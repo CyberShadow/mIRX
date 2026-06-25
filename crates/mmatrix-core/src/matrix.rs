@@ -77,8 +77,7 @@ pub(crate) async fn restore_session(
         meta: SessionMeta {
             user_id: OwnedUserId::try_from(dto.user_id)
                 .map_err(|err| MatrixCoreError::new(format!("invalid session user id: {err}")))?,
-            device_id: OwnedDeviceId::try_from(dto.device_id)
-                .map_err(|err| MatrixCoreError::new(format!("invalid session device id: {err}")))?,
+            device_id: OwnedDeviceId::from(dto.device_id),
         },
         tokens: SessionTokens {
             access_token: dto.access_token,

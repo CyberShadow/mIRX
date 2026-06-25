@@ -57,7 +57,7 @@
 
             if ! rustup run stable cargo --version >/dev/null 2>&1; then
               rustup toolchain uninstall stable >/dev/null 2>&1 || true
-              rustup toolchain install stable --profile minimal --component rustfmt --target x86_64-pc-windows-gnu
+              rustup toolchain install stable --profile minimal --component clippy --component rustfmt --target x86_64-pc-windows-gnu
             fi
 
             if ! rustup target list --installed --toolchain stable | grep -qx 'x86_64-pc-windows-gnu'; then
@@ -66,6 +66,10 @@
 
             if ! rustup component list --installed --toolchain stable | grep -q '^rustfmt'; then
               rustup component add rustfmt --toolchain stable
+            fi
+
+            if ! rustup component list --installed --toolchain stable | grep -q '^clippy'; then
+              rustup component add clippy --toolchain stable
             fi
           ) 9>"$bootstrap_lock"
         '';

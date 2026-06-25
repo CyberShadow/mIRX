@@ -1,5 +1,5 @@
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::process::ExitCode;
 
 #[cfg(not(windows))]
@@ -42,9 +42,9 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
 
     match args.as_slice() {
         [] => Ok(AppCommand::Run),
-        [flag] if *flag == OsString::from("--self-test") => Ok(AppCommand::SelfTest),
-        [flag] if *flag == OsString::from("--auto-close") => Ok(AppCommand::AutoClose),
-        [flag] if *flag == OsString::from("--help") => Ok(AppCommand::Help),
+        [flag] if flag == OsStr::new("--self-test") => Ok(AppCommand::SelfTest),
+        [flag] if flag == OsStr::new("--auto-close") => Ok(AppCommand::AutoClose),
+        [flag] if flag == OsStr::new("--help") => Ok(AppCommand::Help),
         _ => Err(()),
     }
 }
