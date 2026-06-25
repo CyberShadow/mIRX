@@ -11,6 +11,7 @@ declare -a allowlist=(
   advapi32.dll
   api-ms-win-core-synch-l1-2-0.dll
   bcrypt.dll
+  bcryptprimitives.dll
   comctl32.dll
   comdlg32.dll
   crypt32.dll

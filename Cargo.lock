@@ -2033,6 +2033,7 @@ dependencies = [
 name = "mmatrix-core"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "matrix-sdk",
  "tempfile",
  "tokio",
@@ -2043,6 +2044,7 @@ name = "mmatrix-ui"
 version = "0.1.0"
 dependencies = [
  "mmatrix-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
