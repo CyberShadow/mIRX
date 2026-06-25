@@ -42,6 +42,8 @@
 
           export PTHREADS="${mingwPthreads}"
           export MCFGTHREADS="${mingwMcfgthreads}"
+          export CC_x86_64_pc_windows_gnu="x86_64-w64-mingw32-gcc"
+          export CXX_x86_64_pc_windows_gnu="x86_64-w64-mingw32-g++"
           export CFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           export CXXFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           export WINEDLLOVERRIDES="mscoree,mshtml="

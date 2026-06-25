@@ -1,5 +1,15 @@
+mod api;
+mod matrix;
+mod runtime;
+
 pub const APP_NAME: &str = "mmatrix";
 pub const FOUNDATION_PHASE: &str = "bootstrap";
+
+pub use api::{
+    Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RestoreSessionRequest,
+    RoomSummary, SendTextRequest, StoredSession, TimelineText, VerificationRequest,
+};
+pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkspaceInfo {
@@ -22,13 +32,13 @@ pub fn ui_self_test_line() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ui_self_test_line, workspace_info};
+    use super::{APP_NAME, FOUNDATION_PHASE, ui_self_test_line, workspace_info};
 
     #[test]
     fn workspace_info_matches_bootstrap_target() {
         let info = workspace_info();
-        assert_eq!(info.project, "mmatrix");
-        assert_eq!(info.phase, "bootstrap");
+        assert_eq!(info.project, APP_NAME);
+        assert_eq!(info.phase, FOUNDATION_PHASE);
         assert_eq!(info.windows_target, "x86_64-pc-windows-gnu");
     }
 
