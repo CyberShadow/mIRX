@@ -1,0 +1,12 @@
+[package]
+name = "mmatrix-ui"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "mmatrix-ui"
+path = "src/main.rs"
+
+[dependencies]
+mmatrix-core = { path = "../mmatrix-core" }

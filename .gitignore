@@ -1,0 +1,9 @@
+/.cargo-home
+/.direnv
+/.nix-mcfgthreads
+/.nix-pthreads
+/.rustup
+/.wine-*
+/result
+/target
+/wineprefix*
