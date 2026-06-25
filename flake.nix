@@ -26,6 +26,7 @@
           pkgs.imagemagick
           pkgs.pkg-config
           pkgs.rustup
+          pkgs.util-linux
           pkgs.wineWow64Packages.stable
           pkgs.xvfb-run
           mingwCc
@@ -48,17 +49,23 @@
           ln -sfn "$PTHREADS" "$MMATRIX_ROOT/.nix-pthreads"
           ln -sfn "$MCFGTHREADS" "$MMATRIX_ROOT/.nix-mcfgthreads"
 
-          if ! rustup toolchain list | grep -q '^stable'; then
-            rustup toolchain install stable --profile minimal --component rustfmt --target x86_64-pc-windows-gnu
-          fi
+          bootstrap_lock="$CARGO_HOME/.bootstrap.lock"
+          (
+            flock 9
 
-          if ! rustup target list --installed --toolchain stable | grep -qx 'x86_64-pc-windows-gnu'; then
-            rustup target add x86_64-pc-windows-gnu --toolchain stable
-          fi
+            if ! rustup run stable cargo --version >/dev/null 2>&1; then
+              rustup toolchain uninstall stable >/dev/null 2>&1 || true
+              rustup toolchain install stable --profile minimal --component rustfmt --target x86_64-pc-windows-gnu
+            fi
 
-          if ! rustup component list --installed --toolchain stable | grep -q '^rustfmt'; then
-            rustup component add rustfmt --toolchain stable
-          fi
+            if ! rustup target list --installed --toolchain stable | grep -qx 'x86_64-pc-windows-gnu'; then
+              rustup target add x86_64-pc-windows-gnu --toolchain stable
+            fi
+
+            if ! rustup component list --installed --toolchain stable | grep -q '^rustfmt'; then
+              rustup component add rustfmt --toolchain stable
+            fi
+          ) 9>"$bootstrap_lock"
         '';
       };
     };
