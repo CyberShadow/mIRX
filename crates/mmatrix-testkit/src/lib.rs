@@ -36,6 +36,10 @@ const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size
 const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(windows)]
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+#[cfg(windows)]
+const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MMATRIX_TESTKIT_CAPTURE_DIR_WIN";
+#[cfg(windows)]
+const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LaunchOptions {
@@ -473,6 +477,7 @@ mod imp {
 
 #[cfg(windows)]
 mod imp {
+    use std::fs;
     use std::mem::size_of;
     use std::os::windows::ffi::OsStrExt;
     use std::process::{Child, Command};
@@ -737,27 +742,66 @@ mod imp {
         }
 
         pub(crate) fn screenshot(&self, path: &Path) -> Result<(), TestkitError> {
-            // PrintWindow captures black frames under Wine/Xvfb in the validated probe setup.
-            // Keep screenshot capture on the proven host-side ImageMagick import path for now.
-            let status = Command::new("import")
-                .arg("-window")
-                .arg("root")
-                .arg(path)
-                .status()
-                .map_err(|error| {
+            let capture_dir =
+                std::env::var_os(SCREENSHOT_CAPTURE_DIR_WIN_ENV).ok_or_else(|| {
                     TestkitError::Launch(format!(
-                        "failed to launch ImageMagick import for {}: {error}",
+                        "{SCREENSHOT_CAPTURE_DIR_WIN_ENV} was not set by the Wine runner"
+                    ))
+                })?;
+            let request_id = next_request_id();
+            let capture_dir = Path::new(&capture_dir);
+            let capture_name = format!("capture-{request_id}.png");
+            let capture_path = capture_dir.join(&capture_name);
+            let request_path = capture_dir.join(format!("{request_id}.request"));
+            let result_path = capture_dir.join(format!("{request_id}.result"));
+
+            fs::write(&request_path, format!("{capture_name}\n")).map_err(|error| {
+                TestkitError::Launch(format!(
+                    "failed to write screenshot request {}: {error}",
+                    request_path.display()
+                ))
+            })?;
+
+            let wait_result = wait_for_file(&result_path, SCREENSHOT_REQUEST_TIMEOUT);
+            let result = match wait_result {
+                Ok(()) => fs::read_to_string(&result_path).map_err(|error| {
+                    TestkitError::Launch(format!(
+                        "failed to read screenshot result {}: {error}",
+                        result_path.display()
+                    ))
+                })?,
+                Err(error) => {
+                    let _ = fs::remove_file(&request_path);
+                    return Err(error);
+                }
+            };
+
+            let outcome = if result.lines().next() == Some("ok") {
+                fs::copy(&capture_path, path).map_err(|error| {
+                    TestkitError::Launch(format!(
+                        "failed to copy screenshot {} to {}: {error}",
+                        capture_path.display(),
                         path.display()
                     ))
                 })?;
-            if status.success() {
                 Ok(())
             } else {
+                let message = result.lines().skip(1).collect::<Vec<_>>().join("\n");
                 Err(TestkitError::Launch(format!(
-                    "ImageMagick import exited with status {status} while writing {}",
-                    path.display()
+                    "host screenshot capture failed for {}: {}",
+                    path.display(),
+                    if message.is_empty() {
+                        "no helper error output".to_owned()
+                    } else {
+                        message
+                    }
                 )))
-            }
+            };
+
+            let _ = fs::remove_file(&request_path);
+            let _ = fs::remove_file(&result_path);
+            let _ = fs::remove_file(&capture_path);
+            outcome
         }
 
         fn send_command<Args: Serialize, Response: DeserializeOwned>(
@@ -968,6 +1012,21 @@ mod imp {
 
     fn duration_millis_u64(duration: Duration) -> u64 {
         duration.as_millis().min(u64::MAX as u128) as u64
+    }
+
+    fn wait_for_file(path: &Path, timeout: Duration) -> Result<(), TestkitError> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if path.is_file() {
+                return Ok(());
+            }
+            thread::sleep(DEFAULT_POLL_INTERVAL);
+        }
+
+        Err(TestkitError::Timeout(format!(
+            "timed out waiting for screenshot result {}",
+            path.display()
+        )))
     }
 
     fn wide_null(text: &str) -> Vec<u16> {

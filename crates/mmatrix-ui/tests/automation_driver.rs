@@ -42,6 +42,14 @@ fn unique_state_path() -> PathBuf {
     env::temp_dir().join(format!("mmatrix-ui-automation-driver-{unique}.json"))
 }
 
+fn unique_screenshot_path() -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after unix epoch")
+        .as_nanos();
+    env::temp_dir().join(format!("mmatrix-ui-automation-driver-{unique}.png"))
+}
+
 fn write_state_file(state: &SyntheticState) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let state_path = unique_state_path();
     fs::write(&state_path, serde_json::to_vec(state)?)?;
@@ -155,8 +163,13 @@ fn automation_driver_launches_real_ui_and_reads_synthetic_state()
     );
 
     app.wait_for_timeline_contains(Some("!beta:example"), "beta second", Duration::from_secs(5))?;
+    let screenshot_path = unique_screenshot_path();
+    app.screenshot(&screenshot_path)?;
+    let screenshot_bytes = fs::read(&screenshot_path)?;
+    assert!(screenshot_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
 
     let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_file(&screenshot_path);
     Ok(())
 }
 
