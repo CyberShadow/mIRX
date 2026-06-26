@@ -71,7 +71,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
                 }
 
                 let path = args.next().ok_or(())?;
-                if is_known_option(&path) {
+                if !is_valid_render_state_path(&path) {
                     return Err(());
                 }
                 run_options.automation = true;
@@ -109,6 +109,19 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
     }
 
     Ok(lifecycle_command.unwrap_or(AppCommand::Run(run_options)))
+}
+
+fn is_valid_render_state_path(arg: &OsString) -> bool {
+    if is_known_option(arg) {
+        return false;
+    }
+
+    let path = arg.to_string_lossy();
+    if path.starts_with("--") {
+        return path.ends_with(".json");
+    }
+
+    true
 }
 
 fn is_known_option(arg: &OsString) -> bool {
@@ -205,6 +218,13 @@ mod tests {
     fn rejects_unsupported_arguments() {
         assert_eq!(parse_args([OsString::from("--unknown")]), Err(()));
         assert_eq!(parse_args([OsString::from("--render-state")]), Err(()));
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("--unknown"),
+            ]),
+            Err(())
+        );
         assert_eq!(
             parse_args([
                 OsString::from("--render-state"),
