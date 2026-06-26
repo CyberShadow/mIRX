@@ -2040,10 +2040,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmatrix-testkit"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "mmatrix-ui"
 version = "0.1.0"
 dependencies = [
  "mmatrix-core",
+ "mmatrix-testkit",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",

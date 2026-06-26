@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/mmatrix-core",
+    "crates/mmatrix-testkit",
     "crates/mmatrix-ui",
 ]
 resolver = "2"
