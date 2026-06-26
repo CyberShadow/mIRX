@@ -456,6 +456,28 @@ pub(crate) fn dump_error_from_core(error: &CoreErrorEvent) -> DumpError {
     }
 }
 
+pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
+    DumpRoom {
+        room_id: room.room_id.clone(),
+        display_name: room.display_name.clone(),
+        encrypted: room.encrypted,
+    }
+}
+
+pub(crate) fn dump_timeline_line_from_text(timeline: &TimelineText) -> DumpTimelineLine {
+    DumpTimelineLine {
+        room_id: timeline.room_id.clone(),
+        body: timeline.body.clone(),
+    }
+}
+
+pub(crate) fn dump_verification_from_request(request: &VerificationRequest) -> DumpVerification {
+    DumpVerification {
+        flow_id: request.flow_id.clone(),
+        user_id: request.user_id.clone(),
+    }
+}
+
 pub(crate) fn parse_command_request(
     command_id: u32,
     request_json: &[u8],
@@ -807,6 +829,31 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsupported_error_operation_before_conversion() {
+        let state = SyntheticState {
+            rooms: vec![SyntheticRoom {
+                room_id: "!known:example".to_owned(),
+                display_name: "Known".to_owned(),
+                encrypted: false,
+            }],
+            timelines: Vec::new(),
+            selected_room: None,
+            verification: None,
+            error: Some(SyntheticError {
+                operation: "mystery".to_owned(),
+                message: "boom".to_owned(),
+            }),
+        };
+
+        assert_eq!(
+            state.to_synthetic_load(),
+            Err(SyntheticStateError::UnsupportedOperation(
+                "mystery".to_owned()
+            ))
+        );
+    }
+
+    #[test]
     fn converts_valid_synthetic_state_to_ordered_core_events() {
         let state = SyntheticState {
             rooms: vec![
@@ -1006,6 +1053,52 @@ mod tests {
     #[test]
     fn no_args_is_default_constructible() {
         assert_eq!(NoArgs::default(), NoArgs {});
+    }
+
+    #[test]
+    fn dump_helpers_copy_automation_payload_fields() {
+        assert_eq!(
+            super::dump_room_from_summary(&RoomSummary {
+                room_id: "!room:example".to_owned(),
+                display_name: "Room".to_owned(),
+                encrypted: true,
+            }),
+            super::DumpRoom {
+                room_id: "!room:example".to_owned(),
+                display_name: "Room".to_owned(),
+                encrypted: true,
+            }
+        );
+        assert_eq!(
+            super::dump_timeline_line_from_text(&TimelineText {
+                room_id: "!room:example".to_owned(),
+                body: "hello".to_owned(),
+            }),
+            super::DumpTimelineLine {
+                room_id: "!room:example".to_owned(),
+                body: "hello".to_owned(),
+            }
+        );
+        assert_eq!(
+            super::dump_verification_from_request(&VerificationRequest {
+                flow_id: "flow".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            }),
+            super::DumpVerification {
+                flow_id: "flow".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            }
+        );
+        assert_eq!(
+            super::dump_error_from_core(&CoreErrorEvent {
+                operation: Operation::SendText,
+                message: "failed".to_owned(),
+            }),
+            super::DumpError {
+                operation: "send_text".to_owned(),
+                message: "failed".to_owned(),
+            }
+        );
     }
 
     #[test]

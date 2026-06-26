@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, c_void};
+use std::fs;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -16,26 +17,48 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, Operation, RoomSummary,
     SendTextRequest, TimelineText, VerificationRequest, start,
 };
-use windows_sys::Win32::Foundation::{GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use serde::Serialize;
+use serde_json::{Value, json};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
+use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Memory::{
+    CreateFileMappingW, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
+    PAGE_READWRITE, UnmapViewOfFile,
+};
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
     ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, TVE_EXPAND,
     TVGN_CARET, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW,
     TVM_DELETEITEM, TVM_EXPAND, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateWindowExW,
-    DefFrameProcW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_AUTOHSCROLL, GWLP_USERDATA,
-    GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    KillTimer, LoadCursorW, MSG, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SW_SHOW, SendMessageW, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-    WINDOW_EX_STYLE, WM_APP, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC,
-    WS_BORDER, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, ChangeWindowMessageFilterEx,
+    CreateWindowExW, DefFrameProcW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
+    GetWindowLongPtrW, HMENU, IDC_ARROW, KillTimer, LoadCursorW, MSG, MSGFLT_ALLOW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetTimer,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA,
+    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
+    WM_NOTIFY, WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 
-use crate::{AppCommand, HELP, automation::SyntheticLoad};
+use crate::{
+    AppCommand, HELP, RunOptions,
+    automation::{
+        self, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
+        COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
+        ListRoomsResponse, LoadSyntheticStateResponse, ParsedCommand, PongResponse,
+        ResponseEnvelope, SelectRoomResponse, SendTextResponse, SyntheticLoad, SyntheticState,
+        SyntheticStateError, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
+        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
+        parse_command_request, success_response,
+    },
+};
 
 const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 const FRAME_TITLE: &str = "mmatrix";
@@ -49,6 +72,7 @@ const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
+const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
@@ -72,15 +96,21 @@ struct UiModel {
     last_error: Option<CoreErrorEvent>,
 }
 
+struct AutomationState {
+    response_name: String,
+    response_mapping: HANDLE,
+    response_view: *mut u8,
+    response_capacity: usize,
+}
+
 struct WindowState {
     controls: Controls,
     event_queue: Arc<Mutex<VecDeque<Event>>>,
     command_sender: Option<CommandSender>,
+    automation: Option<AutomationState>,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
-    #[allow(dead_code)]
     last_idle_probe_generation: Option<u64>,
-    #[allow(dead_code)]
     synthetic_load_in_progress: bool,
     room_tree_items: BTreeMap<isize, String>,
     edit_window_proc: WNDPROC,
@@ -108,6 +138,12 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
+    let render_state_load = match &command {
+        AppCommand::Run(options) => load_render_state(options)?,
+        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => None,
+    };
+    let automation_enabled = automation_enabled_for_command(&command);
+
     let instance = unsafe { GetModuleHandleW(null()) };
     if instance.is_null() {
         return Err(last_os_error("GetModuleHandleW"));
@@ -123,6 +159,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         controls: Controls::default(),
         event_queue: Arc::clone(&event_queue),
         command_sender: None,
+        automation: None,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         last_idle_probe_generation: None,
@@ -136,19 +173,43 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     });
 
     let hwnd = create_main_window(instance, state)?;
-    let bridge = if matches!(command, AppCommand::Run(_) | AppCommand::AutoClose) {
-        let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
-        unsafe {
-            state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
+
+    let startup = (|| -> Result<Option<CoreBridge>, String> {
+        if automation_enabled {
+            unsafe { enable_automation(hwnd)? };
         }
-        Some(bridge)
-    } else {
-        None
+
+        let bridge = if should_start_core_bridge(&command) {
+            let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
+            unsafe {
+                state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
+            }
+            Some(bridge)
+        } else {
+            None
+        };
+
+        unsafe {
+            ShowWindow(hwnd, SW_SHOW);
+            if let Some(load) = render_state_load {
+                apply_synthetic_load(hwnd, load)?;
+            }
+        }
+
+        Ok(bridge)
+    })();
+
+    let bridge = match startup {
+        Ok(bridge) => bridge,
+        Err(message) => {
+            unsafe {
+                DestroyWindow(hwnd);
+            }
+            return Err(message);
+        }
     };
 
     unsafe {
-        ShowWindow(hwnd, SW_SHOW);
-
         match command {
             AppCommand::SelfTest => {
                 PostMessageW(hwnd, WM_SELF_TEST, 0, 0);
@@ -188,6 +249,45 @@ fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<C
     Ok(CoreBridge {
         command_sender,
         join_handle,
+    })
+}
+
+fn automation_enabled_for_command(command: &AppCommand) -> bool {
+    match command {
+        AppCommand::Run(options) => options.automation || options.render_state.is_some(),
+        AppCommand::SelfTest => true,
+        AppCommand::AutoClose | AppCommand::Help => false,
+    }
+}
+
+fn should_start_core_bridge(command: &AppCommand) -> bool {
+    match command {
+        AppCommand::Run(options) => options.render_state.is_none(),
+        AppCommand::AutoClose => true,
+        AppCommand::SelfTest | AppCommand::Help => false,
+    }
+}
+
+fn load_render_state(options: &RunOptions) -> Result<Option<SyntheticLoad>, String> {
+    let Some(path) = &options.render_state else {
+        return Ok(None);
+    };
+
+    let file_bytes = fs::read(path)
+        .map_err(|err| format!("failed to read render-state file {}: {err}", path.display()))?;
+    let state: SyntheticState = serde_json::from_slice(&file_bytes).map_err(|err| {
+        format!(
+            "failed to parse render-state file {} as JSON: {err}",
+            path.display()
+        )
+    })?;
+
+    state.to_synthetic_load().map(Some).map_err(|err| {
+        format!(
+            "invalid render-state file {}: {}",
+            path.display(),
+            synthetic_state_error_message(&err)
+        )
     })
 }
 
@@ -324,6 +424,7 @@ unsafe extern "system" fn window_proc(
             handle_core_events(hwnd);
             0
         }
+        WM_COPYDATA => handle_copydata(hwnd, lparam),
         WM_NOTIFY => {
             if handle_tree_selection(hwnd, lparam) {
                 0
@@ -354,6 +455,7 @@ unsafe extern "system" fn window_proc(
         WM_NCDESTROY => {
             let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
             if !state_ptr.is_null() {
+                destroy_automation_state(&mut *state_ptr);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 drop(Box::from_raw(state_ptr));
             }
@@ -485,8 +587,7 @@ unsafe fn layout_controls(hwnd: HWND) {
 }
 
 unsafe fn handle_core_events(hwnd: HWND) {
-    let events = drain_core_events(hwnd);
-    apply_events_and_refresh(hwnd, events);
+    drain_core_events_and_refresh(hwnd);
 }
 
 fn apply_core_event(state: &mut WindowState, event: Event) {
@@ -633,6 +734,426 @@ unsafe fn insert_tree_item(tree: HWND, parent: isize, text: &str) -> isize {
     ) as isize
 }
 
+unsafe fn enable_automation(hwnd: HWND) -> Result<(), String> {
+    let response_name = automation_response_name(hwnd);
+    let response_name_wide = wide_null(&response_name);
+    let mapping = CreateFileMappingW(
+        INVALID_HANDLE_VALUE,
+        null(),
+        PAGE_READWRITE,
+        (AUTOMATION_RESPONSE_CAPACITY >> 32) as u32,
+        (AUTOMATION_RESPONSE_CAPACITY & u32::MAX as usize) as u32,
+        response_name_wide.as_ptr(),
+    );
+    if mapping.is_null() {
+        return Err(last_os_error("CreateFileMappingW"));
+    }
+
+    let view = MapViewOfFile(
+        mapping,
+        FILE_MAP_ALL_ACCESS,
+        0,
+        0,
+        AUTOMATION_RESPONSE_CAPACITY,
+    );
+    if view.Value.is_null() {
+        CloseHandle(mapping);
+        return Err(last_os_error("MapViewOfFile"));
+    }
+
+    if ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, null_mut()) == 0 {
+        UnmapViewOfFile(view);
+        CloseHandle(mapping);
+        return Err(last_os_error("ChangeWindowMessageFilterEx"));
+    }
+
+    (view.Value as *mut u32).write_unaligned(0);
+    state_mut(hwnd).automation = Some(AutomationState {
+        response_name,
+        response_mapping: mapping,
+        response_view: view.Value.cast(),
+        response_capacity: AUTOMATION_RESPONSE_CAPACITY,
+    });
+    Ok(())
+}
+
+fn automation_response_name(hwnd: HWND) -> String {
+    format!(
+        "Local\\mmatrix-ui-automation-response-{}-{:x}",
+        unsafe { GetCurrentProcessId() },
+        hwnd as usize
+    )
+}
+
+fn destroy_automation_state(state: &mut WindowState) {
+    let Some(automation) = state.automation.take() else {
+        return;
+    };
+
+    unsafe {
+        if !automation.response_view.is_null() {
+            UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: automation.response_view.cast(),
+            });
+        }
+        if !automation.response_mapping.is_null() {
+            CloseHandle(automation.response_mapping);
+        }
+    }
+}
+
+unsafe fn handle_copydata(hwnd: HWND, lparam: LPARAM) -> LRESULT {
+    if state_ref(hwnd).automation.is_none() {
+        return 0;
+    }
+
+    let (response_id, envelope) = if lparam == 0 {
+        (
+            None,
+            ResponseEnvelope::<Value>::Failure(failure_response(
+                None,
+                "invalid_request",
+                "COPYDATASTRUCT pointer was null",
+            )),
+        )
+    } else {
+        let request = &*(lparam as *const COPYDATASTRUCT);
+        match copy_copydata_request(request) {
+            Ok((command_id, request_bytes)) => {
+                match parse_command_request(command_id, &request_bytes) {
+                    Ok(command) => {
+                        let response_id = Some(command_request_id(&command).to_owned());
+                        (response_id, dispatch_command(hwnd, command))
+                    }
+                    Err(error) => {
+                        let response_id = error.id.clone();
+                        (response_id, ResponseEnvelope::Failure(error))
+                    }
+                }
+            }
+            Err(error) => {
+                let response_id = error.id.clone();
+                (response_id, ResponseEnvelope::Failure(error))
+            }
+        }
+    };
+
+    let response_bytes = match serialize_response_envelope(&envelope, response_id.clone()) {
+        Ok(bytes) => bytes,
+        Err(error) => match serialize_failure_envelope(ResponseEnvelope::<Value>::Failure(error)) {
+            Some(bytes) => bytes,
+            None => return 0,
+        },
+    };
+
+    if write_response_bytes(hwnd, response_id.as_deref(), &response_bytes) {
+        1
+    } else {
+        0
+    }
+}
+
+fn copy_copydata_request(request: &COPYDATASTRUCT) -> Result<(u32, Vec<u8>), FailureEnvelope> {
+    let command_id = u32::try_from(request.dwData).map_err(|_| {
+        failure_response(
+            None,
+            "invalid_request",
+            format!("command id {} exceeds u32 range", request.dwData),
+        )
+    })?;
+
+    if request.cbData == 0 {
+        return Ok((command_id, Vec::new()));
+    }
+
+    if request.lpData.is_null() {
+        return Err(failure_response(
+            None,
+            "invalid_request",
+            "COPYDATASTRUCT data pointer was null",
+        ));
+    }
+
+    let request_len = request.cbData as usize;
+    let request_bytes =
+        unsafe { std::slice::from_raw_parts(request.lpData.cast::<u8>(), request_len) }.to_vec();
+    Ok((command_id, request_bytes))
+}
+
+unsafe fn dispatch_command(hwnd: HWND, command: ParsedCommand) -> ResponseEnvelope<Value> {
+    let response_id = command_request_id(&command).to_owned();
+    match execute_command(hwnd, command) {
+        Ok(json) => success_response(response_id, json),
+        Err(error) => ResponseEnvelope::Failure(error),
+    }
+}
+
+unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, FailureEnvelope> {
+    match command {
+        ParsedCommand::Ping { id } => serialize_success_json(&id, PongResponse { pong: true }),
+        ParsedCommand::GetVersion { id } => {
+            serialize_success_json(&id, GetVersionResponse::current())
+        }
+        ParsedCommand::WaitIdle { id, args } => {
+            let _ = args.timeout_ms;
+            drain_core_events_and_refresh(hwnd);
+
+            let (pending_core_events, event_generation, synthetic_load_in_progress, idle) = {
+                let state = state_mut(hwnd);
+                let pending_core_events = state
+                    .event_queue
+                    .lock()
+                    .expect("core event queue poisoned")
+                    .len() as u64;
+                let event_generation = state.event_generation;
+                let synthetic_load_in_progress = state.synthetic_load_in_progress;
+                let idle = pending_core_events == 0
+                    && !synthetic_load_in_progress
+                    && state.last_idle_probe_generation == Some(event_generation);
+                state.last_idle_probe_generation = Some(event_generation);
+                (
+                    pending_core_events,
+                    event_generation,
+                    synthetic_load_in_progress,
+                    idle,
+                )
+            };
+
+            serialize_success_json(
+                &id,
+                WaitIdleResponse {
+                    idle,
+                    event_generation,
+                    pending_core_events,
+                    synthetic_load_in_progress,
+                },
+            )
+        }
+        ParsedCommand::DumpModel { id } => {
+            let dump = dump_model_from_ui(&state_ref(hwnd).model);
+            serialize_success_json(&id, dump)
+        }
+        ParsedCommand::DumpTimeline { id, args } => {
+            let room_id = resolve_timeline_room_id(state_ref(hwnd), args.room_id.as_deref())
+                .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
+            let lines = state_ref(hwnd)
+                .model
+                .timelines
+                .get(&room_id)
+                .cloned()
+                .unwrap_or_default();
+            serialize_success_json(&id, DumpTimelineResponse { room_id, lines })
+        }
+        ParsedCommand::ListRooms { id } => {
+            let rooms = state_ref(hwnd)
+                .model
+                .rooms
+                .iter()
+                .map(dump_room_from_summary)
+                .collect();
+            serialize_success_json(&id, ListRoomsResponse { rooms })
+        }
+        ParsedCommand::SelectRoom { id, args } => {
+            {
+                let state = state_mut(hwnd);
+                select_room(state, &args.room_id).map_err(|message| {
+                    failure_response(Some(id.clone()), "unknown_room", message)
+                })?;
+            }
+            refresh_tree(hwnd);
+            serialize_success_json(
+                &id,
+                SelectRoomResponse {
+                    selected_room: args.room_id,
+                },
+            )
+        }
+        ParsedCommand::SendText { id, args } => {
+            let body = args.body;
+            set_edit_text(state_ref(hwnd).controls.edit, &body);
+            let room_id = submit_compose_from_control(hwnd, args.room_id.as_deref())
+                .map_err(|message| failure_response(Some(id.clone()), "send_failed", message))?;
+            serialize_success_json(
+                &id,
+                SendTextResponse {
+                    accepted: true,
+                    room_id,
+                },
+            )
+        }
+        ParsedCommand::LoadSyntheticState { id, args } => {
+            let load = args.json.to_synthetic_load().map_err(|error| {
+                failure_response(
+                    Some(id.clone()),
+                    "invalid_synthetic_state",
+                    synthetic_state_error_message(&error),
+                )
+            })?;
+            let (rooms, timeline_events) = apply_synthetic_load(hwnd, load).map_err(|message| {
+                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+            })?;
+            serialize_success_json(
+                &id,
+                LoadSyntheticStateResponse {
+                    loaded: true,
+                    rooms,
+                    timeline_events,
+                },
+            )
+        }
+    }
+}
+
+fn command_request_id(command: &ParsedCommand) -> &str {
+    match command {
+        ParsedCommand::Ping { id }
+        | ParsedCommand::GetVersion { id }
+        | ParsedCommand::WaitIdle { id, .. }
+        | ParsedCommand::DumpModel { id }
+        | ParsedCommand::DumpTimeline { id, .. }
+        | ParsedCommand::ListRooms { id }
+        | ParsedCommand::SelectRoom { id, .. }
+        | ParsedCommand::SendText { id, .. }
+        | ParsedCommand::LoadSyntheticState { id, .. } => id,
+    }
+}
+
+fn serialize_success_json<T: Serialize>(id: &str, payload: T) -> Result<Value, FailureEnvelope> {
+    serde_json::to_value(payload).map_err(|err| {
+        failure_response(
+            Some(id.to_owned()),
+            "serialization_error",
+            format!("failed to serialize response payload: {err}"),
+        )
+    })
+}
+
+fn serialize_response_envelope(
+    envelope: &ResponseEnvelope<Value>,
+    response_id: Option<String>,
+) -> Result<Vec<u8>, FailureEnvelope> {
+    serde_json::to_vec(envelope).map_err(|err| {
+        failure_response(
+            response_id,
+            "serialization_error",
+            format!("failed to serialize response envelope: {err}"),
+        )
+    })
+}
+
+fn serialize_failure_envelope(envelope: ResponseEnvelope<Value>) -> Option<Vec<u8>> {
+    serde_json::to_vec(&envelope).ok()
+}
+
+unsafe fn write_response_bytes(
+    hwnd: HWND,
+    response_id: Option<&str>,
+    response_bytes: &[u8],
+) -> bool {
+    let Some(automation) = state_ref(hwnd).automation.as_ref() else {
+        return false;
+    };
+
+    if write_response_bytes_if_fits(automation, response_bytes) {
+        return true;
+    }
+
+    let fallback = ResponseEnvelope::<Value>::Failure(failure_response(
+        response_id.map(str::to_owned),
+        "response_too_large",
+        format!(
+            "response exceeded shared-memory capacity {}",
+            automation.response_capacity
+        ),
+    ));
+    let Some(fallback_bytes) = serialize_failure_envelope(fallback) else {
+        return false;
+    };
+    write_response_bytes_if_fits(automation, &fallback_bytes)
+}
+
+fn write_response_bytes_if_fits(automation: &AutomationState, response_bytes: &[u8]) -> bool {
+    if automation.response_view.is_null() || automation.response_capacity < size_of::<u32>() {
+        return false;
+    }
+
+    let Ok(response_len) = u32::try_from(response_bytes.len()) else {
+        return false;
+    };
+    let Some(required_capacity) = size_of::<u32>().checked_add(response_bytes.len()) else {
+        return false;
+    };
+    if required_capacity > automation.response_capacity {
+        return false;
+    }
+
+    unsafe {
+        let buffer =
+            std::slice::from_raw_parts_mut(automation.response_view, automation.response_capacity);
+        buffer[..size_of::<u32>()].copy_from_slice(&response_len.to_le_bytes());
+        buffer[size_of::<u32>()..required_capacity].copy_from_slice(response_bytes);
+    }
+    true
+}
+
+unsafe fn send_automation_request(
+    hwnd: HWND,
+    command_id: u32,
+    request_json: Value,
+) -> Result<Value, String> {
+    let request_bytes = serde_json::to_vec(&request_json)
+        .map_err(|err| format!("failed to serialize self-test request: {err}"))?;
+    let request_len = u32::try_from(request_bytes.len())
+        .map_err(|_| "self-test request exceeded WM_COPYDATA size range".to_owned())?;
+    let mut request = COPYDATASTRUCT {
+        dwData: command_id as usize,
+        cbData: request_len,
+        lpData: request_bytes.as_ptr().cast_mut().cast(),
+    };
+
+    let send_result = SendMessageW(
+        hwnd,
+        WM_COPYDATA,
+        hwnd as WPARAM,
+        (&mut request as *mut COPYDATASTRUCT) as LPARAM,
+    );
+    if send_result == 0 {
+        return Err(format!(
+            "automation transport returned no response for command id {command_id}"
+        ));
+    }
+
+    read_automation_response(hwnd)
+}
+
+unsafe fn read_automation_response(hwnd: HWND) -> Result<Value, String> {
+    let automation = state_ref(hwnd)
+        .automation
+        .as_ref()
+        .ok_or_else(|| "automation shared memory is not enabled".to_owned())?;
+    if automation.response_view.is_null() || automation.response_capacity < size_of::<u32>() {
+        return Err(format!(
+            "automation shared memory {} is not mapped",
+            automation.response_name
+        ));
+    }
+
+    let buffer = std::slice::from_raw_parts(automation.response_view, automation.response_capacity);
+    let response_len = u32::from_le_bytes(buffer[..size_of::<u32>()].try_into().unwrap()) as usize;
+    let required_capacity = size_of::<u32>()
+        .checked_add(response_len)
+        .ok_or_else(|| "automation response length overflowed".to_owned())?;
+    if required_capacity > automation.response_capacity {
+        return Err(format!(
+            "automation response from {} exceeded mapped capacity {}",
+            automation.response_name, automation.response_capacity
+        ));
+    }
+
+    serde_json::from_slice(&buffer[size_of::<u32>()..required_capacity])
+        .map_err(|err| format!("failed to parse automation response JSON: {err}"))
+}
+
 unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
     let edit = state_ref(hwnd).controls.edit;
     if edit.is_null() {
@@ -650,6 +1171,86 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
     if actual != expected_text {
         return Err(format!(
             "self-test failed: expected edit text \"{expected_text}\", got \"{actual}\""
+        ));
+    }
+
+    let ping = send_automation_request(hwnd, COMMAND_ID_PING, json!({"id":"ping","args":{}}))?;
+    if ping["ok"] != json!(true) || ping["json"] != json!({"pong": true}) {
+        return Err(format!("self-test failed: unexpected ping response {ping}"));
+    }
+
+    let synthetic_state = SyntheticState {
+        rooms: vec![
+            automation::SyntheticRoom {
+                room_id: "!one:example".to_owned(),
+                display_name: "One".to_owned(),
+                encrypted: false,
+            },
+            automation::SyntheticRoom {
+                room_id: "!two:example".to_owned(),
+                display_name: "Two".to_owned(),
+                encrypted: true,
+            },
+        ],
+        timelines: vec![
+            automation::SyntheticTimeline {
+                room_id: "!one:example".to_owned(),
+                lines: vec!["first line".to_owned(), "second line".to_owned()],
+            },
+            automation::SyntheticTimeline {
+                room_id: "!two:example".to_owned(),
+                lines: vec!["third line".to_owned()],
+            },
+        ],
+        selected_room: Some("!one:example".to_owned()),
+        verification: None,
+        error: None,
+    };
+    let load_response = send_automation_request(
+        hwnd,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE,
+        json!({"id":"load","args":{"json":synthetic_state}}),
+    )?;
+    if load_response["ok"] != json!(true)
+        || load_response["json"] != json!({"loaded": true, "rooms": 2, "timeline_events": 3})
+    {
+        return Err(format!(
+            "self-test failed: unexpected synthetic-load response {load_response}"
+        ));
+    }
+
+    let mut idle = false;
+    for _ in 0..8 {
+        let wait_idle = send_automation_request(
+            hwnd,
+            COMMAND_ID_WAIT_IDLE,
+            json!({"id":"idle","args":{"timeout_ms":10}}),
+        )?;
+        if wait_idle["ok"] != json!(true) {
+            return Err(format!(
+                "self-test failed: wait-idle returned error {wait_idle}"
+            ));
+        }
+        if wait_idle["json"]["idle"] == json!(true) {
+            idle = true;
+            break;
+        }
+    }
+    if !idle {
+        return Err("self-test failed: WAIT_IDLE never reported idle".to_owned());
+    }
+
+    let timeline = send_automation_request(
+        hwnd,
+        COMMAND_ID_DUMP_TIMELINE,
+        json!({"id":"timeline","args":{"room_id":"!one:example"}}),
+    )?;
+    if timeline["ok"] != json!(true)
+        || timeline["json"]
+            != json!({"room_id":"!one:example","lines":["first line","second line"]})
+    {
+        return Err(format!(
+            "self-test failed: unexpected dump-timeline response {timeline}"
         ));
     }
 
@@ -679,7 +1280,6 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) {
     refresh_tree(hwnd);
 }
 
-#[allow(dead_code)]
 unsafe fn apply_synthetic_load(hwnd: HWND, load: SyntheticLoad) -> Result<(usize, usize), String> {
     {
         let state = state_mut(hwnd);
@@ -710,6 +1310,13 @@ unsafe fn apply_synthetic_load(hwnd: HWND, load: SyntheticLoad) -> Result<(usize
     refresh_tree(hwnd);
 
     Ok((load.room_count, load.timeline_event_count))
+}
+
+unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> usize {
+    let events = drain_core_events(hwnd);
+    let event_count = events.len();
+    apply_events_and_refresh(hwnd, events);
+    event_count
 }
 
 unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
@@ -748,9 +1355,16 @@ fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
 }
 
 unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<String, String> {
+    submit_compose_from_control(hwnd, None)
+}
+
+unsafe fn submit_compose_from_control(
+    hwnd: HWND,
+    explicit_room_id: Option<&str>,
+) -> Result<String, String> {
     let edit = state_ref(hwnd).controls.edit;
     let body = read_window_text(edit);
-    let room_id = submit_compose(state_mut(hwnd), body, None)?;
+    let room_id = submit_compose(state_mut(hwnd), body, explicit_room_id)?;
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
     Ok(room_id)
@@ -856,6 +1470,43 @@ unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
+fn dump_model_from_ui(model: &UiModel) -> DumpModel {
+    DumpModel {
+        status: model.status.clone(),
+        rooms: model.rooms.iter().map(dump_room_from_summary).collect(),
+        last_timeline: model
+            .last_timeline
+            .as_ref()
+            .map(dump_timeline_line_from_text),
+        last_verification: model
+            .last_verification
+            .as_ref()
+            .map(dump_verification_from_request),
+        last_error: model.last_error.as_ref().map(dump_error_from_core),
+        selected_room: model.selected_room.clone(),
+    }
+}
+
+fn resolve_timeline_room_id(
+    state: &WindowState,
+    explicit_room_id: Option<&str>,
+) -> Result<String, String> {
+    let room_id = match explicit_room_id {
+        Some(room_id) => room_id.to_owned(),
+        None => state
+            .model
+            .selected_room
+            .clone()
+            .ok_or_else(|| "no room selected".to_owned())?,
+    };
+
+    if room_exists(&state.model.rooms, &room_id) {
+        Ok(room_id)
+    } else {
+        Err(format!("unknown room id: {room_id}"))
+    }
+}
+
 fn operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Login => "login",
@@ -882,8 +1533,29 @@ unsafe fn read_window_text(hwnd: HWND) -> String {
     String::from_utf16_lossy(&text[..text_len as usize])
 }
 
+fn set_edit_text(hwnd: HWND, text: &str) {
+    let text = wide_null(text);
+    unsafe {
+        SendMessageW(hwnd, WM_SETTEXT, 0, text.as_ptr() as LPARAM);
+    }
+}
+
 fn wide_null(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain([0]).collect()
+}
+
+fn synthetic_state_error_message(error: &SyntheticStateError) -> String {
+    match error {
+        SyntheticStateError::SelectedRoomNotFound(room_id) => {
+            format!("selected room was not found: {room_id}")
+        }
+        SyntheticStateError::TimelineRoomNotFound(room_id) => {
+            format!("timeline room was not found: {room_id}")
+        }
+        SyntheticStateError::UnsupportedOperation(operation) => {
+            format!("unsupported operation code: {operation}")
+        }
+    }
 }
 
 fn last_os_error(operation: &str) -> String {
@@ -918,6 +1590,7 @@ mod tests {
             controls: Controls::default(),
             event_queue: Arc::new(Mutex::new(VecDeque::new())),
             command_sender: None,
+            automation: None,
             exit_code: Arc::new(AtomicI32::new(0)),
             event_generation: 0,
             last_idle_probe_generation: None,
