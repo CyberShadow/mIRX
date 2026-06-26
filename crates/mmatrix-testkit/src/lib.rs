@@ -35,7 +35,7 @@ const COMMAND_ID_LOAD_SYNTHETIC_STATE: u32 = 9;
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
-const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 #[cfg(windows)]
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
