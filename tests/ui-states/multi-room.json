@@ -1,0 +1,45 @@
+{
+  "rooms": [
+    {
+      "room_id": "!lobby:example",
+      "display_name": "Lobby",
+      "encrypted": false
+    },
+    {
+      "room_id": "!ops:example",
+      "display_name": "Ops",
+      "encrypted": true
+    },
+    {
+      "room_id": "!random:example",
+      "display_name": "Random",
+      "encrypted": false
+    }
+  ],
+  "timelines": [
+    {
+      "room_id": "!lobby:example",
+      "lines": [
+        "welcome to the lobby",
+        "build is green"
+      ]
+    },
+    {
+      "room_id": "!ops:example",
+      "lines": [
+        "ops topic: incident review",
+        "encryption enabled for ops",
+        "deploy window opens at 18:00 UTC"
+      ]
+    },
+    {
+      "room_id": "!random:example",
+      "lines": [
+        "random: lunch votes are in"
+      ]
+    }
+  ],
+  "selected_room": "!ops:example",
+  "verification": null,
+  "error": null
+}

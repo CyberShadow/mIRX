@@ -1,0 +1,39 @@
+{
+  "rooms": [
+    {
+      "room_id": "!support:example",
+      "display_name": "Support",
+      "encrypted": false
+    },
+    {
+      "room_id": "!verify:example",
+      "display_name": "Verify",
+      "encrypted": true
+    }
+  ],
+  "timelines": [
+    {
+      "room_id": "!support:example",
+      "lines": [
+        "support queue is empty"
+      ]
+    },
+    {
+      "room_id": "!verify:example",
+      "lines": [
+        "verification requested by @alice:example",
+        "sas emoji ready",
+        "waiting for confirmation"
+      ]
+    }
+  ],
+  "selected_room": "!verify:example",
+  "verification": {
+    "flow_id": "flow-verify-123",
+    "user_id": "@alice:example"
+  },
+  "error": {
+    "operation": "send_text",
+    "message": "message send failed for event $event123"
+  }
+}

@@ -33,5 +33,11 @@ jobs:
       - name: Wine smoke self-test
         run: nix develop -c ./scripts/wine-smoke.sh
 
+      - name: Wine automation driver test
+        run: nix develop -c cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver
+
+      - name: UI snapshot harness
+        run: nix develop -c ./scripts/ui-snapshot.sh
+
       - name: DLL gate
         run: nix develop -c ./scripts/dll-gate.sh

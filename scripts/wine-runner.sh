@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 runner_pid=$$
 runner_tmpdir=
 started_xvfb=0
@@ -114,7 +115,7 @@ ensure_xvfb() {
 }
 
 ensure_wineprefix() {
-  export WINEPREFIX="${WINEPREFIX:-$(pwd)/.wine-mmatrix-tests}"
+  export WINEPREFIX="${WINEPREFIX:-$root_dir/.wine-mmatrix-tests}"
   export WINEARCH="${WINEARCH:-win64}"
   export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
   export WINEDEBUG="${WINEDEBUG:--all}"
