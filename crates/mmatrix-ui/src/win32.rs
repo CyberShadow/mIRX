@@ -40,10 +40,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA,
     GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    KillTimer, LoadCursorW, MDICREATESTRUCTW, MSG, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_SHOW, SendMessageW, SetTimer, SetWindowLongPtrW, ShowWindow,
-    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA, WM_CREATE,
-    WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
+    IsWindow, KillTimer, LoadCursorW, MDICREATESTRUCTW, MSG, MoveWindow, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetTimer, SetWindowLongPtrW,
+    ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA,
+    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
     WM_MDIDESTROY, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WM_SIZE,
     WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
     WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
@@ -569,6 +569,7 @@ unsafe extern "system" fn mdi_child_window_proc(
             0
         }
         WM_NCDESTROY => {
+            unregister_destroyed_view(hwnd);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
@@ -889,8 +890,53 @@ unsafe fn mdi_child_edit(hwnd: HWND) -> HWND {
     GetWindowLongPtrW(hwnd, GWLP_USERDATA) as HWND
 }
 
+fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<ViewId> {
+    let view_id = state.hwnd_views.remove(&(child as isize))?;
+    let removed = state
+        .views
+        .remove(&view_id)
+        .expect("HWND-to-view registry must match tracked views");
+    assert_eq!(
+        removed.child, child,
+        "tracked child HWND must match registry"
+    );
+    if state.active_view == view_id {
+        state.active_view = resolve_active_view(
+            &state.active_view,
+            state.model.selected_room.as_deref(),
+            &state.model.rooms,
+        );
+    }
+    Some(view_id)
+}
+
+unsafe fn unregister_destroyed_view(child: HWND) {
+    let frame = frame_window_for(child);
+    let state_ptr = GetWindowLongPtrW(frame, GWLP_USERDATA) as *mut WindowState;
+    if state_ptr.is_null() {
+        return;
+    }
+
+    let _ = unregister_view_by_child(&mut *state_ptr, child);
+}
+
+unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
+    IsWindow(view.child) != 0 && IsWindow(view.edit) != 0 && mdi_child_edit(view.child) == view.edit
+}
+
 unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
-    if let Some(view) = state_ref(hwnd).views.get(&view_id) {
+    let stale_child = state_ref(hwnd)
+        .views
+        .get(&view_id)
+        .and_then(|view| (!cached_view_is_alive(view)).then_some(view.child));
+    if let Some(child) = stale_child {
+        let removed = unregister_view_by_child(state_mut(hwnd), child)
+            .expect("tracked view must exist before stale child cleanup");
+        assert_eq!(
+            removed, view_id,
+            "stale child cleanup must match requested view"
+        );
+    } else if let Some(view) = state_ref(hwnd).views.get(&view_id) {
         return Ok(view.child);
     }
 
@@ -2156,6 +2202,32 @@ mod tests {
                 .views
                 .contains_key(&ViewId::Room("!room:example".to_owned()))
         );
+    }
+
+    #[test]
+    fn unregister_view_by_child_removes_destroyed_room_from_registries() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!alpha:example", "Alpha", false)];
+        state.active_view = ViewId::Room("!beta:example".to_owned());
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state
+            .views
+            .insert(ViewId::Room("!beta:example".to_owned()), tracked_view(20));
+        state.hwnd_views.insert(10, ViewId::Status);
+        state
+            .hwnd_views
+            .insert(20, ViewId::Room("!beta:example".to_owned()));
+
+        let removed = unregister_view_by_child(&mut state, 20 as HWND);
+
+        assert_eq!(removed, Some(ViewId::Room("!beta:example".to_owned())));
+        assert!(!state.hwnd_views.contains_key(&20));
+        assert!(
+            !state
+                .views
+                .contains_key(&ViewId::Room("!beta:example".to_owned()))
+        );
+        assert_eq!(state.active_view, ViewId::Room("!alpha:example".to_owned()));
     }
 
     #[test]
