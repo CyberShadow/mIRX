@@ -148,10 +148,7 @@ cleanup() {
 }
 
 ensure_binaries() {
-  if [[ -x "$ui_exe" && -x "$driver_exe" ]]; then
-    return 0
-  fi
-
+  cargo clean --target x86_64-pc-windows-gnu -p mmatrix-ui -p mmatrix-testkit
   cargo build --target x86_64-pc-windows-gnu -p mmatrix-ui
   cargo build --target x86_64-pc-windows-gnu -p mmatrix-testkit --bin mmatrix-snapshot-driver
 }
