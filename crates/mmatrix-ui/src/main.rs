@@ -71,6 +71,9 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
                 }
 
                 let path = args.next().ok_or(())?;
+                if is_known_option(&path) {
+                    return Err(());
+                }
                 run_options.automation = true;
                 run_options.render_state = Some(PathBuf::from(path));
             }
@@ -106,6 +109,18 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
     }
 
     Ok(lifecycle_command.unwrap_or(AppCommand::Run(run_options)))
+}
+
+fn is_known_option(arg: &OsString) -> bool {
+    matches!(
+        arg.as_os_str(),
+        flag
+            if flag == OsStr::new("--automation")
+                || flag == OsStr::new("--render-state")
+                || flag == OsStr::new("--self-test")
+                || flag == OsStr::new("--auto-close")
+                || flag == OsStr::new("--help")
+    )
 }
 
 #[cfg(test)]
@@ -190,6 +205,38 @@ mod tests {
     fn rejects_unsupported_arguments() {
         assert_eq!(parse_args([OsString::from("--unknown")]), Err(()));
         assert_eq!(parse_args([OsString::from("--render-state")]), Err(()));
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("--render-state"),
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("--automation")
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("--self-test")
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("--auto-close")
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--render-state"), OsString::from("--help")]),
+            Err(())
+        );
         assert_eq!(
             parse_args([
                 OsString::from("--render-state"),
