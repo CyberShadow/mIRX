@@ -160,13 +160,18 @@ configure_case_expectations() {
   local case_name=$1
   timeline_expect_args=()
   room_expect_args=()
+  room_view_expect_args=()
+  status_view_expect_args=()
+  navigation_forbid_args=()
   expect_selected=
   expect_error=
   expect_verification=
+  expect_active_view=
 
   case "$case_name" in
     multi-room)
       expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
       room_expect_args=(
         --expect-room '!lobby:example'
         --expect-room '!ops:example'
@@ -177,9 +182,20 @@ configure_case_expectations() {
         --expect-timeline '!ops:example::encryption enabled'
         --expect-timeline '!ops:example::deploy window opens'
       )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::incident review'
+        --expect-room-view '!ops:example::encryption enabled'
+        --expect-room-view '!ops:example::deploy window opens'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'incident review'
+        --expect-no-navigation-text 'encryption enabled'
+        --expect-no-navigation-text 'deploy window opens'
+      )
       ;;
     verification-error)
       expect_selected='!verify:example'
+      expect_active_view='room:!verify:example'
       expect_verification='flow-verify-123'
       expect_error='message send failed'
       room_expect_args=(
@@ -190,6 +206,22 @@ configure_case_expectations() {
         --expect-timeline '!verify:example::verification requested'
         --expect-timeline '!verify:example::sas emoji ready'
         --expect-timeline '!verify:example::waiting for confirmation'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!verify:example::verification requested'
+        --expect-room-view '!verify:example::sas emoji ready'
+        --expect-room-view '!verify:example::waiting for confirmation'
+      )
+      status_view_expect_args=(
+        --expect-status-view 'flow-verify-123'
+        --expect-status-view 'message send failed'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'verification requested'
+        --expect-no-navigation-text 'sas emoji ready'
+        --expect-no-navigation-text 'waiting for confirmation'
+        --expect-no-navigation-text 'flow-verify-123'
+        --expect-no-navigation-text 'message send failed'
       )
       ;;
     *)
@@ -215,8 +247,12 @@ run_case() {
   driver_args=(
     --wait-idle-ms 5000
     --expect-selected "$expect_selected"
+    --expect-active-view "$expect_active_view"
     "${room_expect_args[@]}"
     "${timeline_expect_args[@]}"
+    "${room_view_expect_args[@]}"
+    "${status_view_expect_args[@]}"
+    "${navigation_forbid_args[@]}"
   )
 
   if [[ -n "${expect_error:-}" ]]; then

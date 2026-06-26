@@ -11,7 +11,7 @@ mod windows_main {
     use std::process::ExitCode;
     use std::time::Duration;
 
-    use mmatrix_testkit::MmatrixApp;
+    use mmatrix_testkit::{MdiView, MmatrixApp, NavigationNode, UiState, ViewIdentity};
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
     const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
@@ -24,11 +24,29 @@ mod windows_main {
         expect_timelines: Vec<TimelineExpectation>,
         expect_error: Option<String>,
         expect_verification: Option<String>,
+        expect_active_view: Option<ViewIdentity>,
+        expect_room_views: Vec<ViewTextExpectation>,
+        expect_status_views: Vec<String>,
+        expect_no_navigation_texts: Vec<String>,
     }
 
     struct TimelineExpectation {
         room_id: String,
         substring: String,
+    }
+
+    struct ViewTextExpectation {
+        room_id: String,
+        substring: String,
+    }
+
+    impl Config {
+        fn requires_ui_state(&self) -> bool {
+            self.expect_active_view.is_some()
+                || !self.expect_room_views.is_empty()
+                || !self.expect_status_views.is_empty()
+                || !self.expect_no_navigation_texts.is_empty()
+        }
     }
 
     pub(crate) fn run() -> Result<(), String> {
@@ -132,6 +150,70 @@ mod windows_main {
             );
         }
 
+        if config.requires_ui_state() {
+            let ui_state = app
+                .dump_ui_state()
+                .map_err(|error| format!("DUMP_UI_STATE failed: {error}"))?;
+
+            if let Some(expected_view) = config.expect_active_view.as_ref() {
+                if &ui_state.mdi.active != expected_view {
+                    return Err(format!(
+                        "active view assertion failed: expected {}, found {}",
+                        format_view_identity(expected_view),
+                        format_view_identity(&ui_state.mdi.active)
+                    ));
+                }
+                println!("PASS active view {}", format_view_identity(expected_view));
+            }
+
+            for expectation in &config.expect_room_views {
+                let identity = ViewIdentity::Room {
+                    room_id: expectation.room_id.clone(),
+                };
+                let view = find_view(&ui_state, &identity).ok_or_else(|| {
+                    format!(
+                        "room view assertion failed: missing room view {}",
+                        expectation.room_id
+                    )
+                })?;
+                if !view_contains(view, &expectation.substring) {
+                    return Err(format!(
+                        "room view assertion failed: room {} did not contain {:?}",
+                        expectation.room_id, expectation.substring
+                    ));
+                }
+                println!(
+                    "PASS room view {} contains {:?}",
+                    expectation.room_id, expectation.substring
+                );
+            }
+
+            if !config.expect_status_views.is_empty() {
+                let status_view = find_view(&ui_state, &ViewIdentity::Status).ok_or_else(|| {
+                    "status view assertion failed: missing status view".to_owned()
+                })?;
+                for substring in &config.expect_status_views {
+                    if !view_contains(status_view, substring) {
+                        return Err(format!(
+                            "status view assertion failed: status did not contain {:?}",
+                            substring
+                        ));
+                    }
+                    println!("PASS status view contains {:?}", substring);
+                }
+            }
+
+            for substring in &config.expect_no_navigation_texts {
+                if navigation_contains(&ui_state.navigation, substring) {
+                    return Err(format!(
+                        "navigation assertion failed: navigation unexpectedly contained {:?}",
+                        substring
+                    ));
+                }
+                println!("PASS navigation excludes {:?}", substring);
+            }
+        }
+
         Ok(())
     }
 
@@ -191,6 +273,39 @@ mod windows_main {
                             .ok_or_else(|| "missing value for --expect-verification".to_owned())?,
                     );
                 }
+                "--expect-active-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-active-view".to_owned())?;
+                    config.expect_active_view = Some(parse_view_identity_arg(&value)?);
+                }
+                "--expect-room-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-view".to_owned())?;
+                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid --expect-room-view value {value:?}; expected <room_id>::<substring>"
+                        )
+                    })?;
+                    config.expect_room_views.push(ViewTextExpectation {
+                        room_id: room_id.to_owned(),
+                        substring: substring.to_owned(),
+                    });
+                }
+                "--expect-status-view" => {
+                    config.expect_status_views.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-status-view".to_owned())?,
+                    );
+                }
+                "--expect-no-navigation-text" => {
+                    config
+                        .expect_no_navigation_texts
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-no-navigation-text".to_owned()
+                        })?);
+                }
                 "--help" => {
                     return Err(usage());
                 }
@@ -212,8 +327,60 @@ mod windows_main {
             "  --expect-timeline <room_id>::<substring>",
             "  --expect-error <substring>",
             "  --expect-verification <flow_id>",
+            "  --expect-active-view <status|room:<room_id>>",
+            "  --expect-room-view <room_id>::<substring>",
+            "  --expect-status-view <substring>",
+            "  --expect-no-navigation-text <substring>",
         ]
         .join("\n")
+    }
+
+    fn parse_view_identity_arg(value: &str) -> Result<ViewIdentity, String> {
+        if value == "status" {
+            return Ok(ViewIdentity::Status);
+        }
+        if let Some(room_id) = value.strip_prefix("room:") {
+            if room_id.is_empty() {
+                return Err(format!(
+                    "invalid --expect-active-view value {value:?}; expected status or room:<room_id>\n{}",
+                    usage()
+                ));
+            }
+            return Ok(ViewIdentity::Room {
+                room_id: room_id.to_owned(),
+            });
+        }
+        Err(format!(
+            "invalid --expect-active-view value {value:?}; expected status or room:<room_id>\n{}",
+            usage()
+        ))
+    }
+
+    fn format_view_identity(identity: &ViewIdentity) -> String {
+        match identity {
+            ViewIdentity::Status => "status".to_owned(),
+            ViewIdentity::Room { room_id } => format!("room:{room_id}"),
+        }
+    }
+
+    fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> Option<&'a MdiView> {
+        ui_state
+            .mdi
+            .views
+            .iter()
+            .find(|view| &view.identity == identity)
+    }
+
+    fn view_contains(view: &MdiView, substring: &str) -> bool {
+        view.lines.iter().any(|line| line.contains(substring))
+    }
+
+    fn navigation_contains(node: &NavigationNode, substring: &str) -> bool {
+        node.text.contains(substring)
+            || node
+                .children
+                .iter()
+                .any(|child| navigation_contains(child, substring))
     }
 
     pub(crate) fn main() -> ExitCode {
