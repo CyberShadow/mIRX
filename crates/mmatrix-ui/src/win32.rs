@@ -36,10 +36,10 @@ use windows_sys::Win32::UI::Controls::{
     TVM_DELETEITEM, TVM_EXPAND, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, ChangeWindowMessageFilterEx,
+    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW,
     CreateWindowExW, DefFrameProcW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
-    GetWindowLongPtrW, HMENU, IDC_ARROW, KillTimer, LoadCursorW, MSG, MSGFLT_ALLOW, MoveWindow,
+    GetWindowLongPtrW, HMENU, IDC_ARROW, KillTimer, LoadCursorW, MSG, MoveWindow,
     PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetTimer,
     SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA,
     WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
@@ -761,12 +761,10 @@ unsafe fn enable_automation(hwnd: HWND) -> Result<(), String> {
         return Err(last_os_error("MapViewOfFile"));
     }
 
-    if ChangeWindowMessageFilterEx(hwnd, WM_COPYDATA, MSGFLT_ALLOW, null_mut()) == 0 {
-        UnmapViewOfFile(view);
-        CloseHandle(mapping);
-        return Err(last_os_error("ChangeWindowMessageFilterEx"));
-    }
-
+    // No ChangeWindowMessageFilterEx: the driver and any user-automation client run
+    // at the same integrity level as the app (same user/session), so UIPI never
+    // blocks their WM_COPYDATA. Adding the filter would only let lower-integrity
+    // processes reach the automation surface.
     (view.Value as *mut u32).write_unaligned(0);
     state_mut(hwnd).automation = Some(AutomationState {
         response_name,
