@@ -22,6 +22,30 @@ fn no_args_runs_non_windows_stub() {
 }
 
 #[test]
+fn automation_flag_runs_non_windows_stub() {
+    let output = run_ui(&["--automation"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout utf-8"),
+        "mmatrix-ui non-windows stub\n"
+    );
+    assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
+}
+
+#[test]
+fn render_state_runs_non_windows_stub() {
+    let output = run_ui(&["--render-state", "state.json"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout utf-8"),
+        "mmatrix-ui non-windows stub\n"
+    );
+    assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
+}
+
+#[test]
 fn self_test_prints_core_self_test_line() {
     let output = run_ui(&["--self-test"]);
 
@@ -53,10 +77,13 @@ fn help_prints_extended_usage() {
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
         "\
-usage: mmatrix-ui [--self-test|--auto-close|--help]
-  --self-test   create the Win32 shell, verify the edit control, and exit
-  --auto-close  create the Win32 shell and close it automatically
-  --help        show this help
+usage: mmatrix-ui [--automation] [--render-state <file.json>]
+       mmatrix-ui [--self-test|--auto-close|--help]
+  --automation                enable automation control surface
+  --render-state <file.json>  load synthetic render state at startup
+  --self-test                 create the Win32 shell, verify the edit control, and exit
+  --auto-close                create the Win32 shell and close it automatically
+  --help                      show this help
 "
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
@@ -70,6 +97,6 @@ fn invalid_arguments_exit_with_usage_error() {
     assert_eq!(String::from_utf8(output.stdout).expect("stdout utf-8"), "");
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr utf-8"),
-        "usage: mmatrix-ui [--self-test|--auto-close|--help]\n"
+        "usage: mmatrix-ui [--automation] [--render-state <file.json>] | [--self-test|--auto-close|--help]\n"
     );
 }

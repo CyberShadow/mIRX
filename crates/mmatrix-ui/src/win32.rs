@@ -121,7 +121,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     });
 
     let hwnd = create_main_window(instance, state)?;
-    let bridge = if matches!(command, AppCommand::Run | AppCommand::AutoClose) {
+    let bridge = if matches!(command, AppCommand::Run(_) | AppCommand::AutoClose) {
         let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
         unsafe {
             state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
@@ -141,7 +141,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             AppCommand::AutoClose => {
                 SetTimer(hwnd, AUTO_CLOSE_TIMER_ID, AUTO_CLOSE_DELAY_MS, None);
             }
-            AppCommand::Run | AppCommand::Help => {}
+            AppCommand::Run(_) | AppCommand::Help => {}
         }
     }
 

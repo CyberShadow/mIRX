@@ -4,7 +4,7 @@ use crate::{AppCommand, HELP};
 
 pub(crate) fn run(command: AppCommand) -> ExitCode {
     match command {
-        AppCommand::Run => {
+        AppCommand::Run(_) => {
             println!("mmatrix-ui non-windows stub");
             ExitCode::SUCCESS
         }

@@ -2044,6 +2044,8 @@ name = "mmatrix-ui"
 version = "0.1.0"
 dependencies = [
  "mmatrix-core",
+ "serde",
+ "serde_json",
  "windows-sys 0.61.2",
 ]
 
