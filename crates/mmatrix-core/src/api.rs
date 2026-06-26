@@ -45,6 +45,7 @@ pub struct SendTextRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomSummary {
     pub room_id: String,
     pub display_name: String,
@@ -52,18 +53,21 @@ pub struct RoomSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimelineText {
     pub room_id: String,
     pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VerificationRequest {
     pub flow_id: String,
     pub user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CoreErrorEvent {
     pub operation: Operation,
     pub message: String,

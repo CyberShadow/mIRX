@@ -644,6 +644,27 @@ mod tests {
     }
 
     #[test]
+    fn load_command_rejects_unknown_fields_inside_event_payloads() {
+        let error = parse_command_request(
+            COMMAND_ID_LOAD_SYNTHETIC_STATE,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"unexpected":true}]}]}}"#,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({
+                "id":"load",
+                "ok":false,
+                "err":{
+                    "code":"invalid_args",
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`"
+                }
+            })
+        );
+    }
+
+    #[test]
     fn response_dtos_match_documented_shapes() {
         assert_eq!(
             serde_json::to_value(success_response("version", GetVersionResponse::current()))
