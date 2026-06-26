@@ -50,38 +50,15 @@ impl CommandKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParsedCommand {
-    Ping {
-        id: String,
-    },
-    GetVersion {
-        id: String,
-    },
-    WaitIdle {
-        id: String,
-        args: WaitIdleArgs,
-    },
-    DumpModel {
-        id: String,
-    },
-    DumpTimeline {
-        id: String,
-        args: DumpTimelineArgs,
-    },
-    ListRooms {
-        id: String,
-    },
-    SelectRoom {
-        id: String,
-        args: SelectRoomArgs,
-    },
-    SendText {
-        id: String,
-        args: SendTextArgs,
-    },
-    LoadSyntheticState {
-        id: String,
-        args: LoadSyntheticStateArgs,
-    },
+    Ping { id: String },
+    GetVersion { id: String },
+    WaitIdle { id: String, args: WaitIdleArgs },
+    DumpModel { id: String },
+    DumpTimeline { id: String, args: DumpTimelineArgs },
+    ListRooms { id: String },
+    SelectRoom { id: String, args: SelectRoomArgs },
+    SendText { id: String, args: SendTextArgs },
+    LoadSyntheticState { id: String, args: LoadEventsArgs },
 }
 
 impl ParsedCommand {
@@ -139,8 +116,8 @@ pub(crate) struct SendTextArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct LoadSyntheticStateArgs {
-    pub(crate) json: SyntheticState,
+pub(crate) struct LoadEventsArgs {
+    pub(crate) events: Vec<Event>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -244,7 +221,7 @@ pub(crate) struct SendTextResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct LoadSyntheticStateResponse {
+pub(crate) struct LoadEventsResponse {
     pub(crate) loaded: bool,
     pub(crate) rooms: usize,
     pub(crate) timeline_events: usize,
@@ -290,142 +267,6 @@ pub(crate) struct DumpError {
     pub(crate) message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SyntheticState {
-    pub(crate) rooms: Vec<SyntheticRoom>,
-    pub(crate) timelines: Vec<SyntheticTimeline>,
-    pub(crate) selected_room: Option<String>,
-    pub(crate) verification: Option<SyntheticVerification>,
-    pub(crate) error: Option<SyntheticError>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SyntheticRoom {
-    pub(crate) room_id: String,
-    pub(crate) display_name: String,
-    pub(crate) encrypted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SyntheticTimeline {
-    pub(crate) room_id: String,
-    pub(crate) lines: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SyntheticVerification {
-    pub(crate) flow_id: String,
-    pub(crate) user_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SyntheticError {
-    pub(crate) operation: String,
-    pub(crate) message: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SyntheticLoad {
-    pub(crate) events: Vec<Event>,
-    pub(crate) selected_room: Option<String>,
-    pub(crate) room_count: usize,
-    pub(crate) timeline_event_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SyntheticStateError {
-    SelectedRoomNotFound(String),
-    TimelineRoomNotFound(String),
-    UnsupportedOperation(String),
-}
-
-impl SyntheticState {
-    pub(crate) fn validate(&self) -> Result<(), SyntheticStateError> {
-        if let Some(room_id) = &self.selected_room
-            && !self.rooms.iter().any(|room| room.room_id == *room_id)
-        {
-            return Err(SyntheticStateError::SelectedRoomNotFound(room_id.clone()));
-        }
-
-        for timeline in &self.timelines {
-            if !self
-                .rooms
-                .iter()
-                .any(|room| room.room_id == timeline.room_id)
-            {
-                return Err(SyntheticStateError::TimelineRoomNotFound(
-                    timeline.room_id.clone(),
-                ));
-            }
-        }
-
-        if let Some(error) = &self.error
-            && parse_operation_code(&error.operation).is_none()
-        {
-            return Err(SyntheticStateError::UnsupportedOperation(
-                error.operation.clone(),
-            ));
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn to_synthetic_load(&self) -> Result<SyntheticLoad, SyntheticStateError> {
-        self.validate()?;
-
-        let mut events = Vec::new();
-        events.push(Event::Started);
-        events.push(Event::SyncedRooms(
-            self.rooms
-                .iter()
-                .map(|room| RoomSummary {
-                    room_id: room.room_id.clone(),
-                    display_name: room.display_name.clone(),
-                    encrypted: room.encrypted,
-                })
-                .collect(),
-        ));
-
-        let mut timeline_event_count = 0;
-        for timeline in &self.timelines {
-            for line in &timeline.lines {
-                events.push(Event::TimelineText(TimelineText {
-                    room_id: timeline.room_id.clone(),
-                    body: line.clone(),
-                }));
-                timeline_event_count += 1;
-            }
-        }
-
-        if let Some(verification) = &self.verification {
-            events.push(Event::VerificationRequest(VerificationRequest {
-                flow_id: verification.flow_id.clone(),
-                user_id: verification.user_id.clone(),
-            }));
-        }
-
-        if let Some(error) = &self.error {
-            events.push(Event::Error(CoreErrorEvent {
-                operation: parse_operation_code(&error.operation)
-                    .expect("synthetic error operation must validate before conversion"),
-                message: error.message.clone(),
-            }));
-        }
-
-        Ok(SyntheticLoad {
-            events,
-            selected_room: self.selected_room.clone(),
-            room_count: self.rooms.len(),
-            timeline_event_count,
-        })
-    }
-}
-
 pub(crate) fn operation_code(operation: Operation) -> &'static str {
     match operation {
         Operation::Login => "login",
@@ -434,18 +275,6 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SendText => "send_text",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
-    }
-}
-
-fn parse_operation_code(operation: &str) -> Option<Operation> {
-    match operation {
-        "login" => Some(Operation::Login),
-        "restore_session" => Some(Operation::RestoreSession),
-        "start_sync" => Some(Operation::StartSync),
-        "send_text" => Some(Operation::SendText),
-        "logout" => Some(Operation::Logout),
-        "shutdown" => Some(Operation::Shutdown),
-        _ => None,
     }
 }
 
@@ -531,7 +360,7 @@ pub(crate) fn parse_command_request(
         }),
         CommandKind::LoadSyntheticState => Ok(ParsedCommand::LoadSyntheticState {
             id: envelope.id.clone(),
-            args: parse_args_required::<LoadSyntheticStateArgs>(&envelope.id, envelope.args)?,
+            args: parse_args_required::<LoadEventsArgs>(&envelope.id, envelope.args)?,
         }),
     }
 }
@@ -594,11 +423,9 @@ mod tests {
         COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SEND_TEXT, COMMAND_ID_WAIT_IDLE, CommandKind,
         DumpTimelineArgs, DumpTimelineResponse, GetVersionResponse, ListRoomsResponse,
-        LoadSyntheticStateArgs, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope,
-        SelectRoomArgs, SelectRoomResponse, SendTextArgs, SendTextResponse, SyntheticError,
-        SyntheticLoad, SyntheticRoom, SyntheticState, SyntheticStateError, SyntheticTimeline,
-        SyntheticVerification, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        LoadEventsArgs, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomArgs,
+        SelectRoomResponse, SendTextArgs, SendTextResponse, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     #[test]
@@ -721,19 +548,24 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"json":{"rooms":[],"timelines":[],"selected_room":null,"verification":null,"error":null}}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}]},{"TimelineText":{"room_id":"!room:example","body":"hello"}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
                 id: "load".to_owned(),
-                args: LoadSyntheticStateArgs {
-                    json: SyntheticState {
-                        rooms: Vec::new(),
-                        timelines: Vec::new(),
-                        selected_room: None,
-                        verification: None,
-                        error: None,
-                    },
+                args: LoadEventsArgs {
+                    events: vec![
+                        Event::Started,
+                        Event::SyncedRooms(vec![RoomSummary {
+                            room_id: "!room:example".to_owned(),
+                            display_name: "Room".to_owned(),
+                            encrypted: true,
+                        }]),
+                        Event::TimelineText(TimelineText {
+                            room_id: "!room:example".to_owned(),
+                            body: "hello".to_owned(),
+                        }),
+                    ],
                 },
             }
         );
@@ -782,155 +614,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_selected_room_before_conversion() {
-        let state = SyntheticState {
-            rooms: vec![SyntheticRoom {
-                room_id: "!known:example".to_owned(),
-                display_name: "Known".to_owned(),
+    fn load_command_uses_real_event_json_schema() {
+        let events = vec![
+            Event::Started,
+            Event::SyncedRooms(vec![RoomSummary {
+                room_id: "!one:example".to_owned(),
+                display_name: "One".to_owned(),
                 encrypted: false,
-            }],
-            timelines: Vec::new(),
-            selected_room: Some("!missing:example".to_owned()),
-            verification: None,
-            error: None,
-        };
-
-        assert_eq!(
-            state.to_synthetic_load(),
-            Err(SyntheticStateError::SelectedRoomNotFound(
-                "!missing:example".to_owned()
-            ))
-        );
-    }
-
-    #[test]
-    fn rejects_unknown_timeline_room_before_conversion() {
-        let state = SyntheticState {
-            rooms: vec![SyntheticRoom {
-                room_id: "!known:example".to_owned(),
-                display_name: "Known".to_owned(),
-                encrypted: false,
-            }],
-            timelines: vec![SyntheticTimeline {
-                room_id: "!missing:example".to_owned(),
-                lines: vec!["hello".to_owned()],
-            }],
-            selected_room: None,
-            verification: None,
-            error: None,
-        };
-
-        assert_eq!(
-            state.to_synthetic_load(),
-            Err(SyntheticStateError::TimelineRoomNotFound(
-                "!missing:example".to_owned()
-            ))
-        );
-    }
-
-    #[test]
-    fn rejects_unsupported_error_operation_before_conversion() {
-        let state = SyntheticState {
-            rooms: vec![SyntheticRoom {
-                room_id: "!known:example".to_owned(),
-                display_name: "Known".to_owned(),
-                encrypted: false,
-            }],
-            timelines: Vec::new(),
-            selected_room: None,
-            verification: None,
-            error: Some(SyntheticError {
-                operation: "mystery".to_owned(),
-                message: "boom".to_owned(),
-            }),
-        };
-
-        assert_eq!(
-            state.to_synthetic_load(),
-            Err(SyntheticStateError::UnsupportedOperation(
-                "mystery".to_owned()
-            ))
-        );
-    }
-
-    #[test]
-    fn converts_valid_synthetic_state_to_ordered_core_events() {
-        let state = SyntheticState {
-            rooms: vec![
-                SyntheticRoom {
-                    room_id: "!one:example".to_owned(),
-                    display_name: "One".to_owned(),
-                    encrypted: false,
-                },
-                SyntheticRoom {
-                    room_id: "!two:example".to_owned(),
-                    display_name: "Two".to_owned(),
-                    encrypted: true,
-                },
-            ],
-            timelines: vec![
-                SyntheticTimeline {
-                    room_id: "!two:example".to_owned(),
-                    lines: vec!["first".to_owned(), "second".to_owned()],
-                },
-                SyntheticTimeline {
-                    room_id: "!one:example".to_owned(),
-                    lines: vec!["third".to_owned()],
-                },
-            ],
-            selected_room: Some("!two:example".to_owned()),
-            verification: Some(SyntheticVerification {
+            }]),
+            Event::VerificationRequest(VerificationRequest {
                 flow_id: "flow-1".to_owned(),
                 user_id: "@alice:example".to_owned(),
             }),
-            error: Some(SyntheticError {
-                operation: "send_text".to_owned(),
+            Event::Error(CoreErrorEvent {
+                operation: Operation::SendText,
                 message: "send failed".to_owned(),
             }),
-        };
+        ];
 
-        let load = state.to_synthetic_load().unwrap();
-
-        assert_eq!(load.selected_room, Some("!two:example".to_owned()));
-        assert_eq!(load.room_count, 2);
-        assert_eq!(load.timeline_event_count, 3);
         assert_eq!(
-            load.events,
-            vec![
-                Event::Started,
-                Event::SyncedRooms(vec![
-                    RoomSummary {
-                        room_id: "!one:example".to_owned(),
-                        display_name: "One".to_owned(),
-                        encrypted: false,
-                    },
-                    RoomSummary {
-                        room_id: "!two:example".to_owned(),
-                        display_name: "Two".to_owned(),
-                        encrypted: true,
-                    },
-                ]),
-                Event::TimelineText(TimelineText {
-                    room_id: "!two:example".to_owned(),
-                    body: "first".to_owned(),
-                }),
-                Event::TimelineText(TimelineText {
-                    room_id: "!two:example".to_owned(),
-                    body: "second".to_owned(),
-                }),
-                Event::TimelineText(TimelineText {
-                    room_id: "!one:example".to_owned(),
-                    body: "third".to_owned(),
-                }),
-                Event::VerificationRequest(VerificationRequest {
-                    flow_id: "flow-1".to_owned(),
-                    user_id: "@alice:example".to_owned(),
-                }),
-                Event::Error(CoreErrorEvent {
-                    operation: Operation::SendText,
-                    message: "send failed".to_owned(),
-                }),
-            ]
+            serde_json::to_value(&events).unwrap(),
+            json!([
+                "Started",
+                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false}]},
+                {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
+                {"Error":{"operation":"SendText","message":"send failed"}}
+            ])
         );
     }
 
@@ -1035,7 +744,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(success_response(
                 "load",
-                super::LoadSyntheticStateResponse {
+                super::LoadEventsResponse {
                     loaded: true,
                     rooms: 2,
                     timeline_events: 3,
@@ -1099,18 +808,5 @@ mod tests {
                 message: "failed".to_owned(),
             }
         );
-    }
-
-    #[test]
-    fn synthetic_load_retains_counts() {
-        let load = SyntheticLoad {
-            events: vec![Event::Started],
-            selected_room: None,
-            room_count: 1,
-            timeline_event_count: 0,
-        };
-
-        assert_eq!(load.room_count, 1);
-        assert_eq!(load.timeline_event_count, 0);
     }
 }

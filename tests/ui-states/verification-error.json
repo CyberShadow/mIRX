@@ -1,39 +1,53 @@
-{
-  "rooms": [
-    {
-      "room_id": "!support:example",
-      "display_name": "Support",
-      "encrypted": false
-    },
-    {
-      "room_id": "!verify:example",
-      "display_name": "Verify",
-      "encrypted": true
-    }
-  ],
-  "timelines": [
-    {
-      "room_id": "!support:example",
-      "lines": [
-        "support queue is empty"
-      ]
-    },
-    {
-      "room_id": "!verify:example",
-      "lines": [
-        "verification requested by @alice:example",
-        "sas emoji ready",
-        "waiting for confirmation"
-      ]
-    }
-  ],
-  "selected_room": "!verify:example",
-  "verification": {
-    "flow_id": "flow-verify-123",
-    "user_id": "@alice:example"
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!verify:example",
+        "display_name": "Verify",
+        "encrypted": true
+      },
+      {
+        "room_id": "!support:example",
+        "display_name": "Support",
+        "encrypted": false
+      }
+    ]
   },
-  "error": {
-    "operation": "send_text",
-    "message": "message send failed for event $event123"
+  {
+    "TimelineText": {
+      "room_id": "!support:example",
+      "body": "support queue is empty"
+    }
+  },
+  {
+    "TimelineText": {
+      "room_id": "!verify:example",
+      "body": "verification requested by @alice:example"
+    }
+  },
+  {
+    "TimelineText": {
+      "room_id": "!verify:example",
+      "body": "sas emoji ready"
+    }
+  },
+  {
+    "TimelineText": {
+      "room_id": "!verify:example",
+      "body": "waiting for confirmation"
+    }
+  },
+  {
+    "VerificationRequest": {
+      "flow_id": "flow-verify-123",
+      "user_id": "@alice:example"
+    }
+  },
+  {
+    "Error": {
+      "operation": "SendText",
+      "message": "message send failed for event $event123"
+    }
   }
-}
+]

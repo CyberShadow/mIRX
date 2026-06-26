@@ -20,7 +20,7 @@ const HELP: &str = "\
 usage: mmatrix-ui [--automation] [--render-state <file.json>]
        mmatrix-ui [--self-test|--auto-close|--help]
   --automation                enable automation control surface
-  --render-state <file.json>  load synthetic render state at startup
+  --render-state <file.json>  load render-state events at startup
   --self-test                 create the Win32 shell, verify the edit control, and exit
   --auto-close                create the Win32 shell and close it automatically
   --help                      show this help";

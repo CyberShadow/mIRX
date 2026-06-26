@@ -8,6 +8,8 @@ use std::time::Duration;
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use serde_json::Value;
 
 #[cfg(windows)]
 const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
@@ -99,45 +101,6 @@ pub struct UiError {
 pub struct ProtocolVersion {
     pub protocol_version: u32,
     pub app_version: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyntheticState {
-    pub rooms: Vec<SyntheticRoom>,
-    pub timelines: Vec<SyntheticTimeline>,
-    pub selected_room: Option<String>,
-    pub verification: Option<SyntheticVerification>,
-    pub error: Option<SyntheticError>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyntheticRoom {
-    pub room_id: String,
-    pub display_name: String,
-    pub encrypted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyntheticTimeline {
-    pub room_id: String,
-    pub lines: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyntheticVerification {
-    pub flow_id: String,
-    pub user_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SyntheticError {
-    pub operation: String,
-    pub message: String,
 }
 
 #[derive(Debug)]
@@ -236,8 +199,12 @@ impl MmatrixApp {
         self.inner.send_text(room_id, body)
     }
 
-    pub fn load_synthetic_state(&self, state: &SyntheticState) -> Result<(), TestkitError> {
-        self.inner.load_synthetic_state(state)
+    pub fn load_events(&self, events_json: &str) -> Result<(), TestkitError> {
+        self.inner.load_events(events_json)
+    }
+
+    pub fn load_events_from_file(&self, path: impl AsRef<Path>) -> Result<(), TestkitError> {
+        self.inner.load_events_from_file(path.as_ref())
     }
 
     pub fn wait_for_timeline_contains(
@@ -293,8 +260,8 @@ struct SendTextArgs<'a> {
 
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct LoadSyntheticStateArgs<'a> {
-    json: &'a SyntheticState,
+struct LoadEventsArgs {
+    events: Value,
 }
 
 #[cfg(windows)]
@@ -365,7 +332,7 @@ struct SendTextResponse {
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LoadSyntheticStateResponse {
+struct LoadEventsResponse {
     loaded: bool,
     rooms: usize,
     timeline_events: usize,
@@ -447,10 +414,13 @@ mod imp {
             ))
         }
 
-        pub(crate) fn load_synthetic_state(
-            &self,
-            _state: &SyntheticState,
-        ) -> Result<(), TestkitError> {
+        pub(crate) fn load_events(&self, _events_json: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn load_events_from_file(&self, _path: &Path) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -699,14 +669,10 @@ mod imp {
             }
         }
 
-        pub(crate) fn load_synthetic_state(
-            &self,
-            state: &SyntheticState,
-        ) -> Result<(), TestkitError> {
-            let response: LoadSyntheticStateResponse = self.send_command(
-                COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                LoadSyntheticStateArgs { json: state },
-            )?;
+        pub(crate) fn load_events(&self, events_json: &str) -> Result<(), TestkitError> {
+            let events = serde_json::from_str(events_json)?;
+            let response: LoadEventsResponse =
+                self.send_command(COMMAND_ID_LOAD_SYNTHETIC_STATE, LoadEventsArgs { events })?;
             if response.loaded {
                 Ok(())
             } else {
@@ -715,6 +681,11 @@ mod imp {
                     response.rooms, response.timeline_events
                 )))
             }
+        }
+
+        pub(crate) fn load_events_from_file(&self, path: &Path) -> Result<(), TestkitError> {
+            let events_json = fs::read_to_string(path)?;
+            self.load_events(&events_json)
         }
 
         pub(crate) fn wait_for_timeline_contains(

@@ -36,27 +36,26 @@ use windows_sys::Win32::UI::Controls::{
     TVM_DELETEITEM, TVM_EXPAND, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW,
-    CreateWindowExW, DefFrameProcW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    ES_AUTOHSCROLL, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
-    GetWindowLongPtrW, HMENU, IDC_ARROW, KillTimer, LoadCursorW, MSG, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetTimer,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA,
-    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateWindowExW,
+    DefFrameProcW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_AUTOHSCROLL, GWLP_USERDATA,
+    GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
+    KillTimer, LoadCursorW, MSG, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SW_SHOW, SendMessageW, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+    WINDOW_EX_STYLE, WM_APP, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_KEYDOWN, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WNDPROC, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
+    WS_VISIBLE,
 };
 
 use crate::{
     AppCommand, HELP, RunOptions,
     automation::{
-        self, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
+        COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
         COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
-        ListRoomsResponse, LoadSyntheticStateResponse, ParsedCommand, PongResponse,
-        ResponseEnvelope, SelectRoomResponse, SendTextResponse, SyntheticLoad, SyntheticState,
-        SyntheticStateError, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
-        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
-        parse_command_request, success_response,
+        ListRoomsResponse, LoadEventsResponse, ParsedCommand, PongResponse, ResponseEnvelope,
+        SelectRoomResponse, SendTextResponse, WaitIdleResponse, dump_error_from_core,
+        dump_room_from_summary, dump_timeline_line_from_text, dump_verification_from_request,
+        failure_response, parse_command_request, success_response,
     },
 };
 
@@ -138,7 +137,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    let render_state_load = match &command {
+    let render_state_events = match &command {
         AppCommand::Run(options) => load_render_state(options)?,
         AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => None,
     };
@@ -191,8 +190,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
 
         unsafe {
             ShowWindow(hwnd, SW_SHOW);
-            if let Some(load) = render_state_load {
-                apply_synthetic_load(hwnd, load)?;
+            if let Some(events) = render_state_events {
+                apply_event_load(hwnd, events)?;
             }
         }
 
@@ -268,27 +267,21 @@ fn should_start_core_bridge(command: &AppCommand) -> bool {
     }
 }
 
-fn load_render_state(options: &RunOptions) -> Result<Option<SyntheticLoad>, String> {
+fn load_render_state(options: &RunOptions) -> Result<Option<Vec<Event>>, String> {
     let Some(path) = &options.render_state else {
         return Ok(None);
     };
 
     let file_bytes = fs::read(path)
         .map_err(|err| format!("failed to read render-state file {}: {err}", path.display()))?;
-    let state: SyntheticState = serde_json::from_slice(&file_bytes).map_err(|err| {
-        format!(
-            "failed to parse render-state file {} as JSON: {err}",
-            path.display()
-        )
-    })?;
-
-    state.to_synthetic_load().map(Some).map_err(|err| {
-        format!(
-            "invalid render-state file {}: {}",
-            path.display(),
-            synthetic_state_error_message(&err)
-        )
-    })
+    serde_json::from_slice(&file_bytes)
+        .map(Some)
+        .map_err(|err| {
+            format!(
+                "failed to parse render-state file {} as JSON event list: {err}",
+                path.display()
+            )
+        })
 }
 
 fn bridge_core_events(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>, handle: CoreHandle) {
@@ -980,19 +973,13 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )
         }
         ParsedCommand::LoadSyntheticState { id, args } => {
-            let load = args.json.to_synthetic_load().map_err(|error| {
-                failure_response(
-                    Some(id.clone()),
-                    "invalid_synthetic_state",
-                    synthetic_state_error_message(&error),
-                )
-            })?;
-            let (rooms, timeline_events) = apply_synthetic_load(hwnd, load).map_err(|message| {
-                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
-            })?;
+            let (rooms, timeline_events) =
+                apply_event_load(hwnd, args.events).map_err(|message| {
+                    failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+                })?;
             serialize_success_json(
                 &id,
-                LoadSyntheticStateResponse {
+                LoadEventsResponse {
                     loaded: true,
                     rooms,
                     timeline_events,
@@ -1177,37 +1164,37 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
         return Err(format!("self-test failed: unexpected ping response {ping}"));
     }
 
-    let synthetic_state = SyntheticState {
-        rooms: vec![
-            automation::SyntheticRoom {
+    let events = vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            RoomSummary {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
                 encrypted: false,
             },
-            automation::SyntheticRoom {
+            RoomSummary {
                 room_id: "!two:example".to_owned(),
                 display_name: "Two".to_owned(),
                 encrypted: true,
             },
-        ],
-        timelines: vec![
-            automation::SyntheticTimeline {
-                room_id: "!one:example".to_owned(),
-                lines: vec!["first line".to_owned(), "second line".to_owned()],
-            },
-            automation::SyntheticTimeline {
-                room_id: "!two:example".to_owned(),
-                lines: vec!["third line".to_owned()],
-            },
-        ],
-        selected_room: Some("!one:example".to_owned()),
-        verification: None,
-        error: None,
-    };
+        ]),
+        Event::TimelineText(TimelineText {
+            room_id: "!one:example".to_owned(),
+            body: "first line".to_owned(),
+        }),
+        Event::TimelineText(TimelineText {
+            room_id: "!one:example".to_owned(),
+            body: "second line".to_owned(),
+        }),
+        Event::TimelineText(TimelineText {
+            room_id: "!two:example".to_owned(),
+            body: "third line".to_owned(),
+        }),
+    ];
     let load_response = send_automation_request(
         hwnd,
         COMMAND_ID_LOAD_SYNTHETIC_STATE,
-        json!({"id":"load","args":{"json":synthetic_state}}),
+        json!({"id":"load","args":{"events":events}}),
     )?;
     if load_response["ok"] != json!(true)
         || load_response["json"] != json!({"loaded": true, "rooms": 2, "timeline_events": 3})
@@ -1278,36 +1265,37 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) {
     refresh_tree(hwnd);
 }
 
-unsafe fn apply_synthetic_load(hwnd: HWND, load: SyntheticLoad) -> Result<(usize, usize), String> {
+unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usize), String> {
     {
         let state = state_mut(hwnd);
         state.synthetic_load_in_progress = true;
         state.model = UiModel::default();
     }
 
-    apply_events_and_refresh(hwnd, load.events);
+    apply_events_and_refresh(hwnd, events);
 
-    let selection_result = {
+    let (rooms, timeline_events, selection_result) = {
         let state = state_mut(hwnd);
-        let selected_room = load
-            .selected_room
-            .clone()
-            .or_else(|| state.model.rooms.first().map(|room| room.room_id.clone()));
+        let rooms = state.model.rooms.len();
+        let timeline_events = state.model.timelines.values().map(Vec::len).sum();
+        let selected_room = state.model.rooms.first().map(|room| room.room_id.clone());
 
-        match selected_room {
+        let selection_result = match selected_room {
             Some(room_id) => select_room(state, &room_id),
             None => {
                 state.model.selected_room = None;
                 Ok(())
             }
-        }
+        };
+
+        (rooms, timeline_events, selection_result)
     };
 
     state_mut(hwnd).synthetic_load_in_progress = false;
     selection_result?;
     refresh_tree(hwnd);
 
-    Ok((load.room_count, load.timeline_event_count))
+    Ok((rooms, timeline_events))
 }
 
 unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> usize {
@@ -1540,20 +1528,6 @@ fn set_edit_text(hwnd: HWND, text: &str) {
 
 fn wide_null(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain([0]).collect()
-}
-
-fn synthetic_state_error_message(error: &SyntheticStateError) -> String {
-    match error {
-        SyntheticStateError::SelectedRoomNotFound(room_id) => {
-            format!("selected room was not found: {room_id}")
-        }
-        SyntheticStateError::TimelineRoomNotFound(room_id) => {
-            format!("timeline room was not found: {room_id}")
-        }
-        SyntheticStateError::UnsupportedOperation(operation) => {
-            format!("unsupported operation code: {operation}")
-        }
-    }
 }
 
 fn last_os_error(operation: &str) -> String {

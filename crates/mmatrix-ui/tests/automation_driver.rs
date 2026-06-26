@@ -6,9 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mmatrix_testkit::{
-    MmatrixApp, Room, SyntheticRoom, SyntheticState, SyntheticTimeline, TestkitError, TimelineLine,
-};
+use mmatrix_core::{Event, RoomSummary, TimelineText};
+use mmatrix_testkit::{MmatrixApp, Room, TestkitError, TimelineLine, UiError, Verification};
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
@@ -50,79 +49,84 @@ fn unique_screenshot_path() -> PathBuf {
     env::temp_dir().join(format!("mmatrix-ui-automation-driver-{unique}.png"))
 }
 
-fn write_state_file(state: &SyntheticState) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn fixture_state_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/ui-states")
+        .join(name)
+}
+
+fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let state_path = unique_state_path();
-    fs::write(&state_path, serde_json::to_vec(state)?)?;
+    fs::write(&state_path, serde_json::to_vec(events)?)?;
     Ok(state_path)
 }
 
-fn base_state() -> SyntheticState {
-    SyntheticState {
-        rooms: vec![
-            SyntheticRoom {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
-            SyntheticRoom {
+fn base_events() -> Vec<Event> {
+    vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            RoomSummary {
                 room_id: "!beta:example".to_owned(),
                 display_name: "Beta".to_owned(),
                 encrypted: true,
             },
-        ],
-        timelines: vec![
-            SyntheticTimeline {
+            RoomSummary {
                 room_id: "!alpha:example".to_owned(),
-                lines: vec!["alpha first".to_owned()],
+                display_name: "Alpha".to_owned(),
+                encrypted: false,
             },
-            SyntheticTimeline {
-                room_id: "!beta:example".to_owned(),
-                lines: vec!["beta first".to_owned(), "beta second".to_owned()],
-            },
-        ],
-        selected_room: Some("!beta:example".to_owned()),
-        verification: None,
-        error: None,
-    }
+        ]),
+        Event::TimelineText(TimelineText {
+            room_id: "!alpha:example".to_owned(),
+            body: "alpha first".to_owned(),
+        }),
+        Event::TimelineText(TimelineText {
+            room_id: "!beta:example".to_owned(),
+            body: "beta first".to_owned(),
+        }),
+        Event::TimelineText(TimelineText {
+            room_id: "!beta:example".to_owned(),
+            body: "beta second".to_owned(),
+        }),
+    ]
 }
 
-fn replacement_state() -> SyntheticState {
-    SyntheticState {
-        rooms: vec![
-            SyntheticRoom {
+fn replacement_events() -> Vec<Event> {
+    vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            RoomSummary {
                 room_id: "!gamma:example".to_owned(),
                 display_name: "Gamma".to_owned(),
                 encrypted: false,
             },
-            SyntheticRoom {
+            RoomSummary {
                 room_id: "!delta:example".to_owned(),
                 display_name: "Delta".to_owned(),
                 encrypted: false,
             },
-        ],
-        timelines: vec![
-            SyntheticTimeline {
-                room_id: "!gamma:example".to_owned(),
-                lines: vec!["gamma only".to_owned()],
-            },
-            SyntheticTimeline {
-                room_id: "!delta:example".to_owned(),
-                lines: vec!["delta first".to_owned(), "delta second".to_owned()],
-            },
-        ],
-        selected_room: Some("!gamma:example".to_owned()),
-        verification: None,
-        error: None,
-    }
+        ]),
+        Event::TimelineText(TimelineText {
+            room_id: "!gamma:example".to_owned(),
+            body: "gamma only".to_owned(),
+        }),
+        Event::TimelineText(TimelineText {
+            room_id: "!delta:example".to_owned(),
+            body: "delta first".to_owned(),
+        }),
+        Event::TimelineText(TimelineText {
+            room_id: "!delta:example".to_owned(),
+            body: "delta second".to_owned(),
+        }),
+    ]
 }
 
 #[test]
-fn automation_driver_launches_real_ui_and_reads_synthetic_state()
+fn automation_driver_launches_real_ui_and_reads_event_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
-    let state = base_state();
-    let state_path = write_state_file(&state)?;
+    let state_path = write_state_file(&base_events())?;
 
     let args = [
         OsString::from("--render-state"),
@@ -136,14 +140,14 @@ fn automation_driver_launches_real_ui_and_reads_synthetic_state()
         model.rooms,
         vec![
             Room {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
-            Room {
                 room_id: "!beta:example".to_owned(),
                 display_name: "Beta".to_owned(),
                 encrypted: true,
+            },
+            Room {
+                room_id: "!alpha:example".to_owned(),
+                display_name: "Alpha".to_owned(),
+                encrypted: false,
             },
         ]
     );
@@ -178,7 +182,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
-    let state_path = write_state_file(&base_state())?;
+    let state_path = write_state_file(&base_events())?;
 
     let args = [
         OsString::from("--render-state"),
@@ -198,14 +202,14 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
         attached.list_rooms()?,
         vec![
             Room {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
-            Room {
                 room_id: "!beta:example".to_owned(),
                 display_name: "Beta".to_owned(),
                 encrypted: true,
+            },
+            Room {
+                room_id: "!alpha:example".to_owned(),
+                display_name: "Alpha".to_owned(),
+                encrypted: false,
             },
         ]
     );
@@ -213,8 +217,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.select_room("!alpha:example")?;
     assert_eq!(attached.timeline(None)?, vec!["alpha first".to_owned()]);
 
-    let replacement = replacement_state();
-    attached.load_synthetic_state(&replacement)?;
+    attached.load_events(&serde_json::to_string(&replacement_events())?)?;
     attached.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
@@ -248,6 +251,80 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
         }
         other => panic!("expected protocol error for unknown room, got {other:?}"),
     }
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_loads_checked_in_event_fixture_via_file_api()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let attached = MmatrixApp::find(Duration::from_secs(5))?;
+    let fixture_path = fixture_state_path("verification-error.json");
+    attached.load_events_from_file(&fixture_path)?;
+    attached.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        attached.list_rooms()?,
+        vec![
+            Room {
+                room_id: "!verify:example".to_owned(),
+                display_name: "Verify".to_owned(),
+                encrypted: true,
+            },
+            Room {
+                room_id: "!support:example".to_owned(),
+                display_name: "Support".to_owned(),
+                encrypted: false,
+            },
+        ]
+    );
+    assert_eq!(
+        attached.dump_model()?.selected_room.as_deref(),
+        Some("!verify:example")
+    );
+    assert_eq!(
+        attached.timeline(None)?,
+        vec![
+            "verification requested by @alice:example".to_owned(),
+            "sas emoji ready".to_owned(),
+            "waiting for confirmation".to_owned(),
+        ]
+    );
+
+    let model = attached.dump_model()?;
+    assert_eq!(
+        model.last_verification,
+        Some(Verification {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+        })
+    );
+    assert_eq!(
+        model.last_error,
+        Some(UiError {
+            operation: "send_text".to_owned(),
+            message: "message send failed for event $event123".to_owned(),
+        })
+    );
+    assert_eq!(
+        model.last_timeline,
+        Some(TimelineLine {
+            room_id: "!verify:example".to_owned(),
+            body: "waiting for confirmation".to_owned(),
+        })
+    );
 
     let _ = fs::remove_file(&state_path);
     Ok(())

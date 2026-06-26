@@ -2,8 +2,7 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use mmatrix_testkit::{
-    LaunchOptions, MmatrixApp, Model, ProtocolVersion, SyntheticError, SyntheticRoom,
-    SyntheticState, SyntheticTimeline, SyntheticVerification, TestkitError, TimelineLine, UiError,
+    LaunchOptions, MmatrixApp, Model, ProtocolVersion, TestkitError, TimelineLine, UiError,
     Verification,
 };
 
@@ -72,46 +71,38 @@ fn data_models_round_trip_through_json() {
         }),
         selected_room: Some("!room:example".to_owned()),
     };
-    let state = SyntheticState {
-        rooms: vec![SyntheticRoom {
-            room_id: "!room:example".to_owned(),
-            display_name: "Room".to_owned(),
-            encrypted: true,
-        }],
-        timelines: vec![SyntheticTimeline {
-            room_id: "!room:example".to_owned(),
-            lines: vec!["hello".to_owned()],
-        }],
-        selected_room: Some("!room:example".to_owned()),
-        verification: Some(SyntheticVerification {
-            flow_id: "flow".to_owned(),
-            user_id: "@alice:example".to_owned(),
-        }),
-        error: Some(SyntheticError {
-            operation: "send text".to_owned(),
-            message: "failed".to_owned(),
-        }),
-    };
     let version = ProtocolVersion {
         protocol_version: 1,
         app_version: "0.1.0".to_owned(),
     };
+    let events = serde_json::json!([
+        "Started",
+        {
+            "SyncedRooms": [
+                {
+                    "room_id": "!room:example",
+                    "display_name": "Room",
+                    "encrypted": true
+                }
+            ]
+        }
+    ]);
 
     let model_json = serde_json::to_vec(&model).expect("serialize model");
-    let state_json = serde_json::to_vec(&state).expect("serialize state");
     let version_json = serde_json::to_vec(&version).expect("serialize version");
+    let events_json = serde_json::to_vec(&events).expect("serialize events");
 
     assert_eq!(
         serde_json::from_slice::<Model>(&model_json).expect("deserialize model"),
         model
     );
     assert_eq!(
-        serde_json::from_slice::<SyntheticState>(&state_json).expect("deserialize state"),
-        state
-    );
-    assert_eq!(
         serde_json::from_slice::<ProtocolVersion>(&version_json).expect("deserialize version"),
         version
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&events_json).expect("deserialize events"),
+        events
     );
 }
 
@@ -126,19 +117,6 @@ fn data_models_reject_unknown_fields() {
             "last_verification":null,
             "last_error":null,
             "selected_room":null,
-            "unexpected":true
-        }"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<SyntheticState>(
-            r#"{
-            "rooms":[],
-            "timelines":[],
-            "selected_room":null,
-            "verification":null,
-            "error":null,
             "unexpected":true
         }"#
         )
