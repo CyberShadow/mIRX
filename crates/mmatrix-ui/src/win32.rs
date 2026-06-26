@@ -32,8 +32,9 @@ use windows_sys::Win32::System::Memory::{
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
     ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, TVE_EXPAND,
-    TVGN_CARET, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW,
-    TVM_DELETEITEM, TVM_EXPAND, TVM_GETNEXTITEM, TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
+    TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
+    TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateWindowExW,
@@ -44,9 +45,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetTimer, SetWindowLongPtrW,
     ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA,
     WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WM_SIZE,
-    WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
+    WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -54,10 +55,11 @@ use crate::{
     automation::{
         COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
         COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
-        ListRoomsResponse, LoadEventsResponse, ParsedCommand, PongResponse, ResponseEnvelope,
-        SelectRoomResponse, SendTextResponse, WaitIdleResponse, dump_error_from_core,
-        dump_room_from_summary, dump_timeline_line_from_text, dump_verification_from_request,
-        failure_response, parse_command_request, success_response,
+        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode, ParsedCommand,
+        PongResponse, ResponseEnvelope, SelectRoomResponse, SelectViewResponse, SendTextResponse,
+        UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
+        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -853,6 +855,22 @@ fn view_title(model: &UiModel, view_id: &ViewId) -> String {
     }
 }
 
+fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
+    match view_id {
+        ViewId::Status => ViewIdentity::Status,
+        ViewId::Room(room_id) => ViewIdentity::Room {
+            room_id: room_id.clone(),
+        },
+    }
+}
+
+fn view_id_from_identity(identity: &ViewIdentity) -> ViewId {
+    match identity {
+        ViewIdentity::Status => ViewId::Status,
+        ViewIdentity::Room { room_id } => ViewId::Room(room_id.clone()),
+    }
+}
+
 unsafe fn create_mdi_child(frame_hwnd: HWND, title: &str) -> Result<HWND, String> {
     let mdi_client = state_ref(frame_hwnd).controls.mdi_client;
     if mdi_client.is_null() {
@@ -1333,6 +1351,16 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             let dump = dump_model_from_ui(&state_ref(hwnd).model);
             serialize_success_json(&id, dump)
         }
+        ParsedCommand::DumpUiState { id } => {
+            drain_core_events_and_refresh(hwnd);
+            sync_views_and_tree(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "ui_state_unavailable", message)
+            })?;
+            let dump = dump_ui_state(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "ui_state_unavailable", message)
+            })?;
+            serialize_success_json(&id, dump)
+        }
         ParsedCommand::DumpTimeline { id, args } => {
             let room_id = resolve_timeline_room_id(state_ref(hwnd), args.room_id.as_deref())
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
@@ -1362,6 +1390,14 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     selected_room: args.room_id,
                 },
             )
+        }
+        ParsedCommand::SelectView { id, args } => {
+            let requested_view = view_id_from_identity(&args.view);
+            activate_view(hwnd, &requested_view)
+                .map_err(|message| failure_response(Some(id.clone()), "unknown_view", message))?;
+            let active = active_view_identity(hwnd)
+                .map_err(|message| failure_response(Some(id.clone()), "unknown_view", message))?;
+            serialize_success_json(&id, SelectViewResponse { active })
         }
         ParsedCommand::SendText { id, args } => {
             let body = args.body;
@@ -1399,9 +1435,11 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::GetVersion { id }
         | ParsedCommand::WaitIdle { id, .. }
         | ParsedCommand::DumpModel { id }
+        | ParsedCommand::DumpUiState { id }
         | ParsedCommand::DumpTimeline { id, .. }
         | ParsedCommand::ListRooms { id }
         | ParsedCommand::SelectRoom { id, .. }
+        | ParsedCommand::SelectView { id, .. }
         | ParsedCommand::SendText { id, .. }
         | ParsedCommand::LoadSyntheticState { id, .. } => id,
     }
@@ -1483,6 +1521,169 @@ fn write_response_bytes_if_fits(automation: &AutomationState, response_bytes: &[
         buffer[size_of::<u32>()..required_capacity].copy_from_slice(response_bytes);
     }
     true
+}
+
+fn split_rendered_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|line| line.trim_end_matches('\r').to_owned())
+        .collect()
+}
+
+fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
+    let mut ordered = Vec::new();
+    if state.views.contains_key(&ViewId::Status) {
+        ordered.push(ViewId::Status);
+    }
+
+    for room in &state.model.rooms {
+        let view_id = ViewId::Room(room.room_id.clone());
+        if state.views.contains_key(&view_id) {
+            ordered.push(view_id);
+        }
+    }
+
+    let mut remaining = state
+        .views
+        .keys()
+        .filter_map(|view_id| match view_id {
+            ViewId::Status => None,
+            ViewId::Room(room_id)
+                if !state
+                    .model
+                    .rooms
+                    .iter()
+                    .any(|room| room.room_id == *room_id) =>
+            {
+                Some(room_id.clone())
+            }
+            ViewId::Room(_) => None,
+        })
+        .collect::<Vec<_>>();
+    remaining.sort();
+    ordered.extend(remaining.into_iter().map(ViewId::Room));
+    ordered
+}
+
+unsafe fn read_tree_item_text(tree: HWND, item: isize) -> Result<String, String> {
+    let mut buffer = vec![0u16; 1024];
+    let mut tree_item = TVITEMEXW {
+        mask: TVIF_TEXT,
+        hItem: item as _,
+        pszText: buffer.as_mut_ptr(),
+        cchTextMax: buffer.len() as i32,
+        ..zeroed()
+    };
+
+    if SendMessageW(
+        tree,
+        TVM_GETITEMW,
+        0,
+        (&mut tree_item as *mut TVITEMEXW) as LPARAM,
+    ) == 0
+    {
+        return Err(format!(
+            "failed to read tree item text for handle 0x{item:x}"
+        ));
+    }
+
+    let text_len = buffer
+        .iter()
+        .position(|ch| *ch == 0)
+        .unwrap_or(buffer.len());
+    Ok(String::from_utf16_lossy(&buffer[..text_len]))
+}
+
+unsafe fn read_navigation_node(tree: HWND, item: isize) -> Result<NavigationNode, String> {
+    let text = read_tree_item_text(tree, item)?;
+    let mut children = Vec::new();
+    let mut child =
+        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
+    while child != 0 {
+        children.push(read_navigation_node(tree, child)?);
+        child = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
+    }
+
+    Ok(NavigationNode { text, children })
+}
+
+unsafe fn dump_navigation_tree(hwnd: HWND) -> Result<NavigationNode, String> {
+    let tree = state_ref(hwnd).controls.tree;
+    if tree.is_null() {
+        return Err("tree control was not created".to_owned());
+    }
+
+    let root = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
+    if root == 0 {
+        return Err("navigation tree root was missing".to_owned());
+    }
+
+    read_navigation_node(tree, root)
+}
+
+unsafe fn active_view_identity(hwnd: HWND) -> Result<ViewIdentity, String> {
+    let mdi_client = state_ref(hwnd).controls.mdi_client;
+    if mdi_client.is_null() {
+        return Err("MDI client control was not created".to_owned());
+    }
+
+    let active_child = SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND;
+    if !active_child.is_null() {
+        let view_id = state_ref(hwnd)
+            .hwnd_views
+            .get(&(active_child as isize))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "active MDI child 0x{:x} was not tracked",
+                    active_child as usize
+                )
+            })?;
+        return Ok(view_identity_from_view_id(&view_id));
+    }
+
+    let active_view = &state_ref(hwnd).active_view;
+    if state_ref(hwnd).views.contains_key(active_view) {
+        Ok(view_identity_from_view_id(active_view))
+    } else {
+        Err("active view was not tracked".to_owned())
+    }
+}
+
+unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
+    let active = active_view_identity(hwnd)?;
+    let view_ids = ordered_view_ids(state_ref(hwnd));
+    let views = view_ids
+        .into_iter()
+        .map(|view_id| {
+            let view = state_ref(hwnd)
+                .views
+                .get(&view_id)
+                .ok_or_else(|| "view state was not tracked".to_owned())?;
+            if !cached_view_is_alive(view) {
+                return Err(format!(
+                    "tracked view {:?} referenced a dead child or edit control",
+                    view_id
+                ));
+            }
+
+            let identity = view_identity_from_view_id(&view_id);
+            Ok(MdiView {
+                title: read_window_text(view.child),
+                active: identity == active,
+                lines: split_rendered_lines(&read_window_text(view.edit)),
+                identity,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(MdiState { active, views })
+}
+
+unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
+    Ok(UiState {
+        navigation: dump_navigation_tree(hwnd)?,
+        mdi: dump_mdi_state(hwnd)?,
+    })
 }
 
 unsafe fn send_automation_request(

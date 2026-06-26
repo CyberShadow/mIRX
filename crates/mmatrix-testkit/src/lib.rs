@@ -32,10 +32,14 @@ const COMMAND_ID_SEND_TEXT: u32 = 8;
 #[cfg(windows)]
 const COMMAND_ID_LOAD_SYNTHETIC_STATE: u32 = 9;
 #[cfg(windows)]
+const COMMAND_ID_DUMP_UI_STATE: u32 = 10;
+#[cfg(windows)]
+const COMMAND_ID_SELECT_VIEW: u32 = 11;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
-const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
+const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(windows)]
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
@@ -101,6 +105,92 @@ pub struct UiError {
 pub struct ProtocolVersion {
     pub protocol_version: u32,
     pub app_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiState {
+    pub navigation: NavigationNode,
+    pub mdi: MdiState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NavigationNode {
+    pub text: String,
+    pub children: Vec<NavigationNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MdiState {
+    pub active: ViewIdentity,
+    pub views: Vec<MdiView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewIdentity {
+    Status,
+    Room { room_id: String },
+}
+
+impl<'de> Deserialize<'de> for ViewIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Kind {
+            Status,
+            Room,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct StatusIdentity {
+            #[serde(rename = "kind")]
+            _kind: Kind,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RoomIdentity {
+            #[serde(rename = "kind")]
+            _kind: Kind,
+            room_id: String,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let kind = value
+            .get("kind")
+            .ok_or_else(|| serde::de::Error::missing_field("kind"))?
+            .clone();
+
+        match serde_json::from_value::<Kind>(kind).map_err(serde::de::Error::custom)? {
+            Kind::Status => {
+                serde_json::from_value::<StatusIdentity>(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Self::Status)
+            }
+            Kind::Room => serde_json::from_value::<RoomIdentity>(value)
+                .map(|view| {
+                    let RoomIdentity { _kind, room_id } = view;
+                    Self::Room { room_id }
+                })
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MdiView {
+    pub identity: ViewIdentity,
+    pub title: String,
+    pub active: bool,
+    pub lines: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -183,6 +273,10 @@ impl MmatrixApp {
         self.inner.dump_model()
     }
 
+    pub fn dump_ui_state(&self) -> Result<UiState, TestkitError> {
+        self.inner.dump_ui_state()
+    }
+
     pub fn timeline(&self, room_id: Option<&str>) -> Result<Vec<String>, TestkitError> {
         self.inner.timeline(room_id)
     }
@@ -193,6 +287,14 @@ impl MmatrixApp {
 
     pub fn select_room(&self, room_id: &str) -> Result<(), TestkitError> {
         self.inner.select_room(room_id)
+    }
+
+    pub fn select_view(&self, view: ViewIdentity) -> Result<(), TestkitError> {
+        self.inner.select_view(view)
+    }
+
+    pub fn select_status_view(&self) -> Result<(), TestkitError> {
+        self.inner.select_status_view()
     }
 
     pub fn send_text(&self, room_id: Option<&str>, body: &str) -> Result<(), TestkitError> {
@@ -262,6 +364,13 @@ struct SendTextArgs<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct LoadEventsArgs {
     events: Value,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectViewArgs {
+    view: ViewIdentity,
 }
 
 #[cfg(windows)]
@@ -338,6 +447,13 @@ struct LoadEventsResponse {
     timeline_events: usize,
 }
 
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectViewResponse {
+    active: ViewIdentity,
+}
+
 #[cfg(not(windows))]
 mod imp {
     use super::*;
@@ -386,6 +502,12 @@ mod imp {
             ))
         }
 
+        pub(crate) fn dump_ui_state(&self) -> Result<UiState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn timeline(&self, _room_id: Option<&str>) -> Result<Vec<String>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
@@ -399,6 +521,18 @@ mod imp {
         }
 
         pub(crate) fn select_room(&self, _room_id: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn select_view(&self, _view: ViewIdentity) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -627,6 +761,10 @@ mod imp {
             self.send_command(COMMAND_ID_DUMP_MODEL, EmptyArgs {})
         }
 
+        pub(crate) fn dump_ui_state(&self) -> Result<UiState, TestkitError> {
+            self.send_command(COMMAND_ID_DUMP_UI_STATE, EmptyArgs {})
+        }
+
         pub(crate) fn timeline(&self, room_id: Option<&str>) -> Result<Vec<String>, TestkitError> {
             let response: DumpTimelineResponse =
                 self.send_command(COMMAND_ID_DUMP_TIMELINE, DumpTimelineArgs { room_id })?;
@@ -650,6 +788,25 @@ mod imp {
                     response.selected_room, room_id
                 )))
             }
+        }
+
+        pub(crate) fn select_view(&self, view: ViewIdentity) -> Result<(), TestkitError> {
+            let response: SelectViewResponse = self.send_command(
+                COMMAND_ID_SELECT_VIEW,
+                SelectViewArgs { view: view.clone() },
+            )?;
+            if response.active == view {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(format!(
+                    "SELECT_VIEW returned active={:?}, expected {:?}",
+                    response.active, view
+                )))
+            }
+        }
+
+        pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
+            self.select_view(ViewIdentity::Status)
         }
 
         pub(crate) fn send_text(

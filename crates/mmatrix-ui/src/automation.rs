@@ -17,6 +17,8 @@ pub(crate) const COMMAND_ID_LIST_ROOMS: u32 = 6;
 pub(crate) const COMMAND_ID_SELECT_ROOM: u32 = 7;
 pub(crate) const COMMAND_ID_SEND_TEXT: u32 = 8;
 pub(crate) const COMMAND_ID_LOAD_SYNTHETIC_STATE: u32 = 9;
+pub(crate) const COMMAND_ID_DUMP_UI_STATE: u32 = 10;
+pub(crate) const COMMAND_ID_SELECT_VIEW: u32 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -29,6 +31,8 @@ pub(crate) enum CommandKind {
     SelectRoom,
     SendText,
     LoadSyntheticState,
+    DumpUiState,
+    SelectView,
 }
 
 impl CommandKind {
@@ -43,6 +47,8 @@ impl CommandKind {
             COMMAND_ID_SELECT_ROOM => Some(Self::SelectRoom),
             COMMAND_ID_SEND_TEXT => Some(Self::SendText),
             COMMAND_ID_LOAD_SYNTHETIC_STATE => Some(Self::LoadSyntheticState),
+            COMMAND_ID_DUMP_UI_STATE => Some(Self::DumpUiState),
+            COMMAND_ID_SELECT_VIEW => Some(Self::SelectView),
             _ => None,
         }
     }
@@ -59,6 +65,8 @@ pub(crate) enum ParsedCommand {
     SelectRoom { id: String, args: SelectRoomArgs },
     SendText { id: String, args: SendTextArgs },
     LoadSyntheticState { id: String, args: LoadEventsArgs },
+    DumpUiState { id: String },
+    SelectView { id: String, args: SelectViewArgs },
 }
 
 impl ParsedCommand {
@@ -73,6 +81,8 @@ impl ParsedCommand {
             Self::SelectRoom { .. } => CommandKind::SelectRoom,
             Self::SendText { .. } => CommandKind::SendText,
             Self::LoadSyntheticState { .. } => CommandKind::LoadSyntheticState,
+            Self::DumpUiState { .. } => CommandKind::DumpUiState,
+            Self::SelectView { .. } => CommandKind::SelectView,
         }
     }
 }
@@ -118,6 +128,12 @@ pub(crate) struct SendTextArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LoadEventsArgs {
     pub(crate) events: Vec<Event>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectViewArgs {
+    pub(crate) view: ViewIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -225,6 +241,98 @@ pub(crate) struct LoadEventsResponse {
     pub(crate) loaded: bool,
     pub(crate) rooms: usize,
     pub(crate) timeline_events: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiState {
+    pub(crate) navigation: NavigationNode,
+    pub(crate) mdi: MdiState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NavigationNode {
+    pub(crate) text: String,
+    pub(crate) children: Vec<NavigationNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MdiState {
+    pub(crate) active: ViewIdentity,
+    pub(crate) views: Vec<MdiView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ViewIdentity {
+    Status,
+    Room { room_id: String },
+}
+
+impl<'de> Deserialize<'de> for ViewIdentity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Kind {
+            Status,
+            Room,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct StatusIdentity {
+            #[serde(rename = "kind")]
+            _kind: Kind,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RoomIdentity {
+            #[serde(rename = "kind")]
+            _kind: Kind,
+            room_id: String,
+        }
+
+        let value = Value::deserialize(deserializer)?;
+        let kind = value
+            .get("kind")
+            .ok_or_else(|| serde::de::Error::missing_field("kind"))?
+            .clone();
+
+        match serde_json::from_value::<Kind>(kind).map_err(serde::de::Error::custom)? {
+            Kind::Status => {
+                serde_json::from_value::<StatusIdentity>(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Self::Status)
+            }
+            Kind::Room => serde_json::from_value::<RoomIdentity>(value)
+                .map(|view| {
+                    let RoomIdentity { _kind, room_id } = view;
+                    Self::Room { room_id }
+                })
+                .map_err(serde::de::Error::custom),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MdiView {
+    pub(crate) identity: ViewIdentity,
+    pub(crate) title: String,
+    pub(crate) active: bool,
+    pub(crate) lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectViewResponse {
+    pub(crate) active: ViewIdentity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -362,6 +470,14 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<LoadEventsArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::DumpUiState => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpUiState { id: envelope.id })
+        }
+        CommandKind::SelectView => Ok(ParsedCommand::SelectView {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SelectViewArgs>(&envelope.id, envelope.args)?,
+        }),
     }
 }
 
@@ -419,13 +535,14 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_GET_VERSION,
-        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
-        COMMAND_ID_SELECT_ROOM, COMMAND_ID_SEND_TEXT, COMMAND_ID_WAIT_IDLE, CommandKind,
-        DumpTimelineArgs, DumpTimelineResponse, GetVersionResponse, ListRoomsResponse,
-        LoadEventsArgs, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomArgs,
-        SelectRoomResponse, SendTextArgs, SendTextResponse, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_DUMP_UI_STATE,
+        COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
+        COMMAND_ID_PING, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_WAIT_IDLE, CommandKind, DumpTimelineArgs, DumpTimelineResponse,
+        GetVersionResponse, ListRoomsResponse, LoadEventsArgs, MdiState, MdiView, NavigationNode,
+        NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomArgs, SelectRoomResponse,
+        SelectViewArgs, SelectViewResponse, SendTextArgs, SendTextResponse, UiState, ViewIdentity,
+        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     #[test]
@@ -465,6 +582,14 @@ mod tests {
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOAD_SYNTHETIC_STATE),
             Some(CommandKind::LoadSyntheticState)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_DUMP_UI_STATE),
+            Some(CommandKind::DumpUiState)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SELECT_VIEW),
+            Some(CommandKind::SelectView)
         );
     }
 
@@ -569,6 +694,40 @@ mod tests {
                 },
             }
         );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_DUMP_UI_STATE, br#"{"id":"ui","args":{}}"#).unwrap(),
+            ParsedCommand::DumpUiState {
+                id: "ui".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_VIEW,
+                br#"{"id":"status","args":{"view":{"kind":"status"}}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SelectView {
+                id: "status".to_owned(),
+                args: SelectViewArgs {
+                    view: ViewIdentity::Status,
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_VIEW,
+                br#"{"id":"room-view","args":{"view":{"kind":"room","room_id":"!room:example"}}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SelectView {
+                id: "room-view".to_owned(),
+                args: SelectViewArgs {
+                    view: ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    },
+                },
+            }
+        );
     }
 
     #[test]
@@ -661,6 +820,57 @@ mod tests {
                     "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn select_view_rejects_unknown_fields() {
+        let error = parse_command_request(
+            COMMAND_ID_SELECT_VIEW,
+            br#"{"id":"select","args":{"view":{"kind":"status","unexpected":true}}}"#,
+        )
+        .unwrap_err();
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["id"], json!("select"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert!(
+            value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+
+        let error = parse_command_request(
+            COMMAND_ID_SELECT_VIEW,
+            br#"{"id":"select","args":{"view":{"kind":"room","room_id":"!room:example","unexpected":true}}}"#,
+        )
+        .unwrap_err();
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["id"], json!("select"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert!(
+            value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+
+        let error = parse_command_request(
+            COMMAND_ID_SELECT_VIEW,
+            br#"{"id":"select","args":{"view":{"kind":"status"},"unexpected":true}}"#,
+        )
+        .unwrap_err();
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["id"], json!("select"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert!(
+            value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
         );
     }
 
@@ -776,6 +986,95 @@ mod tests {
                 "id":"load",
                 "ok":true,
                 "json":{"loaded":true,"rooms":2,"timeline_events":3}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(success_response(
+                "ui",
+                UiState {
+                    navigation: NavigationNode {
+                        text: "mmatrix".to_owned(),
+                        children: vec![
+                            NavigationNode {
+                                text: "status".to_owned(),
+                                children: vec![],
+                            },
+                            NavigationNode {
+                                text: "rooms: 1".to_owned(),
+                                children: vec![NavigationNode {
+                                    text: "Room".to_owned(),
+                                    children: vec![],
+                                }],
+                            },
+                        ],
+                    },
+                    mdi: MdiState {
+                        active: ViewIdentity::Room {
+                            room_id: "!room:example".to_owned(),
+                        },
+                        views: vec![
+                            MdiView {
+                                identity: ViewIdentity::Status,
+                                title: "Status".to_owned(),
+                                active: false,
+                                lines: vec!["status: synced".to_owned()],
+                            },
+                            MdiView {
+                                identity: ViewIdentity::Room {
+                                    room_id: "!room:example".to_owned(),
+                                },
+                                title: "Room".to_owned(),
+                                active: true,
+                                lines: vec!["hello".to_owned()],
+                            },
+                        ],
+                    },
+                },
+            ))
+            .unwrap(),
+            json!({
+                "id":"ui",
+                "ok":true,
+                "json":{
+                    "navigation":{
+                        "text":"mmatrix",
+                        "children":[
+                            {"text":"status","children":[]},
+                            {"text":"rooms: 1","children":[{"text":"Room","children":[]}]}
+                        ]
+                    },
+                    "mdi":{
+                        "active":{"kind":"room","room_id":"!room:example"},
+                        "views":[
+                            {
+                                "identity":{"kind":"status"},
+                                "title":"Status",
+                                "active":false,
+                                "lines":["status: synced"]
+                            },
+                            {
+                                "identity":{"kind":"room","room_id":"!room:example"},
+                                "title":"Room",
+                                "active":true,
+                                "lines":["hello"]
+                            }
+                        ]
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(success_response(
+                "select-view",
+                SelectViewResponse {
+                    active: ViewIdentity::Status,
+                },
+            ))
+            .unwrap(),
+            json!({
+                "id":"select-view",
+                "ok":true,
+                "json":{"active":{"kind":"status"}}
             })
         );
     }

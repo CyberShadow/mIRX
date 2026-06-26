@@ -2,8 +2,8 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use mmatrix_testkit::{
-    LaunchOptions, MmatrixApp, Model, ProtocolVersion, TestkitError, TimelineLine, UiError,
-    Verification,
+    LaunchOptions, MdiState, MdiView, MmatrixApp, Model, NavigationNode, ProtocolVersion,
+    TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
 #[test]
@@ -75,6 +75,45 @@ fn data_models_round_trip_through_json() {
         protocol_version: 1,
         app_version: "0.1.0".to_owned(),
     };
+    let ui_state = UiState {
+        navigation: NavigationNode {
+            text: "mmatrix".to_owned(),
+            children: vec![
+                NavigationNode {
+                    text: "status".to_owned(),
+                    children: vec![],
+                },
+                NavigationNode {
+                    text: "rooms: 1".to_owned(),
+                    children: vec![NavigationNode {
+                        text: "Room".to_owned(),
+                        children: vec![],
+                    }],
+                },
+            ],
+        },
+        mdi: MdiState {
+            active: ViewIdentity::Room {
+                room_id: "!room:example".to_owned(),
+            },
+            views: vec![
+                MdiView {
+                    identity: ViewIdentity::Status,
+                    title: "Status".to_owned(),
+                    active: false,
+                    lines: vec!["status: synced".to_owned()],
+                },
+                MdiView {
+                    identity: ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    },
+                    title: "Room".to_owned(),
+                    active: true,
+                    lines: vec!["hello".to_owned()],
+                },
+            ],
+        },
+    };
     let events = serde_json::json!([
         "Started",
         {
@@ -90,6 +129,7 @@ fn data_models_round_trip_through_json() {
 
     let model_json = serde_json::to_vec(&model).expect("serialize model");
     let version_json = serde_json::to_vec(&version).expect("serialize version");
+    let ui_state_json = serde_json::to_vec(&ui_state).expect("serialize ui state");
     let events_json = serde_json::to_vec(&events).expect("serialize events");
 
     assert_eq!(
@@ -99,6 +139,10 @@ fn data_models_round_trip_through_json() {
     assert_eq!(
         serde_json::from_slice::<ProtocolVersion>(&version_json).expect("deserialize version"),
         version
+    );
+    assert_eq!(
+        serde_json::from_slice::<UiState>(&ui_state_json).expect("deserialize ui state"),
+        ui_state
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&events_json).expect("deserialize events"),
@@ -132,6 +176,67 @@ fn data_models_reject_unknown_fields() {
         )
         .is_err()
     );
+    assert!(
+        serde_json::from_str::<UiState>(
+            r#"{
+            "navigation":{"text":"mmatrix","children":[]},
+            "mdi":{"active":{"kind":"status"},"views":[]},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<NavigationNode>(
+            r#"{
+            "text":"mmatrix",
+            "children":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<MdiState>(
+            r#"{
+            "active":{"kind":"status"},
+            "views":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<MdiView>(
+            r#"{
+            "identity":{"kind":"status"},
+            "title":"Status",
+            "active":true,
+            "lines":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<ViewIdentity>(
+            r#"{
+            "kind":"status",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<ViewIdentity>(
+            r#"{
+            "kind":"room",
+            "room_id":"!room:example",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
 }
 
 #[cfg(not(windows))]
@@ -147,6 +252,36 @@ fn non_windows_platform_reports_unsupported_driver() {
         .expect_err("launch must fail off Windows");
     assert_eq!(
         launch_error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn non_windows_new_methods_report_unsupported_driver() {
+    let app: MmatrixApp = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+
+    let error = app
+        .dump_ui_state()
+        .expect_err("dump_ui_state must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .select_view(ViewIdentity::Status)
+        .expect_err("select_view must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .select_status_view()
+        .expect_err("select_status_view must fail off Windows");
+    assert_eq!(
+        error.to_string(),
         "mmatrix-testkit requires the Windows target"
     );
 }
