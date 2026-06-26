@@ -50,15 +50,38 @@ impl CommandKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParsedCommand {
-    Ping { id: String },
-    GetVersion { id: String },
-    WaitIdle { id: String, args: WaitIdleArgs },
-    DumpModel { id: String },
-    DumpTimeline { id: String, args: DumpTimelineArgs },
-    ListRooms { id: String },
-    SelectRoom { id: String, args: SelectRoomArgs },
-    SendText { id: String, args: SendTextArgs },
-    LoadSyntheticState { id: String, args: LoadSyntheticStateArgs },
+    Ping {
+        id: String,
+    },
+    GetVersion {
+        id: String,
+    },
+    WaitIdle {
+        id: String,
+        args: WaitIdleArgs,
+    },
+    DumpModel {
+        id: String,
+    },
+    DumpTimeline {
+        id: String,
+        args: DumpTimelineArgs,
+    },
+    ListRooms {
+        id: String,
+    },
+    SelectRoom {
+        id: String,
+        args: SelectRoomArgs,
+    },
+    SendText {
+        id: String,
+        args: SendTextArgs,
+    },
+    LoadSyntheticState {
+        id: String,
+        args: LoadSyntheticStateArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -316,9 +339,9 @@ pub(crate) struct SyntheticLoad {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SyntheticStateError {
-    UnknownSelectedRoom(String),
-    UnknownTimelineRoom(String),
-    UnknownOperation(String),
+    SelectedRoomNotFound(String),
+    TimelineRoomNotFound(String),
+    UnsupportedOperation(String),
 }
 
 impl SyntheticState {
@@ -326,12 +349,16 @@ impl SyntheticState {
         if let Some(room_id) = &self.selected_room
             && !self.rooms.iter().any(|room| room.room_id == *room_id)
         {
-            return Err(SyntheticStateError::UnknownSelectedRoom(room_id.clone()));
+            return Err(SyntheticStateError::SelectedRoomNotFound(room_id.clone()));
         }
 
         for timeline in &self.timelines {
-            if !self.rooms.iter().any(|room| room.room_id == timeline.room_id) {
-                return Err(SyntheticStateError::UnknownTimelineRoom(
+            if !self
+                .rooms
+                .iter()
+                .any(|room| room.room_id == timeline.room_id)
+            {
+                return Err(SyntheticStateError::TimelineRoomNotFound(
                     timeline.room_id.clone(),
                 ));
             }
@@ -340,7 +367,7 @@ impl SyntheticState {
         if let Some(error) = &self.error
             && parse_operation_code(&error.operation).is_none()
         {
-            return Err(SyntheticStateError::UnknownOperation(
+            return Err(SyntheticStateError::UnsupportedOperation(
                 error.operation.clone(),
             ));
         }
@@ -535,7 +562,9 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 
 #[cfg(test)]
 mod tests {
-    use mmatrix_core::{CoreErrorEvent, Event, Operation, RoomSummary, TimelineText, VerificationRequest};
+    use mmatrix_core::{
+        CoreErrorEvent, Event, Operation, RoomSummary, TimelineText, VerificationRequest,
+    };
     use serde_json::{Value, json};
 
     use super::{
@@ -552,7 +581,10 @@ mod tests {
 
     #[test]
     fn command_ids_parse_expected_commands() {
-        assert_eq!(CommandKind::from_id(COMMAND_ID_PING), Some(CommandKind::Ping));
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_PING),
+            Some(CommandKind::Ping)
+        );
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_GET_VERSION),
             Some(CommandKind::GetVersion)
@@ -716,8 +748,7 @@ mod tests {
 
     #[test]
     fn unknown_command_returns_structured_failure() {
-        let error =
-            parse_command_request(999, br#"{"id":"mystery","args":{}}"#).unwrap_err();
+        let error = parse_command_request(999, br#"{"id":"mystery","args":{}}"#).unwrap_err();
         assert_eq!(
             serde_json::to_value(error).unwrap(),
             json!({
@@ -744,7 +775,7 @@ mod tests {
 
         assert_eq!(
             state.to_synthetic_load(),
-            Err(SyntheticStateError::UnknownSelectedRoom(
+            Err(SyntheticStateError::SelectedRoomNotFound(
                 "!missing:example".to_owned()
             ))
         );
@@ -769,7 +800,7 @@ mod tests {
 
         assert_eq!(
             state.to_synthetic_load(),
-            Err(SyntheticStateError::UnknownTimelineRoom(
+            Err(SyntheticStateError::TimelineRoomNotFound(
                 "!missing:example".to_owned()
             ))
         );

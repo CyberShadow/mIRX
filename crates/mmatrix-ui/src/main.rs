@@ -15,8 +15,7 @@ use non_windows as platform;
 #[cfg(windows)]
 use win32 as platform;
 
-const USAGE: &str =
-    "usage: mmatrix-ui [--automation] [--render-state <file.json>] | [--self-test|--auto-close|--help]";
+const USAGE: &str = "usage: mmatrix-ui [--automation] [--render-state <file.json>] | [--self-test|--auto-close|--help]";
 const HELP: &str = "\
 usage: mmatrix-ui [--automation] [--render-state <file.json>]
        mmatrix-ui [--self-test|--auto-close|--help]
@@ -72,10 +71,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
                 }
 
                 let path = args.next().ok_or(())?;
-                if path.to_string_lossy().starts_with("--") {
-                    return Err(());
-                }
-
                 run_options.automation = true;
                 run_options.render_state = Some(PathBuf::from(path));
             }
@@ -137,10 +132,23 @@ mod tests {
             }))
         );
         assert_eq!(
-            parse_args([OsString::from("--render-state"), OsString::from("state.json")]),
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("state.json")
+            ]),
             Ok(AppCommand::Run(RunOptions {
                 automation: true,
                 render_state: Some(PathBuf::from("state.json")),
+            }))
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("--state.json"),
+            ]),
+            Ok(AppCommand::Run(RunOptions {
+                automation: true,
+                render_state: Some(PathBuf::from("--state.json")),
             }))
         );
         let expected = Ok(AppCommand::Run(RunOptions {
@@ -181,10 +189,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_arguments() {
         assert_eq!(parse_args([OsString::from("--unknown")]), Err(()));
-        assert_eq!(
-            parse_args([OsString::from("--render-state")]),
-            Err(())
-        );
+        assert_eq!(parse_args([OsString::from("--render-state")]), Err(()));
         assert_eq!(
             parse_args([
                 OsString::from("--render-state"),
@@ -195,11 +200,10 @@ mod tests {
             Err(())
         );
         assert_eq!(
-            parse_args([OsString::from("--render-state"), OsString::from("--automation")]),
-            Err(())
-        );
-        assert_eq!(
-            parse_args([OsString::from("--self-test"), OsString::from("--automation")]),
+            parse_args([
+                OsString::from("--self-test"),
+                OsString::from("--automation")
+            ]),
             Err(())
         );
         assert_eq!(
@@ -211,7 +215,10 @@ mod tests {
             Err(())
         );
         assert_eq!(
-            parse_args([OsString::from("--auto-close"), OsString::from("--automation")]),
+            parse_args([
+                OsString::from("--auto-close"),
+                OsString::from("--automation")
+            ]),
             Err(())
         );
         assert_eq!(
