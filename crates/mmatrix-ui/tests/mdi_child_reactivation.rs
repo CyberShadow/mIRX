@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{Event, RoomSummary, TimelineText};
-use mmatrix_testkit::MmatrixApp;
+use mmatrix_testkit::{LaunchOptions, MmatrixApp};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::Memory::{FILE_MAP_READ, OpenFileMappingW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -21,6 +21,13 @@ const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 const MDI_ID: i32 = 1002;
 const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+fn launch_options() -> LaunchOptions {
+    LaunchOptions {
+        startup_timeout: Duration::from_secs(20),
+        local_app_data: None,
+    }
+}
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
@@ -100,7 +107,7 @@ fn select_room_recreates_room_mdi_child_after_external_destroy()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, launch_options())?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let frame = wait_for_frame(Duration::from_secs(5))?;
