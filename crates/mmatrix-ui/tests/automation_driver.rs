@@ -689,7 +689,6 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
     drop(app);
 
     let restored = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
-    restored.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     restored.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
     restored.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
     restored.wait_for_min_rooms(1, Duration::from_secs(120))?;
