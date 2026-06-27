@@ -747,6 +747,9 @@ fn apply_core_event(state: &mut WindowState, event: Event) {
         Event::Stopped => {
             state.model.status = "core stopped".to_owned();
         }
+        Event::SyncStarted => {
+            state.model.status = "continuous sync started".to_owned();
+        }
         Event::Error(error) => {
             state.model.status = format!("error during {}", operation_name(error.operation));
             state.model.last_error = Some(error);
