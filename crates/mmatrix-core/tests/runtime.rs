@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CoreConfig, Event, LoginRequest, Operation, SendTextRequest, StoredSession, start,
+    Command, CoreConfig, Event, LoginRequest, Operation, RoomMemberState, RoomStateContent,
+    RoomStateEntry, RoomStateEventKind, RoomTopicState, SendTextRequest, StoredSession,
+    TimelineText, start,
 };
 use tempfile::TempDir;
 
@@ -276,5 +278,70 @@ fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
     assert!(
         serde_json::from_str::<Event>(r#""LoggedIn""#).is_err(),
         "logged-in event must include a session payload"
+    );
+}
+
+#[test]
+fn timeline_text_and_room_state_events_round_trip_through_serde() {
+    let timeline = TimelineText {
+        room_id: "!ops:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        body: "hello".to_owned(),
+    };
+    let topic_event = Event::RoomState(RoomStateEntry {
+        room_id: "!ops:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_001,
+        event_kind: RoomStateEventKind::Topic,
+        state_key: String::new(),
+        content: RoomStateContent::Topic(RoomTopicState {
+            topic: "incident review".to_owned(),
+        }),
+    });
+    let member_event = Event::RoomState(RoomStateEntry {
+        room_id: "!ops:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_002,
+        event_kind: RoomStateEventKind::Member,
+        state_key: "@carol:example.org".to_owned(),
+        content: RoomStateContent::Member(RoomMemberState {
+            membership: "join".to_owned(),
+            displayname: Some("carol".to_owned()),
+        }),
+    });
+
+    let timeline_json = serde_json::to_string(&timeline).expect("serialize timeline text");
+    let restored_timeline: TimelineText =
+        serde_json::from_str(&timeline_json).expect("deserialize timeline text");
+    assert_eq!(restored_timeline, timeline);
+
+    let topic_json = serde_json::to_string(&topic_event).expect("serialize topic room state");
+    let restored_topic: Event =
+        serde_json::from_str(&topic_json).expect("deserialize topic room state");
+    assert_eq!(restored_topic, topic_event);
+
+    let member_json = serde_json::to_string(&member_event).expect("serialize member room state");
+    let restored_member: Event =
+        serde_json::from_str(&member_json).expect("deserialize member room state");
+    assert_eq!(restored_member, member_event);
+}
+
+#[test]
+fn timeline_text_and_room_state_entry_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<TimelineText>(
+            r#"{"room_id":"!ops:example.org","sender":"@alice:example.org","timestamp_ms":1700000000000,"body":"hello","unexpected":"value"}"#
+        )
+        .is_err(),
+        "timeline text must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"RoomState":{"room_id":"!ops:example.org","sender":"@alice:example.org","timestamp_ms":1700000000001,"event_kind":"Topic","state_key":"","content":{"Topic":{"topic":"incident review"}},"unexpected":"value"}}"#
+        )
+        .is_err(),
+        "room state entry must reject unknown fields"
     );
 }

@@ -10,7 +10,11 @@ use matrix_sdk::{
         OwnedDeviceId, OwnedUserId,
         events::{
             AnyMessageLikeEventContent,
-            room::message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+            room::{
+                member::SyncRoomMemberEvent,
+                message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+                topic::SyncRoomTopicEvent,
+            },
         },
     },
     store::RoomLoadSettings,
@@ -19,6 +23,7 @@ use tokio::task::JoinHandle;
 
 use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomSummary, SendTextRequest,
+    RoomMemberState, RoomStateContent, RoomStateEntry, RoomStateEventKind, RoomTopicState,
     StoredSession, TimelineText,
 };
 use crate::runtime::{EventSender, emit_event};
@@ -146,15 +151,62 @@ pub(crate) async fn summarize_joined_rooms(
 }
 
 pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
+    let timeline_events = events.clone();
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
-        let events = events.clone();
+        let events = timeline_events.clone();
         async move {
             if let MessageType::Text(text) = &event.content.msgtype {
                 emit_event(
                     &events,
                     Event::TimelineText(TimelineText {
                         room_id: room.room_id().to_string(),
+                        sender: event.sender.to_string(),
+                        timestamp_ms: event.origin_server_ts.get().into(),
                         body: text.body.to_string(),
+                    }),
+                );
+            }
+        }
+    });
+
+    let topic_events = events.clone();
+    client.add_event_handler(move |event: SyncRoomTopicEvent, room: Room| {
+        let events = topic_events.clone();
+        async move {
+            if let SyncRoomTopicEvent::Original(event) = event {
+                emit_event(
+                    &events,
+                    Event::RoomState(RoomStateEntry {
+                        room_id: room.room_id().to_string(),
+                        sender: event.sender.to_string(),
+                        timestamp_ms: event.origin_server_ts.get().into(),
+                        event_kind: RoomStateEventKind::Topic,
+                        state_key: String::new(),
+                        content: RoomStateContent::Topic(RoomTopicState {
+                            topic: event.content.topic.to_string(),
+                        }),
+                    }),
+                );
+            }
+        }
+    });
+
+    client.add_event_handler(move |event: SyncRoomMemberEvent, room: Room| {
+        let events = events.clone();
+        async move {
+            if let SyncRoomMemberEvent::Original(event) = event {
+                emit_event(
+                    &events,
+                    Event::RoomState(RoomStateEntry {
+                        room_id: room.room_id().to_string(),
+                        sender: event.sender.to_string(),
+                        timestamp_ms: event.origin_server_ts.get().into(),
+                        event_kind: RoomStateEventKind::Member,
+                        state_key: event.state_key.to_string(),
+                        content: RoomStateContent::Member(RoomMemberState {
+                            membership: event.content.membership.to_string(),
+                            displayname: event.content.displayname,
+                        }),
                     }),
                 );
             }

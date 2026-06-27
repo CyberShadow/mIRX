@@ -57,7 +57,45 @@ pub struct RoomSummary {
 #[serde(deny_unknown_fields)]
 pub struct TimelineText {
     pub room_id: String,
+    pub sender: String,
+    pub timestamp_ms: u64,
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomStateEntry {
+    pub room_id: String,
+    pub sender: String,
+    pub timestamp_ms: u64,
+    pub event_kind: RoomStateEventKind,
+    pub state_key: String,
+    pub content: RoomStateContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RoomStateEventKind {
+    Topic,
+    Member,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum RoomStateContent {
+    Topic(RoomTopicState),
+    Member(RoomMemberState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomTopicState {
+    pub topic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomMemberState {
+    pub membership: String,
+    pub displayname: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -94,6 +132,7 @@ pub enum Event {
     SyncStarted,
     SyncedRooms(Vec<RoomSummary>),
     TimelineText(TimelineText),
+    RoomState(RoomStateEntry),
     VerificationRequest(VerificationRequest),
     LoggedOut,
     Stopped,
