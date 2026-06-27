@@ -345,3 +345,14 @@ fn timeline_text_and_room_state_entry_reject_unknown_fields() {
         "room state entry must reject unknown fields"
     );
 }
+
+#[test]
+fn room_state_event_rejects_mismatched_event_kind_and_content() {
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"RoomState":{"room_id":"!ops:example.org","sender":"@alice:example.org","timestamp_ms":1700000000001,"event_kind":"Topic","state_key":"","content":{"Member":{"membership":"join","displayname":"carol"}}}}"#
+        )
+        .is_err(),
+        "room state event must reject mismatched event kind and content"
+    );
+}

@@ -22,8 +22,8 @@ use matrix_sdk::{
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomSummary, SendTextRequest,
-    RoomMemberState, RoomStateContent, RoomStateEntry, RoomStateEventKind, RoomTopicState,
+    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomMemberState, RoomStateContent,
+    RoomStateEntry, RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest,
     StoredSession, TimelineText,
 };
 use crate::runtime::{EventSender, emit_event};
