@@ -17,8 +17,7 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
     RestoreSessionRequest, RoomStateContent, RoomStateEventKind, RoomSummary, SendTextRequest,
-    StoredSession, TimelineText,
-    VerificationRequest, start,
+    StoredSession, TimelineText, VerificationRequest, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -4184,20 +4183,17 @@ mod tests {
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.model.selected_room = Some("!room:example".to_owned());
         state.active_view = ViewId::Room("!room:example".to_owned());
-        state
-            .model
-            .room_views
-            .insert(
-                "!room:example".to_owned(),
-                RoomViewModel {
-                    topic: Some("incident review".to_owned()),
-                    entries: vec![RoomTimelineEntry::Text {
-                        sender: "@alice:example".to_owned(),
-                        timestamp_ms: 1_700_000_000_000,
-                        body: "hello".to_owned(),
-                    }],
-                },
-            );
+        state.model.room_views.insert(
+            "!room:example".to_owned(),
+            RoomViewModel {
+                topic: Some("incident review".to_owned()),
+                entries: vec![RoomTimelineEntry::Text {
+                    sender: "@alice:example".to_owned(),
+                    timestamp_ms: 1_700_000_000_000,
+                    body: "hello".to_owned(),
+                }],
+            },
+        );
         state.model.last_timeline = Some(timeline("!room:example", "hello"));
         state.model.last_verification = Some(VerificationRequest {
             flow_id: "flow".to_owned(),

@@ -22,36 +22,48 @@
   {
     "TimelineText": {
       "room_id": "!lobby:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000000000,
       "body": "welcome to the lobby"
     }
   },
   {
     "TimelineText": {
       "room_id": "!lobby:example",
+      "sender": "@bob:example",
+      "timestamp_ms": 1700000060000,
       "body": "build is green"
     }
   },
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000120000,
       "body": "ops topic: incident review"
     }
   },
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "sender": "@bob:example",
+      "timestamp_ms": 1700000180000,
       "body": "encryption enabled for ops"
     }
   },
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "sender": "@carol:example",
+      "timestamp_ms": 1700000240000,
       "body": "deploy window opens at 18:00 UTC"
     }
   },
   {
     "TimelineText": {
       "room_id": "!random:example",
+      "sender": "@dave:example",
+      "timestamp_ms": 1700000300000,
       "body": "random: lunch votes are in"
     }
   }

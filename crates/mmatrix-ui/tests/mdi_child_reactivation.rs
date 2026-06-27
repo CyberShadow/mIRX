@@ -76,10 +76,14 @@ fn base_events() -> Vec<Event> {
         ]),
         Event::TimelineText(TimelineText {
             room_id: "!alpha:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
             body: "alpha first".to_owned(),
         }),
         Event::TimelineText(TimelineText {
             room_id: "!beta:example".to_owned(),
+            sender: "@bob:example".to_owned(),
+            timestamp_ms: 1_700_000_060_000,
             body: "beta first".to_owned(),
         }),
     ]

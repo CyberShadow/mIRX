@@ -17,24 +17,32 @@
   {
     "TimelineText": {
       "room_id": "!support:example",
+      "sender": "@support:example",
+      "timestamp_ms": 1700000000000,
       "body": "support queue is empty"
     }
   },
   {
     "TimelineText": {
       "room_id": "!verify:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000060000,
       "body": "verification requested by @alice:example"
     }
   },
   {
     "TimelineText": {
       "room_id": "!verify:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000120000,
       "body": "sas emoji ready"
     }
   },
   {
     "TimelineText": {
       "room_id": "!verify:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000180000,
       "body": "waiting for confirmation"
     }
   },
