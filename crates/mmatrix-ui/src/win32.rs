@@ -1311,8 +1311,13 @@ unsafe fn handle_core_events(hwnd: HWND) {
 fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String> {
     match event {
         Event::Started => {
-            state.model.status = "core started".to_owned();
-            state.model.lifecycle_state = LifecycleState::CoreStarted;
+            if matches!(
+                state.model.lifecycle_state,
+                LifecycleState::Offline | LifecycleState::CoreStarted
+            ) {
+                state.model.status = "core started".to_owned();
+                state.model.lifecycle_state = LifecycleState::CoreStarted;
+            }
         }
         Event::LoggedIn { session } => {
             let homeserver_url = state.pending_login_homeserver_url.clone().ok_or_else(|| {
@@ -3017,19 +3022,23 @@ mod tests {
                 room("!one:example", "One", false),
                 room("!two:example", "Two", true),
             ]),
-        );
+        )
+        .unwrap();
         apply_core_event(
             &mut state,
             Event::TimelineText(timeline("!one:example", "first")),
-        );
+        )
+        .unwrap();
         apply_core_event(
             &mut state,
             Event::TimelineText(timeline("!one:example", "second")),
-        );
+        )
+        .unwrap();
         apply_core_event(
             &mut state,
             Event::TimelineText(timeline("!two:example", "third")),
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             state.model.timelines.get("!one:example"),
@@ -3133,13 +3142,15 @@ mod tests {
                 room("!keep:example", "Keep", false),
                 room("!other:example", "Other", false),
             ]),
-        );
+        )
+        .unwrap();
         assert_eq!(state.model.selected_room, Some("!keep:example".to_owned()));
 
         apply_core_event(
             &mut state,
             Event::SyncedRooms(vec![room("!other:example", "Other", false)]),
-        );
+        )
+        .unwrap();
         assert_eq!(state.model.selected_room, None);
     }
 
@@ -3511,6 +3522,30 @@ mod tests {
 
             submit_start_sync(&mut state).unwrap();
             submit_logout(&mut state).unwrap();
+
+            handle
+                .command_sender()
+                .send(Command::Shutdown)
+                .expect("shutdown command must enqueue");
+            handle.join().expect("test core must stop cleanly");
+        });
+    }
+
+    #[test]
+    fn startup_restore_keeps_restoring_state_when_started_arrives_after_submit() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            let handle = start_test_core();
+            state.command_sender = Some(handle.command_sender().clone());
+            save_session("https://matrix.example", &stored_session()).unwrap();
+
+            submit_restore_saved_session(&mut state).unwrap();
+            assert_eq!(state.model.status, "restoring saved session");
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
+
+            apply_core_event(&mut state, Event::Started).unwrap();
+            assert_eq!(state.model.status, "restoring saved session");
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
 
             handle
                 .command_sender()

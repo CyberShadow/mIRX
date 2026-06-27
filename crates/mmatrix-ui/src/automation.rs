@@ -335,9 +335,10 @@ pub(crate) struct SelectViewResponse {
     pub(crate) active: ViewIdentity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LifecycleState {
+    #[default]
     Offline,
     CoreStarted,
     LoggingIn,
@@ -348,12 +349,6 @@ pub(crate) enum LifecycleState {
     LoggedOut,
     Stopped,
     Error,
-}
-
-impl Default for LifecycleState {
-    fn default() -> Self {
-        Self::Offline
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
