@@ -449,6 +449,11 @@ impl MmatrixApp {
         self.inner.send_compose_key(key)
     }
 
+    #[cfg(windows)]
+    pub fn automation_frame_hwnd(&self) -> isize {
+        self.inner.frame_hwnd() as isize
+    }
+
     pub fn login(
         &self,
         homeserver_url: &str,
@@ -947,6 +952,10 @@ mod imp {
     }
 
     impl AppHandle {
+        pub(crate) fn frame_hwnd(&self) -> HWND {
+            self.hwnd
+        }
+
         pub(crate) fn find(timeout: Duration) -> Result<Self, TestkitError> {
             let deadline = Instant::now() + timeout;
             let mut last_error = None;

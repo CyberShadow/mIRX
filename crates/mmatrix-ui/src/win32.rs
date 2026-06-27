@@ -33,7 +33,7 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
-    BTNS_CHECK, BTNS_SHOWTEXT, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
+    BTNS_CHECK, BTNS_SHOWTEXT, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
     STATUSCLASSNAMEW, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE,
     TB_CHECKBUTTON, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TBBUTTON,
@@ -46,18 +46,18 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, EM_SETSEL, ES_AUTOHSCROLL,
-    ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA,
-    GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    IsWindow, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP,
-    MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SW_SHOW, SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
-    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE,
-    WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
-    WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED,
-    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
+    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA, GWLP_WNDPROC,
+    GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW, IsWindow,
+    KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+    SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
+    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PASTE,
+    WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -3265,11 +3265,15 @@ unsafe fn navigate_compose_history(
 ) -> Result<(), String> {
     let edit = compose_edit(hwnd)?;
     let replacement = match direction {
-        ComposeHistoryDirection::Previous => state_mut(hwnd)
-            .compose_history
-            .previous(read_window_text(edit))
-            .map(str::to_owned),
-        ComposeHistoryDirection::Next => state_mut(hwnd).compose_history.next(),
+        ComposeHistoryDirection::Previous => {
+            let current_text = read_window_text(edit);
+            let history = &mut state_mut(hwnd).compose_history;
+            history.previous(current_text).map(str::to_owned)
+        }
+        ComposeHistoryDirection::Next => {
+            let history = &mut state_mut(hwnd).compose_history;
+            history.next()
+        }
     };
     if let Some(text) = replacement {
         set_compose_edit_text(edit, &text);
@@ -3406,7 +3410,10 @@ unsafe extern "system" fn edit_window_proc(
         return 0;
     }
 
-    if message == WM_CHAR || (message == WM_KEYDOWN && wparam == VK_DELETE_KEY) {
+    if message == WM_CHAR
+        || message == WM_PASTE
+        || (message == WM_KEYDOWN && wparam == VK_DELETE_KEY)
+    {
         state_mut(parent).compose_history.reset_navigation();
     }
 
@@ -4209,7 +4216,10 @@ mod tests {
         assert_eq!(history.previous("draft".to_owned()), Some("second"));
         history.reset_navigation();
         assert!(history.navigation.is_none());
-        assert_eq!(history.previous("replacement draft".to_owned()), Some("second"));
+        assert_eq!(
+            history.previous("replacement draft".to_owned()),
+            Some("second")
+        );
         assert_eq!(history.next(), Some("replacement draft".to_owned()));
     }
 
