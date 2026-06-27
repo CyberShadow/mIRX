@@ -66,20 +66,22 @@ fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Err
     Ok(state_path)
 }
 
+fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
+    RoomSummary {
+        room_id: room_id.to_owned(),
+        display_name: display_name.to_owned(),
+        encrypted,
+        is_space: false,
+        space_children: Vec::new(),
+    }
+}
+
 fn base_events() -> Vec<Event> {
     vec![
         Event::Started,
         Event::SyncedRooms(vec![
-            RoomSummary {
-                room_id: "!beta:example".to_owned(),
-                display_name: "Beta".to_owned(),
-                encrypted: true,
-            },
-            RoomSummary {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
+            room_summary("!beta:example", "Beta", true),
+            room_summary("!alpha:example", "Alpha", false),
         ]),
         Event::TimelineText(TimelineText {
             room_id: "!alpha:example".to_owned(),

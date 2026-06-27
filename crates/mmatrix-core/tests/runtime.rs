@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CoreConfig, Event, LoginRequest, Operation, RoomMemberState, RoomStateContent,
-    RoomStateEntry, RoomStateEventKind, RoomTopicState, SendTextRequest, StoredSession,
-    TimelineText, start,
+    RoomStateEntry, RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest,
+    SpaceChildSummary, StoredSession, TimelineText, start,
 };
 use tempfile::TempDir;
 
@@ -264,6 +264,105 @@ fn session_updated_event_serializes_and_deserializes_session_payload() {
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize session-updated event");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn synced_rooms_event_round_trips_space_hierarchy_payload() {
+    let event = Event::SyncedRooms(vec![
+        RoomSummary {
+            room_id: "!space:example.org".to_owned(),
+            display_name: "Space".to_owned(),
+            encrypted: false,
+            is_space: true,
+            space_children: vec![
+                SpaceChildSummary {
+                    room_id: "!alpha:example.org".to_owned(),
+                    suggested: true,
+                    order: Some("aaa".to_owned()),
+                },
+                SpaceChildSummary {
+                    room_id: "!beta:example.org".to_owned(),
+                    suggested: false,
+                    order: None,
+                },
+            ],
+        },
+        RoomSummary {
+            room_id: "!alpha:example.org".to_owned(),
+            display_name: "Alpha".to_owned(),
+            encrypted: true,
+            is_space: false,
+            space_children: Vec::new(),
+        },
+        RoomSummary {
+            room_id: "!beta:example.org".to_owned(),
+            display_name: "Beta".to_owned(),
+            encrypted: false,
+            is_space: false,
+            space_children: Vec::new(),
+        },
+        RoomSummary {
+            room_id: "!lobby:example.org".to_owned(),
+            display_name: "Lobby".to_owned(),
+            encrypted: false,
+            is_space: false,
+            space_children: Vec::new(),
+        },
+    ]);
+
+    let json = serde_json::to_string(&event).expect("serialize synced rooms");
+    assert_eq!(
+        json,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}]},{"room_id":"!alpha:example.org","display_name":"Alpha","encrypted":true,"is_space":false,"space_children":[]},{"room_id":"!beta:example.org","display_name":"Beta","encrypted":false,"is_space":false,"space_children":[]},{"room_id":"!lobby:example.org","display_name":"Lobby","encrypted":false,"is_space":false,"space_children":[]}]}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn room_summary_and_space_child_reject_unknown_fields() {
+    let room_error = serde_json::from_str::<Event>(
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"space_children":[],"unexpected":true}]}"#,
+    )
+    .expect_err("room summary must reject unknown fields");
+    assert!(
+        room_error
+            .to_string()
+            .contains("unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`, `is_space`, `space_children`"),
+        "unexpected room summary error: {room_error}"
+    );
+
+    let child_error = serde_json::from_str::<Event>(
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}]}]}"#,
+    )
+    .expect_err("space child summary must reject unknown fields");
+    assert!(
+        child_error.to_string().contains(
+            "unknown field `unexpected`, expected one of `room_id`, `suggested`, `order`"
+        ),
+        "unexpected space child error: {child_error}"
+    );
+}
+
+#[test]
+fn flat_room_summary_payload_round_trips_with_explicit_space_defaults() {
+    let event = Event::SyncedRooms(vec![RoomSummary {
+        room_id: "!ops:example.org".to_owned(),
+        display_name: "Ops".to_owned(),
+        encrypted: true,
+        is_space: false,
+        space_children: Vec::new(),
+    }]);
+
+    let json = serde_json::to_string(&event).expect("serialize flat synced rooms");
+    assert_eq!(
+        json,
+        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","encrypted":true,"is_space":false,"space_children":[]}]}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize flat synced rooms");
     assert_eq!(restored, event);
 }
 

@@ -121,10 +121,20 @@ pub struct Model {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SpaceChild {
+    pub room_id: String,
+    pub suggested: bool,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Room {
     pub room_id: String,
     pub display_name: String,
     pub encrypted: bool,
+    pub is_space: bool,
+    pub space_children: Vec<SpaceChild>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

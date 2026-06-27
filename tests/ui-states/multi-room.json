@@ -5,17 +5,23 @@
       {
         "room_id": "!ops:example",
         "display_name": "Ops",
-        "encrypted": true
+        "encrypted": true,
+        "is_space": false,
+        "space_children": []
       },
       {
         "room_id": "!lobby:example",
         "display_name": "Lobby",
-        "encrypted": false
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
       },
       {
         "room_id": "!random:example",
         "display_name": "Random",
-        "encrypted": false
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
       }
     ]
   },

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
@@ -5,16 +6,18 @@ use matrix_sdk::{
     Client, LoopCtrl, Room, SessionChange, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
+    deserialized_responses::SyncOrStrippedState,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
     ruma::{
         OwnedDeviceId, OwnedUserId,
         events::{
-            AnyMessageLikeEventContent,
+            AnyMessageLikeEventContent, SyncStateEvent,
             room::{
                 member::SyncRoomMemberEvent,
                 message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
                 topic::SyncRoomTopicEvent,
             },
+            space::child::{SpaceChildEventContent, SpaceChildOrd},
         },
     },
     store::RoomLoadSettings,
@@ -24,7 +27,7 @@ use tokio::task::JoinHandle;
 use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomMemberState, RoomStateContent,
     RoomStateEntry, RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest,
-    StoredSession, TimelineText,
+    SpaceChildSummary, StoredSession, TimelineText,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -130,24 +133,71 @@ pub(crate) async fn initial_room_sync(
 pub(crate) async fn summarize_joined_rooms(
     client: &Client,
 ) -> Result<Vec<RoomSummary>, MatrixCoreError> {
-    let mut rooms = Vec::new();
+    let joined_rooms = client.joined_rooms();
+    let joined_room_ids = joined_rooms
+        .iter()
+        .map(|room| room.room_id().to_string())
+        .collect::<BTreeSet<_>>();
+    let mut rooms = Vec::with_capacity(joined_rooms.len());
 
-    for room in client.joined_rooms() {
+    for room in joined_rooms {
         let display_name = room.display_name().await.map_err(|err| {
             MatrixCoreError::new(format!("failed to read room display name: {err}"))
         })?;
         let encrypted = room.latest_encryption_state().await.map_err(|err| {
             MatrixCoreError::new(format!("failed to read room encryption state: {err}"))
         })?;
+        let is_space = room.is_space();
+        let space_children = if is_space {
+            summarize_space_children(&room, &joined_room_ids).await?
+        } else {
+            Vec::new()
+        };
 
         rooms.push(RoomSummary {
             room_id: room.room_id().to_string(),
             display_name: display_name.to_string(),
             encrypted: encrypted.is_encrypted(),
+            is_space,
+            space_children,
         });
     }
 
     Ok(rooms)
+}
+
+async fn summarize_space_children(
+    room: &Room,
+    joined_room_ids: &BTreeSet<String>,
+) -> Result<Vec<SpaceChildSummary>, MatrixCoreError> {
+    let raw_events = room
+        .get_state_events_static::<SpaceChildEventContent>()
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to read space child state: {err}")))?;
+
+    let mut child_events = Vec::new();
+    for raw_event in raw_events {
+        let event = raw_event.deserialize().map_err(|err| {
+            MatrixCoreError::new(format!("failed to deserialize space child state: {err}"))
+        })?;
+        let SyncOrStrippedState::Sync(SyncStateEvent::Original(event)) = event else {
+            continue;
+        };
+        if joined_room_ids.contains(event.state_key.as_str()) {
+            child_events.push(event);
+        }
+    }
+
+    child_events.sort_by(SpaceChildOrd::cmp_space_child);
+
+    Ok(child_events
+        .into_iter()
+        .map(|event| SpaceChildSummary {
+            room_id: event.state_key.to_string(),
+            suggested: event.content.suggested,
+            order: event.content.order.map(|order| order.to_string()),
+        })
+        .collect())
 }
 
 pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {

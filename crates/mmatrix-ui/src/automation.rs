@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 5;
+pub(crate) const PROTOCOL_VERSION: u32 = 6;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -568,10 +568,20 @@ pub(crate) struct DumpModel {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct DumpSpaceChild {
+    pub(crate) room_id: String,
+    pub(crate) suggested: bool,
+    pub(crate) order: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DumpRoom {
     pub(crate) room_id: String,
     pub(crate) display_name: String,
     pub(crate) encrypted: bool,
+    pub(crate) is_space: bool,
+    pub(crate) space_children: Vec<DumpSpaceChild>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -851,6 +861,16 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
         room_id: room.room_id.clone(),
         display_name: room.display_name.clone(),
         encrypted: room.encrypted,
+        is_space: room.is_space,
+        space_children: room
+            .space_children
+            .iter()
+            .map(|child| DumpSpaceChild {
+                room_id: child.room_id.clone(),
+                suggested: child.suggested,
+                order: child.order.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -1021,8 +1041,8 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 #[cfg(test)]
 mod tests {
     use mmatrix_core::{
-        CoreErrorEvent, Event, Operation, RoomSummary, StoredSession, TimelineText,
-        VerificationRequest,
+        CoreErrorEvent, Event, Operation, RoomSummary, SpaceChildSummary, StoredSession,
+        TimelineText, VerificationRequest,
     };
     use serde_json::{Value, json};
 
@@ -1218,7 +1238,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}]},{"TimelineText":{"room_id":"!room:example","sender":"@alice:example","timestamp_ms":1700000000000,"body":"hello"}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"TimelineText":{"room_id":"!room:example","sender":"@alice:example","timestamp_ms":1700000000000,"body":"hello"}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -1230,6 +1250,8 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             display_name: "Room".to_owned(),
                             encrypted: true,
+                            is_space: false,
+                            space_children: Vec::new(),
                         }]),
                         Event::TimelineText(TimelineText {
                             room_id: "!room:example".to_owned(),
@@ -1425,6 +1447,8 @@ mod tests {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
                 encrypted: false,
+                is_space: false,
+                space_children: Vec::new(),
             }]),
             Event::VerificationRequest(VerificationRequest {
                 flow_id: "flow-1".to_owned(),
@@ -1440,7 +1464,7 @@ mod tests {
             serde_json::to_value(&events).unwrap(),
             json!([
                 "Started",
-                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false}]},
+                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"space_children":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
                 {"Error":{"operation":"SendText","message":"send failed"}}
             ])
@@ -1451,7 +1475,7 @@ mod tests {
     fn load_command_rejects_unknown_fields_inside_event_payloads() {
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"unexpected":true}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"space_children":[],"unexpected":true}]}]}}"#,
         )
         .unwrap_err();
 
@@ -1462,7 +1486,25 @@ mod tests {
                 "ok":false,
                 "err":{
                     "code":"invalid_args",
-                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`"
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`, `is_space`, `space_children`"
+                }
+            })
+        );
+
+        let error = parse_command_request(
+            COMMAND_ID_LOAD_SYNTHETIC_STATE,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","encrypted":false,"is_space":true,"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}]}]}]}}"#,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({
+                "id":"load",
+                "ok":false,
+                "err":{
+                    "code":"invalid_args",
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `suggested`, `order`"
                 }
             })
         );
@@ -1660,7 +1702,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":5,
+                    "protocol_version":6,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1697,6 +1739,8 @@ mod tests {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
                         encrypted: true,
+                        is_space: false,
+                        space_children: Vec::new(),
                     }],
                     last_timeline: None,
                     last_verification: None,
@@ -1711,7 +1755,7 @@ mod tests {
                 "json":{
                     "status":"ready",
                     "lifecycle_state":"ready",
-                    "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}],
+                    "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}],
                     "last_timeline":null,
                     "last_verification":null,
                     "last_error":null,
@@ -1782,6 +1826,8 @@ mod tests {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
                         encrypted: true,
+                        is_space: false,
+                        space_children: Vec::new(),
                     }],
                 },
             ))
@@ -1789,7 +1835,7 @@ mod tests {
             json!({
                 "id":"rooms",
                 "ok":true,
-                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}]}
+                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]}
             })
         );
         assert_eq!(
@@ -2006,12 +2052,33 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 display_name: "Room".to_owned(),
                 encrypted: true,
+                is_space: true,
+                space_children: vec![SpaceChildSummary {
+                    room_id: "!child:example".to_owned(),
+                    suggested: true,
+                    order: Some("aaa".to_owned()),
+                }],
             }),
             super::DumpRoom {
                 room_id: "!room:example".to_owned(),
                 display_name: "Room".to_owned(),
                 encrypted: true,
+                is_space: true,
+                space_children: vec![super::DumpSpaceChild {
+                    room_id: "!child:example".to_owned(),
+                    suggested: true,
+                    order: Some("aaa".to_owned()),
+                }],
             }
+        );
+        assert!(
+            serde_json::from_value::<super::DumpSpaceChild>(json!({
+                "room_id":"!child:example",
+                "suggested":true,
+                "order":"aaa",
+                "unexpected":true
+            }))
+            .is_err()
         );
         assert_eq!(
             super::dump_timeline_line_from_text(&TimelineText {

@@ -5,8 +5,9 @@ use std::time::Duration;
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     ProtocolVersion, RestoreSessionArgs, RoomMemberState, RoomStateContent, RoomStateEventKind,
-    RoomStateLine, RoomTopicState, StatusBarState, StoredSession, SwitchbarItem, SwitchbarState,
-    TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    RoomStateLine, RoomTopicState, SpaceChild, StatusBarState, StoredSession, SwitchbarItem,
+    SwitchbarState, TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification,
+    ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -66,11 +67,47 @@ fn data_models_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
-        rooms: vec![mmatrix_testkit::Room {
-            room_id: "!room:example".to_owned(),
-            display_name: "Room".to_owned(),
-            encrypted: true,
-        }],
+        rooms: vec![
+            mmatrix_testkit::Room {
+                room_id: "!space:example".to_owned(),
+                display_name: "Space".to_owned(),
+                encrypted: false,
+                is_space: true,
+                space_children: vec![
+                    SpaceChild {
+                        room_id: "!alpha:example".to_owned(),
+                        suggested: true,
+                        order: Some("aaa".to_owned()),
+                    },
+                    SpaceChild {
+                        room_id: "!beta:example".to_owned(),
+                        suggested: false,
+                        order: None,
+                    },
+                ],
+            },
+            mmatrix_testkit::Room {
+                room_id: "!alpha:example".to_owned(),
+                display_name: "Alpha".to_owned(),
+                encrypted: true,
+                is_space: false,
+                space_children: vec![],
+            },
+            mmatrix_testkit::Room {
+                room_id: "!beta:example".to_owned(),
+                display_name: "Beta".to_owned(),
+                encrypted: false,
+                is_space: false,
+                space_children: vec![],
+            },
+            mmatrix_testkit::Room {
+                room_id: "!lobby:example".to_owned(),
+                display_name: "Lobby".to_owned(),
+                encrypted: false,
+                is_space: false,
+                space_children: vec![],
+            },
+        ],
         last_timeline: Some(TimelineLine {
             room_id: "!room:example".to_owned(),
             sender: "@alice:example".to_owned(),
@@ -88,7 +125,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 5,
+        protocol_version: 6,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -167,9 +204,43 @@ fn data_models_round_trip_through_json() {
         {
             "SyncedRooms": [
                 {
-                    "room_id": "!room:example",
-                    "display_name": "Room",
-                    "encrypted": true
+                    "room_id": "!space:example",
+                    "display_name": "Space",
+                    "encrypted": false,
+                    "is_space": true,
+                    "space_children": [
+                        {
+                            "room_id": "!alpha:example",
+                            "suggested": true,
+                            "order": "aaa"
+                        },
+                        {
+                            "room_id": "!beta:example",
+                            "suggested": false,
+                            "order": null
+                        }
+                    ]
+                },
+                {
+                    "room_id": "!alpha:example",
+                    "display_name": "Alpha",
+                    "encrypted": true,
+                    "is_space": false,
+                    "space_children": []
+                },
+                {
+                    "room_id": "!beta:example",
+                    "display_name": "Beta",
+                    "encrypted": false,
+                    "is_space": false,
+                    "space_children": []
+                },
+                {
+                    "room_id": "!lobby:example",
+                    "display_name": "Lobby",
+                    "encrypted": false,
+                    "is_space": false,
+                    "space_children": []
                 }
             ]
         }
@@ -322,7 +393,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":3,
+            "protocol_version":6,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -336,6 +407,30 @@ fn data_models_reject_unknown_fields() {
             "device_id":"DEVICE",
             "access_token":"secret-token",
             "refresh_token":null,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<mmatrix_testkit::Room>(
+            r#"{
+            "room_id":"!room:example",
+            "display_name":"Room",
+            "encrypted":true,
+            "is_space":false,
+            "space_children":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<SpaceChild>(
+            r#"{
+            "room_id":"!room:example",
+            "suggested":true,
+            "order":"aaa",
             "unexpected":true
         }"#
         )
@@ -577,6 +672,15 @@ fn data_models_reject_unknown_fields() {
             "kind":"room",
             "room_id":"!room:example",
             "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<ViewIdentity>(
+            r#"{
+            "kind":"space",
+            "room_id":"!space:example"
         }"#
         )
         .is_err()

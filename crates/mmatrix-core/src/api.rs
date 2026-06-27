@@ -47,10 +47,20 @@ pub struct SendTextRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SpaceChildSummary {
+    pub room_id: String,
+    pub suggested: bool,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomSummary {
     pub room_id: String,
     pub display_name: String,
     pub encrypted: bool,
+    pub is_space: bool,
+    pub space_children: Vec<SpaceChildSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -1695,17 +1695,19 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                 .model
                 .selected_room
                 .as_deref()
-                .is_some_and(|room_id| !room_exists(&rooms, room_id))
+                .is_some_and(|room_id| actionable_room_by_id(&rooms, room_id).is_none())
             {
                 state.model.selected_room = None;
             }
             state
                 .room_activity
-                .retain(|room_id| room_exists(&rooms, room_id));
+                .retain(|room_id| actionable_room_by_id(&rooms, room_id).is_some());
             state.model.rooms = rooms;
         }
         Event::TimelineText(timeline) => {
-            if state.active_view != ViewId::Room(timeline.room_id.clone()) {
+            if state.active_view != ViewId::Room(timeline.room_id.clone())
+                && actionable_room_by_id(&state.model.rooms, &timeline.room_id).is_some()
+            {
                 state.room_activity.insert(timeline.room_id.clone());
             }
             state.model.status = format!("timeline update from {}", timeline.room_id);
@@ -1723,7 +1725,9 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.last_timeline = Some(timeline);
         }
         Event::RoomState(room_state) => {
-            if state.active_view != ViewId::Room(room_state.room_id.clone()) {
+            if state.active_view != ViewId::Room(room_state.room_id.clone())
+                && actionable_room_by_id(&state.model.rooms, &room_state.room_id).is_some()
+            {
                 state.room_activity.insert(room_state.room_id.clone());
             }
             state.model.status = format!("timeline update from {}", room_state.room_id);
@@ -1798,7 +1802,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
 }
 
 fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
-    let room = room_summary(&model.rooms, room_id).expect("room view must target an existing room");
+    let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
     let mut lines = Vec::new();
     let mut header = format!("Room: {}", room.display_name);
     if room.encrypted {
@@ -1934,11 +1938,15 @@ fn resolve_active_view(
 ) -> ViewId {
     match active_view {
         ViewId::Status => ViewId::Status,
-        ViewId::Room(room_id) if room_exists(rooms, room_id) => ViewId::Room(room_id.clone()),
+        ViewId::Room(room_id) if actionable_room_by_id(rooms, room_id).is_some() => {
+            ViewId::Room(room_id.clone())
+        }
         ViewId::Room(_) => {
-            if let Some(room_id) = selected_room.filter(|room_id| room_exists(rooms, room_id)) {
+            if let Some(room_id) =
+                selected_room.filter(|room_id| actionable_room_by_id(rooms, room_id).is_some())
+            {
                 ViewId::Room(room_id.to_owned())
-            } else if let Some(room) = rooms.first() {
+            } else if let Some(room) = rooms.iter().find(|room| is_actionable_room(room)) {
                 ViewId::Room(room.room_id.clone())
             } else {
                 ViewId::Status
@@ -1952,7 +1960,11 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
         .views
         .keys()
         .filter(|view_id| {
-            matches!(view_id, ViewId::Room(room_id) if !room_exists(&state.model.rooms, room_id))
+            matches!(
+                view_id,
+                ViewId::Room(room_id)
+                    if actionable_room_by_id(&state.model.rooms, room_id).is_none()
+            )
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1980,21 +1992,33 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
     removed
 }
 
-fn room_summary<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
+fn is_actionable_room(room: &RoomSummary) -> bool {
+    !room.is_space
+}
+
+fn room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
     rooms.iter().find(|room| room.room_id == room_id)
+}
+
+fn actionable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
+    room_by_id(rooms, room_id).filter(|room| is_actionable_room(room))
+}
+
+fn room_tree_label(room: &RoomSummary) -> String {
+    let mut label = room.display_name.clone();
+    if room.encrypted {
+        label.push_str(" [e2ee]");
+    }
+    label
 }
 
 fn view_title(model: &UiModel, view_id: &ViewId) -> String {
     match view_id {
         ViewId::Status => "Status".to_owned(),
         ViewId::Room(room_id) => {
-            let room = room_summary(&model.rooms, room_id)
+            let room = room_by_id(&model.rooms, room_id)
                 .expect("room view activation must target an existing room");
-            let mut title = room.display_name.clone();
-            if room.encrypted {
-                title.push_str(" [e2ee]");
-            }
-            title
+            room_tree_label(room)
         }
     }
 }
@@ -2128,7 +2152,7 @@ unsafe fn ensure_status_view(hwnd: HWND) -> Result<HWND, String> {
 }
 
 unsafe fn ensure_room_view(hwnd: HWND, room_id: &str) -> Result<HWND, String> {
-    if room_summary(&state_ref(hwnd).model.rooms, room_id).is_none() {
+    if actionable_room_by_id(&state_ref(hwnd).model.rooms, room_id).is_none() {
         return Err(format!("unknown room id: {room_id}"));
     }
 
@@ -2210,6 +2234,7 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         .model
         .rooms
         .iter()
+        .filter(|room| is_actionable_room(room))
         .map(|room| room.room_id.clone())
         .collect::<Vec<_>>();
     destroy_stale_room_views(hwnd);
@@ -2252,18 +2277,20 @@ unsafe fn refresh_tree(hwnd: HWND) {
     let status = insert_tree_item(tree, root, "status");
     state.tree_items.insert(status, ViewId::Status);
 
+    let actionable_rooms = state
+        .model
+        .rooms
+        .iter()
+        .filter(|room| is_actionable_room(room))
+        .collect::<Vec<_>>();
     let rooms_label = if state.model.rooms.is_empty() {
         "rooms: offline".to_owned()
     } else {
-        format!("rooms: {}", state.model.rooms.len())
+        format!("rooms: {}", actionable_rooms.len())
     };
     let rooms_root = insert_tree_item(tree, root, &rooms_label);
-    for room in &state.model.rooms {
-        let mut room_label = room.display_name.clone();
-        if room.encrypted {
-            room_label.push_str(" [e2ee]");
-        }
-        let room_item = insert_tree_item(tree, rooms_root, &room_label);
+    for room in actionable_rooms {
+        let room_item = insert_tree_item(tree, rooms_root, &room_tree_label(room));
         state
             .tree_items
             .insert(room_item, ViewId::Room(room.room_id.clone()));
@@ -2575,8 +2602,15 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             let edit = compose_edit(hwnd)
                 .map_err(|message| failure_response(Some(id.clone()), "send_failed", message))?;
             set_edit_text(edit, &body);
-            let room_id = submit_compose_from_control(hwnd, args.room_id.as_deref())
-                .map_err(|message| failure_response(Some(id.clone()), "send_failed", message))?;
+            let room_id =
+                submit_compose_from_control(hwnd, args.room_id.as_deref()).map_err(|message| {
+                    let code = if message.starts_with("unknown room id: ") {
+                        "unknown_room"
+                    } else {
+                        "send_failed"
+                    };
+                    failure_response(Some(id.clone()), code, message)
+                })?;
             serialize_success_json(
                 &id,
                 SendTextResponse {
@@ -2775,6 +2809,9 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
     }
 
     for room in &state.model.rooms {
+        if !is_actionable_room(room) {
+            continue;
+        }
         let view_id = ViewId::Room(room.room_id.clone());
         if state.views.contains_key(&view_id) {
             ordered.push(view_id);
@@ -2787,11 +2824,7 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
         .filter_map(|view_id| match view_id {
             ViewId::Status => None,
             ViewId::Room(room_id)
-                if !state
-                    .model
-                    .rooms
-                    .iter()
-                    .any(|room| room.room_id == *room_id) =>
+                if actionable_room_by_id(&state.model.rooms, room_id).is_none() =>
             {
                 Some(room_id.clone())
             }
@@ -3144,11 +3177,15 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
                 encrypted: false,
+                is_space: false,
+                space_children: Vec::new(),
             },
             RoomSummary {
                 room_id: "!two:example".to_owned(),
                 display_name: "Two".to_owned(),
                 encrypted: true,
+                is_space: false,
+                space_children: Vec::new(),
             },
         ]),
         Event::TimelineText(TimelineText {
@@ -3291,7 +3328,12 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
                     .count()
             })
             .sum();
-        let selected_room = state.model.rooms.first().map(|room| room.room_id.clone());
+        let selected_room = state
+            .model
+            .rooms
+            .iter()
+            .find(|room| is_actionable_room(room))
+            .map(|room| room.room_id.clone());
 
         let active_view = match selected_room {
             Some(room_id) => {
@@ -3346,7 +3388,7 @@ unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
 }
 
 fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
-    if !room_exists(&state.model.rooms, room_id) {
+    if actionable_room_by_id(&state.model.rooms, room_id).is_none() {
         return Err(format!("unknown room id: {room_id}"));
     }
 
@@ -3419,7 +3461,7 @@ fn submit_compose(
             .ok_or_else(|| "no room selected".to_owned())?,
     };
 
-    if !room_exists(&state.model.rooms, &room_id) {
+    if actionable_room_by_id(&state.model.rooms, &room_id).is_none() {
         return Err(format!("unknown room id: {room_id}"));
     }
 
@@ -3822,6 +3864,18 @@ mod tests {
             room_id: room_id.to_owned(),
             display_name: display_name.to_owned(),
             encrypted,
+            is_space: false,
+            space_children: Vec::new(),
+        }
+    }
+
+    fn space(room_id: &str, display_name: &str) -> RoomSummary {
+        RoomSummary {
+            room_id: room_id.to_owned(),
+            display_name: display_name.to_owned(),
+            encrypted: false,
+            is_space: true,
+            space_children: Vec::new(),
         }
     }
 
@@ -4217,6 +4271,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_active_view_skips_spaces_when_falling_back() {
+        let rooms = vec![
+            space("!space:example", "Space"),
+            room("!alpha:example", "Alpha", false),
+            room("!beta:example", "Beta", false),
+        ];
+
+        assert_eq!(
+            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &rooms),
+            ViewId::Room("!alpha:example".to_owned())
+        );
+    }
+
+    #[test]
     fn resolve_active_view_falls_back_to_status_when_no_rooms_remain() {
         assert_eq!(
             resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &[]),
@@ -4244,6 +4312,20 @@ mod tests {
             Event::SyncedRooms(vec![room("!other:example", "Other", false)]),
         )
         .unwrap();
+        assert_eq!(state.model.selected_room, None);
+    }
+
+    #[test]
+    fn synced_rooms_clear_selected_room_when_room_becomes_space() {
+        let mut state = test_state();
+        state.model.selected_room = Some("!room:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![space("!room:example", "Room Space")]),
+        )
+        .unwrap();
+
         assert_eq!(state.model.selected_room, None);
     }
 
@@ -4334,6 +4416,36 @@ mod tests {
     }
 
     #[test]
+    fn ordered_view_ids_exclude_spaces_from_model_order() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            space("!space:example", "Space"),
+            room("!beta:example", "Beta", false),
+            room("!alpha:example", "Alpha", false),
+        ];
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state
+            .views
+            .insert(ViewId::Room("!space:example".to_owned()), tracked_view(20));
+        state
+            .views
+            .insert(ViewId::Room("!alpha:example".to_owned()), tracked_view(30));
+        state
+            .views
+            .insert(ViewId::Room("!beta:example".to_owned()), tracked_view(40));
+
+        assert_eq!(
+            ordered_view_ids(&state),
+            vec![
+                ViewId::Status,
+                ViewId::Room("!beta:example".to_owned()),
+                ViewId::Room("!alpha:example".to_owned()),
+                ViewId::Room("!space:example".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
     fn switchbar_button_text_prefixes_activity_and_preserves_room_title() {
         let mut state = test_state();
         state.model.rooms = vec![room("!room:example", "Room", true)];
@@ -4349,6 +4461,10 @@ mod tests {
     #[test]
     fn inactive_room_events_mark_room_activity() {
         let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
         state.active_view = ViewId::Room("!active:example".to_owned());
 
         apply_core_event(
@@ -4368,6 +4484,7 @@ mod tests {
     #[test]
     fn active_room_events_do_not_mark_room_activity() {
         let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = ViewId::Room("!room:example".to_owned());
 
         apply_core_event(
@@ -4394,6 +4511,25 @@ mod tests {
 
         assert!(state.room_activity.contains("!keep:example"));
         assert!(!state.room_activity.contains("!stale:example"));
+    }
+
+    #[test]
+    fn synced_rooms_prune_space_room_activity() {
+        let mut state = test_state();
+        state.room_activity.insert("!keep:example".to_owned());
+        state.room_activity.insert("!space:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                room("!keep:example", "Keep", false),
+                space("!space:example", "Space"),
+            ]),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.contains("!keep:example"));
+        assert!(!state.room_activity.contains("!space:example"));
     }
 
     #[test]
@@ -4436,12 +4572,19 @@ mod tests {
     }
 
     #[test]
-    fn select_room_accepts_only_known_room_ids() {
+    fn select_room_rejects_spaces_without_changing_existing_selection() {
         let mut state = test_state();
-        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.model.rooms = vec![
+            room("!room:example", "Room", false),
+            space("!space:example", "Space"),
+        ];
 
         assert_eq!(select_room(&mut state, "!room:example"), Ok(()));
         assert_eq!(state.model.selected_room, Some("!room:example".to_owned()));
+        assert_eq!(
+            select_room(&mut state, "!space:example"),
+            Err("unknown room id: !space:example".to_owned())
+        );
         assert_eq!(
             select_room(&mut state, "!missing:example"),
             Err("unknown room id: !missing:example".to_owned())
@@ -4481,7 +4624,10 @@ mod tests {
     #[test]
     fn submit_compose_rejects_empty_body_unknown_room_and_missing_selection() {
         let mut state = test_state();
-        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.model.rooms = vec![
+            room("!room:example", "Room", false),
+            space("!space:example", "Space"),
+        ];
 
         assert_eq!(
             submit_compose(&mut state, String::new(), Some("!room:example")),
@@ -4491,6 +4637,11 @@ mod tests {
         assert_eq!(
             submit_compose(&mut state, "hello".to_owned(), Some("!missing:example")),
             Err("unknown room id: !missing:example".to_owned())
+        );
+        assert!(state.compose_history.entries.is_empty());
+        assert_eq!(
+            submit_compose(&mut state, "hello".to_owned(), Some("!space:example")),
+            Err("unknown room id: !space:example".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
         assert_eq!(

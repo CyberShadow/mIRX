@@ -5,12 +5,16 @@
       {
         "room_id": "!verify:example",
         "display_name": "Verify",
-        "encrypted": true
+        "encrypted": true,
+        "is_space": false,
+        "space_children": []
       },
       {
         "room_id": "!support:example",
         "display_name": "Support",
-        "encrypted": false
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
       }
     ]
   },

@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 use std::ptr::copy_nonoverlapping;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
+use mmatrix_core::{
+    Event, RoomSummary, SpaceChildSummary, StoredSession as CoreStoredSession, TimelineText,
+};
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, RoomMemberState,
-    RoomStateContent, RoomStateEventKind, RoomStateLine, StoredSession, SwitchbarItem,
+    RoomStateContent, RoomStateEventKind, RoomStateLine, SpaceChild, StoredSession, SwitchbarItem,
     TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
@@ -158,20 +160,42 @@ fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Err
     Ok(state_path)
 }
 
+fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
+    RoomSummary {
+        room_id: room_id.to_owned(),
+        display_name: display_name.to_owned(),
+        encrypted,
+        is_space: false,
+        space_children: Vec::new(),
+    }
+}
+
+fn listed_room(room_id: &str, display_name: &str, encrypted: bool) -> Room {
+    Room {
+        room_id: room_id.to_owned(),
+        display_name: display_name.to_owned(),
+        encrypted,
+        is_space: false,
+        space_children: Vec::new(),
+    }
+}
+
+fn listed_space(room_id: &str, display_name: &str, children: Vec<SpaceChild>) -> Room {
+    Room {
+        room_id: room_id.to_owned(),
+        display_name: display_name.to_owned(),
+        encrypted: false,
+        is_space: true,
+        space_children: children,
+    }
+}
+
 fn base_events() -> Vec<Event> {
     vec![
         Event::Started,
         Event::SyncedRooms(vec![
-            RoomSummary {
-                room_id: "!beta:example".to_owned(),
-                display_name: "Beta".to_owned(),
-                encrypted: true,
-            },
-            RoomSummary {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
+            room_summary("!beta:example", "Beta", true),
+            room_summary("!alpha:example", "Alpha", false),
         ]),
         Event::TimelineText(TimelineText {
             room_id: "!alpha:example".to_owned(),
@@ -198,16 +222,8 @@ fn replacement_events() -> Vec<Event> {
     vec![
         Event::Started,
         Event::SyncedRooms(vec![
-            RoomSummary {
-                room_id: "!gamma:example".to_owned(),
-                display_name: "Gamma".to_owned(),
-                encrypted: false,
-            },
-            RoomSummary {
-                room_id: "!delta:example".to_owned(),
-                display_name: "Delta".to_owned(),
-                encrypted: false,
-            },
+            room_summary("!gamma:example", "Gamma", false),
+            room_summary("!delta:example", "Delta", false),
         ]),
         Event::TimelineText(TimelineText {
             room_id: "!gamma:example".to_owned(),
@@ -420,16 +436,8 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     assert_eq!(
         model.rooms,
         vec![
-            Room {
-                room_id: "!beta:example".to_owned(),
-                display_name: "Beta".to_owned(),
-                encrypted: true,
-            },
-            Room {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
+            listed_room("!beta:example", "Beta", true),
+            listed_room("!alpha:example", "Alpha", false),
         ]
     );
     assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
@@ -538,22 +546,14 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 5);
+    assert_eq!(version.protocol_version, 6);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
         attached.list_rooms()?,
         vec![
-            Room {
-                room_id: "!beta:example".to_owned(),
-                display_name: "Beta".to_owned(),
-                encrypted: true,
-            },
-            Room {
-                room_id: "!alpha:example".to_owned(),
-                display_name: "Alpha".to_owned(),
-                encrypted: false,
-            },
+            listed_room("!beta:example", "Beta", true),
+            listed_room("!alpha:example", "Alpha", false),
         ]
     );
 
@@ -580,16 +580,8 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     assert_eq!(
         attached.list_rooms()?,
         vec![
-            Room {
-                room_id: "!gamma:example".to_owned(),
-                display_name: "Gamma".to_owned(),
-                encrypted: false,
-            },
-            Room {
-                room_id: "!delta:example".to_owned(),
-                display_name: "Delta".to_owned(),
-                encrypted: false,
-            },
+            listed_room("!gamma:example", "Gamma", false),
+            listed_room("!delta:example", "Delta", false),
         ]
     );
     assert_eq!(
@@ -672,6 +664,81 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
             assert_eq!(message, "unknown room id: !missing:example");
         }
         other => panic!("expected protocol error for unknown room, got {other:?}"),
+    }
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![
+            RoomSummary {
+                room_id: "!space:example".to_owned(),
+                display_name: "Space".to_owned(),
+                encrypted: false,
+                is_space: true,
+                space_children: vec![SpaceChildSummary {
+                    room_id: "!room:example".to_owned(),
+                    suggested: true,
+                    order: Some("aaa".to_owned()),
+                }],
+            },
+            room_summary("!room:example", "Room", true),
+        ]),
+        Event::TimelineText(TimelineText {
+            room_id: "!room:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            body: "hello".to_owned(),
+        }),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.list_rooms()?,
+        vec![
+            listed_space(
+                "!space:example",
+                "Space",
+                vec![SpaceChild {
+                    room_id: "!room:example".to_owned(),
+                    suggested: true,
+                    order: Some("aaa".to_owned()),
+                }],
+            ),
+            listed_room("!room:example", "Room", true),
+        ]
+    );
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!room:example")
+    );
+
+    match app.select_room("!space:example") {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "unknown_room");
+            assert_eq!(message, "unknown room id: !space:example");
+        }
+        other => panic!("expected select_room unknown_room for space, got {other:?}"),
+    }
+    match app.send_text(Some("!space:example"), "hello") {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "unknown_room");
+            assert_eq!(message, "unknown room id: !space:example");
+        }
+        other => panic!("expected send_text unknown_room for space, got {other:?}"),
     }
 
     let _ = fs::remove_file(&state_path);
@@ -797,11 +864,7 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
         Event::RestoredSession,
-        Event::SyncedRooms(vec![RoomSummary {
-            room_id: "!synthetic:example".to_owned(),
-            display_name: "Synthetic".to_owned(),
-            encrypted: false,
-        }]),
+        Event::SyncedRooms(vec![room_summary("!synthetic:example", "Synthetic", false)]),
         Event::LoggedOut,
     ])?)?;
     app.wait_for_lifecycle_state("logged_out", Duration::from_secs(5))?;
@@ -929,16 +992,8 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     assert_eq!(
         attached.list_rooms()?,
         vec![
-            Room {
-                room_id: "!verify:example".to_owned(),
-                display_name: "Verify".to_owned(),
-                encrypted: true,
-            },
-            Room {
-                room_id: "!support:example".to_owned(),
-                display_name: "Support".to_owned(),
-                encrypted: false,
-            },
+            listed_room("!verify:example", "Verify", true),
+            listed_room("!support:example", "Support", false),
         ]
     );
     assert_eq!(
