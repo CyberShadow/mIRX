@@ -27,6 +27,11 @@ mod windows_main {
         expect_active_view: Option<ViewIdentity>,
         expect_room_views: Vec<ViewTextExpectation>,
         expect_status_views: Vec<String>,
+        expect_status_bars: Vec<String>,
+        expect_switchbar_items: Vec<SwitchbarItemExpectation>,
+        expect_switchbar_active: Option<ViewIdentity>,
+        expect_switchbar_activity: Vec<ViewIdentity>,
+        expect_no_switchbar_activity: Vec<ViewIdentity>,
         expect_no_navigation_texts: Vec<String>,
     }
 
@@ -40,11 +45,21 @@ mod windows_main {
         substring: String,
     }
 
+    struct SwitchbarItemExpectation {
+        identity: ViewIdentity,
+        title_substring: String,
+    }
+
     impl Config {
         fn requires_ui_state(&self) -> bool {
             self.expect_active_view.is_some()
                 || !self.expect_room_views.is_empty()
                 || !self.expect_status_views.is_empty()
+                || !self.expect_status_bars.is_empty()
+                || !self.expect_switchbar_items.is_empty()
+                || self.expect_switchbar_active.is_some()
+                || !self.expect_switchbar_activity.is_empty()
+                || !self.expect_no_switchbar_activity.is_empty()
                 || !self.expect_no_navigation_texts.is_empty()
         }
     }
@@ -203,6 +218,110 @@ mod windows_main {
                 }
             }
 
+            for substring in &config.expect_status_bars {
+                if !ui_state.status_bar.text.contains(substring) {
+                    return Err(format!(
+                        "status bar assertion failed: expected substring {:?} in {:?}",
+                        substring, ui_state.status_bar.text
+                    ));
+                }
+                println!("PASS status bar contains {:?}", substring);
+            }
+
+            for expectation in &config.expect_switchbar_items {
+                let item = ui_state
+                    .switchbar
+                    .item(&expectation.identity)
+                    .ok_or_else(|| {
+                        format!(
+                            "switchbar item assertion failed: missing item {}",
+                            format_view_identity(&expectation.identity)
+                        )
+                    })?;
+                if !item.title.contains(&expectation.title_substring) {
+                    return Err(format!(
+                        "switchbar item assertion failed: expected {} title to contain {:?}, found {:?}",
+                        format_view_identity(&expectation.identity),
+                        expectation.title_substring,
+                        item.title
+                    ));
+                }
+                println!(
+                    "PASS switchbar item {} contains {:?}",
+                    format_view_identity(&expectation.identity),
+                    expectation.title_substring
+                );
+            }
+
+            if let Some(expected_identity) = config.expect_switchbar_active.as_ref() {
+                let active_items: Vec<_> = ui_state
+                    .switchbar
+                    .items
+                    .iter()
+                    .filter(|item| item.active)
+                    .collect();
+                if active_items.len() != 1 {
+                    let actual = active_items
+                        .iter()
+                        .map(|item| format_view_identity(&item.identity))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(format!(
+                        "switchbar active assertion failed: expected exactly one active item {}, found {} active item(s): [{}]",
+                        format_view_identity(expected_identity),
+                        active_items.len(),
+                        actual
+                    ));
+                }
+                let actual_identity = &active_items[0].identity;
+                if actual_identity != expected_identity {
+                    return Err(format!(
+                        "switchbar active assertion failed: expected {}, found {}",
+                        format_view_identity(expected_identity),
+                        format_view_identity(actual_identity)
+                    ));
+                }
+                println!(
+                    "PASS switchbar active {}",
+                    format_view_identity(expected_identity)
+                );
+            }
+
+            for identity in &config.expect_switchbar_activity {
+                let item = ui_state.switchbar.item(identity).ok_or_else(|| {
+                    format!(
+                        "switchbar activity assertion failed: missing item {}",
+                        format_view_identity(identity)
+                    )
+                })?;
+                if !item.has_activity {
+                    return Err(format!(
+                        "switchbar activity assertion failed: expected {} to have activity, found false",
+                        format_view_identity(identity)
+                    ));
+                }
+                println!("PASS switchbar activity {}", format_view_identity(identity));
+            }
+
+            for identity in &config.expect_no_switchbar_activity {
+                let item = ui_state.switchbar.item(identity).ok_or_else(|| {
+                    format!(
+                        "switchbar no-activity assertion failed: missing item {}",
+                        format_view_identity(identity)
+                    )
+                })?;
+                if item.has_activity {
+                    return Err(format!(
+                        "switchbar no-activity assertion failed: expected {} to have no activity, found true",
+                        format_view_identity(identity)
+                    ));
+                }
+                println!(
+                    "PASS switchbar no activity {}",
+                    format_view_identity(identity)
+                );
+            }
+
             for substring in &config.expect_no_navigation_texts {
                 if navigation_contains(&ui_state.navigation, substring) {
                     return Err(format!(
@@ -277,7 +396,8 @@ mod windows_main {
                     let value = args
                         .next()
                         .ok_or_else(|| "missing value for --expect-active-view".to_owned())?;
-                    config.expect_active_view = Some(parse_view_identity_arg(&value)?);
+                    config.expect_active_view =
+                        Some(parse_view_identity_arg("--expect-active-view", &value)?);
                 }
                 "--expect-room-view" => {
                     let value = args
@@ -298,6 +418,59 @@ mod windows_main {
                         args.next()
                             .ok_or_else(|| "missing value for --expect-status-view".to_owned())?,
                     );
+                }
+                "--expect-status-bar" => {
+                    config.expect_status_bars.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-status-bar".to_owned())?,
+                    );
+                }
+                "--expect-switchbar-item" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-switchbar-item".to_owned())?;
+                    let (identity, title_substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid --expect-switchbar-item value {value:?}; expected <identity>::<title-substring>"
+                        )
+                    })?;
+                    config
+                        .expect_switchbar_items
+                        .push(SwitchbarItemExpectation {
+                            identity: parse_view_identity_arg("--expect-switchbar-item", identity)?,
+                            title_substring: title_substring.to_owned(),
+                        });
+                }
+                "--expect-switchbar-active" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-switchbar-active".to_owned())?;
+                    config.expect_switchbar_active = Some(parse_view_identity_arg(
+                        "--expect-switchbar-active",
+                        &value,
+                    )?);
+                }
+                "--expect-switchbar-activity" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-switchbar-activity".to_owned()
+                    })?;
+                    config
+                        .expect_switchbar_activity
+                        .push(parse_view_identity_arg(
+                            "--expect-switchbar-activity",
+                            &value,
+                        )?);
+                }
+                "--expect-no-switchbar-activity" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-no-switchbar-activity".to_owned()
+                    })?;
+                    config
+                        .expect_no_switchbar_activity
+                        .push(parse_view_identity_arg(
+                            "--expect-no-switchbar-activity",
+                            &value,
+                        )?);
                 }
                 "--expect-no-navigation-text" => {
                     config
@@ -330,19 +503,24 @@ mod windows_main {
             "  --expect-active-view <status|room:<room_id>>",
             "  --expect-room-view <room_id>::<substring>",
             "  --expect-status-view <substring>",
+            "  --expect-status-bar <substring>",
+            "  --expect-switchbar-item <identity>::<title-substring>",
+            "  --expect-switchbar-active <status|room:<room_id>>",
+            "  --expect-switchbar-activity <status|room:<room_id>>",
+            "  --expect-no-switchbar-activity <status|room:<room_id>>",
             "  --expect-no-navigation-text <substring>",
         ]
         .join("\n")
     }
 
-    fn parse_view_identity_arg(value: &str) -> Result<ViewIdentity, String> {
+    fn parse_view_identity_arg(flag_name: &str, value: &str) -> Result<ViewIdentity, String> {
         if value == "status" {
             return Ok(ViewIdentity::Status);
         }
         if let Some(room_id) = value.strip_prefix("room:") {
             if room_id.is_empty() {
                 return Err(format!(
-                    "invalid --expect-active-view value {value:?}; expected status or room:<room_id>\n{}",
+                    "invalid {flag_name} value {value:?}; expected status or room:<room_id>\n{}",
                     usage()
                 ));
             }
@@ -351,7 +529,7 @@ mod windows_main {
             });
         }
         Err(format!(
-            "invalid --expect-active-view value {value:?}; expected status or room:<room_id>\n{}",
+            "invalid {flag_name} value {value:?}; expected status or room:<room_id>\n{}",
             usage()
         ))
     }

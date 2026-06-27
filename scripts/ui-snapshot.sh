@@ -159,11 +159,16 @@ configure_case_expectations() {
   room_expect_args=()
   room_view_expect_args=()
   status_view_expect_args=()
+  status_bar_expect_args=()
+  switchbar_item_expect_args=()
+  switchbar_activity_expect_args=()
+  switchbar_no_activity_expect_args=()
   navigation_forbid_args=()
   expect_selected=
   expect_error=
   expect_verification=
   expect_active_view=
+  expect_switchbar_active=
 
   case "$case_name" in
     multi-room)
@@ -184,6 +189,24 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::encryption enabled'
         --expect-room-view '!ops:example::deploy window opens'
       )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !random:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'room:!lobby:example::Lobby'
+        --expect-switchbar-item 'room:!random:example::Random'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!lobby:example'
+        --expect-switchbar-activity 'room:!random:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ops:example'
       navigation_forbid_args=(
         --expect-no-navigation-text 'incident review'
         --expect-no-navigation-text 'encryption enabled'
@@ -213,6 +236,24 @@ configure_case_expectations() {
         --expect-status-view 'flow-verify-123'
         --expect-status-view 'message send failed'
       )
+      status_bar_expect_args=(
+        --expect-status-bar 'error during send text'
+        --expect-status-bar 'flow-verify-123'
+        --expect-status-bar 'message send failed'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!verify:example::Verify'
+        --expect-switchbar-item 'room:!support:example::Support'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!support:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!verify:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!verify:example'
       navigation_forbid_args=(
         --expect-no-navigation-text 'verification requested'
         --expect-no-navigation-text 'sas emoji ready'
@@ -256,6 +297,10 @@ run_case() {
     "${timeline_expect_args[@]}"
     "${room_view_expect_args[@]}"
     "${status_view_expect_args[@]}"
+    "${status_bar_expect_args[@]}"
+    "${switchbar_item_expect_args[@]}"
+    "${switchbar_activity_expect_args[@]}"
+    "${switchbar_no_activity_expect_args[@]}"
     "${navigation_forbid_args[@]}"
   )
 
@@ -265,6 +310,9 @@ run_case() {
   if [[ -n "${expect_verification:-}" ]]; then
     driver_args+=(--expect-verification "$expect_verification")
   fi
+  if [[ -n "${expect_switchbar_active:-}" ]]; then
+    driver_args+=(--expect-switchbar-active "$expect_switchbar_active")
+  fi
 
   wine "$ui_exe" --render-state "$state_path_win" --automation >/dev/null 2>&1 &
   app_pid=$!
@@ -273,11 +321,6 @@ run_case() {
   wine "$driver_exe" "${driver_args[@]}" >"$driver_stdout" 2>"$driver_stderr"
   driver_status=$?
   set -e
-
-  import -window root "$generated_png"
-  echo "PNG $generated_png"
-
-  compare_snapshot_pngs "$baseline_png" "$generated_png" "$diff_png"
 
   if [[ -s "$driver_stdout" ]]; then
     cat "$driver_stdout"
@@ -290,6 +333,11 @@ run_case() {
     cleanup_app
     return "$driver_status"
   fi
+
+  import -window root "$generated_png"
+  echo "PNG $generated_png"
+
+  compare_snapshot_pngs "$baseline_png" "$generated_png" "$diff_png"
 
   cleanup_app
 }
