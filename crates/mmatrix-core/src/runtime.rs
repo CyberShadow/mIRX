@@ -425,10 +425,10 @@ mod tests {
                 other => panic!("expected duplicate sync error, got {other:?}"),
             }
 
-            if let WorkerState::Ready { sync_task, .. } = &mut state {
-                if let Some(task) = sync_task.take() {
-                    task.abort();
-                }
+            if let WorkerState::Ready { sync_task, .. } = &mut state
+                && let Some(task) = sync_task.take()
+            {
+                task.abort();
             }
         });
     }
