@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
-    RestoreSessionRequest, RoomSummary, SendTextRequest, StoredSession, TimelineText,
+    RestoreSessionRequest, RoomStateContent, RoomStateEventKind, RoomSummary, SendTextRequest,
+    StoredSession, TimelineText,
     VerificationRequest, start,
 };
 use serde::Serialize;
@@ -151,10 +152,33 @@ struct UiModel {
     lifecycle_state: LifecycleState,
     rooms: Vec<RoomSummary>,
     selected_room: Option<String>,
-    timelines: BTreeMap<String, Vec<String>>,
+    room_views: BTreeMap<String, RoomViewModel>,
     last_timeline: Option<TimelineText>,
     last_verification: Option<VerificationRequest>,
     last_error: Option<CoreErrorEvent>,
+}
+
+#[derive(Default)]
+struct RoomViewModel {
+    topic: Option<String>,
+    entries: Vec<RoomTimelineEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoomTimelineEntry {
+    Text {
+        sender: String,
+        timestamp_ms: u64,
+        body: String,
+    },
+    System {
+        sender: String,
+        timestamp_ms: u64,
+        kind: RoomStateEventKind,
+        state_key: String,
+        display_name: Option<String>,
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1685,11 +1709,56 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.status = format!("timeline update from {}", timeline.room_id);
             state
                 .model
-                .timelines
+                .room_views
                 .entry(timeline.room_id.clone())
                 .or_default()
-                .push(timeline.body.clone());
+                .entries
+                .push(RoomTimelineEntry::Text {
+                    sender: timeline.sender.clone(),
+                    timestamp_ms: timeline.timestamp_ms,
+                    body: timeline.body.clone(),
+                });
             state.model.last_timeline = Some(timeline);
+        }
+        Event::RoomState(room_state) => {
+            if state.active_view != ViewId::Room(room_state.room_id.clone()) {
+                state.room_activity.insert(room_state.room_id.clone());
+            }
+            state.model.status = format!("timeline update from {}", room_state.room_id);
+            let room_view = state
+                .model
+                .room_views
+                .entry(room_state.room_id)
+                .or_default();
+            match room_state.event_kind {
+                RoomStateEventKind::Topic => {
+                    let RoomStateContent::Topic(topic) = room_state.content else {
+                        panic!("topic room state must carry topic content");
+                    };
+                    room_view.topic = Some(topic.topic.clone());
+                    room_view.entries.push(RoomTimelineEntry::System {
+                        sender: room_state.sender,
+                        timestamp_ms: room_state.timestamp_ms,
+                        kind: RoomStateEventKind::Topic,
+                        state_key: room_state.state_key,
+                        display_name: None,
+                        text: topic.topic,
+                    });
+                }
+                RoomStateEventKind::Member => {
+                    let RoomStateContent::Member(member) = room_state.content else {
+                        panic!("member room state must carry member content");
+                    };
+                    room_view.entries.push(RoomTimelineEntry::System {
+                        sender: room_state.sender,
+                        timestamp_ms: room_state.timestamp_ms,
+                        kind: RoomStateEventKind::Member,
+                        state_key: room_state.state_key,
+                        display_name: member.displayname,
+                        text: member.membership,
+                    });
+                }
+            }
         }
         Event::VerificationRequest(request) => {
             state.model.status = format!("verification request from {}", request.user_id);
@@ -1703,7 +1772,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
             state.model.selected_room = None;
-            state.model.timelines.clear();
+            state.model.room_views.clear();
             state.model.last_timeline = None;
             state.model.last_verification = None;
             state.model.last_error = None;
@@ -1727,7 +1796,75 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
 }
 
 fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
-    model.timelines.get(room_id).cloned().unwrap_or_default()
+    let room = room_summary(&model.rooms, room_id).expect("room view must target an existing room");
+    let mut lines = Vec::new();
+    let mut header = format!("Room: {}", room.display_name);
+    if room.encrypted {
+        header.push_str(" [e2ee]");
+    }
+    header.push_str(&format!(" ({room_id})"));
+    lines.push(header);
+
+    let room_view = model.room_views.get(room_id);
+    if let Some(topic) = room_view.and_then(|view| view.topic.as_deref()) {
+        lines.push(format!("Topic: {topic}"));
+    }
+
+    if let Some(room_view) = room_view {
+        for entry in &room_view.entries {
+            match entry {
+                RoomTimelineEntry::Text {
+                    sender,
+                    timestamp_ms,
+                    body,
+                } => lines.push(format!(
+                    "[{}] {sender}: {body}",
+                    format_timestamp_hhmm_utc(*timestamp_ms)
+                )),
+                RoomTimelineEntry::System {
+                    sender,
+                    timestamp_ms,
+                    kind,
+                    state_key,
+                    display_name,
+                    text,
+                } => match kind {
+                    RoomStateEventKind::Topic => lines.push(format!(
+                        "* [{}] {sender} set topic: {text}",
+                        format_timestamp_hhmm_utc(*timestamp_ms)
+                    )),
+                    RoomStateEventKind::Member => {
+                        let timestamp = format_timestamp_hhmm_utc(*timestamp_ms);
+                        match text.as_str() {
+                            "join" => {
+                                let member = display_name.as_deref().unwrap_or(state_key);
+                                lines.push(format!("* [{timestamp}] {member} joined"));
+                            }
+                            "leave" => {
+                                let member = display_name.as_deref().unwrap_or(state_key);
+                                lines.push(format!("* [{timestamp}] {member} left"));
+                            }
+                            membership => lines.push(format!(
+                                "* [{timestamp}] {state_key} membership: {membership}"
+                            )),
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    lines
+}
+
+fn format_timestamp_hhmm_utc(timestamp_ms: u64) -> String {
+    const MINUTES_PER_DAY: u64 = 24 * 60;
+
+    let total_minutes = timestamp_ms / 1000 / 60;
+    let minutes_of_day = total_minutes % MINUTES_PER_DAY;
+    let hours = minutes_of_day / 60;
+    let minutes = minutes_of_day % 60;
+    format!("{hours:02}:{minutes:02}")
 }
 
 fn render_status_lines(model: &UiModel) -> Vec<String> {
@@ -2392,9 +2529,18 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
             let lines = state_ref(hwnd)
                 .model
-                .timelines
+                .room_views
                 .get(&room_id)
-                .cloned()
+                .map(|room_view| {
+                    room_view
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            RoomTimelineEntry::Text { body, .. } => Some(body.clone()),
+                            RoomTimelineEntry::System { .. } => None,
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
             serialize_success_json(&id, DumpTimelineResponse { room_id, lines })
         }
@@ -3008,14 +3154,20 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
         ]),
         Event::TimelineText(TimelineText {
             room_id: "!one:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
             body: "first line".to_owned(),
         }),
         Event::TimelineText(TimelineText {
             room_id: "!one:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_060_000,
             body: "second line".to_owned(),
         }),
         Event::TimelineText(TimelineText {
             room_id: "!two:example".to_owned(),
+            sender: "@bob:example".to_owned(),
+            timestamp_ms: 1_700_000_120_000,
             body: "third line".to_owned(),
         }),
     ];
@@ -3110,7 +3262,18 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
     let (rooms, timeline_events, active_view) = {
         let state = state_mut(hwnd);
         let rooms = state.model.rooms.len();
-        let timeline_events = state.model.timelines.values().map(Vec::len).sum();
+        let timeline_events = state
+            .model
+            .room_views
+            .values()
+            .map(|room_view| {
+                room_view
+                    .entries
+                    .iter()
+                    .filter(|entry| matches!(entry, RoomTimelineEntry::Text { .. }))
+                    .count()
+            })
+            .sum();
         let selected_room = state.model.rooms.first().map(|room| room.room_id.clone());
 
         let active_view = match selected_room {
@@ -3596,8 +3759,42 @@ mod tests {
     fn timeline(room_id: &str, body: &str) -> TimelineText {
         TimelineText {
             room_id: room_id.to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
             body: body.to_owned(),
         }
+    }
+
+    fn topic_state(room_id: &str, topic: &str) -> Event {
+        Event::RoomState(mmatrix_core::RoomStateEntry {
+            room_id: room_id.to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_060_000,
+            event_kind: RoomStateEventKind::Topic,
+            state_key: String::new(),
+            content: RoomStateContent::Topic(mmatrix_core::RoomTopicState {
+                topic: topic.to_owned(),
+            }),
+        })
+    }
+
+    fn member_state(
+        room_id: &str,
+        state_key: &str,
+        membership: &str,
+        display_name: Option<&str>,
+    ) -> Event {
+        Event::RoomState(mmatrix_core::RoomStateEntry {
+            room_id: room_id.to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_120_000,
+            event_kind: RoomStateEventKind::Member,
+            state_key: state_key.to_owned(),
+            content: RoomStateContent::Member(mmatrix_core::RoomMemberState {
+                membership: membership.to_owned(),
+                displayname: display_name.map(str::to_owned),
+            }),
+        })
     }
 
     fn stored_session() -> StoredSession {
@@ -3758,12 +3955,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            state.model.timelines.get("!one:example"),
-            Some(&vec!["first".to_owned(), "second".to_owned()])
+            state
+                .model
+                .room_views
+                .get("!one:example")
+                .map(|view| &view.entries),
+            Some(&vec![
+                RoomTimelineEntry::Text {
+                    sender: "@alice:example".to_owned(),
+                    timestamp_ms: 1_700_000_000_000,
+                    body: "first".to_owned(),
+                },
+                RoomTimelineEntry::Text {
+                    sender: "@alice:example".to_owned(),
+                    timestamp_ms: 1_700_000_000_000,
+                    body: "second".to_owned(),
+                },
+            ])
         );
         assert_eq!(
-            state.model.timelines.get("!two:example"),
-            Some(&vec!["third".to_owned()])
+            state
+                .model
+                .room_views
+                .get("!two:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "third".to_owned(),
+            }])
         );
         assert_eq!(
             state.model.last_timeline,
@@ -3772,21 +3992,51 @@ mod tests {
     }
 
     #[test]
-    fn render_room_lines_returns_timeline_lines_including_multiline_entries() {
+    fn format_timestamp_hhmm_utc_uses_deterministic_utc_minutes() {
+        assert_eq!(format_timestamp_hhmm_utc(1_700_000_000_000), "22:13");
+    }
+
+    #[test]
+    fn render_room_lines_include_header_topic_text_and_system_entries() {
         let mut state = test_state();
-        state.model.timelines.insert(
-            "!ops:example".to_owned(),
-            vec![
-                "incident review".to_owned(),
-                "deploy window opens\n18:00 UTC".to_owned(),
-            ],
-        );
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(TimelineText {
+                room_id: "!ops:example".to_owned(),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "<body>".to_owned(),
+            }),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            member_state("!ops:example", "@carol:example", "join", Some("carol")),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            member_state("!ops:example", "@dave:example", "leave", None),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            member_state("!ops:example", "@erin:example", "ban", Some("erin")),
+        )
+        .unwrap();
 
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "incident review".to_owned(),
-                "deploy window opens\n18:00 UTC".to_owned(),
+                "Room: Ops [e2ee] (!ops:example)".to_owned(),
+                "Topic: incident review".to_owned(),
+                "* [22:14] @alice:example set topic: incident review".to_owned(),
+                "[22:13] @alice:example: <body>".to_owned(),
+                "* [22:15] carol joined".to_owned(),
+                "* [22:15] @dave:example left".to_owned(),
+                "* [22:15] @erin:example membership: ban".to_owned(),
             ]
         );
     }
@@ -3936,8 +4186,18 @@ mod tests {
         state.active_view = ViewId::Room("!room:example".to_owned());
         state
             .model
-            .timelines
-            .insert("!room:example".to_owned(), vec!["hello".to_owned()]);
+            .room_views
+            .insert(
+                "!room:example".to_owned(),
+                RoomViewModel {
+                    topic: Some("incident review".to_owned()),
+                    entries: vec![RoomTimelineEntry::Text {
+                        sender: "@alice:example".to_owned(),
+                        timestamp_ms: 1_700_000_000_000,
+                        body: "hello".to_owned(),
+                    }],
+                },
+            );
         state.model.last_timeline = Some(timeline("!room:example", "hello"));
         state.model.last_verification = Some(VerificationRequest {
             flow_id: "flow".to_owned(),
@@ -3964,7 +4224,7 @@ mod tests {
 
         assert!(state.model.rooms.is_empty());
         assert_eq!(state.model.selected_room, None);
-        assert!(state.model.timelines.is_empty());
+        assert!(state.model.room_views.is_empty());
         assert_eq!(state.model.last_timeline, None);
         assert_eq!(state.model.last_verification, None);
         assert_eq!(state.model.last_error, None);
@@ -4021,7 +4281,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_timeline_marks_room_activity() {
+    fn inactive_room_events_mark_room_activity() {
         let mut state = test_state();
         state.active_view = ViewId::Room("!active:example".to_owned());
 
@@ -4030,12 +4290,17 @@ mod tests {
             Event::TimelineText(timeline("!inactive:example", "hello")),
         )
         .unwrap();
+        apply_core_event(
+            &mut state,
+            topic_state("!inactive:example", "incident review"),
+        )
+        .unwrap();
 
         assert!(state.room_activity.contains("!inactive:example"));
     }
 
     #[test]
-    fn active_timeline_does_not_mark_room_activity() {
+    fn active_room_events_do_not_mark_room_activity() {
         let mut state = test_state();
         state.active_view = ViewId::Room("!room:example".to_owned());
 
@@ -4044,6 +4309,7 @@ mod tests {
             Event::TimelineText(timeline("!room:example", "hello")),
         )
         .unwrap();
+        apply_core_event(&mut state, topic_state("!room:example", "incident review")).unwrap();
 
         assert!(!state.room_activity.contains("!room:example"));
     }

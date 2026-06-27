@@ -975,7 +975,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}]},{"TimelineText":{"room_id":"!room:example","body":"hello"}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}]},{"TimelineText":{"room_id":"!room:example","sender":"@alice:example","timestamp_ms":1700000000000,"body":"hello"}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -990,6 +990,8 @@ mod tests {
                         }]),
                         Event::TimelineText(TimelineText {
                             room_id: "!room:example".to_owned(),
+                            sender: "@alice:example".to_owned(),
+                            timestamp_ms: 1_700_000_000_000,
                             body: "hello".to_owned(),
                         }),
                     ],
@@ -1731,6 +1733,8 @@ mod tests {
         assert_eq!(
             super::dump_timeline_line_from_text(&TimelineText {
                 room_id: "!room:example".to_owned(),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
                 body: "hello".to_owned(),
             }),
             super::DumpTimelineLine {
