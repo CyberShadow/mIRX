@@ -60,7 +60,10 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             .expect("login event")
         {
             Event::LoggedIn { session } => {
-                assert!(!session.user_id.is_empty(), "expected non-empty session user id");
+                assert!(
+                    !session.user_id.is_empty(),
+                    "expected non-empty session user id"
+                );
                 assert!(
                     !session.device_id.is_empty(),
                     "expected non-empty session device id"
@@ -111,6 +114,34 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
     }
 
     assert!(saw_sync_started, "timed out waiting for sync started event");
+
+    handle
+        .command_sender()
+        .send(Command::StartSync)
+        .expect("send duplicate start sync");
+
+    let duplicate_sync_deadline = Instant::now() + Duration::from_secs(15);
+    let mut saw_duplicate_sync_error = false;
+    while Instant::now() < duplicate_sync_deadline {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("duplicate start sync event")
+        {
+            Event::Error(err) if err.operation == mmatrix_core::Operation::StartSync => {
+                assert_eq!(err.message, "continuous sync is already running");
+                saw_duplicate_sync_error = true;
+                break;
+            }
+            Event::TimelineText(_) => {}
+            other => panic!("unexpected duplicate start sync event: {other:?}"),
+        }
+    }
+
+    assert!(
+        saw_duplicate_sync_error,
+        "timed out waiting for duplicate start sync error"
+    );
 
     if let Some(room_id) = room_id {
         let nonce = SystemTime::now()

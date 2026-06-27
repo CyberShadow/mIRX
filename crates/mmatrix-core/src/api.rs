@@ -31,6 +31,7 @@ pub struct RestoreSessionRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoredSession {
     pub user_id: String,
     pub device_id: String,

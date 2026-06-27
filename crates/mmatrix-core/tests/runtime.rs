@@ -187,8 +187,7 @@ fn stored_session_serializes_and_deserializes_with_existing_fields() {
         r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"}"#
     );
 
-    let restored: StoredSession =
-        serde_json::from_str(&json).expect("deserialize stored session");
+    let restored: StoredSession = serde_json::from_str(&json).expect("deserialize stored session");
     assert_eq!(restored, session);
 }
 
@@ -207,9 +206,19 @@ fn stored_session_serializes_and_deserializes_without_refresh_token() {
         r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null}"#
     );
 
-    let restored: StoredSession =
-        serde_json::from_str(&json).expect("deserialize stored session");
+    let restored: StoredSession = serde_json::from_str(&json).expect("deserialize stored session");
     assert_eq!(restored, session);
+}
+
+#[test]
+fn stored_session_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<StoredSession>(
+            r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "stored session must reject unknown fields"
+    );
 }
 
 #[test]

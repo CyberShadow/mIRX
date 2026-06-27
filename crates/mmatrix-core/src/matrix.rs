@@ -105,7 +105,9 @@ pub(crate) async fn login(
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to log in to Matrix: {err}")))?;
 
-    Ok(stored_session_from_matrix_session(MatrixSession::from(&response)))
+    Ok(stored_session_from_matrix_session(MatrixSession::from(
+        &response,
+    )))
 }
 
 pub(crate) async fn initial_room_sync(

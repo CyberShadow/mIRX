@@ -382,3 +382,54 @@ fn emit_matrix_error(event_tx: &EventSender, operation: Operation, err: MatrixCo
         }),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use super::{EventSender, WorkerState, handle_start_sync};
+    use crate::api::{Event, Operation};
+
+    #[test]
+    fn duplicate_start_sync_emits_typed_error_event() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(&runtime, async {
+            let client = matrix_sdk::Client::builder()
+                .homeserver_url("http://localhost")
+                .build()
+                .await
+                .expect("build matrix client");
+            let existing_task = tokio::task::spawn_local(std::future::pending::<()>());
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = WorkerState::Ready {
+                client,
+                sync_task: Some(existing_task),
+            };
+
+            assert!(!handle_start_sync(&event_tx as &EventSender, &mut state));
+
+            match event_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("duplicate sync error")
+            {
+                Event::Error(err) => {
+                    assert_eq!(err.operation, Operation::StartSync);
+                    assert_eq!(err.message, "continuous sync is already running");
+                }
+                other => panic!("expected duplicate sync error, got {other:?}"),
+            }
+
+            if let WorkerState::Ready { sync_task, .. } = &mut state {
+                if let Some(task) = sync_task.take() {
+                    task.abort();
+                }
+            }
+        });
+    }
+}

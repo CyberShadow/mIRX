@@ -751,7 +751,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) {
             state.model.status = format!("error during {}", operation_name(error.operation));
             state.model.last_error = Some(error);
         }
-        Event::LoggedIn | Event::RestoredSession => {}
+        Event::LoggedIn { .. } | Event::RestoredSession => {}
     }
 }
 
