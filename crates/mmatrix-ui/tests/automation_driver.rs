@@ -4,12 +4,17 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession,
     SwitchbarItem, TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetClassNameW, GetDlgItem, SendMessageW, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH,
 };
 
 #[allow(dead_code)]
@@ -18,6 +23,9 @@ mod dpapi;
 
 const PROTECTED_SESSION_MAGIC: &[u8] = b"mmatrix-ui-session:v1\0";
 const SESSION_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/session/v1";
+const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
+const EDIT_ID: i32 = 1003;
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
@@ -276,6 +284,61 @@ fn assert_navigation_not_contains(node: &NavigationNode, substring: &str) {
         !navigation_contains(node, substring),
         "navigation unexpectedly contained {substring:?}"
     );
+}
+
+fn class_name(hwnd: HWND) -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let len = unsafe { GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+    if len <= 0 {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&buffer[..len as usize]))
+}
+
+fn read_window_text(hwnd: HWND) -> String {
+    let text_len = unsafe { SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0) };
+    if text_len <= 0 {
+        return String::new();
+    }
+
+    let mut text = vec![0u16; text_len as usize + 1];
+    unsafe {
+        SendMessageW(hwnd, WM_GETTEXT, text.len(), text.as_mut_ptr() as LPARAM);
+    }
+    String::from_utf16_lossy(&text[..text_len as usize])
+}
+
+fn frame_windows() -> Vec<HWND> {
+    unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> i32 {
+        let windows = unsafe { &mut *(lparam as *mut Vec<HWND>) };
+        if class_name(hwnd).as_deref() == Some(FRAME_CLASS_NAME) {
+            windows.push(hwnd);
+        }
+        1
+    }
+
+    let mut windows = Vec::new();
+    unsafe {
+        EnumWindows(Some(callback), (&mut windows as *mut Vec<HWND>) as LPARAM);
+    }
+    windows
+}
+
+fn wait_for_frame_with_compose_text(expected_text: &str, timeout: Duration) -> Result<HWND, String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        for frame in frame_windows() {
+            let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
+            if !edit.is_null() && read_window_text(edit) == expected_text {
+                return Ok(frame);
+            }
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+
+    Err(format!(
+        "timed out waiting for frame compose text {expected_text:?}"
+    ))
 }
 
 #[test]
@@ -836,7 +899,7 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
 }
 
 #[test]
-fn automation_driver_can_read_write_compose_text_and_send_navigation_keys()
+fn automation_driver_compose_history_keys_are_noops_without_history()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
@@ -875,6 +938,186 @@ fn automation_driver_can_read_write_compose_text_and_send_navigation_keys()
     assert_active_switchbar_item(&after, &beta_identity);
 
     let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_compose_history_recalls_accepted_submissions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("first accepted")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("second accepted")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("draft before arrows")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "second accepted");
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "first accepted");
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "first accepted");
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "second accepted");
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "draft before arrows");
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "draft before arrows");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_compose_history_ignores_rejected_submissions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.set_compose_text("no selected room")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "no selected room");
+
+    app.set_compose_text("draft after rejected")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "draft after rejected");
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "draft after rejected");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_compose_history_ignores_empty_submission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("draft after empty submit")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "draft after empty submit");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_setting_text_exits_compose_history_navigation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("first accepted")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("second accepted")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "second accepted");
+
+    app.set_compose_text("replacement draft")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "second accepted");
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "replacement draft");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_typing_exits_compose_history_navigation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("first accepted")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("second accepted")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "second accepted");
+
+    let frame = wait_for_frame_with_compose_text("second accepted", Duration::from_secs(5))?;
+    let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
+    if edit.is_null() {
+        return Err("compose edit control was not found".into());
+    }
+    unsafe {
+        SendMessageW(edit, WM_CHAR, 'x' as WPARAM, 0);
+    }
+    assert_eq!(app.compose_text()?, "second acceptedx");
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "second accepted");
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "second acceptedx");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

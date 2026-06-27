@@ -46,18 +46,18 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
-    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA, GWLP_WNDPROC,
-    GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW, IsWindow,
-    KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_CREATE,
-    WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-    WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, EM_SETSEL, ES_AUTOHSCROLL,
+    ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA,
+    GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
+    IsWindow, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP,
+    MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SW_SHOW, SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE,
+    WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
+    WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED,
+    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -123,6 +123,7 @@ const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mmatrix-ui";
 const VK_RETURN_KEY: WPARAM = 13;
 const VK_UP_KEY: WPARAM = 38;
 const VK_DOWN_KEY: WPARAM = 40;
+const VK_DELETE_KEY: WPARAM = 46;
 
 #[derive(Default)]
 struct Controls {
@@ -193,6 +194,73 @@ struct AutomationState {
     response_capacity: usize,
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct ComposeHistory {
+    entries: Vec<String>,
+    navigation: Option<ComposeHistoryNavigation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposeHistoryNavigation {
+    index: usize,
+    draft: String,
+}
+
+impl ComposeHistory {
+    fn record_submission(&mut self, body: String) {
+        self.entries.push(body);
+        self.navigation = None;
+    }
+
+    fn reset_navigation(&mut self) {
+        self.navigation = None;
+    }
+
+    fn previous(&mut self, current_text: String) -> Option<&str> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
+        match self.navigation.as_mut() {
+            Some(navigation) => {
+                if navigation.index > 0 {
+                    navigation.index -= 1;
+                }
+            }
+            None => {
+                self.navigation = Some(ComposeHistoryNavigation {
+                    index: self.entries.len() - 1,
+                    draft: current_text,
+                });
+            }
+        }
+
+        let index = self
+            .navigation
+            .as_ref()
+            .expect("compose history navigation must exist after previous")
+            .index;
+        Some(&self.entries[index])
+    }
+
+    fn next(&mut self) -> Option<String> {
+        let navigation = self.navigation.as_mut()?;
+        if navigation.index + 1 < self.entries.len() {
+            navigation.index += 1;
+            return Some(self.entries[navigation.index].clone());
+        }
+
+        let draft = navigation.draft.clone();
+        self.navigation = None;
+        Some(draft)
+    }
+}
+
+enum ComposeHistoryDirection {
+    Previous,
+    Next,
+}
+
 struct WindowState {
     controls: Controls,
     event_queue: Arc<Mutex<VecDeque<Event>>>,
@@ -210,6 +278,7 @@ struct WindowState {
     active_view: ViewId,
     switchbar_views: Vec<ViewId>,
     room_activity: BTreeSet<String>,
+    compose_history: ComposeHistory,
     edit_window_proc: WNDPROC,
     model: UiModel,
 }
@@ -271,6 +340,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         active_view: ViewId::Status,
         switchbar_views: Vec::new(),
         room_activity: BTreeSet::new(),
+        compose_history: ComposeHistory::default(),
         edit_window_proc: None,
         model: initial_model(),
     });
@@ -3123,7 +3193,8 @@ unsafe fn dump_compose_text(hwnd: HWND) -> Result<String, String> {
 
 unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), String> {
     let edit = compose_edit(hwnd)?;
-    set_edit_text(edit, text);
+    state_mut(hwnd).compose_history.reset_navigation();
+    set_compose_edit_text(edit, text);
     Ok(())
 }
 
@@ -3176,14 +3247,34 @@ fn submit_compose(
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let send_body = body.clone();
     sender
         .send(Command::SendText(SendTextRequest {
             room_id: room_id.clone(),
-            body,
+            body: send_body,
         }))
         .map_err(|err| format!("failed to enqueue send text command: {err}"))?;
+    state.compose_history.record_submission(body);
 
     Ok(room_id)
+}
+
+unsafe fn navigate_compose_history(
+    hwnd: HWND,
+    direction: ComposeHistoryDirection,
+) -> Result<(), String> {
+    let edit = compose_edit(hwnd)?;
+    let replacement = match direction {
+        ComposeHistoryDirection::Previous => state_mut(hwnd)
+            .compose_history
+            .previous(read_window_text(edit))
+            .map(str::to_owned),
+        ComposeHistoryDirection::Next => state_mut(hwnd).compose_history.next(),
+    };
+    if let Some(text) = replacement {
+        set_compose_edit_text(edit, &text);
+    }
+    Ok(())
 }
 
 fn submit_login(
@@ -3295,17 +3386,28 @@ unsafe extern "system" fn edit_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if message == WM_KEYDOWN && wparam == VK_RETURN_KEY {
-        let parent = GetParent(hwnd);
-        if !parent.is_null() {
-            let _ = submit_compose_from_edit(parent);
-        }
-        return 0;
-    }
-
     let parent = GetParent(hwnd);
     if parent.is_null() {
         return DefWindowProcW(hwnd, message, wparam, lparam);
+    }
+
+    if message == WM_KEYDOWN && wparam == VK_RETURN_KEY {
+        let _ = submit_compose_from_edit(parent);
+        return 0;
+    }
+
+    if message == WM_KEYDOWN && wparam == VK_UP_KEY {
+        let _ = navigate_compose_history(parent, ComposeHistoryDirection::Previous);
+        return 0;
+    }
+
+    if message == WM_KEYDOWN && wparam == VK_DOWN_KEY {
+        let _ = navigate_compose_history(parent, ComposeHistoryDirection::Next);
+        return 0;
+    }
+
+    if message == WM_CHAR || (message == WM_KEYDOWN && wparam == VK_DELETE_KEY) {
+        state_mut(parent).compose_history.reset_navigation();
     }
 
     let original = state_ref(parent).edit_window_proc;
@@ -3440,6 +3542,12 @@ fn set_edit_text(hwnd: HWND, text: &str) {
     unsafe {
         SendMessageW(hwnd, WM_SETTEXT, 0, text.as_ptr() as LPARAM);
     }
+}
+
+unsafe fn set_compose_edit_text(hwnd: HWND, text: &str) {
+    set_edit_text(hwnd, text);
+    let len = text.encode_utf16().count();
+    SendMessageW(hwnd, EM_SETSEL, len, len as LPARAM);
 }
 
 fn show_error_message(hwnd: HWND, title: &str, message: &str) {
@@ -3586,6 +3694,7 @@ mod tests {
             active_view: ViewId::Status,
             switchbar_views: Vec::new(),
             room_activity: BTreeSet::new(),
+            compose_history: ComposeHistory::default(),
             edit_window_proc: None,
             model: initial_model(),
         }
@@ -4018,6 +4127,10 @@ mod tests {
         let explicit_room_id =
             submit_compose(&mut state, "hi".to_owned(), Some("!explicit:example")).unwrap();
         assert_eq!(explicit_room_id, "!explicit:example");
+        assert_eq!(
+            state.compose_history.entries,
+            vec!["hello".to_owned(), "hi".to_owned()]
+        );
 
         handle
             .command_sender()
@@ -4035,14 +4148,17 @@ mod tests {
             submit_compose(&mut state, String::new(), Some("!room:example")),
             Err("message body must not be empty".to_owned())
         );
+        assert!(state.compose_history.entries.is_empty());
         assert_eq!(
             submit_compose(&mut state, "hello".to_owned(), Some("!missing:example")),
             Err("unknown room id: !missing:example".to_owned())
         );
+        assert!(state.compose_history.entries.is_empty());
         assert_eq!(
             submit_compose(&mut state, "hello".to_owned(), None),
             Err("no room selected".to_owned())
         );
+        assert!(state.compose_history.entries.is_empty());
     }
 
     #[test]
@@ -4055,6 +4171,46 @@ mod tests {
             submit_compose(&mut state, "hello".to_owned(), None),
             Err("core command sender is not available".to_owned())
         );
+        assert!(state.compose_history.entries.is_empty());
+    }
+
+    #[test]
+    fn compose_history_navigation_is_noop_when_empty() {
+        let mut history = ComposeHistory::default();
+
+        assert_eq!(history.previous("draft".to_owned()), None);
+        assert_eq!(history.next(), None);
+        assert!(history.navigation.is_none());
+    }
+
+    #[test]
+    fn compose_history_navigates_entries_and_restores_draft() {
+        let mut history = ComposeHistory {
+            entries: vec!["first".to_owned(), "second".to_owned()],
+            navigation: None,
+        };
+
+        assert_eq!(history.previous("draft".to_owned()), Some("second"));
+        assert_eq!(history.previous("ignored".to_owned()), Some("first"));
+        assert_eq!(history.previous("ignored".to_owned()), Some("first"));
+        assert_eq!(history.next(), Some("second".to_owned()));
+        assert_eq!(history.next(), Some("draft".to_owned()));
+        assert_eq!(history.next(), None);
+        assert!(history.navigation.is_none());
+    }
+
+    #[test]
+    fn compose_history_reset_navigation_restarts_from_newest_with_fresh_draft() {
+        let mut history = ComposeHistory {
+            entries: vec!["first".to_owned(), "second".to_owned()],
+            navigation: None,
+        };
+
+        assert_eq!(history.previous("draft".to_owned()), Some("second"));
+        history.reset_navigation();
+        assert!(history.navigation.is_none());
+        assert_eq!(history.previous("replacement draft".to_owned()), Some("second"));
+        assert_eq!(history.next(), Some("replacement draft".to_owned()));
     }
 
     #[test]
