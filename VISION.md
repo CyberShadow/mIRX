@@ -156,11 +156,19 @@ Windows. Validated layered approach:
 > targets are accepted. Anti-examples: nheko (Qt) ~50–72 MiB; Element (Electron)
 > 100–250+ MiB / 200+ MiB RAM.
 
+## Current prototype capability
+
+The current vertical slice already covers login, saved-session restore, room
+sync, room listing, timeline text rendering, send, and logout through the
+`mmatrix-core` boundary, with deterministic offline fixtures plus env-gated
+live automation coverage.
+
 ## v1 feature set
 
-Login (+ session restore) · sync · space/room/thread tree · room timeline
+Dense mIRC-style room/status shell · space/room/thread tree · room timeline
 (virtualized) · send/receive text · spaces · threads · **E2EE** (cross-signing,
-SAS verification, secret-storage recovery, key backup) · logout.
+SAS verification, secret-storage recovery, key backup) · secure credential
+storage · token refresh persistence.
 
 ## Risks
 
@@ -191,11 +199,11 @@ SAS verification, secret-storage recovery, key backup) · logout.
 
 ## Immediate next step
 
-1. **Scaffold the project**: Cargo workspace (core facade crate + win32 UI crate),
-   nix devshell encoding the cross-compile toolchain, CI (cross-build + Wine smoke
-   + single-DLL gate), Apache-2.0 LICENSE, this VISION.md.
-2. **Vertical-slice prototype**: login → sync → list rooms → decrypt an encrypted
-   room → send one encrypted message; measure a **release** EXE size, working set,
-   thread count, cold start against the footprint targets.
-
-This de-risks footprint and the async/UI boundary before any real UI investment.
+1. **Replace the minimal shell with the richer mIRC-style UI**: treebar/switchbar,
+   denser room/status layout, and the native interaction polish that matches the
+   current Windows-first direction.
+2. **Harden account/session handling**: move saved-session secrets out of local
+   cleartext JSON into secure OS credential storage, persist token refresh data,
+   and add the missing E2EE verification/recovery/key-backup UX.
+3. **Expand coverage where Wine is not authoritative**: add a real-Windows lane
+   for the live session slice and future spaces/threads work.

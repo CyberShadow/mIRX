@@ -6,7 +6,7 @@
 
 - Vertical-slice prototype scaffold is in place.
 - `mmatrix-core` owns the Matrix SDK runtime boundary and has offline tests plus env-gated live Matrix coverage.
-- `mmatrix-ui` is a native Win32 shell with a Wine-driven `--self-test`.
+- `mmatrix-ui` is a native Win32 shell with deterministic Wine automation and a live login/session-restore/sync/rooms/send slice through `mmatrix-core`.
 - CI is intended to run the full local check sequence through the Nix devshell.
 
 ## Local Commands
@@ -18,12 +18,36 @@ nix develop -c cargo fmt --check
 nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 nix develop -c cargo test --workspace
 nix develop -c ./scripts/cross-build.sh
+nix develop -c ./scripts/ui-snapshot.sh
 nix develop -c ./scripts/wine-smoke.sh
 nix develop -c ./scripts/dll-gate.sh
 nix develop -c ./scripts/measure.sh
 ```
 
-Live Matrix testing is gated behind `MMATRIX_HS`, `MMATRIX_USER`, `MMATRIX_PASS`, and optional `MMATRIX_ROOM`. Normal checks do not require network access or Matrix credentials.
+Normal checks remain offline and deterministic. They do not require network access or Matrix credentials.
+
+## Live Matrix Checks
+
+Live Matrix checks are opt-in and use:
+
+- `MMATRIX_HS`
+- `MMATRIX_USER`
+- `MMATRIX_PASS`
+- optional `MMATRIX_ROOM`
+
+Supported live checks:
+
+```sh
+MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... \
+  nix develop -c cargo test -p mmatrix-core --test live_matrix
+
+MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... MMATRIX_ROOM=... \
+  nix develop -c cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver live_matrix_ui_session
+```
+
+Omit `MMATRIX_ROOM` to verify login, restore, sync, and logout without send coverage.
+
+The UI session file lives at `%LOCALAPPDATA%\mmatrix\ui-shell\session.json`. For this iteration it stores Matrix access and refresh tokens as local developer cleartext JSON, never the password. DPAPI/Credential Manager integration and token refresh persistence are future work.
 
 ## Release Measurement
 
