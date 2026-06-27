@@ -7,6 +7,10 @@ objdump_bin=${OBJDUMP:-x86_64-w64-mingw32-objdump}
 
 cd "$root_dir"
 
+if [[ $# -eq 0 ]] && [[ ! -f "$exe_path" ]]; then
+  cargo build --release --package mmatrix-ui --target x86_64-pc-windows-gnu
+fi
+
 declare -a allowlist=(
   advapi32.dll
   api-ms-win-core-synch-l1-2-0.dll

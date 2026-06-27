@@ -174,6 +174,11 @@ start_host_capture_helper() {
 
   host_capture_helper "$capture_dir_unix" &
   helper_pid=$!
+
+  if ! import -window root "$capture_dir_unix/preflight.png" >"$runner_tmpdir/import.log" 2>&1; then
+    die "host screenshot preflight failed: $(<"$runner_tmpdir/import.log")"
+  fi
+  rm -f "$capture_dir_unix/preflight.png"
 }
 
 cleanup() {

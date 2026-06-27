@@ -60,7 +60,7 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
 const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MMATRIX_TESTKIT_CAPTURE_DIR_WIN";
 #[cfg(windows)]
-const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
