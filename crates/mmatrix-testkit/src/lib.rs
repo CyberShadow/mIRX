@@ -136,8 +136,7 @@ pub struct TimelineLine {
     pub body: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TimelineEntry {
     Text(TimelineLine),
     RoomState(RoomStateLine),
@@ -171,7 +170,7 @@ impl TimelineEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomStateLine {
     pub room_id: String,
@@ -189,8 +188,7 @@ pub enum RoomStateEventKind {
     Member,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoomStateContent {
     Topic(RoomTopicState),
     Member(RoomMemberState),
@@ -207,6 +205,181 @@ pub struct RoomTopicState {
 pub struct RoomMemberState {
     pub membership: String,
     pub displayname: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum TimelineEntrySerde {
+    Text {
+        room_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        body: String,
+    },
+    RoomState {
+        room_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        event_kind: RoomStateEventKind,
+        state_key: String,
+        content: RoomStateContent,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RoomStateContentSerde {
+    Topic {
+        topic: String,
+    },
+    Member {
+        membership: String,
+        displayname: Option<String>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoomStateLineSerde {
+    room_id: String,
+    sender: String,
+    timestamp_ms: u64,
+    event_kind: RoomStateEventKind,
+    state_key: String,
+    content: RoomStateContent,
+}
+
+impl Serialize for TimelineEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Text(line) => TimelineEntrySerde::Text {
+                room_id: line.room_id.clone(),
+                sender: line.sender.clone(),
+                timestamp_ms: line.timestamp_ms,
+                body: line.body.clone(),
+            },
+            Self::RoomState(line) => TimelineEntrySerde::RoomState {
+                room_id: line.room_id.clone(),
+                sender: line.sender.clone(),
+                timestamp_ms: line.timestamp_ms,
+                event_kind: line.event_kind,
+                state_key: line.state_key.clone(),
+                content: line.content.clone(),
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TimelineEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match TimelineEntrySerde::deserialize(deserializer)? {
+            TimelineEntrySerde::Text {
+                room_id,
+                sender,
+                timestamp_ms,
+                body,
+            } => Ok(Self::Text(TimelineLine {
+                room_id,
+                sender,
+                timestamp_ms,
+                body,
+            })),
+            TimelineEntrySerde::RoomState {
+                room_id,
+                sender,
+                timestamp_ms,
+                event_kind,
+                state_key,
+                content,
+            } => Ok(Self::RoomState(
+                validate_room_state_line(RoomStateLineSerde {
+                    room_id,
+                    sender,
+                    timestamp_ms,
+                    event_kind,
+                    state_key,
+                    content,
+                })
+                .map_err(serde::de::Error::custom)?,
+            )),
+        }
+    }
+}
+
+impl Serialize for RoomStateContent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Topic(topic) => RoomStateContentSerde::Topic {
+                topic: topic.topic.clone(),
+            },
+            Self::Member(member) => RoomStateContentSerde::Member {
+                membership: member.membership.clone(),
+                displayname: member.displayname.clone(),
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RoomStateContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match RoomStateContentSerde::deserialize(deserializer)? {
+            RoomStateContentSerde::Topic { topic } => Ok(Self::Topic(RoomTopicState { topic })),
+            RoomStateContentSerde::Member {
+                membership,
+                displayname,
+            } => Ok(Self::Member(RoomMemberState {
+                membership,
+                displayname,
+            })),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RoomStateLine {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let dto = RoomStateLineSerde::deserialize(deserializer)?;
+        validate_room_state_line(dto).map_err(serde::de::Error::custom)
+    }
+}
+
+fn validate_room_state_line(dto: RoomStateLineSerde) -> Result<RoomStateLine, &'static str> {
+    if !room_state_content_matches_kind(dto.event_kind, &dto.content) {
+        return Err("room state event_kind must match content type");
+    }
+
+    Ok(RoomStateLine {
+        room_id: dto.room_id,
+        sender: dto.sender,
+        timestamp_ms: dto.timestamp_ms,
+        event_kind: dto.event_kind,
+        state_key: dto.state_key,
+        content: dto.content,
+    })
+}
+
+fn room_state_content_matches_kind(kind: RoomStateEventKind, content: &RoomStateContent) -> bool {
+    matches!(
+        (kind, content),
+        (RoomStateEventKind::Topic, RoomStateContent::Topic(_))
+            | (RoomStateEventKind::Member, RoomStateContent::Member(_))
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

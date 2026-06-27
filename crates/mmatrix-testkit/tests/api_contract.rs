@@ -247,12 +247,11 @@ fn timeline_entries_round_trip_through_json() {
     assert_eq!(
         serde_json::to_value(&text).expect("serialize text timeline entry"),
         serde_json::json!({
-            "text": {
-                "room_id": "!room:example",
-                "sender": "@alice:example",
-                "timestamp_ms": 1700000000000u64,
-                "body": "hello"
-            }
+            "type": "text",
+            "room_id": "!room:example",
+            "sender": "@alice:example",
+            "timestamp_ms": 1700000000000u64,
+            "body": "hello"
         })
     );
     assert_eq!(
@@ -263,17 +262,15 @@ fn timeline_entries_round_trip_through_json() {
     assert_eq!(
         serde_json::to_value(&topic).expect("serialize topic room-state entry"),
         serde_json::json!({
-            "room_state": {
-                "room_id": "!room:example",
-                "sender": "@alice:example",
-                "timestamp_ms": 1700000060000u64,
-                "event_kind": "topic",
-                "state_key": "",
-                "content": {
-                    "topic": {
-                        "topic": "incident review"
-                    }
-                }
+            "type": "room_state",
+            "room_id": "!room:example",
+            "sender": "@alice:example",
+            "timestamp_ms": 1700000060000u64,
+            "event_kind": "topic",
+            "state_key": "",
+            "content": {
+                "type": "topic",
+                "topic": "incident review"
             }
         })
     );
@@ -285,18 +282,16 @@ fn timeline_entries_round_trip_through_json() {
     assert_eq!(
         serde_json::to_value(&member).expect("serialize member room-state entry"),
         serde_json::json!({
-            "room_state": {
-                "room_id": "!room:example",
-                "sender": "@carol:example",
-                "timestamp_ms": 1700000120000u64,
-                "event_kind": "member",
-                "state_key": "@carol:example",
-                "content": {
-                    "member": {
-                        "membership": "join",
-                        "displayname": "carol"
-                    }
-                }
+            "type": "room_state",
+            "room_id": "!room:example",
+            "sender": "@carol:example",
+            "timestamp_ms": 1700000120000u64,
+            "event_kind": "member",
+            "state_key": "@carol:example",
+            "content": {
+                "type": "member",
+                "membership": "join",
+                "displayname": "carol"
             }
         })
     );
@@ -366,7 +361,7 @@ fn data_models_reject_unknown_fields() {
             "timestamp_ms":1700000060000,
             "event_kind":"topic",
             "state_key":"",
-            "content":{"topic":{"topic":"incident review"}},
+            "content":{"type":"topic","topic":"incident review"},
             "unexpected":true
         }"#
         )
@@ -377,6 +372,41 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "topic":"incident review",
             "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<TimelineEntry>(
+            r#"{
+            "type":"room_state",
+            "room_id":"!ops:example",
+            "sender":"@alice:example",
+            "timestamp_ms":1700000000000,
+            "event_kind":"topic",
+            "state_key":"",
+            "content":{
+                "type":"member",
+                "membership":"join",
+                "displayname":"alice"
+            }
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomStateLine>(
+            r#"{
+            "room_id":"!ops:example",
+            "sender":"@alice:example",
+            "timestamp_ms":1700000000000,
+            "event_kind":"topic",
+            "state_key":"",
+            "content":{
+                "type":"member",
+                "membership":"join",
+                "displayname":"alice"
+            }
         }"#
         )
         .is_err()

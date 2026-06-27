@@ -583,14 +583,13 @@ pub(crate) struct DumpTimelineLine {
     pub(crate) body: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpTimelineEntry {
     Text(DumpTimelineLine),
     RoomState(DumpRoomStateLine),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpRoomStateLine {
     pub(crate) room_id: String,
@@ -608,8 +607,7 @@ pub(crate) enum DumpRoomStateEventKind {
     Member,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpRoomStateContent {
     Topic(DumpRoomTopicState),
     Member(DumpRoomMemberState),
@@ -626,6 +624,193 @@ pub(crate) struct DumpRoomTopicState {
 pub(crate) struct DumpRoomMemberState {
     pub(crate) membership: String,
     pub(crate) displayname: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum DumpTimelineEntrySerde {
+    Text {
+        room_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        body: String,
+    },
+    RoomState {
+        room_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        event_kind: DumpRoomStateEventKind,
+        state_key: String,
+        content: DumpRoomStateContent,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum DumpRoomStateContentSerde {
+    Topic {
+        topic: String,
+    },
+    Member {
+        membership: String,
+        displayname: Option<String>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DumpRoomStateLineSerde {
+    room_id: String,
+    sender: String,
+    timestamp_ms: u64,
+    event_kind: DumpRoomStateEventKind,
+    state_key: String,
+    content: DumpRoomStateContent,
+}
+
+impl Serialize for DumpTimelineEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Text(line) => DumpTimelineEntrySerde::Text {
+                room_id: line.room_id.clone(),
+                sender: line.sender.clone(),
+                timestamp_ms: line.timestamp_ms,
+                body: line.body.clone(),
+            },
+            Self::RoomState(line) => DumpTimelineEntrySerde::RoomState {
+                room_id: line.room_id.clone(),
+                sender: line.sender.clone(),
+                timestamp_ms: line.timestamp_ms,
+                event_kind: line.event_kind,
+                state_key: line.state_key.clone(),
+                content: line.content.clone(),
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DumpTimelineEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match DumpTimelineEntrySerde::deserialize(deserializer)? {
+            DumpTimelineEntrySerde::Text {
+                room_id,
+                sender,
+                timestamp_ms,
+                body,
+            } => Ok(Self::Text(DumpTimelineLine {
+                room_id,
+                sender,
+                timestamp_ms,
+                body,
+            })),
+            DumpTimelineEntrySerde::RoomState {
+                room_id,
+                sender,
+                timestamp_ms,
+                event_kind,
+                state_key,
+                content,
+            } => Ok(Self::RoomState(
+                validate_dump_room_state_line(DumpRoomStateLineSerde {
+                    room_id,
+                    sender,
+                    timestamp_ms,
+                    event_kind,
+                    state_key,
+                    content,
+                })
+                .map_err(serde::de::Error::custom)?,
+            )),
+        }
+    }
+}
+
+impl Serialize for DumpRoomStateContent {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Topic(topic) => DumpRoomStateContentSerde::Topic {
+                topic: topic.topic.clone(),
+            },
+            Self::Member(member) => DumpRoomStateContentSerde::Member {
+                membership: member.membership.clone(),
+                displayname: member.displayname.clone(),
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DumpRoomStateContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match DumpRoomStateContentSerde::deserialize(deserializer)? {
+            DumpRoomStateContentSerde::Topic { topic } => {
+                Ok(Self::Topic(DumpRoomTopicState { topic }))
+            }
+            DumpRoomStateContentSerde::Member {
+                membership,
+                displayname,
+            } => Ok(Self::Member(DumpRoomMemberState {
+                membership,
+                displayname,
+            })),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DumpRoomStateLine {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let dto = DumpRoomStateLineSerde::deserialize(deserializer)?;
+        validate_dump_room_state_line(dto).map_err(serde::de::Error::custom)
+    }
+}
+
+fn validate_dump_room_state_line(
+    dto: DumpRoomStateLineSerde,
+) -> Result<DumpRoomStateLine, &'static str> {
+    if !dump_room_state_content_matches_kind(dto.event_kind, &dto.content) {
+        return Err("room state event_kind must match content type");
+    }
+
+    Ok(DumpRoomStateLine {
+        room_id: dto.room_id,
+        sender: dto.sender,
+        timestamp_ms: dto.timestamp_ms,
+        event_kind: dto.event_kind,
+        state_key: dto.state_key,
+        content: dto.content,
+    })
+}
+
+fn dump_room_state_content_matches_kind(
+    kind: DumpRoomStateEventKind,
+    content: &DumpRoomStateContent,
+) -> bool {
+    matches!(
+        (kind, content),
+        (
+            DumpRoomStateEventKind::Topic,
+            DumpRoomStateContent::Topic(_)
+        ) | (
+            DumpRoomStateEventKind::Member,
+            DumpRoomStateContent::Member(_)
+        )
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -855,9 +1040,8 @@ mod tests {
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NoArgs, ParsedCommand,
         PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectRoomArgs, SelectRoomResponse,
         SelectViewArgs, SelectViewResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
-        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiState,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
+        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1568,25 +1752,22 @@ mod tests {
                     "room_id":"!room:example",
                     "entries":[
                         {
-                            "text":{
-                                "room_id":"!room:example",
-                                "sender":"@alice:example",
-                                "timestamp_ms":1700000000000u64,
-                                "body":"hello"
-                            }
+                            "type":"text",
+                            "room_id":"!room:example",
+                            "sender":"@alice:example",
+                            "timestamp_ms":1700000000000u64,
+                            "body":"hello"
                         },
                         {
-                            "room_state":{
-                                "room_id":"!room:example",
-                                "sender":"@alice:example",
-                                "timestamp_ms":1700000060000u64,
-                                "event_kind":"topic",
-                                "state_key":"",
-                                "content":{
-                                    "topic":{
-                                        "topic":"incident review"
-                                    }
-                                }
+                            "type":"room_state",
+                            "room_id":"!room:example",
+                            "sender":"@alice:example",
+                            "timestamp_ms":1700000060000u64,
+                            "event_kind":"topic",
+                            "state_key":"",
+                            "content":{
+                                "type":"topic",
+                                "topic":"incident review"
                             }
                         }
                     ]
@@ -1845,6 +2026,37 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
                 body: "hello".to_owned(),
             }
+        );
+        assert!(
+            serde_json::from_value::<DumpTimelineEntry>(json!({
+                "type":"room_state",
+                "room_id":"!ops:example",
+                "sender":"@alice:example",
+                "timestamp_ms":1700000000000u64,
+                "event_kind":"topic",
+                "state_key":"",
+                "content":{
+                    "type":"member",
+                    "membership":"join",
+                    "displayname":"alice"
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomStateLine>(json!({
+                "room_id":"!ops:example",
+                "sender":"@alice:example",
+                "timestamp_ms":1700000000000u64,
+                "event_kind":"topic",
+                "state_key":"",
+                "content":{
+                    "type":"member",
+                    "membership":"join",
+                    "displayname":"alice"
+                }
+            }))
+            .is_err()
         );
         assert_eq!(
             super::dump_verification_from_request(&VerificationRequest {

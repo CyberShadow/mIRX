@@ -9,8 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
 use mmatrix_testkit::{
-    ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession,
-    RoomMemberState, RoomStateContent, RoomStateEventKind, RoomStateLine, SwitchbarItem,
+    ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, RoomMemberState,
+    RoomStateContent, RoomStateEventKind, RoomStateLine, StoredSession, SwitchbarItem,
     TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
@@ -828,8 +828,7 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
 }
 
 #[test]
-fn room_pane_renders_header_metadata_and_system_state()
--> Result<(), Box<dyn std::error::Error>> {
+fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("multi-room.json");
@@ -899,7 +898,10 @@ fn room_pane_renders_header_metadata_and_system_state()
         ops_view,
         "[22:15] @alice:example: ops topic: incident review"
     ));
-    assert!(view_contains(ops_view, "* [22:13] @alice:example set topic: incident review"));
+    assert!(view_contains(
+        ops_view,
+        "* [22:13] @alice:example set topic: incident review"
+    ));
     assert!(view_contains(ops_view, "* [22:14] carol joined"));
 
     Ok(())

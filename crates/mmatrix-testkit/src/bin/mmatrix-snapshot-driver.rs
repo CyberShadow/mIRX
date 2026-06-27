@@ -11,7 +11,9 @@ mod windows_main {
     use std::process::ExitCode;
     use std::time::Duration;
 
-    use mmatrix_testkit::{MdiView, MmatrixApp, NavigationNode, UiState, ViewIdentity};
+    use mmatrix_testkit::{
+        MdiView, MmatrixApp, NavigationNode, RoomStateContent, TimelineEntry, UiState, ViewIdentity,
+    };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
     const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
@@ -133,26 +135,26 @@ mod windows_main {
             println!("PASS error contains {:?}", expected_substring);
         }
 
-        let mut timeline_cache = BTreeMap::<String, Vec<String>>::new();
+        let mut timeline_cache = BTreeMap::<String, Vec<TimelineEntry>>::new();
         for expectation in &config.expect_timelines {
-            let lines = if let Some(lines) = timeline_cache.get(&expectation.room_id) {
-                lines
+            let entries = if let Some(entries) = timeline_cache.get(&expectation.room_id) {
+                entries
             } else {
-                let lines = app.timeline(Some(&expectation.room_id)).map_err(|error| {
+                let entries = app.timeline(Some(&expectation.room_id)).map_err(|error| {
                     format!(
                         "DUMP_TIMELINE failed for room {}: {error}",
                         expectation.room_id
                     )
                 })?;
-                timeline_cache.insert(expectation.room_id.clone(), lines);
+                timeline_cache.insert(expectation.room_id.clone(), entries);
                 timeline_cache
                     .get(&expectation.room_id)
                     .expect("timeline cache entry must exist after insert")
             };
 
-            let found = lines
+            let found = entries
                 .iter()
-                .any(|line| line.contains(&expectation.substring));
+                .any(|entry| timeline_entry_contains(entry, &expectation.substring));
             if !found {
                 return Err(format!(
                     "timeline assertion failed: room {} did not contain {:?}",
@@ -551,6 +553,31 @@ mod windows_main {
 
     fn view_contains(view: &MdiView, substring: &str) -> bool {
         view.lines.iter().any(|line| line.contains(substring))
+    }
+
+    fn timeline_entry_contains(entry: &TimelineEntry, substring: &str) -> bool {
+        match entry {
+            TimelineEntry::Text(line) => {
+                line.room_id.contains(substring)
+                    || line.sender.contains(substring)
+                    || line.body.contains(substring)
+            }
+            TimelineEntry::RoomState(line) => {
+                line.room_id.contains(substring)
+                    || line.sender.contains(substring)
+                    || line.state_key.contains(substring)
+                    || match &line.content {
+                        RoomStateContent::Topic(topic) => topic.topic.contains(substring),
+                        RoomStateContent::Member(member) => {
+                            member.membership.contains(substring)
+                                || member
+                                    .displayname
+                                    .as_deref()
+                                    .is_some_and(|displayname| displayname.contains(substring))
+                        }
+                    }
+            }
+        }
     }
 
     fn navigation_contains(node: &NavigationNode, substring: &str) -> bool {

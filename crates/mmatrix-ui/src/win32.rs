@@ -70,11 +70,11 @@ use crate::{
         DumpRoomStateEventKind as AutomationRoomStateEventKind, DumpRoomStateLine,
         DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope,
-        SelectRoomResponse, SelectViewResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_from_summary, dump_timeline_line_from_text, dump_verification_from_request,
-        failure_response, parse_command_request, success_response,
+        MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
+        SelectViewResponse, SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
+        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -3211,7 +3211,25 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
     )?;
     if timeline["ok"] != json!(true)
         || timeline["json"]
-            != json!({"room_id":"!one:example","lines":["first line","second line"]})
+            != json!({
+                "room_id":"!one:example",
+                "entries":[
+                    {
+                        "type":"text",
+                        "room_id":"!one:example",
+                        "sender":"@alice:example",
+                        "timestamp_ms":1700000000000u64,
+                        "body":"first line"
+                    },
+                    {
+                        "type":"text",
+                        "room_id":"!one:example",
+                        "sender":"@alice:example",
+                        "timestamp_ms":1700000060000u64,
+                        "body":"second line"
+                    }
+                ]
+            })
     {
         return Err(format!(
             "self-test failed: unexpected dump-timeline response {timeline}"
@@ -3659,7 +3677,10 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
     }
 }
 
-fn dump_timeline_entry_from_room_entry(room_id: &str, entry: &RoomTimelineEntry) -> DumpTimelineEntry {
+fn dump_timeline_entry_from_room_entry(
+    room_id: &str,
+    entry: &RoomTimelineEntry,
+) -> DumpTimelineEntry {
     match entry {
         RoomTimelineEntry::Text {
             sender,
