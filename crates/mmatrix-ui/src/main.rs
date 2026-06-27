@@ -5,6 +5,8 @@ use std::process::ExitCode;
 
 mod automation;
 
+#[cfg(windows)]
+mod dpapi;
 #[cfg(not(windows))]
 mod non_windows;
 #[cfg(windows)]

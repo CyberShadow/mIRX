@@ -47,7 +47,7 @@ MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... MMATRIX_ROOM=... \
 
 Omit `MMATRIX_ROOM` to verify login, restore, sync, and logout without send coverage.
 
-The UI session file lives at `%LOCALAPPDATA%\mmatrix\ui-shell\session.json`. For this iteration it stores Matrix access and refresh tokens as local developer cleartext JSON, never the password. DPAPI/Credential Manager integration and token refresh persistence are future work.
+The UI session file still lives at `%LOCALAPPDATA%\mmatrix\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mmatrix\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
 
 ## Release Measurement
 

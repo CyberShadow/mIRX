@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use matrix_sdk::{
-    Client, LoopCtrl, Room, SessionMeta, SessionTokens,
+    Client, LoopCtrl, Room, SessionChange, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
@@ -18,8 +18,8 @@ use matrix_sdk::{
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, Event, LoginRequest, Operation, RoomSummary, SendTextRequest, StoredSession,
-    TimelineText,
+    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomSummary, SendTextRequest,
+    StoredSession, TimelineText,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -56,6 +56,7 @@ pub(crate) async fn build_client(
         .homeserver_url(homeserver_url)
         .sqlite_store(&store_path, Some(config.store_passphrase.as_str()))
         .with_encryption_settings(encryption_settings())
+        .handle_refresh_tokens()
         .build()
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to build Matrix client: {err}")))
@@ -178,6 +179,38 @@ pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle
     })
 }
 
+pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
+    let mut session_changes = client.subscribe_to_session_changes();
+
+    tokio::task::spawn_local(async move {
+        loop {
+            match session_changes.recv().await {
+                Ok(SessionChange::TokensRefreshed) => {
+                    let session = client
+                        .matrix_auth()
+                        .session()
+                        .expect("refreshed tokens require an active Matrix session");
+                    emit_event(
+                        &events,
+                        Event::SessionUpdated {
+                            session: stored_session_from_matrix_session(session),
+                        },
+                    );
+                }
+                Ok(SessionChange::UnknownToken { .. }) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
+                    &events,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::SessionUpdate,
+                        message: "missed Matrix session change notification".to_owned(),
+                    }),
+                ),
+            }
+        }
+    })
+}
+
 pub(crate) async fn send_text(
     client: &Client,
     request: SendTextRequest,
@@ -207,7 +240,7 @@ pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
         .map_err(|err| MatrixCoreError::new(format!("failed to log out of Matrix: {err}")))
 }
 
-fn stored_session_from_matrix_session(session: MatrixSession) -> StoredSession {
+pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> StoredSession {
     StoredSession {
         user_id: session.meta.user_id.to_string(),
         device_id: session.meta.device_id.to_string(),

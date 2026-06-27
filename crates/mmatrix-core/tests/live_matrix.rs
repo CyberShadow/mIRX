@@ -74,6 +74,20 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 );
                 saw_logged_in = true;
             }
+            Event::SessionUpdated { session } => {
+                assert!(
+                    !session.user_id.is_empty(),
+                    "expected non-empty session update user id"
+                );
+                assert!(
+                    !session.device_id.is_empty(),
+                    "expected non-empty session update device id"
+                );
+                assert!(
+                    !session.access_token.is_empty(),
+                    "expected non-empty session update access token"
+                );
+            }
             Event::SyncedRooms(_) => saw_rooms = true,
             Event::TimelineText(_) => {}
             Event::Error(err) => panic!(
@@ -104,6 +118,20 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 saw_sync_started = true;
                 break;
             }
+            Event::SessionUpdated { session } => {
+                assert!(
+                    !session.user_id.is_empty(),
+                    "expected non-empty session update user id"
+                );
+                assert!(
+                    !session.device_id.is_empty(),
+                    "expected non-empty session update device id"
+                );
+                assert!(
+                    !session.access_token.is_empty(),
+                    "expected non-empty session update access token"
+                );
+            }
             Event::TimelineText(_) => {}
             Event::Error(err) => panic!(
                 "live start sync failed during {:?}: {}",
@@ -132,6 +160,20 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 assert_eq!(err.message, "continuous sync is already running");
                 saw_duplicate_sync_error = true;
                 break;
+            }
+            Event::SessionUpdated { session } => {
+                assert!(
+                    !session.user_id.is_empty(),
+                    "expected non-empty session update user id"
+                );
+                assert!(
+                    !session.device_id.is_empty(),
+                    "expected non-empty session update device id"
+                );
+                assert!(
+                    !session.access_token.is_empty(),
+                    "expected non-empty session update access token"
+                );
             }
             Event::TimelineText(_) => {}
             other => panic!("unexpected duplicate start sync event: {other:?}"),
@@ -174,6 +216,20 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 saw_logged_out = true;
                 break;
             }
+            Event::SessionUpdated { session } => {
+                assert!(
+                    !session.user_id.is_empty(),
+                    "expected non-empty session update user id"
+                );
+                assert!(
+                    !session.device_id.is_empty(),
+                    "expected non-empty session update device id"
+                );
+                assert!(
+                    !session.access_token.is_empty(),
+                    "expected non-empty session update access token"
+                );
+            }
             Event::TimelineText(_) => {}
             Event::Error(err) => panic!(
                 "live post-login command failed during {:?}: {}",
@@ -200,6 +256,20 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::Stopped => {
                 handle.join().expect("join worker");
                 return;
+            }
+            Event::SessionUpdated { session } => {
+                assert!(
+                    !session.user_id.is_empty(),
+                    "expected non-empty session update user id"
+                );
+                assert!(
+                    !session.device_id.is_empty(),
+                    "expected non-empty session update device id"
+                );
+                assert!(
+                    !session.access_token.is_empty(),
+                    "expected non-empty session update access token"
+                );
             }
             Event::TimelineText(_) => {}
             Event::Error(err) => {

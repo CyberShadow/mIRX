@@ -484,6 +484,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
     match operation {
         Operation::Login => "login",
         Operation::RestoreSession => "restore_session",
+        Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
         Operation::SendText => "send_text",
         Operation::Logout => "logout",

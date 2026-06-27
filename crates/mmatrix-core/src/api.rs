@@ -78,6 +78,7 @@ pub struct CoreErrorEvent {
 pub enum Operation {
     Login,
     RestoreSession,
+    SessionUpdate,
     StartSync,
     SendText,
     Logout,
@@ -88,6 +89,7 @@ pub enum Operation {
 pub enum Event {
     Started,
     LoggedIn { session: StoredSession },
+    SessionUpdated { session: StoredSession },
     RestoredSession,
     SyncStarted,
     SyncedRooms(Vec<RoomSummary>),

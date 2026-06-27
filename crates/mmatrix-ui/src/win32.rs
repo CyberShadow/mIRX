@@ -6,7 +6,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -102,6 +102,11 @@ const EDIT_HEIGHT: i32 = 28;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
+const PROTECTED_SESSION_MAGIC: &[u8] = b"mmatrix-ui-session:v1\0";
+const SESSION_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/session/v1";
+const STORE_PASSPHRASE_FILE_NAME: &str = "store-passphrase.dpapi";
+const PROTECTED_STORE_PASSPHRASE_MAGIC: &[u8] = b"mmatrix-ui-store-secret:v1\0";
+const STORE_PASSPHRASE_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/store-passphrase/v1";
 const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mmatrix-ui";
 const VK_RETURN_KEY: WPARAM = 13;
 
@@ -182,6 +187,7 @@ struct WindowState {
     last_idle_probe_generation: Option<u64>,
     synthetic_load_in_progress: bool,
     pending_login_homeserver_url: Option<String>,
+    current_session_homeserver_url: Option<String>,
     tree_items: BTreeMap<isize, ViewId>,
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
@@ -240,6 +246,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
         pending_login_homeserver_url: None,
+        current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
         views: BTreeMap::new(),
         hwnd_views: BTreeMap::new(),
@@ -312,9 +319,11 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
 }
 
 fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<CoreBridge, String> {
+    let profile_dir = profile_dir()?;
+    let store_passphrase = load_or_create_store_passphrase(&profile_dir)?;
     let handle = start(CoreConfig {
-        profile_dir: profile_dir()?,
-        store_passphrase: "mmatrix-ui-store-passphrase".to_owned(),
+        profile_dir,
+        store_passphrase,
     })
     .map_err(|err| format!("failed to start mmatrix-core: {err}"))?;
 
@@ -410,7 +419,19 @@ fn load_saved_session() -> Result<SavedSession, String> {
     let path = session_path()?;
     let bytes = fs::read(&path)
         .map_err(|err| format!("failed to read saved session {}: {err}", path.display()))?;
-    let saved = serde_json::from_slice::<SavedSession>(&bytes)
+    let protected = bytes.strip_prefix(PROTECTED_SESSION_MAGIC).ok_or_else(|| {
+        format!(
+            "saved session {} is not in protected format",
+            path.display()
+        )
+    })?;
+    let payload = crate::dpapi::unprotect(protected, SESSION_DPAPI_ENTROPY).map_err(|err| {
+        format!(
+            "failed to unprotect saved session {}: {err}",
+            path.display()
+        )
+    })?;
+    let saved = serde_json::from_slice::<SavedSession>(&payload)
         .map_err(|err| format!("failed to parse saved session {}: {err}", path.display()))?;
     if saved.version != SAVED_SESSION_VERSION {
         return Err(format!(
@@ -443,12 +464,18 @@ fn save_session(homeserver_url: &str, session: &StoredSession) -> Result<(), Str
         homeserver_url: homeserver_url.to_owned(),
         session: session.clone(),
     };
-    let bytes = serde_json::to_vec(&payload).map_err(|err| {
+    let serialized = serde_json::to_vec(&payload).map_err(|err| {
         format!(
             "failed to serialize saved session {}: {err}",
             path.display()
         )
     })?;
+    let protected =
+        crate::dpapi::protect(&serialized, "mmatrix saved session", SESSION_DPAPI_ENTROPY)
+            .map_err(|err| format!("failed to protect saved session {}: {err}", path.display()))?;
+    let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
+    bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
+    bytes.extend_from_slice(&protected);
     fs::write(&temp_path, bytes).map_err(|err| {
         format!(
             "failed to write saved session {}: {err}",
@@ -480,6 +507,109 @@ fn delete_saved_session() -> Result<(), String> {
             path.display()
         )),
     }
+}
+
+fn load_or_create_store_passphrase(profile_dir: &Path) -> Result<String, String> {
+    let path = profile_dir.join(STORE_PASSPHRASE_FILE_NAME);
+    if path.is_file() {
+        let bytes = fs::read(&path).map_err(|err| {
+            format!(
+                "failed to read protected store passphrase {}: {err}",
+                path.display()
+            )
+        })?;
+        let protected = bytes
+            .strip_prefix(PROTECTED_STORE_PASSPHRASE_MAGIC)
+            .ok_or_else(|| {
+                format!(
+                    "protected store passphrase {} is missing the expected marker",
+                    path.display()
+                )
+            })?;
+        let payload =
+            crate::dpapi::unprotect(protected, STORE_PASSPHRASE_DPAPI_ENTROPY).map_err(|err| {
+                format!(
+                    "failed to unprotect store passphrase {}: {err}",
+                    path.display()
+                )
+            })?;
+        let passphrase = String::from_utf8(payload).map_err(|err| {
+            format!(
+                "protected store passphrase {} is not valid UTF-8: {err}",
+                path.display()
+            )
+        })?;
+        if passphrase.len() != 64
+            || !passphrase
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(format!(
+                "protected store passphrase {} must be 64 lowercase hex characters",
+                path.display()
+            ));
+        }
+        return Ok(passphrase);
+    }
+
+    let matrix_store_path = profile_dir.join("matrix-store");
+    if matrix_store_path.exists() {
+        return Err(format!(
+            "Matrix store {} exists but protected passphrase {} is missing",
+            matrix_store_path.display(),
+            path.display()
+        ));
+    }
+
+    create_store_passphrase(profile_dir, &path)
+}
+
+fn create_store_passphrase(profile_dir: &Path, path: &Path) -> Result<String, String> {
+    fs::create_dir_all(profile_dir).map_err(|err| {
+        format!(
+            "failed to create profile directory {}: {err}",
+            profile_dir.display()
+        )
+    })?;
+
+    let passphrase = hex_string(&crate::dpapi::random_bytes::<32>()?);
+    let protected = crate::dpapi::protect(
+        passphrase.as_bytes(),
+        "mmatrix store passphrase",
+        STORE_PASSPHRASE_DPAPI_ENTROPY,
+    )
+    .map_err(|err| {
+        format!(
+            "failed to protect store passphrase {}: {err}",
+            path.display()
+        )
+    })?;
+    let temp_path = path.with_extension("dpapi.tmp");
+    let mut bytes = Vec::with_capacity(PROTECTED_STORE_PASSPHRASE_MAGIC.len() + protected.len());
+    bytes.extend_from_slice(PROTECTED_STORE_PASSPHRASE_MAGIC);
+    bytes.extend_from_slice(&protected);
+    fs::write(&temp_path, bytes).map_err(|err| {
+        format!(
+            "failed to write protected store passphrase {}: {err}",
+            temp_path.display()
+        )
+    })?;
+    fs::rename(&temp_path, path).map_err(|err| {
+        format!(
+            "failed to install protected store passphrase {}: {err}",
+            path.display()
+        )
+    })?;
+    Ok(passphrase)
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from(b"0123456789abcdef"[(byte >> 4) as usize]));
+        out.push(char::from(b"0123456789abcdef"[(byte & 0x0f) as usize]));
+    }
+    out
 }
 
 fn init_common_controls() -> Result<(), String> {
@@ -1321,6 +1451,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         }
         Event::LoggedIn { session } => {
             if let Some(homeserver_url) = state.pending_login_homeserver_url.clone() {
+                state.current_session_homeserver_url = Some(homeserver_url.clone());
                 save_session(&homeserver_url, &session)?;
                 state.pending_login_homeserver_url = None;
             } else if !state.synthetic_load_in_progress {
@@ -1328,6 +1459,13 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             }
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
+        }
+        Event::SessionUpdated { session } => {
+            let homeserver_url = state
+                .current_session_homeserver_url
+                .as_ref()
+                .expect("session updates require an active homeserver URL");
+            save_session(homeserver_url, &session)?;
         }
         Event::RestoredSession => {
             state.model.status = "restored saved session".to_owned();
@@ -1363,6 +1501,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::LoggedOut => {
             delete_saved_session()?;
             state.pending_login_homeserver_url = None;
+            state.current_session_homeserver_url = None;
             state.model.status = "logged out".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
@@ -2552,6 +2691,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         let state = state_mut(hwnd);
         state.synthetic_load_in_progress = true;
         state.pending_login_homeserver_url = None;
+        state.current_session_homeserver_url = None;
         state.model = initial_model();
     }
 
@@ -2742,12 +2882,13 @@ fn submit_restore_session(
         .ok_or_else(|| "core command sender is not available".to_owned())?;
     sender
         .send(Command::RestoreSession(RestoreSessionRequest {
-            homeserver_url,
+            homeserver_url: homeserver_url.clone(),
             session,
         }))
         .map_err(|err| format!("failed to enqueue restore session command: {err}"))?;
 
     state.pending_login_homeserver_url = None;
+    state.current_session_homeserver_url = Some(homeserver_url);
     state.model.status = "restoring saved session".to_owned();
     state.model.lifecycle_state = LifecycleState::Restoring;
     Ok(())
@@ -2901,6 +3042,7 @@ fn operation_name(operation: Operation) -> &'static str {
     match operation {
         Operation::Login => "login",
         Operation::RestoreSession => "restore session",
+        Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
         Operation::SendText => "send text",
         Operation::Logout => "logout",
@@ -2978,8 +3120,55 @@ mod tests {
             user_id: "@alice:example".to_owned(),
             device_id: "DEVICE".to_owned(),
             access_token: "secret-token".to_owned(),
-            refresh_token: None,
+            refresh_token: Some("refresh-token".to_owned()),
         }
+    }
+
+    fn saved_session_payload() -> SavedSession {
+        SavedSession {
+            version: SAVED_SESSION_VERSION,
+            homeserver_url: "https://matrix.example".to_owned(),
+            session: stored_session(),
+        }
+    }
+
+    fn protected_saved_session_bytes(saved: &SavedSession) -> Vec<u8> {
+        let serialized = serde_json::to_vec(saved).expect("saved session must serialize");
+        protected_saved_session_payload_bytes(&serialized)
+    }
+
+    fn protected_saved_session_payload_bytes(payload: &[u8]) -> Vec<u8> {
+        let protected =
+            crate::dpapi::protect(payload, "mmatrix saved session test", SESSION_DPAPI_ENTROPY)
+                .expect("saved session test payload must protect");
+        let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
+        bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
+        bytes.extend_from_slice(&protected);
+        bytes
+    }
+
+    fn session_file_path(root: &Path) -> PathBuf {
+        root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME)
+    }
+
+    fn write_session_bytes(root: &Path, bytes: &[u8]) {
+        let path = session_file_path(root);
+        let parent = path.parent().expect("session file must have parent");
+        fs::create_dir_all(parent).expect("session file parent must exist");
+        fs::write(path, bytes).expect("session bytes must write");
+    }
+
+    fn store_passphrase_file_path(root: &Path) -> PathBuf {
+        root.join(PROFILE_SUBDIR).join(STORE_PASSPHRASE_FILE_NAME)
+    }
+
+    fn assert_bytes_do_not_contain(bytes: &[u8], needle: &str) {
+        assert!(
+            !bytes
+                .windows(needle.len())
+                .any(|window| window == needle.as_bytes()),
+            "bytes unexpectedly contained {needle:?}"
+        );
     }
 
     fn with_local_app_data<T>(test: impl FnOnce(PathBuf) -> T) -> T {
@@ -3020,6 +3209,7 @@ mod tests {
             last_idle_probe_generation: None,
             synthetic_load_in_progress: false,
             pending_login_homeserver_url: None,
+            current_session_homeserver_url: None,
             tree_items: BTreeMap::new(),
             views: BTreeMap::new(),
             hwnd_views: BTreeMap::new(),
@@ -3357,24 +3547,19 @@ mod tests {
             .unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
             assert_eq!(state.pending_login_homeserver_url, None);
-
-            let session_path = root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME);
-            let saved = serde_json::from_slice::<SavedSession>(
-                &fs::read(&session_path).expect("saved session file must exist"),
-            )
-            .expect("saved session file must deserialize");
             assert_eq!(
-                saved,
-                SavedSession {
-                    version: SAVED_SESSION_VERSION,
-                    homeserver_url: "https://matrix.example".to_owned(),
-                    session: stored_session(),
-                }
+                state.current_session_homeserver_url,
+                Some("https://matrix.example".to_owned())
             );
-            let session_json =
-                String::from_utf8(fs::read(&session_path).expect("session file must be readable"))
-                    .expect("session file must be utf-8 json");
-            assert!(!session_json.contains("password"));
+
+            let session_path = session_file_path(&root);
+            let session_bytes = fs::read(&session_path).expect("saved session file must exist");
+            assert_eq!(load_saved_session().unwrap(), saved_session_payload());
+            assert_bytes_do_not_contain(&session_bytes, "secret-token");
+            assert_bytes_do_not_contain(&session_bytes, "refresh-token");
+            assert_bytes_do_not_contain(&session_bytes, "@alice:example");
+            assert_bytes_do_not_contain(&session_bytes, "DEVICE");
+            assert_bytes_do_not_contain(&session_bytes, "\"access_token\"");
 
             apply_core_event(&mut state, Event::SyncStarted).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Syncing);
@@ -3408,6 +3593,7 @@ mod tests {
 
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::LoggedOut);
+            assert_eq!(state.current_session_homeserver_url, None);
             assert!(!session_path.exists());
 
             apply_core_event(&mut state, Event::Stopped).unwrap();
@@ -3446,60 +3632,187 @@ mod tests {
 
             assert_eq!(state.model.status, "authenticated");
             assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
+            assert_eq!(state.current_session_homeserver_url, None);
             assert!(!root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME).exists());
         });
     }
 
     #[test]
-    fn saved_session_helpers_round_trip_and_reject_invalid_json() {
+    fn session_updated_event_persists_refreshed_tokens_without_leaking_them() {
         with_local_app_data(|root| {
             save_session("https://matrix.example", &stored_session()).unwrap();
+            let mut state = test_state();
+            state.current_session_homeserver_url = Some("https://matrix.example".to_owned());
+
+            let updated_session = StoredSession {
+                access_token: "updated-access-token".to_owned(),
+                refresh_token: Some("updated-refresh-token".to_owned()),
+                ..stored_session()
+            };
+
+            apply_core_event(
+                &mut state,
+                Event::SessionUpdated {
+                    session: updated_session.clone(),
+                },
+            )
+            .unwrap();
+
             assert_eq!(
                 load_saved_session().unwrap(),
                 SavedSession {
-                    version: SAVED_SESSION_VERSION,
-                    homeserver_url: "https://matrix.example".to_owned(),
-                    session: stored_session(),
+                    session: updated_session.clone(),
+                    ..saved_session_payload()
                 }
             );
+            let session_bytes = fs::read(session_file_path(&root)).unwrap();
+            assert_bytes_do_not_contain(&session_bytes, "updated-access-token");
+            assert_bytes_do_not_contain(&session_bytes, "updated-refresh-token");
+            assert!(
+                !serde_json::to_string(&dump_model_from_ui(&state.model))
+                    .unwrap()
+                    .contains("updated-access-token")
+            );
+            assert!(
+                !serde_json::to_string(&state.model.status)
+                    .unwrap()
+                    .contains("updated-access-token")
+            );
+        });
+    }
 
-            let path = root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME);
-            fs::write(
-                &path,
-                br#"{"version":2,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null}}"#,
-            )
-            .unwrap();
+    #[test]
+    fn saved_session_helper_round_trips_and_protects_sensitive_fields() {
+        with_local_app_data(|root| {
+            save_session("https://matrix.example", &stored_session()).unwrap();
+            assert_eq!(load_saved_session().unwrap(), saved_session_payload());
+            let saved_bytes = fs::read(session_file_path(&root)).unwrap();
+            assert_bytes_do_not_contain(&saved_bytes, "secret-token");
+            assert_bytes_do_not_contain(&saved_bytes, "refresh-token");
+            assert_bytes_do_not_contain(&saved_bytes, "@alice:example");
+            assert_bytes_do_not_contain(&saved_bytes, "DEVICE");
+            assert_bytes_do_not_contain(&saved_bytes, "\"access_token\"");
+
+            let path = session_file_path(&root);
+            delete_saved_session().unwrap();
+            delete_saved_session().unwrap();
+            assert!(!path.exists());
+        });
+    }
+
+    #[test]
+    fn load_saved_session_rejects_legacy_cleartext_json_without_marker() {
+        with_local_app_data(|root| {
+            let cleartext = serde_json::to_vec(&saved_session_payload()).unwrap();
+            write_session_bytes(&root, &cleartext);
+            assert!(
+                load_saved_session()
+                    .unwrap_err()
+                    .contains("is not in protected format")
+            );
+        });
+    }
+
+    #[test]
+    fn load_saved_session_rejects_unsupported_version() {
+        with_local_app_data(|root| {
+            write_session_bytes(
+                &root,
+                &protected_saved_session_bytes(&SavedSession {
+                    version: 2,
+                    ..saved_session_payload()
+                }),
+            );
             assert!(
                 load_saved_session()
                     .unwrap_err()
                     .contains("unsupported saved session version 2")
             );
+        });
+    }
 
-            fs::write(
-                &path,
-                br#"{"version":1,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null},"unexpected":true}"#,
-            )
-            .unwrap();
+    #[test]
+    fn load_saved_session_rejects_invalid_protected_json() {
+        with_local_app_data(|root| {
+            write_session_bytes(
+                &root,
+                &protected_saved_session_payload_bytes(
+                    br#"{"version":1,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example""#,
+                ),
+            );
             assert!(
                 load_saved_session()
                     .unwrap_err()
-                    .contains("unknown field `unexpected`")
+                    .contains("failed to parse saved session")
             );
+        });
+    }
 
-            fs::write(
-                &path,
-                br#"{"version":1,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null,"unexpected":"value"}}"#,
-            )
-            .unwrap();
+    #[test]
+    fn load_saved_session_rejects_corrupt_dpapi_payload() {
+        with_local_app_data(|root| {
+            write_session_bytes(
+                &root,
+                &[PROTECTED_SESSION_MAGIC, b"corrupt".as_slice()].concat(),
+            );
             assert!(
                 load_saved_session()
                     .unwrap_err()
-                    .contains("unknown field `unexpected`")
+                    .contains("failed to unprotect saved session")
             );
+        });
+    }
 
-            delete_saved_session().unwrap();
-            delete_saved_session().unwrap();
-            assert!(!path.exists());
+    #[test]
+    fn store_passphrase_helper_round_trips_and_protects_secret() {
+        with_local_app_data(|root| {
+            let profile_dir = root.join(PROFILE_SUBDIR);
+            let first = load_or_create_store_passphrase(&profile_dir).unwrap();
+            let second = load_or_create_store_passphrase(&profile_dir).unwrap();
+            let raw_bytes = fs::read(store_passphrase_file_path(&root)).unwrap();
+
+            assert_eq!(first, second);
+            assert_eq!(first.len(), 64);
+            assert!(
+                first
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            );
+            assert_bytes_do_not_contain(&raw_bytes, &first);
+        });
+    }
+
+    #[test]
+    fn load_or_create_store_passphrase_rejects_missing_passphrase_when_store_exists() {
+        with_local_app_data(|root| {
+            let profile_dir = root.join(PROFILE_SUBDIR);
+            let matrix_store_dir = profile_dir.join("matrix-store");
+            fs::create_dir_all(&matrix_store_dir).unwrap();
+            assert!(
+                load_or_create_store_passphrase(&profile_dir)
+                    .unwrap_err()
+                    .contains("exists but protected passphrase")
+            );
+        });
+    }
+
+    #[test]
+    fn load_or_create_store_passphrase_rejects_corrupt_passphrase_file() {
+        with_local_app_data(|root| {
+            let profile_dir = root.join(PROFILE_SUBDIR);
+            let passphrase_path = store_passphrase_file_path(&root);
+            let parent = passphrase_path.parent().unwrap();
+            fs::create_dir_all(parent).unwrap();
+            fs::write(
+                &passphrase_path,
+                [PROTECTED_STORE_PASSPHRASE_MAGIC, b"corrupt".as_slice()].concat(),
+            )
+            .unwrap();
+            assert!(
+                load_or_create_store_passphrase(&profile_dir)
+                    .unwrap_err()
+                    .contains("failed to unprotect store passphrase")
+            );
         });
     }
 
@@ -3529,6 +3842,10 @@ mod tests {
             stored_session(),
         )
         .unwrap();
+        assert_eq!(
+            state.current_session_homeserver_url,
+            Some("https://matrix.example".to_owned())
+        );
         assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
 
         assert_eq!(

@@ -12,6 +12,13 @@ use mmatrix_testkit::{
     TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
+#[allow(dead_code)]
+#[path = "../src/dpapi.rs"]
+mod dpapi;
+
+const PROTECTED_SESSION_MAGIC: &[u8] = b"mmatrix-ui-session:v1\0";
+const SESSION_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/session/v1";
+
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
         return Ok(PathBuf::from(path));
@@ -98,20 +105,35 @@ fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::er
         .parent()
         .ok_or_else(|| format!("missing parent for {}", path.display()))?;
     fs::create_dir_all(parent)?;
-    fs::write(
-        &path,
-        serde_json::to_vec(&serde_json::json!({
-            "version": 1,
-            "homeserver_url": "https://matrix.example",
-            "session": {
-                "user_id": "@alice:example",
-                "device_id": "DEVICE",
-                "access_token": "secret-token",
-                "refresh_token": "refresh-token"
-            }
-        }))?,
+    let payload = serde_json::to_vec(&serde_json::json!({
+        "version": 1,
+        "homeserver_url": "https://matrix.example",
+        "session": {
+            "user_id": "@alice:example",
+            "device_id": "DEVICE",
+            "access_token": "secret-token",
+            "refresh_token": "refresh-token"
+        }
+    }))?;
+    let protected = dpapi::protect(
+        &payload,
+        "mmatrix saved session test",
+        SESSION_DPAPI_ENTROPY,
     )?;
+    let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
+    bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
+    bytes.extend_from_slice(&protected);
+    fs::write(&path, bytes)?;
     Ok(path)
+}
+
+fn assert_bytes_do_not_contain(bytes: &[u8], needle: &str) {
+    assert!(
+        !bytes
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes()),
+        "bytes unexpectedly contained {needle:?}"
+    );
 }
 
 fn fixture_state_path(name: &str) -> PathBuf {
@@ -408,7 +430,11 @@ fn automation_driver_lifecycle_commands_fail_cleanly_in_render_state_mode()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let local_app_data = unique_local_app_data_path();
-    let _session_path = write_saved_session(&local_app_data)?;
+    let session_path = write_saved_session(&local_app_data)?;
+    let raw_session_bytes = fs::read(&session_path)?;
+    assert_bytes_do_not_contain(&raw_session_bytes, "secret-token");
+    assert_bytes_do_not_contain(&raw_session_bytes, "refresh-token");
+    assert_bytes_do_not_contain(&raw_session_bytes, "\"access_token\"");
 
     let args = [
         OsString::from("--render-state"),
@@ -672,6 +698,10 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
     app.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
     app.wait_for_min_rooms(1, Duration::from_secs(120))?;
     assert!(session_path.is_file());
+    let raw_session_bytes = fs::read(&session_path)?;
+    assert_bytes_do_not_contain(&raw_session_bytes, "\"access_token\"");
+    assert_bytes_do_not_contain(&raw_session_bytes, "\"refresh_token\"");
+    assert_bytes_do_not_contain(&raw_session_bytes, &password);
 
     app.start_sync()?;
     app.wait_for_lifecycle_state("syncing", Duration::from_secs(60))?;

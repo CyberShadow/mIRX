@@ -98,6 +98,7 @@ enum WorkerState {
     Ready {
         client: Client,
         sync_task: Option<TokioJoinHandle<()>>,
+        session_update_task: TokioJoinHandle<()>,
     },
 }
 
@@ -213,11 +214,13 @@ async fn handle_login(
         }
     };
 
+    let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
     let rooms = matrix::initial_room_sync(&client).await;
 
     *state = WorkerState::Ready {
         client,
         sync_task: None,
+        session_update_task,
     };
     emit_event(event_tx, Event::LoggedIn { session });
 
@@ -259,11 +262,13 @@ async fn handle_restore_session(
         return false;
     }
 
+    let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
     let rooms = matrix::initial_room_sync(&client).await;
 
     *state = WorkerState::Ready {
         client,
         sync_task: None,
+        session_update_task,
     };
     emit_event(event_tx, Event::RestoredSession);
 
@@ -276,7 +281,10 @@ async fn handle_restore_session(
 }
 
 fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
-    let WorkerState::Ready { client, sync_task } = state else {
+    let WorkerState::Ready {
+        client, sync_task, ..
+    } = state
+    else {
         emit_invalid_state(
             event_tx,
             Operation::StartSync,
@@ -324,7 +332,12 @@ async fn handle_send_text(
 }
 
 async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool {
-    let WorkerState::Ready { client, sync_task } = state else {
+    let WorkerState::Ready {
+        client,
+        sync_task,
+        session_update_task,
+    } = state
+    else {
         emit_invalid_state(
             event_tx,
             Operation::Logout,
@@ -334,6 +347,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     };
 
     abort_sync_task(sync_task);
+    session_update_task.abort();
 
     if let Err(err) = matrix::logout(client.clone()).await {
         emit_matrix_error(event_tx, Operation::Logout, err);
@@ -346,8 +360,14 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
 }
 
 fn shutdown_state(state: &mut WorkerState) {
-    if let WorkerState::Ready { sync_task, .. } = state {
+    if let WorkerState::Ready {
+        sync_task,
+        session_update_task,
+        ..
+    } = state
+    {
         abort_sync_task(sync_task);
+        session_update_task.abort();
     }
 
     *state = WorkerState::NoClient;
@@ -410,6 +430,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 sync_task: Some(existing_task),
+                session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
             };
 
             assert!(!handle_start_sync(&event_tx as &EventSender, &mut state));
@@ -425,10 +446,16 @@ mod tests {
                 other => panic!("expected duplicate sync error, got {other:?}"),
             }
 
-            if let WorkerState::Ready { sync_task, .. } = &mut state
-                && let Some(task) = sync_task.take()
+            if let WorkerState::Ready {
+                sync_task,
+                session_update_task,
+                ..
+            } = &mut state
             {
-                task.abort();
+                if let Some(task) = sync_task.take() {
+                    task.abort();
+                }
+                session_update_task.abort();
             }
         });
     }

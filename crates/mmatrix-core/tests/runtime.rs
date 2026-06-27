@@ -244,6 +244,28 @@ fn logged_in_event_serializes_and_deserializes_session_payload() {
 }
 
 #[test]
+fn session_updated_event_serializes_and_deserializes_session_payload() {
+    let session = StoredSession {
+        user_id: "@user:example.org".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "updated-access-token".to_owned(),
+        refresh_token: Some("updated-refresh-token".to_owned()),
+    };
+    let event = Event::SessionUpdated {
+        session: session.clone(),
+    };
+
+    let json = serde_json::to_string(&event).expect("serialize session-updated event");
+    assert_eq!(
+        json,
+        r#"{"SessionUpdated":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"updated-access-token","refresh_token":"updated-refresh-token"}}}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize session-updated event");
+    assert_eq!(restored, event);
+}
+
+#[test]
 fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
     let sync_started = serde_json::to_string(&Event::SyncStarted).expect("serialize sync started");
     assert_eq!(sync_started, r#""SyncStarted""#);
