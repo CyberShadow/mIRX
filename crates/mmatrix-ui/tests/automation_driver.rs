@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
 use mmatrix_testkit::{
-    LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession, TestkitError,
-    TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession, SwitchbarItem,
+    TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
 #[allow(dead_code)]
@@ -223,6 +223,42 @@ fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> &'a MdiView 
         .unwrap_or_else(|| panic!("missing MDI view for {identity:?}"))
 }
 
+fn find_switchbar_item<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> &'a SwitchbarItem {
+    ui_state
+        .switchbar
+        .items
+        .iter()
+        .find(|item| &item.identity == identity)
+        .unwrap_or_else(|| panic!("missing switchbar item for {identity:?}"))
+}
+
+fn assert_active_switchbar_item(ui_state: &UiState, identity: &ViewIdentity) {
+    let active_items = ui_state
+        .switchbar
+        .items
+        .iter()
+        .filter(|item| item.active)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        active_items.len(),
+        1,
+        "expected exactly one active switchbar item, got {active_items:?}"
+    );
+    assert_eq!(
+        ui_state.switchbar.active_item().map(|item| &item.identity),
+        Some(identity)
+    );
+    assert!(find_switchbar_item(ui_state, identity).active);
+}
+
+fn assert_switchbar_activity(ui_state: &UiState, identity: &ViewIdentity, expected: bool) {
+    assert_eq!(
+        find_switchbar_item(ui_state, identity).has_activity,
+        expected,
+        "unexpected switchbar activity for {identity:?}"
+    );
+}
+
 fn view_contains(view: &MdiView, substring: &str) -> bool {
     view.lines.iter().any(|line| line.contains(substring))
 }
@@ -289,6 +325,39 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     );
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert!(!ui_state.status_bar.text.is_empty());
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("timeline update from !beta:example")
+    );
+    assert_eq!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| &item.identity)
+            .collect::<Vec<_>>(),
+        vec![
+            &ViewIdentity::Status,
+            &room_identity("!beta:example"),
+            &room_identity("!alpha:example"),
+        ]
+    );
+    assert_eq!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Status", "Beta [e2ee]", "* Alpha"]
+    );
+    assert_active_switchbar_item(&ui_state, &ui_state.mdi.active);
+    assert_switchbar_activity(&ui_state, &ViewIdentity::Status, false);
+    assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), false);
+    assert_switchbar_activity(&ui_state, &room_identity("!alpha:example"), true);
 
     let beta_view = find_view(&ui_state, &room_identity("!beta:example"));
     assert!(beta_view.active);
@@ -354,6 +423,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     assert_eq!(attached.timeline(None)?, vec!["alpha first".to_owned()]);
     let alpha_state = attached.dump_ui_state()?;
     assert_eq!(alpha_state.mdi.active, room_identity("!alpha:example"));
+    assert_active_switchbar_item(&alpha_state, &room_identity("!alpha:example"));
     let alpha_view = find_view(&alpha_state, &room_identity("!alpha:example"));
     assert!(alpha_view.active);
     assert!(view_contains(alpha_view, "alpha first"));
@@ -390,6 +460,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
         replacement_state.mdi.active,
         room_identity("!gamma:example")
     );
+    assert_active_switchbar_item(&replacement_state, &room_identity("!gamma:example"));
     let gamma_view = find_view(&replacement_state, &room_identity("!gamma:example"));
     assert!(gamma_view.active);
     assert!(view_contains(gamma_view, "gamma only"));
@@ -407,6 +478,34 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
             .iter()
             .all(|view| view.identity != room_identity("!beta:example"))
     );
+    assert!(
+        replacement_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!alpha:example"))
+    );
+    assert!(
+        replacement_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!beta:example"))
+    );
+    assert_eq!(
+        replacement_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| &item.identity)
+            .collect::<Vec<_>>(),
+        vec![
+            &ViewIdentity::Status,
+            &room_identity("!gamma:example"),
+            &room_identity("!delta:example"),
+        ]
+    );
+    assert_switchbar_activity(&replacement_state, &room_identity("!delta:example"), true);
     assert_navigation_not_contains(&replacement_state.navigation, "alpha first");
     assert_navigation_not_contains(&replacement_state.navigation, "beta first");
     assert_navigation_not_contains(&replacement_state.navigation, "beta second");
@@ -503,6 +602,12 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     app.wait_for_lifecycle_state("authenticated", Duration::from_secs(5))?;
     let model = app.dump_model()?;
     assert_eq!(model.status, "authenticated");
+    assert!(
+        app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("authenticated")
+    );
     assert!(!serde_json::to_string(&model)?.contains("secret-token"));
     assert!(!session_path.exists());
 
@@ -512,6 +617,12 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     ])?)?;
     app.wait_for_lifecycle_state("authenticated", Duration::from_secs(5))?;
     assert_eq!(app.dump_model()?.status, "restored saved session");
+    assert!(
+        app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("restored saved session")
+    );
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -520,6 +631,12 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     ])?)?;
     app.wait_for_lifecycle_state("syncing", Duration::from_secs(5))?;
     assert_eq!(app.dump_model()?.status, "continuous sync started");
+    assert!(
+        app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("continuous sync started")
+    );
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -536,6 +653,18 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     assert_eq!(logged_out_model.status, "logged out");
     assert!(logged_out_model.rooms.is_empty());
     assert!(logged_out_model.selected_room.is_none());
+    let logged_out_state = app.dump_ui_state()?;
+    assert!(logged_out_state.status_bar.text.contains("logged out"));
+    assert_eq!(
+        logged_out_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| &item.identity)
+            .collect::<Vec<_>>(),
+        vec![&ViewIdentity::Status]
+    );
+    assert_active_switchbar_item(&logged_out_state, &ViewIdentity::Status);
 
     let _ = fs::remove_file(&state_path);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -613,6 +742,24 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         })
     );
     let ui_state = attached.dump_ui_state()?;
+    assert!(ui_state.status_bar.text.contains("error during send text"));
+    assert!(ui_state.status_bar.text.contains("flow-verify-123"));
+    assert!(ui_state.status_bar.text.contains("message send failed"));
+    assert_eq!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| &item.identity)
+            .collect::<Vec<_>>(),
+        vec![
+            &ViewIdentity::Status,
+            &room_identity("!verify:example"),
+            &room_identity("!support:example"),
+        ]
+    );
+    assert_active_switchbar_item(&ui_state, &room_identity("!verify:example"));
+    assert_switchbar_activity(&ui_state, &room_identity("!support:example"), true);
     let verify_view = find_view(&ui_state, &room_identity("!verify:example"));
     assert!(view_contains(verify_view, "verification requested"));
     assert!(view_contains(verify_view, "sas emoji ready"));
@@ -647,16 +794,44 @@ fn automation_driver_can_activate_status_view_and_return_to_room()
     app.select_status_view()?;
     let status_state = app.dump_ui_state()?;
     assert_eq!(status_state.mdi.active, ViewIdentity::Status);
+    assert_active_switchbar_item(&status_state, &ViewIdentity::Status);
     assert_eq!(app.dump_model()?.selected_room, None);
 
     app.select_room("!verify:example")?;
     let room_state = app.dump_ui_state()?;
     assert_eq!(room_state.mdi.active, room_identity("!verify:example"));
+    assert_active_switchbar_item(&room_state, &room_identity("!verify:example"));
     assert_eq!(
         app.dump_model()?.selected_room.as_deref(),
         Some("!verify:example")
     );
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
+
+    app.select_room("!alpha:example")?;
+    let activated_state = app.dump_ui_state()?;
+    assert_active_switchbar_item(&activated_state, &room_identity("!alpha:example"));
+    assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
+
+    let _ = fs::remove_file(&state_path);
     Ok(())
 }
 
