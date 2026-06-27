@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession,
-    SwitchbarItem, TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    RoomMemberState, RoomStateContent, RoomStateEventKind, RoomStateLine, SwitchbarItem,
+    TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -229,6 +230,49 @@ fn replacement_events() -> Vec<Event> {
     ]
 }
 
+fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineEntry {
+    TimelineEntry::Text(TimelineLine {
+        room_id: room_id.to_owned(),
+        sender: sender.to_owned(),
+        timestamp_ms,
+        body: body.to_owned(),
+    })
+}
+
+fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> TimelineEntry {
+    TimelineEntry::RoomState(RoomStateLine {
+        room_id: room_id.to_owned(),
+        sender: sender.to_owned(),
+        timestamp_ms,
+        event_kind: RoomStateEventKind::Topic,
+        state_key: String::new(),
+        content: RoomStateContent::Topic(mmatrix_testkit::RoomTopicState {
+            topic: topic.to_owned(),
+        }),
+    })
+}
+
+fn member_entry(
+    room_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    state_key: &str,
+    membership: &str,
+    displayname: Option<&str>,
+) -> TimelineEntry {
+    TimelineEntry::RoomState(RoomStateLine {
+        room_id: room_id.to_owned(),
+        sender: sender.to_owned(),
+        timestamp_ms,
+        event_kind: RoomStateEventKind::Member,
+        state_key: state_key.to_owned(),
+        content: RoomStateContent::Member(RoomMemberState {
+            membership: membership.to_owned(),
+            displayname: displayname.map(str::to_owned),
+        }),
+    })
+}
+
 fn room_identity(room_id: &str) -> ViewIdentity {
     ViewIdentity::Room {
         room_id: room_id.to_owned(),
@@ -393,6 +437,8 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
         model.last_timeline,
         Some(TimelineLine {
             room_id: "!beta:example".to_owned(),
+            sender: "@bob:example".to_owned(),
+            timestamp_ms: 1_700_000_120_000,
             body: "beta second".to_owned(),
         })
     );
@@ -400,7 +446,20 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     let timeline = app.timeline(Some("!beta:example"))?;
     assert_eq!(
         timeline,
-        vec!["beta first".to_owned(), "beta second".to_owned()]
+        vec![
+            text_entry(
+                "!beta:example",
+                "@bob:example",
+                1_700_000_060_000,
+                "beta first",
+            ),
+            text_entry(
+                "!beta:example",
+                "@bob:example",
+                1_700_000_120_000,
+                "beta second",
+            ),
+        ]
     );
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
@@ -479,7 +538,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 4);
+    assert_eq!(version.protocol_version, 5);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -499,7 +558,15 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     );
 
     attached.select_room("!alpha:example")?;
-    assert_eq!(attached.timeline(None)?, vec!["alpha first".to_owned()]);
+    assert_eq!(
+        attached.timeline(None)?,
+        vec![text_entry(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "alpha first",
+        )]
+    );
     let alpha_state = attached.dump_ui_state()?;
     assert_eq!(alpha_state.mdi.active, room_identity("!alpha:example"));
     assert_active_switchbar_item(&alpha_state, &room_identity("!alpha:example"));
@@ -525,11 +592,21 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
             },
         ]
     );
-    assert_eq!(attached.timeline(None)?, vec!["gamma only".to_owned()]);
+    assert_eq!(
+        attached.timeline(None)?,
+        vec![text_entry(
+            "!gamma:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "gamma only",
+        )]
+    );
     assert_eq!(
         attached.dump_model()?.last_timeline,
         Some(TimelineLine {
             room_id: "!delta:example".to_owned(),
+            sender: "@bob:example".to_owned(),
+            timestamp_ms: 1_700_000_120_000,
             body: "delta second".to_owned(),
         })
     );
@@ -751,6 +828,84 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
 }
 
 #[test]
+fn room_pane_renders_header_metadata_and_system_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("multi-room.json");
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!ops:example"));
+    assert_eq!(
+        model.last_timeline,
+        Some(TimelineLine {
+            room_id: "!random:example".to_owned(),
+            sender: "@dave:example".to_owned(),
+            timestamp_ms: 1_700_000_300_000,
+            body: "random: lunch votes are in".to_owned(),
+        })
+    );
+    assert_eq!(
+        app.timeline(Some("!ops:example"))?,
+        vec![
+            topic_entry(
+                "!ops:example",
+                "@alice:example",
+                1_700_000_000_000,
+                "incident review",
+            ),
+            member_entry(
+                "!ops:example",
+                "@carol:example",
+                1_700_000_060_000,
+                "@carol:example",
+                "join",
+                Some("carol"),
+            ),
+            text_entry(
+                "!ops:example",
+                "@alice:example",
+                1_700_000_120_000,
+                "ops topic: incident review",
+            ),
+            text_entry(
+                "!ops:example",
+                "@bob:example",
+                1_700_000_180_000,
+                "encryption enabled for ops",
+            ),
+            text_entry(
+                "!ops:example",
+                "@carol:example",
+                1_700_000_240_000,
+                "deploy window opens at 18:00 UTC",
+            ),
+        ]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!ops:example"));
+    let ops_view = find_view(&ui_state, &room_identity("!ops:example"));
+    assert!(view_contains(ops_view, "Room: Ops [e2ee] (!ops:example)"));
+    assert!(view_contains(ops_view, "Topic: incident review"));
+    assert!(view_contains(
+        ops_view,
+        "[22:15] @alice:example: ops topic: incident review"
+    ));
+    assert!(view_contains(ops_view, "* [22:13] @alice:example set topic: incident review"));
+    assert!(view_contains(ops_view, "* [22:14] carol joined"));
+
+    Ok(())
+}
+
+#[test]
 fn automation_driver_loads_checked_in_event_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
@@ -791,9 +946,24 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     assert_eq!(
         attached.timeline(None)?,
         vec![
-            "verification requested by @alice:example".to_owned(),
-            "sas emoji ready".to_owned(),
-            "waiting for confirmation".to_owned(),
+            text_entry(
+                "!verify:example",
+                "@alice:example",
+                1_700_000_060_000,
+                "verification requested by @alice:example",
+            ),
+            text_entry(
+                "!verify:example",
+                "@alice:example",
+                1_700_000_120_000,
+                "sas emoji ready",
+            ),
+            text_entry(
+                "!verify:example",
+                "@alice:example",
+                1_700_000_180_000,
+                "waiting for confirmation",
+            ),
         ]
     );
 
@@ -817,6 +987,8 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         model.last_timeline,
         Some(TimelineLine {
             room_id: "!verify:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_180_000,
             body: "waiting for confirmation".to_owned(),
         })
     );

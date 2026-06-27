@@ -65,13 +65,16 @@ use crate::{
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_TIMELINE,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
-        ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse, SelectViewResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
-        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
-        parse_command_request, success_response,
+        ComposeTextResponse, DumpModel, DumpRoomMemberState,
+        DumpRoomStateContent as AutomationRoomStateContent,
+        DumpRoomStateEventKind as AutomationRoomStateEventKind, DumpRoomStateLine,
+        DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, FailureEnvelope,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
+        MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope,
+        SelectRoomResponse, SelectViewResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_from_summary, dump_timeline_line_from_text, dump_verification_from_request,
+        failure_response, parse_command_request, success_response,
     },
 };
 
@@ -2526,7 +2529,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         ParsedCommand::DumpTimeline { id, args } => {
             let room_id = resolve_timeline_room_id(state_ref(hwnd), args.room_id.as_deref())
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
-            let lines = state_ref(hwnd)
+            let entries = state_ref(hwnd)
                 .model
                 .room_views
                 .get(&room_id)
@@ -2534,14 +2537,11 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     room_view
                         .entries
                         .iter()
-                        .filter_map(|entry| match entry {
-                            RoomTimelineEntry::Text { body, .. } => Some(body.clone()),
-                            RoomTimelineEntry::System { .. } => None,
-                        })
+                        .map(|entry| dump_timeline_entry_from_room_entry(&room_id, entry))
                         .collect()
                 })
                 .unwrap_or_default();
-            serialize_success_json(&id, DumpTimelineResponse { room_id, lines })
+            serialize_success_json(&id, DumpTimelineResponse { room_id, entries })
         }
         ParsedCommand::ListRooms { id } => {
             let rooms = state_ref(hwnd)
@@ -3656,6 +3656,55 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
             .map(dump_verification_from_request),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
+    }
+}
+
+fn dump_timeline_entry_from_room_entry(room_id: &str, entry: &RoomTimelineEntry) -> DumpTimelineEntry {
+    match entry {
+        RoomTimelineEntry::Text {
+            sender,
+            timestamp_ms,
+            body,
+        } => DumpTimelineEntry::Text(crate::automation::DumpTimelineLine {
+            room_id: room_id.to_owned(),
+            sender: sender.clone(),
+            timestamp_ms: *timestamp_ms,
+            body: body.clone(),
+        }),
+        RoomTimelineEntry::System {
+            sender,
+            timestamp_ms,
+            kind,
+            state_key,
+            display_name,
+            text,
+        } => DumpTimelineEntry::RoomState(DumpRoomStateLine {
+            room_id: room_id.to_owned(),
+            sender: sender.clone(),
+            timestamp_ms: *timestamp_ms,
+            event_kind: dump_room_state_event_kind(*kind),
+            state_key: state_key.clone(),
+            content: match kind {
+                RoomStateEventKind::Topic => {
+                    AutomationRoomStateContent::Topic(DumpRoomTopicState {
+                        topic: text.clone(),
+                    })
+                }
+                RoomStateEventKind::Member => {
+                    AutomationRoomStateContent::Member(DumpRoomMemberState {
+                        membership: text.clone(),
+                        displayname: display_name.clone(),
+                    })
+                }
+            },
+        }),
+    }
+}
+
+fn dump_room_state_event_kind(kind: RoomStateEventKind) -> AutomationRoomStateEventKind {
+    match kind {
+        RoomStateEventKind::Topic => AutomationRoomStateEventKind::Topic,
+        RoomStateEventKind::Member => AutomationRoomStateEventKind::Member,
     }
 }
 

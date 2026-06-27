@@ -4,8 +4,9 @@ use std::time::Duration;
 
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
-    ProtocolVersion, RestoreSessionArgs, StatusBarState, StoredSession, SwitchbarItem,
-    SwitchbarState, TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    ProtocolVersion, RestoreSessionArgs, RoomMemberState, RoomStateContent, RoomStateEventKind,
+    RoomStateLine, RoomTopicState, StatusBarState, StoredSession, SwitchbarItem, SwitchbarState,
+    TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -72,6 +73,8 @@ fn data_models_round_trip_through_json() {
         }],
         last_timeline: Some(TimelineLine {
             room_id: "!room:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
             body: "hello".to_owned(),
         }),
         last_verification: Some(Verification {
@@ -85,7 +88,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 4,
+        protocol_version: 5,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -212,6 +215,99 @@ fn data_models_round_trip_through_json() {
 }
 
 #[test]
+fn timeline_entries_round_trip_through_json() {
+    let text = TimelineEntry::Text(TimelineLine {
+        room_id: "!room:example".to_owned(),
+        sender: "@alice:example".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        body: "hello".to_owned(),
+    });
+    let topic = TimelineEntry::RoomState(RoomStateLine {
+        room_id: "!room:example".to_owned(),
+        sender: "@alice:example".to_owned(),
+        timestamp_ms: 1_700_000_060_000,
+        event_kind: RoomStateEventKind::Topic,
+        state_key: String::new(),
+        content: RoomStateContent::Topic(RoomTopicState {
+            topic: "incident review".to_owned(),
+        }),
+    });
+    let member = TimelineEntry::RoomState(RoomStateLine {
+        room_id: "!room:example".to_owned(),
+        sender: "@carol:example".to_owned(),
+        timestamp_ms: 1_700_000_120_000,
+        event_kind: RoomStateEventKind::Member,
+        state_key: "@carol:example".to_owned(),
+        content: RoomStateContent::Member(RoomMemberState {
+            membership: "join".to_owned(),
+            displayname: Some("carol".to_owned()),
+        }),
+    });
+
+    assert_eq!(
+        serde_json::to_value(&text).expect("serialize text timeline entry"),
+        serde_json::json!({
+            "text": {
+                "room_id": "!room:example",
+                "sender": "@alice:example",
+                "timestamp_ms": 1700000000000u64,
+                "body": "hello"
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<TimelineEntry>(serde_json::to_value(&text).unwrap())
+            .expect("deserialize text timeline entry"),
+        text
+    );
+    assert_eq!(
+        serde_json::to_value(&topic).expect("serialize topic room-state entry"),
+        serde_json::json!({
+            "room_state": {
+                "room_id": "!room:example",
+                "sender": "@alice:example",
+                "timestamp_ms": 1700000060000u64,
+                "event_kind": "topic",
+                "state_key": "",
+                "content": {
+                    "topic": {
+                        "topic": "incident review"
+                    }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<TimelineEntry>(serde_json::to_value(&topic).unwrap())
+            .expect("deserialize topic room-state entry"),
+        topic
+    );
+    assert_eq!(
+        serde_json::to_value(&member).expect("serialize member room-state entry"),
+        serde_json::json!({
+            "room_state": {
+                "room_id": "!room:example",
+                "sender": "@carol:example",
+                "timestamp_ms": 1700000120000u64,
+                "event_kind": "member",
+                "state_key": "@carol:example",
+                "content": {
+                    "member": {
+                        "membership": "join",
+                        "displayname": "carol"
+                    }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<TimelineEntry>(serde_json::to_value(&member).unwrap())
+            .expect("deserialize member room-state entry"),
+        member
+    );
+}
+
+#[test]
 fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<Model>(
@@ -245,6 +341,51 @@ fn data_models_reject_unknown_fields() {
             "device_id":"DEVICE",
             "access_token":"secret-token",
             "refresh_token":null,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<TimelineLine>(
+            r#"{
+            "room_id":"!room:example",
+            "sender":"@alice:example",
+            "timestamp_ms":1700000000000,
+            "body":"hello",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomStateLine>(
+            r#"{
+            "room_id":"!room:example",
+            "sender":"@alice:example",
+            "timestamp_ms":1700000060000,
+            "event_kind":"topic",
+            "state_key":"",
+            "content":{"topic":{"topic":"incident review"}},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomTopicState>(
+            r#"{
+            "topic":"incident review",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMemberState>(
+            r#"{
+            "membership":"join",
+            "displayname":"carol",
             "unexpected":true
         }"#
         )

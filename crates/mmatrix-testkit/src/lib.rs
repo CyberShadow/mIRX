@@ -131,7 +131,82 @@ pub struct Room {
 #[serde(deny_unknown_fields)]
 pub struct TimelineLine {
     pub room_id: String,
+    pub sender: String,
+    pub timestamp_ms: u64,
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineEntry {
+    Text(TimelineLine),
+    RoomState(RoomStateLine),
+}
+
+#[cfg(windows)]
+impl TimelineEntry {
+    fn contains(&self, substr: &str) -> bool {
+        match self {
+            Self::Text(line) => {
+                line.room_id.contains(substr)
+                    || line.sender.contains(substr)
+                    || line.body.contains(substr)
+            }
+            Self::RoomState(line) => {
+                line.room_id.contains(substr)
+                    || line.sender.contains(substr)
+                    || line.state_key.contains(substr)
+                    || match &line.content {
+                        RoomStateContent::Topic(topic) => topic.topic.contains(substr),
+                        RoomStateContent::Member(member) => {
+                            member.membership.contains(substr)
+                                || member
+                                    .displayname
+                                    .as_deref()
+                                    .is_some_and(|displayname| displayname.contains(substr))
+                        }
+                    }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomStateLine {
+    pub room_id: String,
+    pub sender: String,
+    pub timestamp_ms: u64,
+    pub event_kind: RoomStateEventKind,
+    pub state_key: String,
+    pub content: RoomStateContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomStateEventKind {
+    Topic,
+    Member,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomStateContent {
+    Topic(RoomTopicState),
+    Member(RoomMemberState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomTopicState {
+    pub topic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomMemberState {
+    pub membership: String,
+    pub displayname: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -413,7 +488,7 @@ impl MmatrixApp {
         self.inner.dump_ui_state()
     }
 
-    pub fn timeline(&self, room_id: Option<&str>) -> Result<Vec<String>, TestkitError> {
+    pub fn timeline(&self, room_id: Option<&str>) -> Result<Vec<TimelineEntry>, TestkitError> {
         self.inner.timeline(room_id)
     }
 
@@ -658,7 +733,7 @@ struct WaitIdleResponse {
 #[serde(deny_unknown_fields)]
 struct DumpTimelineResponse {
     room_id: String,
-    lines: Vec<String>,
+    entries: Vec<TimelineEntry>,
 }
 
 #[cfg(windows)]
@@ -767,7 +842,10 @@ mod imp {
             ))
         }
 
-        pub(crate) fn timeline(&self, _room_id: Option<&str>) -> Result<Vec<String>, TestkitError> {
+        pub(crate) fn timeline(
+            &self,
+            _room_id: Option<&str>,
+        ) -> Result<Vec<TimelineEntry>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1078,10 +1156,13 @@ mod imp {
             self.send_command(COMMAND_ID_DUMP_UI_STATE, EmptyArgs {})
         }
 
-        pub(crate) fn timeline(&self, room_id: Option<&str>) -> Result<Vec<String>, TestkitError> {
+        pub(crate) fn timeline(
+            &self,
+            room_id: Option<&str>,
+        ) -> Result<Vec<TimelineEntry>, TestkitError> {
             let response: DumpTimelineResponse =
                 self.send_command(COMMAND_ID_DUMP_TIMELINE, DumpTimelineArgs { room_id })?;
-            Ok(response.lines)
+            Ok(response.entries)
         }
 
         pub(crate) fn list_rooms(&self) -> Result<Vec<Room>, TestkitError> {
@@ -1255,8 +1336,8 @@ mod imp {
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 self.wait_idle(remaining)?;
-                let lines = self.timeline(room_id)?;
-                if lines.iter().any(|line| line.contains(substr)) {
+                let entries = self.timeline(room_id)?;
+                if entries.iter().any(|entry| entry.contains(substr)) {
                     return Ok(());
                 }
                 if Instant::now() >= deadline {

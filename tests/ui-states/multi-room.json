@@ -36,6 +36,35 @@
     }
   },
   {
+    "RoomState": {
+      "room_id": "!ops:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000000000,
+      "event_kind": "Topic",
+      "state_key": "",
+      "content": {
+        "Topic": {
+          "topic": "incident review"
+        }
+      }
+    }
+  },
+  {
+    "RoomState": {
+      "room_id": "!ops:example",
+      "sender": "@carol:example",
+      "timestamp_ms": 1700000060000,
+      "event_kind": "Member",
+      "state_key": "@carol:example",
+      "content": {
+        "Member": {
+          "membership": "join",
+          "displayname": "carol"
+        }
+      }
+    }
+  },
+  {
     "TimelineText": {
       "room_id": "!ops:example",
       "sender": "@alice:example",

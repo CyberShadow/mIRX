@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 4;
+pub(crate) const PROTOCOL_VERSION: u32 = 5;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -304,11 +304,13 @@ pub(crate) fn failure_response(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PongResponse {
     pub(crate) pong: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct GetVersionResponse {
     pub(crate) protocol_version: u32,
     pub(crate) app_version: String,
@@ -324,6 +326,7 @@ impl GetVersionResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WaitIdleResponse {
     pub(crate) idle: bool,
     pub(crate) event_generation: u64,
@@ -332,22 +335,26 @@ pub(crate) struct WaitIdleResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DumpTimelineResponse {
     pub(crate) room_id: String,
-    pub(crate) lines: Vec<String>,
+    pub(crate) entries: Vec<DumpTimelineEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ListRoomsResponse {
     pub(crate) rooms: Vec<DumpRoom>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SelectRoomResponse {
     pub(crate) selected_room: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SendTextResponse {
     pub(crate) accepted: bool,
     pub(crate) room_id: String,
@@ -366,6 +373,7 @@ pub(crate) struct AcceptedResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LoadEventsResponse {
     pub(crate) loaded: bool,
     pub(crate) rooms: usize,
@@ -570,7 +578,54 @@ pub(crate) struct DumpRoom {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpTimelineLine {
     pub(crate) room_id: String,
+    pub(crate) sender: String,
+    pub(crate) timestamp_ms: u64,
     pub(crate) body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpTimelineEntry {
+    Text(DumpTimelineLine),
+    RoomState(DumpRoomStateLine),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomStateLine {
+    pub(crate) room_id: String,
+    pub(crate) sender: String,
+    pub(crate) timestamp_ms: u64,
+    pub(crate) event_kind: DumpRoomStateEventKind,
+    pub(crate) state_key: String,
+    pub(crate) content: DumpRoomStateContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpRoomStateEventKind {
+    Topic,
+    Member,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpRoomStateContent {
+    Topic(DumpRoomTopicState),
+    Member(DumpRoomMemberState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomTopicState {
+    pub(crate) topic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomMemberState {
+    pub(crate) membership: String,
+    pub(crate) displayname: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -617,6 +672,8 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
 pub(crate) fn dump_timeline_line_from_text(timeline: &TimelineText) -> DumpTimelineLine {
     DumpTimelineLine {
         room_id: timeline.room_id.clone(),
+        sender: timeline.sender.clone(),
+        timestamp_ms: timeline.timestamp_ms,
         body: timeline.body.clone(),
     }
 }
@@ -792,13 +849,15 @@ mod tests {
         COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
         COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
         COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
-        DumpModel, DumpTimelineArgs, DumpTimelineResponse, GetVersionResponse, LifecycleState,
-        ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NoArgs,
-        ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendComposeKeyArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        DumpModel, DumpRoomStateContent, DumpRoomStateEventKind, DumpRoomStateLine,
+        DumpRoomTopicState, DumpTimelineArgs, DumpTimelineEntry, DumpTimelineLine,
+        DumpTimelineResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NoArgs, ParsedCommand,
+        PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectRoomArgs, SelectRoomResponse,
+        SelectViewArgs, SelectViewResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
+        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiState,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1417,7 +1476,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":4,
+                    "protocol_version":5,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1481,14 +1540,57 @@ mod tests {
                 "timeline",
                 DumpTimelineResponse {
                     room_id: "!room:example".to_owned(),
-                    lines: vec!["a".to_owned(), "b".to_owned()],
+                    entries: vec![
+                        DumpTimelineEntry::Text(DumpTimelineLine {
+                            room_id: "!room:example".to_owned(),
+                            sender: "@alice:example".to_owned(),
+                            timestamp_ms: 1_700_000_000_000,
+                            body: "hello".to_owned(),
+                        }),
+                        DumpTimelineEntry::RoomState(DumpRoomStateLine {
+                            room_id: "!room:example".to_owned(),
+                            sender: "@alice:example".to_owned(),
+                            timestamp_ms: 1_700_000_060_000,
+                            event_kind: DumpRoomStateEventKind::Topic,
+                            state_key: String::new(),
+                            content: DumpRoomStateContent::Topic(DumpRoomTopicState {
+                                topic: "incident review".to_owned(),
+                            }),
+                        }),
+                    ],
                 },
             ))
             .unwrap(),
             json!({
                 "id":"timeline",
                 "ok":true,
-                "json":{"room_id":"!room:example","lines":["a","b"]}
+                "json":{
+                    "room_id":"!room:example",
+                    "entries":[
+                        {
+                            "text":{
+                                "room_id":"!room:example",
+                                "sender":"@alice:example",
+                                "timestamp_ms":1700000000000u64,
+                                "body":"hello"
+                            }
+                        },
+                        {
+                            "room_state":{
+                                "room_id":"!room:example",
+                                "sender":"@alice:example",
+                                "timestamp_ms":1700000060000u64,
+                                "event_kind":"topic",
+                                "state_key":"",
+                                "content":{
+                                    "topic":{
+                                        "topic":"incident review"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                }
             })
         );
         assert_eq!(
@@ -1739,6 +1841,8 @@ mod tests {
             }),
             super::DumpTimelineLine {
                 room_id: "!room:example".to_owned(),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
                 body: "hello".to_owned(),
             }
         );
