@@ -740,6 +740,13 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
         }
         other => panic!("expected send_text unknown_room for space, got {other:?}"),
     }
+    match app.timeline(Some("!space:example")) {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "unknown_room");
+            assert_eq!(message, "unknown room id: !space:example");
+        }
+        other => panic!("expected timeline unknown_room for space, got {other:?}"),
+    }
 
     let _ = fs::remove_file(&state_path);
     Ok(())

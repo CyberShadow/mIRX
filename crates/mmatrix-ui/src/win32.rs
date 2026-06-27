@@ -3784,7 +3784,7 @@ fn resolve_timeline_room_id(
             .ok_or_else(|| "no room selected".to_owned())?,
     };
 
-    if room_exists(&state.model.rooms, &room_id) {
+    if actionable_room_by_id(&state.model.rooms, &room_id).is_some() {
         Ok(room_id)
     } else {
         Err(format!("unknown room id: {room_id}"))
@@ -3801,10 +3801,6 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
     }
-}
-
-fn room_exists(rooms: &[RoomSummary], room_id: &str) -> bool {
-    rooms.iter().any(|room| room.room_id == room_id)
 }
 
 unsafe fn read_window_text(hwnd: HWND) -> String {
@@ -4649,6 +4645,25 @@ mod tests {
             Err("no room selected".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
+    }
+
+    #[test]
+    fn resolve_timeline_room_id_rejects_spaces() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            space("!space:example", "Space"),
+            room("!room:example", "Room", false),
+        ];
+        state.model.selected_room = Some("!room:example".to_owned());
+
+        assert_eq!(
+            resolve_timeline_room_id(&state, Some("!space:example")),
+            Err("unknown room id: !space:example".to_owned())
+        );
+        assert_eq!(
+            resolve_timeline_room_id(&state, Some("!room:example")),
+            Ok("!room:example".to_owned())
+        );
     }
 
     #[test]
