@@ -2036,6 +2036,7 @@ dependencies = [
  "blake3",
  "matrix-sdk",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

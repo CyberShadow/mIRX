@@ -30,7 +30,7 @@ pub struct RestoreSessionRequest {
     pub session: StoredSession,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StoredSession {
     pub user_id: String,
     pub device_id: String,
@@ -86,8 +86,9 @@ pub enum Operation {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
-    LoggedIn,
+    LoggedIn { session: StoredSession },
     RestoredSession,
+    SyncStarted,
     SyncedRooms(Vec<RoomSummary>),
     TimelineText(TimelineText),
     VerificationRequest(VerificationRequest),

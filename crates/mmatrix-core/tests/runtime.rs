@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use mmatrix_core::{Command, CoreConfig, Event, LoginRequest, Operation, SendTextRequest, start};
+use mmatrix_core::{
+    Command, CoreConfig, Event, LoginRequest, Operation, SendTextRequest, StoredSession, start,
+};
 use tempfile::TempDir;
 
 fn test_config() -> (TempDir, CoreConfig) {
@@ -168,4 +170,80 @@ fn login_store_initialization_failure_emits_typed_error_event() {
         Event::Stopped
     );
     handle.join().expect("join worker");
+}
+
+#[test]
+fn stored_session_serializes_and_deserializes_with_existing_fields() {
+    let session = StoredSession {
+        user_id: "@user:example.org".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "access-token".to_owned(),
+        refresh_token: Some("refresh-token".to_owned()),
+    };
+
+    let json = serde_json::to_string(&session).expect("serialize stored session");
+    assert_eq!(
+        json,
+        r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"}"#
+    );
+
+    let restored: StoredSession =
+        serde_json::from_str(&json).expect("deserialize stored session");
+    assert_eq!(restored, session);
+}
+
+#[test]
+fn stored_session_serializes_and_deserializes_without_refresh_token() {
+    let session = StoredSession {
+        user_id: "@user:example.org".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "access-token".to_owned(),
+        refresh_token: None,
+    };
+
+    let json = serde_json::to_string(&session).expect("serialize stored session");
+    assert_eq!(
+        json,
+        r#"{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":null}"#
+    );
+
+    let restored: StoredSession =
+        serde_json::from_str(&json).expect("deserialize stored session");
+    assert_eq!(restored, session);
+}
+
+#[test]
+fn logged_in_event_serializes_and_deserializes_session_payload() {
+    let session = StoredSession {
+        user_id: "@user:example.org".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "access-token".to_owned(),
+        refresh_token: Some("refresh-token".to_owned()),
+    };
+    let event = Event::LoggedIn {
+        session: session.clone(),
+    };
+
+    let json = serde_json::to_string(&event).expect("serialize logged-in event");
+    assert_eq!(
+        json,
+        r#"{"LoggedIn":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"}}}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize logged-in event");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
+    let sync_started = serde_json::to_string(&Event::SyncStarted).expect("serialize sync started");
+    assert_eq!(sync_started, r#""SyncStarted""#);
+
+    let restored: Event = serde_json::from_str(&sync_started).expect("deserialize sync started");
+    assert_eq!(restored, Event::SyncStarted);
+
+    assert!(
+        serde_json::from_str::<Event>(r#""LoggedIn""#).is_err(),
+        "logged-in event must include a session payload"
+    );
 }

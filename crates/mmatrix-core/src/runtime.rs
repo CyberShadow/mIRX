@@ -205,10 +205,13 @@ async fn handle_login(
 
     matrix::register_event_handlers(&client, event_tx.clone());
 
-    if let Err(err) = matrix::login(&client, &request).await {
-        emit_matrix_error(event_tx, Operation::Login, err);
-        return false;
-    }
+    let session = match matrix::login(&client, &request).await {
+        Ok(session) => session,
+        Err(err) => {
+            emit_matrix_error(event_tx, Operation::Login, err);
+            return false;
+        }
+    };
 
     let rooms = matrix::initial_room_sync(&client).await;
 
@@ -216,7 +219,7 @@ async fn handle_login(
         client,
         sync_task: None,
     };
-    emit_event(event_tx, Event::LoggedIn);
+    emit_event(event_tx, Event::LoggedIn { session });
 
     match rooms {
         Ok(rooms) => emit_event(event_tx, Event::SyncedRooms(rooms)),
@@ -295,6 +298,7 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
     }
 
     *sync_task = Some(matrix::start_sync_task(client.clone(), event_tx.clone()));
+    emit_event(event_tx, Event::SyncStarted);
     false
 }
 

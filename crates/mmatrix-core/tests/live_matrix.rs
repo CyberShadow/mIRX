@@ -59,7 +59,18 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             .recv_timeout(Duration::from_secs(2))
             .expect("login event")
         {
-            Event::LoggedIn => saw_logged_in = true,
+            Event::LoggedIn { session } => {
+                assert!(!session.user_id.is_empty(), "expected non-empty session user id");
+                assert!(
+                    !session.device_id.is_empty(),
+                    "expected non-empty session device id"
+                );
+                assert!(
+                    !session.access_token.is_empty(),
+                    "expected non-empty session access token"
+                );
+                saw_logged_in = true;
+            }
             Event::SyncedRooms(_) => saw_rooms = true,
             Event::TimelineText(_) => {}
             Event::Error(err) => panic!(
@@ -77,6 +88,29 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
         .command_sender()
         .send(Command::StartSync)
         .expect("send start sync");
+
+    let sync_started_deadline = Instant::now() + Duration::from_secs(30);
+    let mut saw_sync_started = false;
+    while Instant::now() < sync_started_deadline {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("sync start event")
+        {
+            Event::SyncStarted => {
+                saw_sync_started = true;
+                break;
+            }
+            Event::TimelineText(_) => {}
+            Event::Error(err) => panic!(
+                "live start sync failed during {:?}: {}",
+                err.operation, err.message
+            ),
+            other => panic!("unexpected sync start event: {other:?}"),
+        }
+    }
+
+    assert!(saw_sync_started, "timed out waiting for sync started event");
 
     if let Some(room_id) = room_id {
         let nonce = SystemTime::now()

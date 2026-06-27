@@ -92,8 +92,11 @@ pub(crate) async fn restore_session(
         .map_err(|err| MatrixCoreError::new(format!("failed to restore Matrix session: {err}")))
 }
 
-pub(crate) async fn login(client: &Client, request: &LoginRequest) -> Result<(), MatrixCoreError> {
-    client
+pub(crate) async fn login(
+    client: &Client,
+    request: &LoginRequest,
+) -> Result<StoredSession, MatrixCoreError> {
+    let response = client
         .matrix_auth()
         .login_username(&request.username, &request.password)
         .initial_device_display_name(&request.device_display_name)
@@ -102,7 +105,7 @@ pub(crate) async fn login(client: &Client, request: &LoginRequest) -> Result<(),
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to log in to Matrix: {err}")))?;
 
-    Ok(())
+    Ok(stored_session_from_matrix_session(MatrixSession::from(&response)))
 }
 
 pub(crate) async fn initial_room_sync(
@@ -200,4 +203,13 @@ pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
         .logout()
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to log out of Matrix: {err}")))
+}
+
+fn stored_session_from_matrix_session(session: MatrixSession) -> StoredSession {
+    StoredSession {
+        user_id: session.meta.user_id.to_string(),
+        device_id: session.meta.device_id.to_string(),
+        access_token: session.tokens.access_token,
+        refresh_token: session.tokens.refresh_token,
+    }
 }
