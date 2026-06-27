@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
 use mmatrix_testkit::{
-    LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession, SwitchbarItem,
-    TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession,
+    SwitchbarItem, TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
 #[allow(dead_code)]
@@ -400,7 +400,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 3);
+    assert_eq!(version.protocol_version, 4);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -832,6 +832,86 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
 
     let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_can_read_write_compose_text_and_send_navigation_keys()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!beta:example")?;
+    app.set_compose_text("draft line")?;
+    assert_eq!(app.compose_text()?, "draft line");
+
+    app.set_compose_text("")?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("draft before arrows")?;
+    let before = app.dump_ui_state()?;
+    let beta_identity = room_identity("!beta:example");
+    app.send_compose_key(ComposeKey::Up)?;
+    app.send_compose_key(ComposeKey::Down)?;
+    assert_eq!(app.compose_text()?, "draft before arrows");
+    let after = app.dump_ui_state()?;
+
+    assert_eq!(after.mdi.active, before.mdi.active);
+    assert_eq!(
+        find_view(&after, &beta_identity),
+        find_view(&before, &beta_identity)
+    );
+    assert_eq!(after.switchbar, before.switchbar);
+    assert_eq!(after.status_bar, before.status_bar);
+    assert_eq!(after.mdi.active, beta_identity);
+    assert_active_switchbar_item(&after, &beta_identity);
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_return_compose_key_submits_through_edit_control()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.set_compose_text("queued by return key")?;
+    assert_eq!(app.compose_text()?, "queued by return key");
+
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+    assert_eq!(
+        app.dump_model()?.last_error,
+        Some(UiError {
+            operation: "send_text".to_owned(),
+            message: "send text requires an authenticated session".to_owned(),
+        })
+    );
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

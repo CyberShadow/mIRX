@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 3;
+pub(crate) const PROTOCOL_VERSION: u32 = 4;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -24,6 +24,9 @@ pub(crate) const COMMAND_ID_RESTORE_SESSION: u32 = 13;
 pub(crate) const COMMAND_ID_RESTORE_SAVED_SESSION: u32 = 14;
 pub(crate) const COMMAND_ID_START_SYNC: u32 = 15;
 pub(crate) const COMMAND_ID_LOGOUT: u32 = 16;
+pub(crate) const COMMAND_ID_DUMP_COMPOSE_TEXT: u32 = 17;
+pub(crate) const COMMAND_ID_SET_COMPOSE_TEXT: u32 = 18;
+pub(crate) const COMMAND_ID_SEND_COMPOSE_KEY: u32 = 19;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -43,6 +46,9 @@ pub(crate) enum CommandKind {
     RestoreSavedSession,
     StartSync,
     Logout,
+    DumpComposeText,
+    SetComposeText,
+    SendComposeKey,
 }
 
 impl CommandKind {
@@ -64,6 +70,9 @@ impl CommandKind {
             COMMAND_ID_RESTORE_SAVED_SESSION => Some(Self::RestoreSavedSession),
             COMMAND_ID_START_SYNC => Some(Self::StartSync),
             COMMAND_ID_LOGOUT => Some(Self::Logout),
+            COMMAND_ID_DUMP_COMPOSE_TEXT => Some(Self::DumpComposeText),
+            COMMAND_ID_SET_COMPOSE_TEXT => Some(Self::SetComposeText),
+            COMMAND_ID_SEND_COMPOSE_KEY => Some(Self::SendComposeKey),
             _ => None,
         }
     }
@@ -127,6 +136,17 @@ pub(crate) enum ParsedCommand {
     Logout {
         id: String,
     },
+    DumpComposeText {
+        id: String,
+    },
+    SetComposeText {
+        id: String,
+        args: SetComposeTextArgs,
+    },
+    SendComposeKey {
+        id: String,
+        args: SendComposeKeyArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -148,6 +168,9 @@ impl ParsedCommand {
             Self::RestoreSavedSession { .. } => CommandKind::RestoreSavedSession,
             Self::StartSync { .. } => CommandKind::StartSync,
             Self::Logout { .. } => CommandKind::Logout,
+            Self::DumpComposeText { .. } => CommandKind::DumpComposeText,
+            Self::SetComposeText { .. } => CommandKind::SetComposeText,
+            Self::SendComposeKey { .. } => CommandKind::SendComposeKey,
         }
     }
 }
@@ -187,6 +210,18 @@ pub(crate) struct SelectRoomArgs {
 pub(crate) struct SendTextArgs {
     pub(crate) room_id: Option<String>,
     pub(crate) body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetComposeTextArgs {
+    pub(crate) text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SendComposeKeyArgs {
+    pub(crate) key: ComposeKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -320,6 +355,12 @@ pub(crate) struct SendTextResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ComposeTextResponse {
+    pub(crate) text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AcceptedResponse {
     pub(crate) accepted: bool,
 }
@@ -419,6 +460,49 @@ impl<'de> Deserialize<'de> for ViewIdentity {
                 })
                 .map_err(serde::de::Error::custom),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ComposeKey {
+    Return,
+    Up,
+    Down,
+}
+
+impl<'de> Deserialize<'de> for ComposeKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Kind {
+            Return,
+            Up,
+            Down,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ComposeKeyPayload {
+            #[serde(rename = "kind")]
+            kind: Kind,
+        }
+
+        let value = Value::deserialize(deserializer)?;
+        if value.get("kind").is_none() {
+            return Err(serde::de::Error::missing_field("kind"));
+        }
+
+        serde_json::from_value::<ComposeKeyPayload>(value)
+            .map(|payload| match payload.kind {
+                Kind::Return => Self::Return,
+                Kind::Up => Self::Up,
+                Kind::Down => Self::Down,
+            })
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -627,6 +711,18 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::Logout { id: envelope.id })
         }
+        CommandKind::DumpComposeText => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpComposeText { id: envelope.id })
+        }
+        CommandKind::SetComposeText => Ok(ParsedCommand::SetComposeText {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SetComposeTextArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::SendComposeKey => Ok(ParsedCommand::SendComposeKey {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SendComposeKeyArgs>(&envelope.id, envelope.args)?,
+        }),
     }
 }
 
@@ -689,17 +785,20 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AcceptedResponse, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_TIMELINE,
-        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING,
-        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_ROOM,
-        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE,
-        CommandKind, DumpModel, DumpTimelineArgs, DumpTimelineResponse, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
-        NavigationNode, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
-        SelectRoomArgs, SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendTextArgs,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
-        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
+        AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL,
+        COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION,
+        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
+        COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RESTORE_SAVED_SESSION,
+        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
+        DumpModel, DumpTimelineArgs, DumpTimelineResponse, GetVersionResponse, LifecycleState,
+        ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NoArgs,
+        ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -778,10 +877,22 @@ mod tests {
             Some(CommandKind::Logout)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_DUMP_COMPOSE_TEXT),
+            Some(CommandKind::DumpComposeText)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SET_COMPOSE_TEXT),
+            Some(CommandKind::SetComposeText)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SEND_COMPOSE_KEY),
+            Some(CommandKind::SendComposeKey)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
-        assert_eq!(CommandKind::from_id(COMMAND_ID_LOGOUT + 1), None);
+        assert_eq!(CommandKind::from_id(COMMAND_ID_SEND_COMPOSE_KEY + 1), None);
     }
 
     #[test]
@@ -972,6 +1083,51 @@ mod tests {
                 id: "logout".to_owned(),
             }
         );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_DUMP_COMPOSE_TEXT,
+                br#"{"id":"compose-text","args":{}}"#
+            )
+            .unwrap(),
+            ParsedCommand::DumpComposeText {
+                id: "compose-text".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SET_COMPOSE_TEXT,
+                br#"{"id":"set-compose","args":{"text":"draft"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SetComposeText {
+                id: "set-compose".to_owned(),
+                args: SetComposeTextArgs {
+                    text: "draft".to_owned(),
+                },
+            }
+        );
+        for (request_json, expected_key) in [
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"return"}}}"#.as_slice(),
+                ComposeKey::Return,
+            ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"up"}}}"#.as_slice(),
+                ComposeKey::Up,
+            ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"down"}}}"#.as_slice(),
+                ComposeKey::Down,
+            ),
+        ] {
+            assert_eq!(
+                parse_command_request(COMMAND_ID_SEND_COMPOSE_KEY, request_json).unwrap(),
+                ParsedCommand::SendComposeKey {
+                    id: "compose-key".to_owned(),
+                    args: SendComposeKeyArgs { key: expected_key },
+                }
+            );
+        }
     }
 
     #[test]
@@ -1119,6 +1275,43 @@ mod tests {
     }
 
     #[test]
+    fn send_compose_key_rejects_unknown_and_malformed_payloads() {
+        for request in [
+            br#"{"id":"compose-key","args":{"key":{"kind":"left"}}}"#.as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"unexpected":true}}}"#.as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"kind":"return","unexpected":true}}}"#
+                .as_slice(),
+            br#"{"id":"compose-key","args":{"key":{"kind":"return"},"unexpected":true}}"#
+                .as_slice(),
+        ] {
+            let error = parse_command_request(COMMAND_ID_SEND_COMPOSE_KEY, request).unwrap_err();
+            let value = serde_json::to_value(error).unwrap();
+            assert_eq!(value["id"], json!("compose-key"));
+            assert_eq!(value["ok"], json!(false));
+            assert_eq!(value["err"]["code"], json!("invalid_args"));
+        }
+    }
+
+    #[test]
+    fn set_compose_text_rejects_unknown_fields() {
+        let error = parse_command_request(
+            COMMAND_ID_SET_COMPOSE_TEXT,
+            br#"{"id":"set-compose","args":{"text":"draft","unexpected":true}}"#,
+        )
+        .unwrap_err();
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["id"], json!("set-compose"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert!(
+            value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+    }
+
+    #[test]
     fn login_defaults_device_display_name_when_omitted() {
         assert_eq!(
             parse_command_request(
@@ -1201,6 +1394,7 @@ mod tests {
             (COMMAND_ID_RESTORE_SAVED_SESSION, "restore-saved"),
             (COMMAND_ID_START_SYNC, "start-sync"),
             (COMMAND_ID_LOGOUT, "logout"),
+            (COMMAND_ID_DUMP_COMPOSE_TEXT, "compose-text"),
         ] {
             let request = format!(r#"{{"id":"{request_id}","args":{{"unexpected":true}}}}"#);
             let error = parse_command_request(command_id, request.as_bytes())
@@ -1221,7 +1415,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":3,
+                    "protocol_version":4,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1340,6 +1534,20 @@ mod tests {
                 "id":"send",
                 "ok":true,
                 "json":{"accepted":true,"room_id":"!room:example"}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(success_response(
+                "compose-text",
+                ComposeTextResponse {
+                    text: "draft".to_owned(),
+                },
+            ))
+            .unwrap(),
+            json!({
+                "id":"compose-text",
+                "ok":true,
+                "json":{"text":"draft"}
             })
         );
         assert_eq!(

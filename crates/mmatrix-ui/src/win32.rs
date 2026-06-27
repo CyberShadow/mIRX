@@ -63,12 +63,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::{
     AppCommand, HELP, RunOptions,
     automation::{
-        AcceptedResponse, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE,
-        COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
-        SelectViewResponse, SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
+        AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_TIMELINE,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
+        ComposeTextResponse, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
+        ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse, SelectViewResponse,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
         dump_timeline_line_from_text, dump_verification_from_request, failure_response,
         parse_command_request, success_response,
     },
@@ -120,6 +121,8 @@ const PROTECTED_STORE_PASSPHRASE_MAGIC: &[u8] = b"mmatrix-ui-store-secret:v1\0";
 const STORE_PASSPHRASE_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/store-passphrase/v1";
 const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mmatrix-ui";
 const VK_RETURN_KEY: WPARAM = 13;
+const VK_UP_KEY: WPARAM = 38;
+const VK_DOWN_KEY: WPARAM = 40;
 
 #[derive(Default)]
 struct Controls {
@@ -2354,7 +2357,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         }
         ParsedCommand::SendText { id, args } => {
             let body = args.body;
-            set_edit_text(state_ref(hwnd).controls.edit, &body);
+            let edit = compose_edit(hwnd)
+                .map_err(|message| failure_response(Some(id.clone()), "send_failed", message))?;
+            set_edit_text(edit, &body);
             let room_id = submit_compose_from_control(hwnd, args.room_id.as_deref())
                 .map_err(|message| failure_response(Some(id.clone()), "send_failed", message))?;
             serialize_success_json(
@@ -2364,6 +2369,24 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     room_id,
                 },
             )
+        }
+        ParsedCommand::DumpComposeText { id } => {
+            let text = dump_compose_text(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "compose_unavailable", message)
+            })?;
+            serialize_success_json(&id, ComposeTextResponse { text })
+        }
+        ParsedCommand::SetComposeText { id, args } => {
+            set_compose_text(hwnd, &args.text).map_err(|message| {
+                failure_response(Some(id.clone()), "compose_unavailable", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::SendComposeKey { id, args } => {
+            send_compose_key(hwnd, args.key).map_err(|message| {
+                failure_response(Some(id.clone()), "compose_key_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::LoadSyntheticState { id, args } => {
             let (rooms, timeline_events) =
@@ -2439,7 +2462,10 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::RestoreSession { id, .. }
         | ParsedCommand::RestoreSavedSession { id }
         | ParsedCommand::StartSync { id }
-        | ParsedCommand::Logout { id } => id,
+        | ParsedCommand::Logout { id }
+        | ParsedCommand::DumpComposeText { id }
+        | ParsedCommand::SetComposeText { id, .. }
+        | ParsedCommand::SendComposeKey { id, .. } => id,
     }
 }
 
@@ -2880,6 +2906,17 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
         ));
     }
 
+    let compose_text = send_automation_request(
+        hwnd,
+        COMMAND_ID_DUMP_COMPOSE_TEXT,
+        json!({"id":"compose-text","args":{}}),
+    )?;
+    if compose_text["ok"] != json!(true) || compose_text["json"] != json!({"text": expected_text}) {
+        return Err(format!(
+            "self-test failed: unexpected compose-text response {compose_text}"
+        ));
+    }
+
     let ping = send_automation_request(hwnd, COMMAND_ID_PING, json!({"id":"ping","args":{}}))?;
     if ping["ok"] != json!(true) || ping["json"] != json!({"pong": true}) {
         return Err(format!("self-test failed: unexpected ping response {ping}"));
@@ -3071,11 +3108,41 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<String, String> {
     submit_compose_from_control(hwnd, None)
 }
 
+unsafe fn compose_edit(hwnd: HWND) -> Result<HWND, String> {
+    let edit = state_ref(hwnd).controls.edit;
+    if edit.is_null() {
+        return Err("compose edit control is not available".to_owned());
+    }
+    Ok(edit)
+}
+
+unsafe fn dump_compose_text(hwnd: HWND) -> Result<String, String> {
+    let edit = compose_edit(hwnd)?;
+    Ok(read_window_text(edit))
+}
+
+unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), String> {
+    let edit = compose_edit(hwnd)?;
+    set_edit_text(edit, text);
+    Ok(())
+}
+
+unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(), String> {
+    let edit = compose_edit(hwnd)?;
+    let virtual_key = match key {
+        ComposeKey::Return => VK_RETURN_KEY,
+        ComposeKey::Up => VK_UP_KEY,
+        ComposeKey::Down => VK_DOWN_KEY,
+    };
+    SendMessageW(edit, WM_KEYDOWN, virtual_key, 0);
+    Ok(())
+}
+
 unsafe fn submit_compose_from_control(
     hwnd: HWND,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
-    let edit = state_ref(hwnd).controls.edit;
+    let edit = compose_edit(hwnd)?;
     let body = read_window_text(edit);
     let room_id = submit_compose(state_mut(hwnd), body, explicit_room_id)?;
     let empty = wide_null("");

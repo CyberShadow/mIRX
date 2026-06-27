@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mmatrix_testkit::{
-    LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
+    ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     ProtocolVersion, RestoreSessionArgs, StatusBarState, StoredSession, SwitchbarItem,
     SwitchbarState, TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
@@ -85,7 +85,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 3,
+        protocol_version: 4,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -424,6 +424,35 @@ fn switchbar_helpers_find_items_and_active_item() {
 }
 
 #[test]
+fn compose_key_round_trips_and_rejects_invalid_shapes() {
+    for (key, json) in [
+        (ComposeKey::Return, r#"{"kind":"return"}"#),
+        (ComposeKey::Up, r#"{"kind":"up"}"#),
+        (ComposeKey::Down, r#"{"kind":"down"}"#),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&key).expect("compose key must serialize"),
+            json
+        );
+        assert_eq!(
+            serde_json::from_str::<ComposeKey>(json).expect("compose key must deserialize"),
+            key
+        );
+    }
+
+    for json in [
+        r#"{"kind":"return","unexpected":true}"#,
+        r#"{"kind":"left"}"#,
+        r#"{"unexpected":true}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ComposeKey>(json).is_err(),
+            "invalid compose key payload unexpectedly deserialized: {json}"
+        );
+    }
+}
+
+#[test]
 fn login_args_defaults_device_display_name_when_omitted() {
     assert_eq!(
         serde_json::from_str::<LoginArgs>(
@@ -500,6 +529,8 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
     unsupported(app.logout());
     unsupported(app.wait_for_lifecycle_state("ready", Duration::from_millis(1)));
     unsupported(app.wait_for_min_rooms(1, Duration::from_millis(1)));
+    unsupported(app.set_compose_text("draft"));
+    unsupported(app.send_compose_key(ComposeKey::Return));
 }
 
 #[cfg(not(windows))]
@@ -518,6 +549,14 @@ fn non_windows_new_methods_report_unsupported_driver() {
     let error = app
         .select_view(ViewIdentity::Status)
         .expect_err("select_view must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .compose_text()
+        .expect_err("compose_text must fail off Windows");
     assert_eq!(
         error.to_string(),
         "mmatrix-testkit requires the Windows target"

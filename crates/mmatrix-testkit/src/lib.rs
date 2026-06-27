@@ -46,6 +46,12 @@ const COMMAND_ID_START_SYNC: u32 = 15;
 #[cfg(windows)]
 const COMMAND_ID_LOGOUT: u32 = 16;
 #[cfg(windows)]
+const COMMAND_ID_DUMP_COMPOSE_TEXT: u32 = 17;
+#[cfg(windows)]
+const COMMAND_ID_SET_COMPOSE_TEXT: u32 = 18;
+#[cfg(windows)]
+const COMMAND_ID_SEND_COMPOSE_KEY: u32 = 19;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -240,6 +246,49 @@ impl<'de> Deserialize<'de> for ViewIdentity {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ComposeKey {
+    Return,
+    Up,
+    Down,
+}
+
+impl<'de> Deserialize<'de> for ComposeKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Kind {
+            Return,
+            Up,
+            Down,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ComposeKeyPayload {
+            #[serde(rename = "kind")]
+            kind: Kind,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if value.get("kind").is_none() {
+            return Err(serde::de::Error::missing_field("kind"));
+        }
+
+        serde_json::from_value::<ComposeKeyPayload>(value)
+            .map(|payload| match payload.kind {
+                Kind::Return => Self::Return,
+                Kind::Up => Self::Up,
+                Kind::Down => Self::Down,
+            })
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MdiView {
@@ -388,6 +437,18 @@ impl MmatrixApp {
         self.inner.send_text(room_id, body)
     }
 
+    pub fn compose_text(&self) -> Result<String, TestkitError> {
+        self.inner.compose_text()
+    }
+
+    pub fn set_compose_text(&self, text: &str) -> Result<(), TestkitError> {
+        self.inner.set_compose_text(text)
+    }
+
+    pub fn send_compose_key(&self, key: ComposeKey) -> Result<(), TestkitError> {
+        self.inner.send_compose_key(key)
+    }
+
     pub fn login(
         &self,
         homeserver_url: &str,
@@ -529,6 +590,18 @@ struct SendTextArgs<'a> {
 
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SetComposeTextArgs<'a> {
+    text: &'a str,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SendComposeKeyArgs {
+    key: ComposeKey,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct LoadEventsArgs {
     events: Value,
 }
@@ -603,6 +676,13 @@ struct SelectRoomResponse {
 struct SendTextResponse {
     accepted: bool,
     room_id: String,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComposeTextResponse {
+    text: String,
 }
 
 #[cfg(windows)]
@@ -717,6 +797,24 @@ mod imp {
             _room_id: Option<&str>,
             _body: &str,
         ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn compose_text(&self) -> Result<String, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn set_compose_text(&self, _text: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn send_compose_key(&self, _key: ComposeKey) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1029,6 +1127,36 @@ mod imp {
                     "SEND_TEXT was not accepted for room {}",
                     response.room_id
                 )))
+            }
+        }
+
+        pub(crate) fn compose_text(&self) -> Result<String, TestkitError> {
+            let response: ComposeTextResponse =
+                self.send_command(COMMAND_ID_DUMP_COMPOSE_TEXT, EmptyArgs {})?;
+            Ok(response.text)
+        }
+
+        pub(crate) fn set_compose_text(&self, text: &str) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_SET_COMPOSE_TEXT, SetComposeTextArgs { text })?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "SET_COMPOSE_TEXT was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn send_compose_key(&self, key: ComposeKey) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_SEND_COMPOSE_KEY, SendComposeKeyArgs { key })?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "SEND_COMPOSE_KEY was not accepted".to_owned(),
+                ))
             }
         }
 
