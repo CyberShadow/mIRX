@@ -1,10 +1,21 @@
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use mmatrix_testkit::{
-    LaunchOptions, MdiState, MdiView, MmatrixApp, Model, NavigationNode, ProtocolVersion,
-    TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
+    ProtocolVersion, RestoreSessionArgs, StoredSession, TestkitError, TimelineLine, UiError,
+    UiState, Verification, ViewIdentity,
 };
+
+fn stored_session() -> StoredSession {
+    StoredSession {
+        user_id: "@alice:example".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "secret-token".to_owned(),
+        refresh_token: Some("refresh-token".to_owned()),
+    }
+}
 
 #[test]
 fn launch_options_default_has_expected_timeout() {
@@ -12,6 +23,7 @@ fn launch_options_default_has_expected_timeout() {
         LaunchOptions::default(),
         LaunchOptions {
             startup_timeout: Duration::from_secs(10),
+            local_app_data: None,
         }
     );
 }
@@ -73,8 +85,19 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 1,
+        protocol_version: 2,
         app_version: "0.1.0".to_owned(),
+    };
+    let session = stored_session();
+    let login = LoginArgs {
+        homeserver_url: "https://matrix.example".to_owned(),
+        username: "@alice:example".to_owned(),
+        password: "secret".to_owned(),
+        device_display_name: "mmatrix-ui".to_owned(),
+    };
+    let restore = RestoreSessionArgs {
+        homeserver_url: "https://matrix.example".to_owned(),
+        session: session.clone(),
     };
     let ui_state = UiState {
         navigation: NavigationNode {
@@ -130,6 +153,9 @@ fn data_models_round_trip_through_json() {
 
     let model_json = serde_json::to_vec(&model).expect("serialize model");
     let version_json = serde_json::to_vec(&version).expect("serialize version");
+    let session_json = serde_json::to_vec(&session).expect("serialize session");
+    let login_json = serde_json::to_vec(&login).expect("serialize login args");
+    let restore_json = serde_json::to_vec(&restore).expect("serialize restore args");
     let ui_state_json = serde_json::to_vec(&ui_state).expect("serialize ui state");
     let events_json = serde_json::to_vec(&events).expect("serialize events");
 
@@ -140,6 +166,19 @@ fn data_models_round_trip_through_json() {
     assert_eq!(
         serde_json::from_slice::<ProtocolVersion>(&version_json).expect("deserialize version"),
         version
+    );
+    assert_eq!(
+        serde_json::from_slice::<StoredSession>(&session_json).expect("deserialize session"),
+        session
+    );
+    assert_eq!(
+        serde_json::from_slice::<LoginArgs>(&login_json).expect("deserialize login args"),
+        login
+    );
+    assert_eq!(
+        serde_json::from_slice::<RestoreSessionArgs>(&restore_json)
+            .expect("deserialize restore args"),
+        restore
     );
     assert_eq!(
         serde_json::from_slice::<UiState>(&ui_state_json).expect("deserialize ui state"),
@@ -171,8 +210,47 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":1,
+            "protocol_version":2,
             "app_version":"0.1.0",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<StoredSession>(
+            r#"{
+            "user_id":"@alice:example",
+            "device_id":"DEVICE",
+            "access_token":"secret-token",
+            "refresh_token":null,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<LoginArgs>(
+            r#"{
+            "homeserver_url":"https://matrix.example",
+            "username":"@alice:example",
+            "password":"secret",
+            "device_display_name":"mmatrix-ui",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RestoreSessionArgs>(
+            r#"{
+            "homeserver_url":"https://matrix.example",
+            "session":{
+                "user_id":"@alice:example",
+                "device_id":"DEVICE",
+                "access_token":"secret-token",
+                "refresh_token":null
+            },
             "unexpected":true
         }"#
         )
@@ -241,6 +319,26 @@ fn data_models_reject_unknown_fields() {
     );
 }
 
+#[test]
+fn login_args_defaults_device_display_name_when_omitted() {
+    assert_eq!(
+        serde_json::from_str::<LoginArgs>(
+            r#"{
+            "homeserver_url":"https://matrix.example",
+            "username":"@alice:example",
+            "password":"secret"
+        }"#
+        )
+        .expect("login args must deserialize"),
+        LoginArgs {
+            homeserver_url: "https://matrix.example".to_owned(),
+            username: "@alice:example".to_owned(),
+            password: "secret".to_owned(),
+            device_display_name: "mmatrix-ui".to_owned(),
+        }
+    );
+}
+
 #[cfg(not(windows))]
 #[test]
 fn non_windows_platform_reports_unsupported_driver() {
@@ -256,6 +354,48 @@ fn non_windows_platform_reports_unsupported_driver() {
         launch_error.to_string(),
         "mmatrix-testkit requires the Windows target"
     );
+
+    let launch_with_options_error = MmatrixApp::launch_with_options(
+        "mmatrix-ui.exe",
+        &[OsString::from("--automation")],
+        LaunchOptions {
+            startup_timeout: Duration::from_secs(1),
+            local_app_data: Some(PathBuf::from("/tmp/mmatrix-testkit")),
+        },
+    )
+    .expect_err("launch_with_options must fail off Windows");
+    assert_eq!(
+        launch_with_options_error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let app = MmatrixApp::find(Duration::from_millis(1)).expect_err("find must fail off Windows");
+    assert_eq!(
+        app.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn non_windows_platform_reports_unsupported_for_new_public_methods() {
+    let app: MmatrixApp = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+
+    let unsupported = |result: Result<(), TestkitError>| {
+        let error = result.expect_err("method must fail off Windows");
+        assert_eq!(
+            error.to_string(),
+            "mmatrix-testkit requires the Windows target"
+        );
+    };
+
+    unsupported(app.login("https://matrix.example", "@alice:example", "secret", None));
+    unsupported(app.restore_session("https://matrix.example", stored_session()));
+    unsupported(app.restore_saved_session());
+    unsupported(app.start_sync());
+    unsupported(app.logout());
+    unsupported(app.wait_for_lifecycle_state("ready", Duration::from_millis(1)));
+    unsupported(app.wait_for_min_rooms(1, Duration::from_millis(1)));
 }
 
 #[cfg(not(windows))]

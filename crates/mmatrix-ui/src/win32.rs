@@ -59,13 +59,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::{
     AppCommand, HELP, RunOptions,
     automation::{
-        COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
-        COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
-        ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse, SelectViewResponse,
-        SendTextResponse, UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_from_summary, dump_timeline_line_from_text, dump_verification_from_request,
-        failure_response, parse_command_request, success_response,
+        AcceptedResponse, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE,
+        COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
+        MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
+        SelectViewResponse, SendTextResponse, UiState, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_from_summary, dump_timeline_line_from_text,
+        dump_verification_from_request, failure_response, parse_command_request, success_response,
     },
 };
 
@@ -1320,11 +1320,12 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             }
         }
         Event::LoggedIn { session } => {
-            let homeserver_url = state.pending_login_homeserver_url.clone().ok_or_else(|| {
-                "received LoggedIn event without a pending homeserver URL".to_owned()
-            })?;
-            save_session(&homeserver_url, &session)?;
-            state.pending_login_homeserver_url = None;
+            if let Some(homeserver_url) = state.pending_login_homeserver_url.clone() {
+                save_session(&homeserver_url, &session)?;
+                state.pending_login_homeserver_url = None;
+            } else if !state.synthetic_load_in_progress {
+                return Err("received LoggedIn event without a pending homeserver URL".to_owned());
+            }
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
         }
@@ -2063,6 +2064,39 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 },
             )
         }
+        ParsedCommand::Login { id, args } => {
+            submit_login(
+                state_mut(hwnd),
+                args.homeserver_url,
+                args.username,
+                args.password,
+                args.device_display_name,
+            )
+            .map_err(|message| failure_response(Some(id.clone()), "login_failed", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::RestoreSession { id, args } => {
+            submit_restore_session(state_mut(hwnd), args.homeserver_url, args.session)
+                .map_err(|message| failure_response(Some(id.clone()), "restore_failed", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::RestoreSavedSession { id } => {
+            submit_restore_saved_session(state_mut(hwnd)).map_err(|message| {
+                failure_response(Some(id.clone()), "restore_saved_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::StartSync { id } => {
+            submit_start_sync(state_mut(hwnd)).map_err(|message| {
+                failure_response(Some(id.clone()), "start_sync_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::Logout { id } => {
+            submit_logout(state_mut(hwnd))
+                .map_err(|message| failure_response(Some(id.clone()), "logout_failed", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
     }
 }
 
@@ -2078,7 +2112,12 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SelectRoom { id, .. }
         | ParsedCommand::SelectView { id, .. }
         | ParsedCommand::SendText { id, .. }
-        | ParsedCommand::LoadSyntheticState { id, .. } => id,
+        | ParsedCommand::LoadSyntheticState { id, .. }
+        | ParsedCommand::Login { id, .. }
+        | ParsedCommand::RestoreSession { id, .. }
+        | ParsedCommand::RestoreSavedSession { id }
+        | ParsedCommand::StartSync { id }
+        | ParsedCommand::Logout { id } => id,
     }
 }
 
@@ -3389,6 +3428,26 @@ mod tests {
             ),
             Err("received LoggedIn event without a pending homeserver URL".to_owned())
         );
+    }
+
+    #[test]
+    fn synthetic_logged_in_event_updates_model_without_persisting_session() {
+        with_local_app_data(|root| {
+            let mut state = test_state();
+            state.synthetic_load_in_progress = true;
+
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                },
+            )
+            .unwrap();
+
+            assert_eq!(state.model.status, "authenticated");
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
+            assert!(!root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME).exists());
+        });
     }
 
     #[test]

@@ -6,10 +6,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{Event, RoomSummary, TimelineText};
+use mmatrix_core::{Event, RoomSummary, StoredSession as CoreStoredSession, TimelineText};
 use mmatrix_testkit::{
-    MdiView, MmatrixApp, NavigationNode, Room, TestkitError, TimelineLine, UiError, UiState,
-    Verification, ViewIdentity,
+    LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, StoredSession, TestkitError,
+    TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
@@ -50,6 +50,68 @@ fn unique_screenshot_path() -> PathBuf {
         .expect("system clock must be after unix epoch")
         .as_nanos();
     env::temp_dir().join(format!("mmatrix-ui-automation-driver-{unique}.png"))
+}
+
+fn unique_local_app_data_path() -> PathBuf {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after unix epoch")
+        .as_nanos();
+    env::temp_dir().join(format!("mmatrix-ui-local-app-data-{unique}"))
+}
+
+fn session_file_path(local_app_data: &Path) -> PathBuf {
+    local_app_data
+        .join("mmatrix")
+        .join("ui-shell")
+        .join("session.json")
+}
+
+fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {
+    LaunchOptions {
+        startup_timeout: Duration::from_secs(20),
+        local_app_data,
+    }
+}
+
+fn stored_session() -> StoredSession {
+    StoredSession {
+        user_id: "@alice:example".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "secret-token".to_owned(),
+        refresh_token: Some("refresh-token".to_owned()),
+    }
+}
+
+fn core_stored_session() -> CoreStoredSession {
+    CoreStoredSession {
+        user_id: "@alice:example".to_owned(),
+        device_id: "DEVICE".to_owned(),
+        access_token: "secret-token".to_owned(),
+        refresh_token: Some("refresh-token".to_owned()),
+    }
+}
+
+fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path = session_file_path(local_app_data);
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("missing parent for {}", path.display()))?;
+    fs::create_dir_all(parent)?;
+    fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "homeserver_url": "https://matrix.example",
+            "session": {
+                "user_id": "@alice:example",
+                "device_id": "DEVICE",
+                "access_token": "secret-token",
+                "refresh_token": "refresh-token"
+            }
+        }))?,
+    )?;
+    Ok(path)
 }
 
 fn fixture_state_path(name: &str) -> PathBuf {
@@ -247,7 +309,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 1);
+    assert_eq!(version.protocol_version, 2);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -336,6 +398,121 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     }
 
     let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_lifecycle_commands_fail_cleanly_in_render_state_mode()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+    let local_app_data = unique_local_app_data_path();
+    let _session_path = write_saved_session(&local_app_data)?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch_with_options(
+        &exe_path,
+        &args,
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    for (result, expected_code) in [
+        (
+            app.login("https://matrix.example", "@alice:example", "secret", None),
+            "login_failed",
+        ),
+        (
+            app.restore_session("https://matrix.example", stored_session()),
+            "restore_failed",
+        ),
+        (app.restore_saved_session(), "restore_saved_failed"),
+        (app.start_sync(), "start_sync_failed"),
+        (app.logout(), "logout_failed"),
+    ] {
+        match result {
+            Err(TestkitError::Protocol { code, message }) => {
+                assert_eq!(code, expected_code);
+                assert!(message.contains("core command sender is not available"));
+            }
+            other => panic!("expected protocol error {expected_code}, got {other:?}"),
+        }
+    }
+
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tokens()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+    let local_app_data = unique_local_app_data_path();
+    let session_path = session_file_path(&local_app_data);
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch_with_options(
+        &exe_path,
+        &args,
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::LoggedIn {
+            session: core_stored_session(),
+        },
+    ])?)?;
+    app.wait_for_lifecycle_state("authenticated", Duration::from_secs(5))?;
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "authenticated");
+    assert!(!serde_json::to_string(&model)?.contains("secret-token"));
+    assert!(!session_path.exists());
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::RestoredSession,
+    ])?)?;
+    app.wait_for_lifecycle_state("authenticated", Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.status, "restored saved session");
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::RestoredSession,
+        Event::SyncStarted,
+    ])?)?;
+    app.wait_for_lifecycle_state("syncing", Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.status, "continuous sync started");
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::RestoredSession,
+        Event::SyncedRooms(vec![RoomSummary {
+            room_id: "!synthetic:example".to_owned(),
+            display_name: "Synthetic".to_owned(),
+            encrypted: false,
+        }]),
+        Event::LoggedOut,
+    ])?)?;
+    app.wait_for_lifecycle_state("logged_out", Duration::from_secs(5))?;
+    let logged_out_model = app.dump_model()?;
+    assert_eq!(logged_out_model.status, "logged out");
+    assert!(logged_out_model.rooms.is_empty());
+    assert!(logged_out_model.selected_room.is_none());
+
+    let _ = fs::remove_file(&state_path);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
@@ -454,5 +631,72 @@ fn automation_driver_can_activate_status_view_and_return_to_room()
         Some("!verify:example")
     );
 
+    Ok(())
+}
+
+#[test]
+fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(homeserver_url) = env::var("MMATRIX_HS")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(username) = env::var("MMATRIX_USER")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(password) = env::var("MMATRIX_PASS")
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let room_id = env::var("MMATRIX_ROOM")
+        .ok()
+        .filter(|value| !value.is_empty());
+
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let session_path = session_file_path(&local_app_data);
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options.clone())?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.login(&homeserver_url, &username, &password, None)?;
+    app.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
+    app.wait_for_min_rooms(1, Duration::from_secs(120))?;
+    assert!(session_path.is_file());
+
+    app.start_sync()?;
+    app.wait_for_lifecycle_state("syncing", Duration::from_secs(60))?;
+
+    if let Some(room_id) = room_id.as_deref() {
+        let unique_body = format!(
+            "mmatrix ui live {}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        );
+        app.select_room(room_id)?;
+        app.send_text(Some(room_id), &unique_body)?;
+        app.wait_for_timeline_contains(Some(room_id), &unique_body, Duration::from_secs(120))?;
+    }
+
+    drop(app);
+
+    let restored = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    restored.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    restored.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
+    restored.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
+    restored.wait_for_min_rooms(1, Duration::from_secs(120))?;
+    restored.logout()?;
+    restored.wait_for_lifecycle_state("logged_out", Duration::from_secs(120))?;
+    assert!(!session_path.exists());
+
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }

@@ -1,13 +1,13 @@
 #![allow(dead_code)]
 
 use mmatrix_core::{
-    CoreErrorEvent, Event, Operation, RoomSummary, TimelineText, VerificationRequest,
+    CoreErrorEvent, Event, Operation, RoomSummary, StoredSession, TimelineText, VerificationRequest,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 1;
+pub(crate) const PROTOCOL_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -19,6 +19,11 @@ pub(crate) const COMMAND_ID_SEND_TEXT: u32 = 8;
 pub(crate) const COMMAND_ID_LOAD_SYNTHETIC_STATE: u32 = 9;
 pub(crate) const COMMAND_ID_DUMP_UI_STATE: u32 = 10;
 pub(crate) const COMMAND_ID_SELECT_VIEW: u32 = 11;
+pub(crate) const COMMAND_ID_LOGIN: u32 = 12;
+pub(crate) const COMMAND_ID_RESTORE_SESSION: u32 = 13;
+pub(crate) const COMMAND_ID_RESTORE_SAVED_SESSION: u32 = 14;
+pub(crate) const COMMAND_ID_START_SYNC: u32 = 15;
+pub(crate) const COMMAND_ID_LOGOUT: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -33,6 +38,11 @@ pub(crate) enum CommandKind {
     LoadSyntheticState,
     DumpUiState,
     SelectView,
+    Login,
+    RestoreSession,
+    RestoreSavedSession,
+    StartSync,
+    Logout,
 }
 
 impl CommandKind {
@@ -49,6 +59,11 @@ impl CommandKind {
             COMMAND_ID_LOAD_SYNTHETIC_STATE => Some(Self::LoadSyntheticState),
             COMMAND_ID_DUMP_UI_STATE => Some(Self::DumpUiState),
             COMMAND_ID_SELECT_VIEW => Some(Self::SelectView),
+            COMMAND_ID_LOGIN => Some(Self::Login),
+            COMMAND_ID_RESTORE_SESSION => Some(Self::RestoreSession),
+            COMMAND_ID_RESTORE_SAVED_SESSION => Some(Self::RestoreSavedSession),
+            COMMAND_ID_START_SYNC => Some(Self::StartSync),
+            COMMAND_ID_LOGOUT => Some(Self::Logout),
             _ => None,
         }
     }
@@ -56,17 +71,62 @@ impl CommandKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParsedCommand {
-    Ping { id: String },
-    GetVersion { id: String },
-    WaitIdle { id: String, args: WaitIdleArgs },
-    DumpModel { id: String },
-    DumpTimeline { id: String, args: DumpTimelineArgs },
-    ListRooms { id: String },
-    SelectRoom { id: String, args: SelectRoomArgs },
-    SendText { id: String, args: SendTextArgs },
-    LoadSyntheticState { id: String, args: LoadEventsArgs },
-    DumpUiState { id: String },
-    SelectView { id: String, args: SelectViewArgs },
+    Ping {
+        id: String,
+    },
+    GetVersion {
+        id: String,
+    },
+    WaitIdle {
+        id: String,
+        args: WaitIdleArgs,
+    },
+    DumpModel {
+        id: String,
+    },
+    DumpTimeline {
+        id: String,
+        args: DumpTimelineArgs,
+    },
+    ListRooms {
+        id: String,
+    },
+    SelectRoom {
+        id: String,
+        args: SelectRoomArgs,
+    },
+    SendText {
+        id: String,
+        args: SendTextArgs,
+    },
+    LoadSyntheticState {
+        id: String,
+        args: LoadEventsArgs,
+    },
+    DumpUiState {
+        id: String,
+    },
+    SelectView {
+        id: String,
+        args: SelectViewArgs,
+    },
+    Login {
+        id: String,
+        args: LoginArgs,
+    },
+    RestoreSession {
+        id: String,
+        args: RestoreSessionArgs,
+    },
+    RestoreSavedSession {
+        id: String,
+    },
+    StartSync {
+        id: String,
+    },
+    Logout {
+        id: String,
+    },
 }
 
 impl ParsedCommand {
@@ -83,6 +143,11 @@ impl ParsedCommand {
             Self::LoadSyntheticState { .. } => CommandKind::LoadSyntheticState,
             Self::DumpUiState { .. } => CommandKind::DumpUiState,
             Self::SelectView { .. } => CommandKind::SelectView,
+            Self::Login { .. } => CommandKind::Login,
+            Self::RestoreSession { .. } => CommandKind::RestoreSession,
+            Self::RestoreSavedSession { .. } => CommandKind::RestoreSavedSession,
+            Self::StartSync { .. } => CommandKind::StartSync,
+            Self::Logout { .. } => CommandKind::Logout,
         }
     }
 }
@@ -134,6 +199,23 @@ pub(crate) struct LoadEventsArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectViewArgs {
     pub(crate) view: ViewIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LoginArgs {
+    pub(crate) homeserver_url: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    #[serde(default = "default_device_display_name")]
+    pub(crate) device_display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RestoreSessionArgs {
+    pub(crate) homeserver_url: String,
+    pub(crate) session: StoredSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -234,6 +316,12 @@ pub(crate) struct SelectRoomResponse {
 pub(crate) struct SendTextResponse {
     pub(crate) accepted: bool,
     pub(crate) room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AcceptedResponse {
+    pub(crate) accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,7 +583,31 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SelectViewArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::Login => Ok(ParsedCommand::Login {
+            id: envelope.id.clone(),
+            args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::RestoreSession => Ok(ParsedCommand::RestoreSession {
+            id: envelope.id.clone(),
+            args: parse_args_required::<RestoreSessionArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::RestoreSavedSession => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::RestoreSavedSession { id: envelope.id })
+        }
+        CommandKind::StartSync => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::StartSync { id: envelope.id })
+        }
+        CommandKind::Logout => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::Logout { id: envelope.id })
+        }
     }
+}
+
+fn default_device_display_name() -> String {
+    "mmatrix-ui".to_owned()
 }
 
 fn parse_request_envelope(request_json: &[u8]) -> Result<RawRequestEnvelope, FailureEnvelope> {
@@ -547,21 +659,33 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 #[cfg(test)]
 mod tests {
     use mmatrix_core::{
-        CoreErrorEvent, Event, Operation, RoomSummary, TimelineText, VerificationRequest,
+        CoreErrorEvent, Event, Operation, RoomSummary, StoredSession, TimelineText,
+        VerificationRequest,
     };
     use serde_json::{Value, json};
 
     use super::{
-        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_DUMP_UI_STATE,
-        COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
-        COMMAND_ID_PING, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_WAIT_IDLE, CommandKind, DumpModel, DumpTimelineArgs, DumpTimelineResponse,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, MdiState, MdiView,
-        NavigationNode, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomArgs,
-        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendTextArgs, SendTextResponse,
-        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        AcceptedResponse, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_TIMELINE,
+        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING,
+        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE,
+        CommandKind, DumpModel, DumpTimelineArgs, DumpTimelineResponse, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
+        NavigationNode, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
+        SelectRoomArgs, SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendTextArgs,
+        SendTextResponse, UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
         parse_command_request, success_response,
     };
+
+    fn stored_session() -> StoredSession {
+        StoredSession {
+            user_id: "@alice:example".to_owned(),
+            device_id: "DEVICE".to_owned(),
+            access_token: "secret-token".to_owned(),
+            refresh_token: Some("refresh-token".to_owned()),
+        }
+    }
 
     #[test]
     fn command_ids_parse_expected_commands() {
@@ -609,6 +733,31 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_SELECT_VIEW),
             Some(CommandKind::SelectView)
         );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_LOGIN),
+            Some(CommandKind::Login)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_RESTORE_SESSION),
+            Some(CommandKind::RestoreSession)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_RESTORE_SAVED_SESSION),
+            Some(CommandKind::RestoreSavedSession)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_START_SYNC),
+            Some(CommandKind::StartSync)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_LOGOUT),
+            Some(CommandKind::Logout)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_LOGIN - 1),
+            Some(CommandKind::SelectView)
+        );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_LOGOUT + 1), None);
     }
 
     #[test]
@@ -744,6 +893,59 @@ mod tests {
                         room_id: "!room:example".to_owned(),
                     },
                 },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_LOGIN,
+                br#"{"id":"login","args":{"homeserver_url":"https://matrix.example","username":"@alice:example","password":"secret","device_display_name":"desktop"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::Login {
+                id: "login".to_owned(),
+                args: LoginArgs {
+                    homeserver_url: "https://matrix.example".to_owned(),
+                    username: "@alice:example".to_owned(),
+                    password: "secret".to_owned(),
+                    device_display_name: "desktop".to_owned(),
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_RESTORE_SESSION,
+                br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":"refresh-token"}}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::RestoreSession {
+                id: "restore".to_owned(),
+                args: RestoreSessionArgs {
+                    homeserver_url: "https://matrix.example".to_owned(),
+                    session: stored_session(),
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_RESTORE_SAVED_SESSION,
+                br#"{"id":"restore-saved"}"#,
+            )
+            .unwrap(),
+            ParsedCommand::RestoreSavedSession {
+                id: "restore-saved".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_START_SYNC, br#"{"id":"start-sync","args":{}}"#)
+                .unwrap(),
+            ParsedCommand::StartSync {
+                id: "start-sync".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_LOGOUT, br#"{"id":"logout"}"#).unwrap(),
+            ParsedCommand::Logout {
+                id: "logout".to_owned(),
             }
         );
     }
@@ -893,6 +1095,100 @@ mod tests {
     }
 
     #[test]
+    fn login_defaults_device_display_name_when_omitted() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_LOGIN,
+                br#"{"id":"login","args":{"homeserver_url":"https://matrix.example","username":"@alice:example","password":"secret"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::Login {
+                id: "login".to_owned(),
+                args: LoginArgs {
+                    homeserver_url: "https://matrix.example".to_owned(),
+                    username: "@alice:example".to_owned(),
+                    password: "secret".to_owned(),
+                    device_display_name: "mmatrix-ui".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn lifecycle_payload_commands_require_args() {
+        let login_error = parse_command_request(COMMAND_ID_LOGIN, br#"{"id":"login"}"#)
+            .expect_err("missing login args must fail");
+        assert_eq!(
+            serde_json::to_value(login_error).unwrap()["err"]["code"],
+            json!("invalid_args")
+        );
+
+        let restore_error =
+            parse_command_request(COMMAND_ID_RESTORE_SESSION, br#"{"id":"restore"}"#)
+                .expect_err("missing restore args must fail");
+        assert_eq!(
+            serde_json::to_value(restore_error).unwrap()["err"]["code"],
+            json!("invalid_args")
+        );
+    }
+
+    #[test]
+    fn lifecycle_commands_reject_unknown_fields() {
+        let login_error = parse_command_request(
+            COMMAND_ID_LOGIN,
+            br#"{"id":"login","args":{"homeserver_url":"https://matrix.example","username":"@alice:example","password":"secret","unexpected":true}}"#,
+        )
+        .expect_err("login unknown field must fail");
+        assert!(
+            serde_json::to_value(login_error).unwrap()["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+
+        let restore_error = parse_command_request(
+            COMMAND_ID_RESTORE_SESSION,
+            br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null,"unexpected":true}}}"#,
+        )
+        .expect_err("restore nested unknown field must fail");
+        assert!(
+            serde_json::to_value(restore_error).unwrap()["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+
+        let restore_args_error = parse_command_request(
+            COMMAND_ID_RESTORE_SESSION,
+            br#"{"id":"restore","args":{"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null},"unexpected":true}}"#,
+        )
+        .expect_err("restore args unknown field must fail");
+        assert!(
+            serde_json::to_value(restore_args_error).unwrap()["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+    }
+
+    #[test]
+    fn no_arg_lifecycle_commands_reject_unexpected_args() {
+        for (command_id, request_id) in [
+            (COMMAND_ID_RESTORE_SAVED_SESSION, "restore-saved"),
+            (COMMAND_ID_START_SYNC, "start-sync"),
+            (COMMAND_ID_LOGOUT, "logout"),
+        ] {
+            let request = format!(r#"{{"id":"{request_id}","args":{{"unexpected":true}}}}"#);
+            let error = parse_command_request(command_id, request.as_bytes())
+                .expect_err("unexpected args must fail");
+            assert_eq!(
+                serde_json::to_value(error).unwrap()["err"]["code"],
+                json!("invalid_args")
+            );
+        }
+    }
+
+    #[test]
     fn response_dtos_match_documented_shapes() {
         assert_eq!(
             serde_json::to_value(success_response("version", GetVersionResponse::current()))
@@ -901,7 +1197,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":1,
+                    "protocol_version":2,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1020,6 +1316,18 @@ mod tests {
                 "id":"send",
                 "ok":true,
                 "json":{"accepted":true,"room_id":"!room:example"}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(success_response(
+                "login",
+                AcceptedResponse { accepted: true },
+            ))
+            .unwrap(),
+            json!({
+                "id":"login",
+                "ok":true,
+                "json":{"accepted":true}
             })
         );
         assert_eq!(

@@ -2,7 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(windows)]
@@ -36,28 +36,69 @@ const COMMAND_ID_DUMP_UI_STATE: u32 = 10;
 #[cfg(windows)]
 const COMMAND_ID_SELECT_VIEW: u32 = 11;
 #[cfg(windows)]
+const COMMAND_ID_LOGIN: u32 = 12;
+#[cfg(windows)]
+const COMMAND_ID_RESTORE_SESSION: u32 = 13;
+#[cfg(windows)]
+const COMMAND_ID_RESTORE_SAVED_SESSION: u32 = 14;
+#[cfg(windows)]
+const COMMAND_ID_START_SYNC: u32 = 15;
+#[cfg(windows)]
+const COMMAND_ID_LOGOUT: u32 = 16;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
 const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(windows)]
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
 const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MMATRIX_TESTKIT_CAPTURE_DIR_WIN";
 #[cfg(windows)]
 const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
     pub startup_timeout: Duration,
+    pub local_app_data: Option<PathBuf>,
 }
 
 impl Default for LaunchOptions {
     fn default() -> Self {
         Self {
             startup_timeout: DEFAULT_LAUNCH_TIMEOUT,
+            local_app_data: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredSession {
+    pub user_id: String,
+    pub device_id: String,
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoginArgs {
+    pub homeserver_url: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "default_device_display_name")]
+    pub device_display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreSessionArgs {
+    pub homeserver_url: String,
+    pub session: StoredSession,
+}
+
+fn default_device_display_name() -> String {
+    "mmatrix-ui".to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -249,13 +290,19 @@ impl MmatrixApp {
         exe_path: impl AsRef<Path>,
         args: &[impl AsRef<OsStr>],
     ) -> Result<Self, TestkitError> {
-        let options = LaunchOptions::default();
+        Self::launch_with_options(exe_path, args, LaunchOptions::default())
+    }
+
+    pub fn launch_with_options(
+        exe_path: impl AsRef<Path>,
+        args: &[impl AsRef<OsStr>],
+        options: LaunchOptions,
+    ) -> Result<Self, TestkitError> {
         let owned_args = args
             .iter()
             .map(|arg| arg.as_ref().to_os_string())
             .collect::<Vec<_>>();
-        imp::AppHandle::launch(exe_path.as_ref(), &owned_args, options.startup_timeout)
-            .map(|inner| Self { inner })
+        imp::AppHandle::launch(exe_path.as_ref(), &owned_args, options).map(|inner| Self { inner })
     }
 
     pub fn ping(&self) -> Result<(), TestkitError> {
@@ -302,6 +349,44 @@ impl MmatrixApp {
         self.inner.send_text(room_id, body)
     }
 
+    pub fn login(
+        &self,
+        homeserver_url: &str,
+        username: &str,
+        password: &str,
+        device_display_name: Option<&str>,
+    ) -> Result<(), TestkitError> {
+        self.inner.login(LoginArgs {
+            homeserver_url: homeserver_url.to_owned(),
+            username: username.to_owned(),
+            password: password.to_owned(),
+            device_display_name: device_display_name.unwrap_or("mmatrix-ui").to_owned(),
+        })
+    }
+
+    pub fn restore_session(
+        &self,
+        homeserver_url: &str,
+        session: StoredSession,
+    ) -> Result<(), TestkitError> {
+        self.inner.restore_session(RestoreSessionArgs {
+            homeserver_url: homeserver_url.to_owned(),
+            session,
+        })
+    }
+
+    pub fn restore_saved_session(&self) -> Result<(), TestkitError> {
+        self.inner.restore_saved_session()
+    }
+
+    pub fn start_sync(&self) -> Result<(), TestkitError> {
+        self.inner.start_sync()
+    }
+
+    pub fn logout(&self) -> Result<(), TestkitError> {
+        self.inner.logout()
+    }
+
     pub fn load_events(&self, events_json: &str) -> Result<(), TestkitError> {
         self.inner.load_events(events_json)
     }
@@ -322,6 +407,48 @@ impl MmatrixApp {
 
     pub fn screenshot(&self, path: impl AsRef<Path>) -> Result<(), TestkitError> {
         self.inner.screenshot(path.as_ref())
+    }
+
+    pub fn wait_for_lifecycle_state(
+        &self,
+        expected: &str,
+        timeout: Duration,
+    ) -> Result<(), TestkitError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            self.wait_idle(remaining)?;
+            if self.dump_model()?.lifecycle_state == expected {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(TestkitError::Timeout(format!(
+                    "lifecycle state never reached {expected:?}"
+                )));
+            }
+            std::thread::sleep(DEFAULT_POLL_INTERVAL);
+        }
+    }
+
+    pub fn wait_for_min_rooms(
+        &self,
+        min_rooms: usize,
+        timeout: Duration,
+    ) -> Result<(), TestkitError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            self.wait_idle(remaining)?;
+            if self.list_rooms()?.len() >= min_rooms {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(TestkitError::Timeout(format!(
+                    "room list never reached {min_rooms} room(s)"
+                )));
+            }
+            std::thread::sleep(DEFAULT_POLL_INTERVAL);
+        }
     }
 }
 
@@ -442,6 +569,13 @@ struct SendTextResponse {
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AcceptedResponse {
+    accepted: bool,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LoadEventsResponse {
     loaded: bool,
     rooms: usize,
@@ -472,7 +606,7 @@ mod imp {
         pub(crate) fn launch(
             _exe_path: &Path,
             _args: &[OsString],
-            _timeout: Duration,
+            _options: LaunchOptions,
         ) -> Result<Self, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
@@ -544,6 +678,39 @@ mod imp {
             _room_id: Option<&str>,
             _body: &str,
         ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn login(&self, _args: LoginArgs) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn restore_session(
+            &self,
+            _args: RestoreSessionArgs,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn restore_saved_session(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn start_sync(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn logout(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -666,7 +833,7 @@ mod imp {
         pub(crate) fn launch(
             exe_path: &Path,
             args: &[OsString],
-            timeout: Duration,
+            options: LaunchOptions,
         ) -> Result<Self, TestkitError> {
             let mut final_args = args.to_vec();
             if !final_args
@@ -676,17 +843,16 @@ mod imp {
                 final_args.push(OsString::from("--automation"));
             }
 
-            let mut child = Command::new(exe_path)
-                .args(&final_args)
-                .spawn()
-                .map_err(|error| {
-                    TestkitError::Launch(format!(
-                        "failed to launch {}: {error}",
-                        exe_path.display()
-                    ))
-                })?;
+            let mut command = Command::new(exe_path);
+            command.args(&final_args);
+            if let Some(local_app_data) = options.local_app_data.as_ref() {
+                command.env("LOCALAPPDATA", local_app_data);
+            }
+            let mut child = command.spawn().map_err(|error| {
+                TestkitError::Launch(format!("failed to launch {}: {error}", exe_path.display()))
+            })?;
             let child_pid = child.id();
-            let deadline = Instant::now() + timeout;
+            let deadline = Instant::now() + options.startup_timeout;
             let mut last_error = None;
 
             while Instant::now() < deadline {
@@ -824,6 +990,63 @@ mod imp {
                     "SEND_TEXT was not accepted for room {}",
                     response.room_id
                 )))
+            }
+        }
+
+        pub(crate) fn login(&self, args: LoginArgs) -> Result<(), TestkitError> {
+            let response: AcceptedResponse = self.send_command(COMMAND_ID_LOGIN, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "LOGIN was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn restore_session(&self, args: RestoreSessionArgs) -> Result<(), TestkitError> {
+            let response: AcceptedResponse = self.send_command(COMMAND_ID_RESTORE_SESSION, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "RESTORE_SESSION was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn restore_saved_session(&self) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_RESTORE_SAVED_SESSION, EmptyArgs {})?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "RESTORE_SAVED_SESSION was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn start_sync(&self) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_START_SYNC, EmptyArgs {})?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "START_SYNC was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn logout(&self) -> Result<(), TestkitError> {
+            let response: AcceptedResponse = self.send_command(COMMAND_ID_LOGOUT, EmptyArgs {})?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "LOGOUT was not accepted".to_owned(),
+                ))
             }
         }
 
