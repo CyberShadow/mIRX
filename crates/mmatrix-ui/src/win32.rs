@@ -1,6 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{OsStr, c_void};
 use std::fs;
 use std::io::ErrorKind;
@@ -33,8 +33,12 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
-    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, TVE_EXPAND,
-    TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
+    BTNS_CHECK, BTNS_SHOWTEXT, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
+    STATUSCLASSNAMEW, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE,
+    TB_CHECKBUTTON, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TBBUTTON,
+    TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET,
+    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
     TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
@@ -63,9 +67,10 @@ use crate::{
         COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
         MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
-        SelectViewResponse, SendTextResponse, UiState, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_from_summary, dump_timeline_line_from_text,
-        dump_verification_from_request, failure_response, parse_command_request, success_response,
+        SelectViewResponse, SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
+        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -81,11 +86,15 @@ const BUTTON_CLASS_NAME: &str = "BUTTON";
 const TREE_ID: u16 = 1001;
 const MDI_ID: u16 = 1002;
 const EDIT_ID: u16 = 1003;
+const STATUS_BAR_ID: u16 = 1004;
+const SWITCHBAR_ID: u16 = 1005;
 const VIEW_EDIT_ID: u16 = 2001;
 const MENU_ID_LOGIN: usize = 40001;
 const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
 const MENU_ID_START_SYNC: usize = 40003;
 const MENU_ID_LOGOUT: usize = 40004;
+const SWITCHBAR_COMMAND_FIRST: usize = 41001;
+const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
 const LOGIN_DIALOG_USERNAME_ID: u16 = 5002;
 const LOGIN_DIALOG_PASSWORD_ID: u16 = 5003;
@@ -99,6 +108,8 @@ const AUTO_CLOSE_DELAY_MS: u32 = 250;
 const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
+const SWITCHBAR_HEIGHT: i32 = 28;
+const STATUS_BAR_HEIGHT: i32 = 22;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
@@ -115,6 +126,8 @@ struct Controls {
     tree: HWND,
     mdi_client: HWND,
     edit: HWND,
+    status_bar: HWND,
+    switchbar: HWND,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,6 +205,8 @@ struct WindowState {
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
     active_view: ViewId,
+    switchbar_views: Vec<ViewId>,
+    room_activity: BTreeSet<String>,
     edit_window_proc: WNDPROC,
     model: UiModel,
 }
@@ -251,6 +266,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         views: BTreeMap::new(),
         hwnd_views: BTreeMap::new(),
         active_view: ViewId::Status,
+        switchbar_views: Vec::new(),
+        room_activity: BTreeSet::new(),
         edit_window_proc: None,
         model: initial_model(),
     });
@@ -268,6 +285,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
                 state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
                 if session_path()?.is_file() {
                     submit_restore_saved_session(state_mut(hwnd))?;
+                    refresh_status_bar(hwnd)?;
                 }
             }
             Some(bridge)
@@ -615,7 +633,7 @@ fn hex_string(bytes: &[u8]) -> String {
 fn init_common_controls() -> Result<(), String> {
     let controls = INITCOMMONCONTROLSEX {
         dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-        dwICC: ICC_TREEVIEW_CLASSES,
+        dwICC: ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES,
     };
     let success = unsafe { InitCommonControlsEx(&controls) };
     if success == 0 {
@@ -773,7 +791,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND => {
-            if handle_menu_command(hwnd, wparam) {
+            if handle_switchbar_command(hwnd, wparam) || handle_menu_command(hwnd, wparam) {
                 0
             } else {
                 default_window_proc(hwnd, message, wparam, lparam)
@@ -956,6 +974,42 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
 
     create_account_menu(hwnd)?;
 
+    state.controls.switchbar = CreateWindowExW(
+        0,
+        TOOLBARCLASSNAMEW,
+        null(),
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        0,
+        0,
+        hwnd,
+        SWITCHBAR_ID as usize as HMENU,
+        instance,
+        null_mut(),
+    );
+    if state.controls.switchbar.is_null() {
+        return Err(last_os_error("CreateWindowExW switchbar"));
+    }
+    SendMessageW(
+        state.controls.switchbar,
+        TB_BUTTONSTRUCTSIZE,
+        size_of::<TBBUTTON>(),
+        0,
+    );
+    SendMessageW(
+        state.controls.switchbar,
+        TB_SETEXTENDEDSTYLE,
+        0,
+        TBSTYLE_EX_MIXEDBUTTONS as LPARAM,
+    );
+    SendMessageW(
+        state.controls.switchbar,
+        TB_SETBUTTONSIZE,
+        0,
+        pack_size_lparam(160, SWITCHBAR_HEIGHT),
+    );
+
     state.controls.tree = create_child_window(
         hwnd,
         TREE_CLASS_NAME,
@@ -1004,6 +1058,24 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         isize,
         unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
     >(previous_proc));
+
+    state.controls.status_bar = CreateWindowExW(
+        0,
+        STATUSCLASSNAMEW,
+        null(),
+        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+        0,
+        0,
+        0,
+        0,
+        hwnd,
+        STATUS_BAR_ID as usize as HMENU,
+        instance,
+        null_mut(),
+    );
+    if state.controls.status_bar.is_null() {
+        return Err(last_os_error("CreateWindowExW status bar"));
+    }
 
     Ok(())
 }
@@ -1055,9 +1127,9 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
     let command_id = (wparam & 0xffff) as usize;
     let result = match command_id {
         MENU_ID_LOGIN => show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
-        MENU_ID_RESTORE_SAVED_SESSION => {
-            submit_restore_saved_session(state_mut(hwnd)).map(|_| Some(()))
-        }
+        MENU_ID_RESTORE_SAVED_SESSION => submit_restore_saved_session(state_mut(hwnd))
+            .and_then(|_| refresh_status_bar(hwnd))
+            .map(|_| Some(())),
         MENU_ID_START_SYNC => submit_start_sync(state_mut(hwnd)).map(|_| Some(())),
         MENU_ID_LOGOUT => submit_logout(state_mut(hwnd)).map(|_| Some(())),
         _ => return false,
@@ -1065,6 +1137,24 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
 
     if let Err(message) = result {
         show_error_message(hwnd, "Account", &message);
+    }
+
+    true
+}
+
+unsafe fn handle_switchbar_command(hwnd: HWND, wparam: WPARAM) -> bool {
+    let command_id = (wparam & 0xffff) as usize;
+    if !(SWITCHBAR_COMMAND_FIRST..=SWITCHBAR_COMMAND_LAST).contains(&command_id) {
+        return false;
+    }
+
+    let index = command_id - SWITCHBAR_COMMAND_FIRST;
+    let Some(view_id) = state_ref(hwnd).switchbar_views.get(index).cloned() else {
+        return false;
+    };
+
+    if let Err(message) = activate_view(hwnd, &view_id) {
+        show_error_message(hwnd, "Switchbar", &message);
     }
 
     true
@@ -1081,6 +1171,7 @@ unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
         form.password,
         form.device_display_name,
     )?;
+    refresh_status_bar(hwnd)?;
     Ok(true)
 }
 
@@ -1116,6 +1207,10 @@ unsafe fn create_child_window(
     }
 
     Ok(hwnd)
+}
+
+const fn pack_size_lparam(width: i32, height: i32) -> LPARAM {
+    (((height as u32) << 16) | (width as u32 & 0xffff)) as LPARAM
 }
 
 unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
@@ -1404,6 +1499,8 @@ unsafe fn layout_controls(hwnd: HWND) {
     if state.controls.tree.is_null()
         || state.controls.mdi_client.is_null()
         || state.controls.edit.is_null()
+        || state.controls.status_bar.is_null()
+        || state.controls.switchbar.is_null()
     {
         return;
     }
@@ -1414,20 +1511,41 @@ unsafe fn layout_controls(hwnd: HWND) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
     let tree_width = TREE_WIDTH.min(width);
-    let edit_height = EDIT_HEIGHT.min(height);
+    let switchbar_height = SWITCHBAR_HEIGHT.min(height);
+    let status_bar_height = STATUS_BAR_HEIGHT.min((height - switchbar_height).max(0));
+    let remaining_height = (height - switchbar_height - status_bar_height).max(0);
+    let edit_height = EDIT_HEIGHT.min(remaining_height);
     let mdi_width = (width - tree_width).max(0);
-    let mdi_height = (height - edit_height).max(0);
+    let mdi_height = (height - switchbar_height - edit_height - status_bar_height).max(0);
+    let compose_y = switchbar_height + mdi_height;
+    let status_bar_y = compose_y + edit_height;
 
-    MoveWindow(state.controls.tree, 0, 0, tree_width, mdi_height, 1);
+    MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
+    MoveWindow(
+        state.controls.tree,
+        0,
+        switchbar_height,
+        tree_width,
+        mdi_height,
+        1,
+    );
     MoveWindow(
         state.controls.mdi_client,
         tree_width,
-        0,
+        switchbar_height,
         mdi_width,
         mdi_height,
         1,
     );
-    MoveWindow(state.controls.edit, 0, mdi_height, width, edit_height, 1);
+    MoveWindow(state.controls.edit, 0, compose_y, width, edit_height, 1);
+    MoveWindow(
+        state.controls.status_bar,
+        0,
+        status_bar_y,
+        width,
+        status_bar_height,
+        1,
+    );
 }
 
 unsafe fn handle_core_events(hwnd: HWND) {
@@ -1482,9 +1600,15 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             {
                 state.model.selected_room = None;
             }
+            state
+                .room_activity
+                .retain(|room_id| room_exists(&rooms, room_id));
             state.model.rooms = rooms;
         }
         Event::TimelineText(timeline) => {
+            if state.active_view != ViewId::Room(timeline.room_id.clone()) {
+                state.room_activity.insert(timeline.room_id.clone());
+            }
             state.model.status = format!("timeline update from {}", timeline.room_id);
             state
                 .model
@@ -1510,6 +1634,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.last_timeline = None;
             state.model.last_verification = None;
             state.model.last_error = None;
+            state.room_activity.clear();
         }
         Event::Stopped => {
             state.model.status = "core stopped".to_owned();
@@ -1550,6 +1675,40 @@ fn render_status_lines(model: &UiModel) -> Vec<String> {
     }
 
     lines
+}
+
+fn frame_status_text(model: &UiModel) -> String {
+    let mut text = model.status.clone();
+
+    if let Some(request) = &model.last_verification {
+        text.push_str(" | verification: ");
+        text.push_str(&request.flow_id);
+        text.push_str(" from ");
+        text.push_str(&request.user_id);
+    }
+
+    if let Some(error) = &model.last_error {
+        text.push_str(" | error: ");
+        text.push_str(operation_name(error.operation));
+        text.push_str(": ");
+        text.push_str(&error.message);
+    }
+
+    text
+}
+
+unsafe fn refresh_status_bar(hwnd: HWND) -> Result<(), String> {
+    let status_bar = state_ref(hwnd).controls.status_bar;
+    if status_bar.is_null() {
+        return Err("status bar control was not created".to_owned());
+    }
+
+    let text = wide_null(&frame_status_text(&state_ref(hwnd).model));
+    if SendMessageW(status_bar, SB_SETTEXTW, 0, text.as_ptr() as LPARAM) == 0 {
+        return Err("failed to update status bar text".to_owned());
+    }
+
+    Ok(())
 }
 
 fn render_view_text(lines: &[String]) -> String {
@@ -1626,6 +1785,14 @@ fn view_title(model: &UiModel, view_id: &ViewId) -> String {
             title
         }
     }
+}
+
+fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
+    let mut text = view_title(&state.model, view_id);
+    if matches!(view_id, ViewId::Room(room_id) if state.room_activity.contains(room_id)) {
+        text.insert_str(0, "* ");
+    }
+    text
 }
 
 fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
@@ -1789,6 +1956,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
 }
 
 unsafe fn activate_view(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
+    let mut cleared_room_activity = false;
     let child = match view_id {
         ViewId::Status => {
             state_mut(hwnd).model.selected_room = None;
@@ -1798,6 +1966,7 @@ unsafe fn activate_view(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
             {
                 let state = state_mut(hwnd);
                 select_room(state, room_id)?;
+                cleared_room_activity = state.room_activity.remove(room_id);
             }
             ensure_room_view(hwnd, room_id)?
         }
@@ -1814,6 +1983,11 @@ unsafe fn activate_view(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
     let mdi_client = state_ref(hwnd).controls.mdi_client;
     SendMessageW(mdi_client, WM_MDIACTIVATE, child as WPARAM, 0);
     SendMessageW(mdi_client, WM_MDIMAXIMIZE, child as WPARAM, 0);
+    if cleared_room_activity {
+        rebuild_switchbar(hwnd)?;
+    } else {
+        refresh_switchbar_state(hwnd)?;
+    }
     Ok(())
 }
 
@@ -1847,6 +2021,8 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         active
     };
     refresh_tree(hwnd);
+    rebuild_switchbar(hwnd)?;
+    refresh_status_bar(hwnd)?;
     activate_view(hwnd, &active_view)
 }
 
@@ -2212,15 +2388,22 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 args.device_display_name,
             )
             .map_err(|message| failure_response(Some(id.clone()), "login_failed", message))?;
+            refresh_status_bar(hwnd)
+                .map_err(|message| failure_response(Some(id.clone()), "login_failed", message))?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::RestoreSession { id, args } => {
             submit_restore_session(state_mut(hwnd), args.homeserver_url, args.session)
                 .map_err(|message| failure_response(Some(id.clone()), "restore_failed", message))?;
+            refresh_status_bar(hwnd)
+                .map_err(|message| failure_response(Some(id.clone()), "restore_failed", message))?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::RestoreSavedSession { id } => {
             submit_restore_saved_session(state_mut(hwnd)).map_err(|message| {
+                failure_response(Some(id.clone()), "restore_saved_failed", message)
+            })?;
+            refresh_status_bar(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "restore_saved_failed", message)
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
@@ -2379,6 +2562,89 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
     ordered
 }
 
+unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
+    let switchbar = state_ref(hwnd).controls.switchbar;
+    if switchbar.is_null() {
+        return Err("switchbar control was not created".to_owned());
+    }
+
+    loop {
+        let count = SendMessageW(switchbar, TB_BUTTONCOUNT, 0, 0);
+        if count < 0 {
+            return Err("failed to query switchbar button count".to_owned());
+        }
+        if count == 0 {
+            break;
+        }
+        if SendMessageW(switchbar, TB_DELETEBUTTON, 0, 0) == 0 {
+            return Err("failed to delete switchbar button".to_owned());
+        }
+    }
+
+    let view_ids = ordered_view_ids(state_ref(hwnd));
+    let button_count = view_ids.len();
+    if SWITCHBAR_COMMAND_FIRST
+        .checked_add(button_count.saturating_sub(1))
+        .is_some_and(|command_id| command_id > SWITCHBAR_COMMAND_LAST)
+    {
+        return Err("switchbar command range exhausted".to_owned());
+    }
+
+    let labels = {
+        let state = state_ref(hwnd);
+        view_ids
+            .iter()
+            .map(|view_id| wide_null(&switchbar_button_text(state, view_id)))
+            .collect::<Vec<_>>()
+    };
+    let buttons = view_ids
+        .iter()
+        .enumerate()
+        .map(|(index, _)| TBBUTTON {
+            iBitmap: I_IMAGENONE,
+            idCommand: (SWITCHBAR_COMMAND_FIRST + index) as i32,
+            fsState: TBSTATE_ENABLED as u8,
+            fsStyle: (BTNS_CHECK | BTNS_SHOWTEXT) as u8,
+            iString: labels[index].as_ptr() as isize,
+            ..TBBUTTON::default()
+        })
+        .collect::<Vec<_>>();
+
+    if !buttons.is_empty()
+        && SendMessageW(
+            switchbar,
+            TB_ADDBUTTONSW,
+            buttons.len(),
+            buttons.as_ptr() as LPARAM,
+        ) == 0
+    {
+        return Err("failed to add switchbar buttons".to_owned());
+    }
+    SendMessageW(switchbar, TB_AUTOSIZE, 0, 0);
+
+    state_mut(hwnd).switchbar_views = view_ids;
+    refresh_switchbar_state(hwnd)
+}
+
+unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
+    let switchbar = state_ref(hwnd).controls.switchbar;
+    if switchbar.is_null() {
+        return Err("switchbar control was not created".to_owned());
+    }
+
+    let active_view = state_ref(hwnd).active_view.clone();
+    let view_ids = state_ref(hwnd).switchbar_views.clone();
+    for (index, view_id) in view_ids.iter().enumerate() {
+        let command_id = SWITCHBAR_COMMAND_FIRST + index;
+        let checked = usize::from(*view_id == active_view);
+        if SendMessageW(switchbar, TB_CHECKBUTTON, command_id, checked as LPARAM) == 0 {
+            return Err(format!("failed to refresh switchbar button {command_id}"));
+        }
+    }
+
+    Ok(())
+}
+
 unsafe fn read_tree_item_text(tree: HWND, item: isize) -> Result<String, String> {
     let mut buffer = vec![0u16; 1024];
     let mut tree_item = TVITEMEXW {
@@ -2433,6 +2699,16 @@ unsafe fn dump_navigation_tree(hwnd: HWND) -> Result<NavigationNode, String> {
     }
 
     read_navigation_node(tree, root)
+}
+
+unsafe fn dump_status_bar_state(hwnd: HWND) -> Result<StatusBarState, String> {
+    if state_ref(hwnd).controls.status_bar.is_null() {
+        return Err("status bar control was not created".to_owned());
+    }
+
+    Ok(StatusBarState {
+        text: frame_status_text(&state_ref(hwnd).model),
+    })
 }
 
 unsafe fn active_view_identity(hwnd: HWND) -> Result<ViewIdentity, String> {
@@ -2494,10 +2770,35 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
     Ok(MdiState { active, views })
 }
 
+unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
+    if state_ref(hwnd).controls.switchbar.is_null() {
+        return Err("switchbar control was not created".to_owned());
+    }
+
+    let active = active_view_identity(hwnd)?;
+    let state = state_ref(hwnd);
+    let items = ordered_view_ids(state)
+        .into_iter()
+        .map(|view_id| SwitchbarItem {
+            identity: view_identity_from_view_id(&view_id),
+            title: switchbar_button_text(state, &view_id),
+            active: view_identity_from_view_id(&view_id) == active,
+            has_activity: matches!(
+                &view_id,
+                ViewId::Room(room_id) if state.room_activity.contains(room_id)
+            ),
+        })
+        .collect();
+
+    Ok(SwitchbarState { items })
+}
+
 unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     Ok(UiState {
         navigation: dump_navigation_tree(hwnd)?,
         mdi: dump_mdi_state(hwnd)?,
+        status_bar: dump_status_bar_state(hwnd)?,
+        switchbar: dump_switchbar_state(hwnd)?,
     })
 }
 
@@ -2692,6 +2993,8 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.synthetic_load_in_progress = true;
         state.pending_login_homeserver_url = None;
         state.current_session_homeserver_url = None;
+        state.switchbar_views.clear();
+        state.room_activity.clear();
         state.model = initial_model();
     }
 
@@ -3214,6 +3517,8 @@ mod tests {
             views: BTreeMap::new(),
             hwnd_views: BTreeMap::new(),
             active_view: ViewId::Status,
+            switchbar_views: Vec::new(),
+            room_activity: BTreeSet::new(),
             edit_window_proc: None,
             model: initial_model(),
         }
@@ -3320,6 +3625,63 @@ mod tests {
         assert!(status_text.contains("flow_id: flow-verify-123"));
         assert!(status_text.contains("operation: send text"));
         assert!(status_text.contains("message: message send failed"));
+    }
+
+    #[test]
+    fn frame_status_text_returns_lifecycle_status_only_when_no_details_exist() {
+        let mut state = test_state();
+        state.model.status = "authenticated".to_owned();
+
+        assert_eq!(frame_status_text(&state.model), "authenticated");
+    }
+
+    #[test]
+    fn frame_status_text_appends_verification_details() {
+        let mut state = test_state();
+        state.model.status = "verification request from @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationRequest {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+        });
+
+        assert_eq!(
+            frame_status_text(&state.model),
+            "verification request from @alice:example | verification: flow-verify-123 from @alice:example"
+        );
+    }
+
+    #[test]
+    fn frame_status_text_appends_error_details() {
+        let mut state = test_state();
+        state.model.status = "error during send text".to_owned();
+        state.model.last_error = Some(CoreErrorEvent {
+            operation: Operation::SendText,
+            message: "message send failed".to_owned(),
+        });
+
+        assert_eq!(
+            frame_status_text(&state.model),
+            "error during send text | error: send text: message send failed"
+        );
+    }
+
+    #[test]
+    fn frame_status_text_appends_verification_before_error_when_both_exist() {
+        let mut state = test_state();
+        state.model.status = "verification request from @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationRequest {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+        });
+        state.model.last_error = Some(CoreErrorEvent {
+            operation: Operation::SendText,
+            message: "message send failed".to_owned(),
+        });
+
+        assert_eq!(
+            frame_status_text(&state.model),
+            "verification request from @alice:example | verification: flow-verify-123 from @alice:example | error: send text: message send failed"
+        );
     }
 
     #[test]
@@ -3431,6 +3793,105 @@ mod tests {
                 .views
                 .contains_key(&ViewId::Room("!room:example".to_owned()))
         );
+    }
+
+    #[test]
+    fn ordered_view_ids_follow_status_then_room_model_order_then_stale_views() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!beta:example", "Beta", false),
+            room("!alpha:example", "Alpha", false),
+        ];
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state
+            .views
+            .insert(ViewId::Room("!alpha:example".to_owned()), tracked_view(20));
+        state
+            .views
+            .insert(ViewId::Room("!orphan:example".to_owned()), tracked_view(30));
+        state
+            .views
+            .insert(ViewId::Room("!beta:example".to_owned()), tracked_view(40));
+
+        assert_eq!(
+            ordered_view_ids(&state),
+            vec![
+                ViewId::Status,
+                ViewId::Room("!beta:example".to_owned()),
+                ViewId::Room("!alpha:example".to_owned()),
+                ViewId::Room("!orphan:example".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn switchbar_button_text_prefixes_activity_and_preserves_room_title() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", true)];
+        state.room_activity.insert("!room:example".to_owned());
+
+        assert_eq!(
+            switchbar_button_text(&state, &ViewId::Room("!room:example".to_owned())),
+            "* Room [e2ee]"
+        );
+        assert_eq!(switchbar_button_text(&state, &ViewId::Status), "Status");
+    }
+
+    #[test]
+    fn inactive_timeline_marks_room_activity() {
+        let mut state = test_state();
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(timeline("!inactive:example", "hello")),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.contains("!inactive:example"));
+    }
+
+    #[test]
+    fn active_timeline_does_not_mark_room_activity() {
+        let mut state = test_state();
+        state.active_view = ViewId::Room("!room:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(timeline("!room:example", "hello")),
+        )
+        .unwrap();
+
+        assert!(!state.room_activity.contains("!room:example"));
+    }
+
+    #[test]
+    fn synced_rooms_prunes_stale_room_activity() {
+        let mut state = test_state();
+        state.room_activity.insert("!keep:example".to_owned());
+        state.room_activity.insert("!stale:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![room("!keep:example", "Keep", false)]),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.contains("!keep:example"));
+        assert!(!state.room_activity.contains("!stale:example"));
+    }
+
+    #[test]
+    fn logged_out_clears_room_activity() {
+        let mut state = test_state();
+        state.room_activity.insert("!room:example".to_owned());
+
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut)
+                .expect("logged out event must apply successfully");
+        });
+
+        assert!(state.room_activity.is_empty());
     }
 
     #[test]

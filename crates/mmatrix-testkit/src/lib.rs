@@ -154,6 +154,8 @@ pub struct ProtocolVersion {
 pub struct UiState {
     pub navigation: NavigationNode,
     pub mdi: MdiState,
+    pub status_bar: StatusBarState,
+    pub switchbar: SwitchbarState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +170,18 @@ pub struct NavigationNode {
 pub struct MdiState {
     pub active: ViewIdentity,
     pub views: Vec<MdiView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatusBarState {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwitchbarState {
+    pub items: Vec<SwitchbarItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -233,6 +247,31 @@ pub struct MdiView {
     pub title: String,
     pub active: bool,
     pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwitchbarItem {
+    pub identity: ViewIdentity,
+    pub title: String,
+    pub active: bool,
+    pub has_activity: bool,
+}
+
+impl UiState {
+    pub fn switchbar_item(&self, identity: &ViewIdentity) -> Option<&SwitchbarItem> {
+        self.switchbar.item(identity)
+    }
+}
+
+impl SwitchbarState {
+    pub fn item(&self, identity: &ViewIdentity) -> Option<&SwitchbarItem> {
+        self.items.iter().find(|item| &item.identity == identity)
+    }
+
+    pub fn active_item(&self) -> Option<&SwitchbarItem> {
+        self.items.iter().find(|item| item.active)
+    }
 }
 
 #[derive(Debug)]

@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use mmatrix_testkit::{
     LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
-    ProtocolVersion, RestoreSessionArgs, StoredSession, TestkitError, TimelineLine, UiError,
-    UiState, Verification, ViewIdentity,
+    ProtocolVersion, RestoreSessionArgs, StatusBarState, StoredSession, SwitchbarItem,
+    SwitchbarState, TestkitError, TimelineLine, UiError, UiState, Verification, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -85,7 +85,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 2,
+        protocol_version: 3,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -134,6 +134,27 @@ fn data_models_round_trip_through_json() {
                     title: "Room".to_owned(),
                     active: true,
                     lines: vec!["hello".to_owned()],
+                },
+            ],
+        },
+        status_bar: StatusBarState {
+            text: "synced 1 room(s)".to_owned(),
+        },
+        switchbar: SwitchbarState {
+            items: vec![
+                SwitchbarItem {
+                    identity: ViewIdentity::Status,
+                    title: "Status".to_owned(),
+                    active: false,
+                    has_activity: false,
+                },
+                SwitchbarItem {
+                    identity: ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    },
+                    title: "Room".to_owned(),
+                    active: true,
+                    has_activity: true,
                 },
             ],
         },
@@ -210,7 +231,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":2,
+            "protocol_version":3,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -261,6 +282,8 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "navigation":{"text":"mmatrix","children":[]},
             "mdi":{"active":{"kind":"status"},"views":[]},
+            "status_bar":{"text":"ready"},
+            "switchbar":{"items":[]},
             "unexpected":true
         }"#
         )
@@ -299,6 +322,36 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
+        serde_json::from_str::<StatusBarState>(
+            r#"{
+            "text":"ready",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<SwitchbarState>(
+            r#"{
+            "items":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<SwitchbarItem>(
+            r#"{
+            "identity":{"kind":"status"},
+            "title":"Status",
+            "active":true,
+            "has_activity":false,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
         serde_json::from_str::<ViewIdentity>(
             r#"{
             "kind":"status",
@@ -316,6 +369,57 @@ fn data_models_reject_unknown_fields() {
         }"#
         )
         .is_err()
+    );
+}
+
+#[test]
+fn switchbar_helpers_find_items_and_active_item() {
+    let ui_state = UiState {
+        navigation: NavigationNode {
+            text: "mmatrix".to_owned(),
+            children: vec![],
+        },
+        mdi: MdiState {
+            active: ViewIdentity::Room {
+                room_id: "!room:example".to_owned(),
+            },
+            views: vec![],
+        },
+        status_bar: StatusBarState {
+            text: "ready".to_owned(),
+        },
+        switchbar: SwitchbarState {
+            items: vec![
+                SwitchbarItem {
+                    identity: ViewIdentity::Status,
+                    title: "Status".to_owned(),
+                    active: false,
+                    has_activity: false,
+                },
+                SwitchbarItem {
+                    identity: ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    },
+                    title: "Room".to_owned(),
+                    active: true,
+                    has_activity: true,
+                },
+            ],
+        },
+    };
+
+    let identity = ViewIdentity::Room {
+        room_id: "!room:example".to_owned(),
+    };
+    assert_eq!(
+        ui_state
+            .switchbar_item(&identity)
+            .map(|item| item.title.as_str()),
+        Some("Room")
+    );
+    assert_eq!(
+        ui_state.switchbar.active_item().map(|item| &item.identity),
+        Some(&identity)
     );
 }
 

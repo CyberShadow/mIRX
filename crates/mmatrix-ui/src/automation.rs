@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 2;
+pub(crate) const PROTOCOL_VERSION: u32 = 3;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -336,6 +336,8 @@ pub(crate) struct LoadEventsResponse {
 pub(crate) struct UiState {
     pub(crate) navigation: NavigationNode,
     pub(crate) mdi: MdiState,
+    pub(crate) status_bar: StatusBarState,
+    pub(crate) switchbar: SwitchbarState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +352,18 @@ pub(crate) struct NavigationNode {
 pub(crate) struct MdiState {
     pub(crate) active: ViewIdentity,
     pub(crate) views: Vec<MdiView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StatusBarState {
+    pub(crate) text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SwitchbarState {
+    pub(crate) items: Vec<SwitchbarItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -415,6 +429,15 @@ pub(crate) struct MdiView {
     pub(crate) title: String,
     pub(crate) active: bool,
     pub(crate) lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SwitchbarItem {
+    pub(crate) identity: ViewIdentity,
+    pub(crate) title: String,
+    pub(crate) active: bool,
+    pub(crate) has_activity: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -675,8 +698,8 @@ mod tests {
         LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
         NavigationNode, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
         SelectRoomArgs, SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendTextArgs,
-        SendTextResponse, UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
+        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1198,7 +1221,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":2,
+                    "protocol_version":3,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1388,6 +1411,27 @@ mod tests {
                             },
                         ],
                     },
+                    status_bar: StatusBarState {
+                        text: "synced 1 room(s)".to_owned(),
+                    },
+                    switchbar: SwitchbarState {
+                        items: vec![
+                            SwitchbarItem {
+                                identity: ViewIdentity::Status,
+                                title: "Status".to_owned(),
+                                active: false,
+                                has_activity: false,
+                            },
+                            SwitchbarItem {
+                                identity: ViewIdentity::Room {
+                                    room_id: "!room:example".to_owned(),
+                                },
+                                title: "Room".to_owned(),
+                                active: true,
+                                has_activity: true,
+                            },
+                        ],
+                    },
                 },
             ))
             .unwrap(),
@@ -1416,6 +1460,25 @@ mod tests {
                                 "title":"Room",
                                 "active":true,
                                 "lines":["hello"]
+                            }
+                        ]
+                    },
+                    "status_bar":{
+                        "text":"synced 1 room(s)"
+                    },
+                    "switchbar":{
+                        "items":[
+                            {
+                                "identity":{"kind":"status"},
+                                "title":"Status",
+                                "active":false,
+                                "has_activity":false
+                            },
+                            {
+                                "identity":{"kind":"room","room_id":"!room:example"},
+                                "title":"Room",
+                                "active":true,
+                                "has_activity":true
                             }
                         ]
                     }
