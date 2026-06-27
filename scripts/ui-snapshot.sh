@@ -180,14 +180,14 @@ configure_case_expectations() {
         --expect-room '!random:example'
       )
       timeline_expect_args=(
-        --expect-timeline '!ops:example::incident review'
-        --expect-timeline '!ops:example::encryption enabled'
         --expect-timeline '!ops:example::deploy window opens'
       )
       room_view_expect_args=(
-        --expect-room-view '!ops:example::incident review'
-        --expect-room-view '!ops:example::encryption enabled'
-        --expect-room-view '!ops:example::deploy window opens'
+        --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
+        --expect-room-view '!ops:example::Topic: incident review'
+        --expect-room-view '!ops:example::* [22:15] @alice:example set topic: incident review'
+        --expect-room-view '!ops:example::* [22:16] bob joined'
+        --expect-room-view '!ops:example::[22:17] @carol:example: deploy window opens at 18:00 UTC'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !random:example'
