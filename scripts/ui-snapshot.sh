@@ -181,13 +181,17 @@ configure_case_expectations() {
       )
       timeline_expect_args=(
         --expect-timeline '!ops:example::incident review'
-        --expect-timeline '!ops:example::encryption enabled'
+        --expect-timeline '!ops:example::carol'
+        --expect-timeline '!ops:example::join'
+        --expect-timeline '!ops:example::@alice:example'
         --expect-timeline '!ops:example::deploy window opens'
       )
       room_view_expect_args=(
-        --expect-room-view '!ops:example::incident review'
-        --expect-room-view '!ops:example::encryption enabled'
-        --expect-room-view '!ops:example::deploy window opens'
+        --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
+        --expect-room-view '!ops:example::Topic: incident review'
+        --expect-room-view '!ops:example::* [22:13] @alice:example set topic: incident review'
+        --expect-room-view '!ops:example::* [22:14] carol joined'
+        --expect-room-view '!ops:example::[22:15] @alice:example: ops topic: incident review'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !random:example'
@@ -223,14 +227,16 @@ configure_case_expectations() {
         --expect-room '!verify:example'
       )
       timeline_expect_args=(
+        --expect-timeline '!verify:example::@alice:example'
         --expect-timeline '!verify:example::verification requested'
         --expect-timeline '!verify:example::sas emoji ready'
         --expect-timeline '!verify:example::waiting for confirmation'
       )
       room_view_expect_args=(
-        --expect-room-view '!verify:example::verification requested'
-        --expect-room-view '!verify:example::sas emoji ready'
-        --expect-room-view '!verify:example::waiting for confirmation'
+        --expect-room-view '!verify:example::Room: Verify [e2ee] (!verify:example)'
+        --expect-room-view '!verify:example::[22:14] @alice:example: verification requested by @alice:example'
+        --expect-room-view '!verify:example::[22:15] @alice:example: sas emoji ready'
+        --expect-room-view '!verify:example::[22:16] @alice:example: waiting for confirmation'
       )
       status_view_expect_args=(
         --expect-status-view 'flow-verify-123'
