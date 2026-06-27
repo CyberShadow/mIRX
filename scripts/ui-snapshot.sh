@@ -90,8 +90,7 @@ start_xvfb_explicit() {
   local display=$1
 
   if display_is_healthy "$display"; then
-    export DISPLAY=$display
-    return 0
+    die "Xvfb display already in use: $display"
   fi
 
   cleanup_stale_display_files "$display"
