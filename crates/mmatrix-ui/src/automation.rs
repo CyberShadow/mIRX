@@ -627,7 +627,7 @@ pub(crate) struct DumpRoomMemberState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 enum DumpTimelineEntrySerde {
     Text {
         room_id: String,
@@ -646,7 +646,7 @@ enum DumpTimelineEntrySerde {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 enum DumpRoomStateContentSerde {
     Topic {
         topic: String,
@@ -2026,6 +2026,40 @@ mod tests {
                 timestamp_ms: 1_700_000_000_000,
                 body: "hello".to_owned(),
             }
+        );
+        assert!(
+            serde_json::from_value::<DumpTimelineEntry>(json!({
+                "type":"text",
+                "room_id":"!room:example",
+                "sender":"@alice:example",
+                "timestamp_ms":1700000000000u64,
+                "body":"hello",
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomStateContent>(json!({
+                "type":"topic",
+                "topic":"incident review",
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomStateLine>(json!({
+                "room_id":"!room:example",
+                "sender":"@alice:example",
+                "timestamp_ms":1700000060000u64,
+                "event_kind":"topic",
+                "state_key":"",
+                "content":{
+                    "type":"topic",
+                    "topic":"incident review",
+                    "unexpected":true
+                }
+            }))
+            .is_err()
         );
         assert!(
             serde_json::from_value::<DumpTimelineEntry>(json!({

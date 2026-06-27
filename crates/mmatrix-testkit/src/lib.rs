@@ -208,7 +208,7 @@ pub struct RoomMemberState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 enum TimelineEntrySerde {
     Text {
         room_id: String,
@@ -227,7 +227,7 @@ enum TimelineEntrySerde {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 enum RoomStateContentSerde {
     Topic {
         topic: String,

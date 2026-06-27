@@ -354,6 +354,19 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
+        serde_json::from_str::<TimelineEntry>(
+            r#"{
+            "type":"text",
+            "room_id":"!room:example",
+            "sender":"@alice:example",
+            "timestamp_ms":1700000000000,
+            "body":"hello",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
         serde_json::from_str::<RoomStateLine>(
             r#"{
             "room_id":"!room:example",
@@ -368,10 +381,37 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
+        serde_json::from_str::<RoomStateContent>(
+            r#"{
+            "type":"topic",
+            "topic":"incident review",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
         serde_json::from_str::<RoomTopicState>(
             r#"{
             "topic":"incident review",
             "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomStateLine>(
+            r#"{
+            "room_id":"!room:example",
+            "sender":"@alice:example",
+            "timestamp_ms":1700000060000,
+            "event_kind":"topic",
+            "state_key":"",
+            "content":{
+                "type":"topic",
+                "topic":"incident review",
+                "unexpected":true
+            }
         }"#
         )
         .is_err()
