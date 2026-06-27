@@ -64,6 +64,7 @@ impl Default for LaunchOptions {
 #[serde(deny_unknown_fields)]
 pub struct Model {
     pub status: String,
+    pub lifecycle_state: String,
     pub rooms: Vec<Room>,
     pub last_timeline: Option<TimelineLine>,
     pub last_verification: Option<Verification>,

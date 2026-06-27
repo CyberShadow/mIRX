@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, c_void};
 use std::fs;
+use std::io::ErrorKind;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -14,8 +15,9 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, Operation, RoomSummary,
-    SendTextRequest, TimelineText, VerificationRequest, start,
+    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
+    RestoreSessionRequest, RoomSummary, SendTextRequest, StoredSession, TimelineText,
+    VerificationRequest, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -36,18 +38,22 @@ use windows_sys::Win32::UI::Controls::{
     TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateWindowExW,
-    DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA,
-    GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    IsWindow, KillTimer, LoadCursorW, MDICREATESTRUCTW, MSG, MoveWindow, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SW_SHOW, SendMessageW, SetTimer, SetWindowLongPtrW,
-    ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_COPYDATA,
-    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
+    AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
+    CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
+    DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
+    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA, GWLP_WNDPROC,
+    GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW, IsWindow,
+    KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+    SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_CREATE,
+    WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
     WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-    WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
+    WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -55,24 +61,37 @@ use crate::{
     automation::{
         COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
         COMMAND_ID_WAIT_IDLE, DumpModel, DumpTimelineResponse, FailureEnvelope, GetVersionResponse,
-        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode, ParsedCommand,
-        PongResponse, ResponseEnvelope, SelectRoomResponse, SelectViewResponse, SendTextResponse,
-        UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
-        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
-        parse_command_request, success_response,
+        LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
+        ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse, SelectViewResponse,
+        SendTextResponse, UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_from_summary, dump_timeline_line_from_text, dump_verification_from_request,
+        failure_response, parse_command_request, success_response,
     },
 };
 
 const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
+const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const FRAME_TITLE: &str = "mmatrix";
 const TREE_CLASS_NAME: &str = "SysTreeView32";
 const MDI_CLASS_NAME: &str = "MDICLIENT";
 const EDIT_CLASS_NAME: &str = "EDIT";
+const STATIC_CLASS_NAME: &str = "STATIC";
+const BUTTON_CLASS_NAME: &str = "BUTTON";
 const TREE_ID: u16 = 1001;
 const MDI_ID: u16 = 1002;
 const EDIT_ID: u16 = 1003;
 const VIEW_EDIT_ID: u16 = 2001;
+const MENU_ID_LOGIN: usize = 40001;
+const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
+const MENU_ID_START_SYNC: usize = 40003;
+const MENU_ID_LOGOUT: usize = 40004;
+const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
+const LOGIN_DIALOG_USERNAME_ID: u16 = 5002;
+const LOGIN_DIALOG_PASSWORD_ID: u16 = 5003;
+const LOGIN_DIALOG_DEVICE_ID: u16 = 5004;
+const LOGIN_DIALOG_OK_ID: usize = 5005;
+const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
@@ -81,6 +100,9 @@ const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
+const SESSION_FILE_NAME: &str = "session.json";
+const SAVED_SESSION_VERSION: u32 = 1;
+const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mmatrix-ui";
 const VK_RETURN_KEY: WPARAM = 13;
 
 #[derive(Default)]
@@ -104,12 +126,43 @@ struct MdiViewState {
 #[derive(Default)]
 struct UiModel {
     status: String,
+    lifecycle_state: LifecycleState,
     rooms: Vec<RoomSummary>,
     selected_room: Option<String>,
     timelines: BTreeMap<String, Vec<String>>,
     last_timeline: Option<TimelineText>,
     last_verification: Option<VerificationRequest>,
     last_error: Option<CoreErrorEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SavedSession {
+    version: u32,
+    homeserver_url: String,
+    session: StoredSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoginForm {
+    homeserver_url: String,
+    username: String,
+    password: String,
+    device_display_name: String,
+}
+
+struct LoginDialogState {
+    result: Arc<Mutex<Option<LoginForm>>>,
+    homeserver_label: HWND,
+    homeserver_url_edit: HWND,
+    username_label: HWND,
+    username_edit: HWND,
+    password_label: HWND,
+    password_edit: HWND,
+    device_display_name_label: HWND,
+    device_display_name_edit: HWND,
+    ok_button: HWND,
+    cancel_button: HWND,
 }
 
 struct AutomationState {
@@ -128,6 +181,7 @@ struct WindowState {
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
     synthetic_load_in_progress: bool,
+    pending_login_homeserver_url: Option<String>,
     tree_items: BTreeMap<isize, ViewId>,
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
@@ -171,6 +225,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     init_common_controls()?;
     register_frame_class(instance)?;
     register_mdi_child_class(instance)?;
+    register_login_dialog_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -184,6 +239,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         event_generation: 0,
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
+        pending_login_homeserver_url: None,
         tree_items: BTreeMap::new(),
         views: BTreeMap::new(),
         hwnd_views: BTreeMap::new(),
@@ -203,6 +259,9 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
             unsafe {
                 state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
+                if session_path()?.is_file() {
+                    submit_restore_saved_session(state_mut(hwnd))?;
+                }
             }
             Some(bridge)
         } else {
@@ -291,6 +350,7 @@ fn should_start_core_bridge(command: &AppCommand) -> bool {
 fn initial_model() -> UiModel {
     UiModel {
         status: "offline".to_owned(),
+        lifecycle_state: LifecycleState::Offline,
         ..UiModel::default()
     }
 }
@@ -340,6 +400,86 @@ fn profile_dir() -> Result<PathBuf, String> {
     let local_app_data =
         std::env::var_os("LOCALAPPDATA").ok_or_else(|| "LOCALAPPDATA is not set".to_owned())?;
     Ok(PathBuf::from(local_app_data).join(PROFILE_SUBDIR))
+}
+
+fn session_path() -> Result<PathBuf, String> {
+    Ok(profile_dir()?.join(SESSION_FILE_NAME))
+}
+
+fn load_saved_session() -> Result<SavedSession, String> {
+    let path = session_path()?;
+    let bytes = fs::read(&path)
+        .map_err(|err| format!("failed to read saved session {}: {err}", path.display()))?;
+    let saved = serde_json::from_slice::<SavedSession>(&bytes)
+        .map_err(|err| format!("failed to parse saved session {}: {err}", path.display()))?;
+    if saved.version != SAVED_SESSION_VERSION {
+        return Err(format!(
+            "unsupported saved session version {} in {}",
+            saved.version,
+            path.display()
+        ));
+    }
+    Ok(saved)
+}
+
+fn save_session(homeserver_url: &str, session: &StoredSession) -> Result<(), String> {
+    let path = session_path()?;
+    let Some(profile_dir) = path.parent() else {
+        return Err(format!(
+            "saved session path {} has no parent directory",
+            path.display()
+        ));
+    };
+    fs::create_dir_all(profile_dir).map_err(|err| {
+        format!(
+            "failed to create saved session directory {}: {err}",
+            profile_dir.display()
+        )
+    })?;
+
+    let temp_path = path.with_extension("json.tmp");
+    let payload = SavedSession {
+        version: SAVED_SESSION_VERSION,
+        homeserver_url: homeserver_url.to_owned(),
+        session: session.clone(),
+    };
+    let bytes = serde_json::to_vec(&payload).map_err(|err| {
+        format!(
+            "failed to serialize saved session {}: {err}",
+            path.display()
+        )
+    })?;
+    fs::write(&temp_path, bytes).map_err(|err| {
+        format!(
+            "failed to write saved session {}: {err}",
+            temp_path.display()
+        )
+    })?;
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "failed to replace saved session {}: {err}",
+                path.display()
+            ));
+        }
+    }
+    fs::rename(&temp_path, &path)
+        .map_err(|err| format!("failed to install saved session {}: {err}", path.display()))?;
+    Ok(())
+}
+
+fn delete_saved_session() -> Result<(), String> {
+    let path = session_path()?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to delete saved session {}: {err}",
+            path.display()
+        )),
+    }
 }
 
 fn init_common_controls() -> Result<(), String> {
@@ -410,6 +550,34 @@ fn register_mdi_child_class(instance: *mut c_void) -> Result<(), String> {
     Ok(())
 }
 
+fn register_login_dialog_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(login_dialog_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error("RegisterClassExW login dialog"));
+        }
+    }
+
+    Ok(())
+}
+
 fn create_main_window(instance: *mut c_void, state: Box<WindowState>) -> Result<HWND, String> {
     let class_name = wide_null(FRAME_CLASS_NAME);
     let title = wide_null(FRAME_TITLE);
@@ -473,6 +641,13 @@ unsafe extern "system" fn window_proc(
         WM_SIZE => {
             layout_controls(hwnd);
             0
+        }
+        WM_COMMAND => {
+            if handle_menu_command(hwnd, wparam) {
+                0
+            } else {
+                default_window_proc(hwnd, message, wparam, lparam)
+            }
         }
         WM_CORE_EVENT => {
             handle_core_events(hwnd);
@@ -579,9 +754,77 @@ unsafe extern "system" fn mdi_child_window_proc(
     }
 }
 
+unsafe extern "system" fn login_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    _wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            let create = &*(lparam as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            1
+        }
+        WM_CREATE => match create_login_dialog_controls(hwnd) {
+            Ok(()) => 0,
+            Err(message) => {
+                eprintln!("{message}");
+                -1
+            }
+        },
+        WM_COMMAND => {
+            let command_id = (_wparam & 0xffff) as usize;
+            match command_id {
+                LOGIN_DIALOG_OK_ID => {
+                    let Some(state) = login_dialog_state(hwnd) else {
+                        return 0;
+                    };
+                    let form = LoginForm {
+                        homeserver_url: read_window_text(state.homeserver_url_edit),
+                        username: read_window_text(state.username_edit),
+                        password: read_window_text(state.password_edit),
+                        device_display_name: read_window_text(state.device_display_name_edit),
+                    };
+                    *state
+                        .result
+                        .lock()
+                        .expect("login dialog result mutex poisoned") = Some(form);
+                    DestroyWindow(hwnd);
+                    0
+                }
+                LOGIN_DIALOG_CANCEL_ID => {
+                    DestroyWindow(hwnd);
+                    0
+                }
+                _ => DefWindowProcW(hwnd, message, _wparam, lparam),
+            }
+        }
+        WM_CLOSE => {
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_SIZE => {
+            layout_login_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LoginDialogState;
+            if !state_ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(state_ptr));
+            }
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, _wparam, lparam),
+    }
+}
+
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
     let state = state_mut(hwnd);
+
+    create_account_menu(hwnd)?;
 
     state.controls.tree = create_child_window(
         hwnd,
@@ -635,6 +878,82 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
+unsafe fn create_account_menu(hwnd: HWND) -> Result<(), String> {
+    let account_menu = CreatePopupMenu();
+    if account_menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    append_menu_text(account_menu, MF_STRING, MENU_ID_LOGIN, "Login")?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_RESTORE_SAVED_SESSION,
+        "Restore Saved Session",
+    )?;
+    append_menu_text(account_menu, MF_STRING, MENU_ID_START_SYNC, "Start Sync")?;
+    append_menu_text(account_menu, MF_STRING, MENU_ID_LOGOUT, "Logout")?;
+
+    let frame_menu = CreateMenu();
+    if frame_menu.is_null() {
+        return Err(last_os_error("CreateMenu"));
+    }
+    append_menu_text(frame_menu, MF_POPUP, account_menu as usize, "Account")?;
+
+    if SetMenu(hwnd, frame_menu) == 0 {
+        return Err(last_os_error("SetMenu"));
+    }
+    if DrawMenuBar(hwnd) == 0 {
+        return Err(last_os_error("DrawMenuBar"));
+    }
+    Ok(())
+}
+
+unsafe fn append_menu_text(
+    menu: HMENU,
+    flags: u32,
+    item_id: usize,
+    text: &str,
+) -> Result<(), String> {
+    let wide = wide_null(text);
+    if AppendMenuW(menu, flags, item_id, wide.as_ptr()) == 0 {
+        return Err(last_os_error("AppendMenuW"));
+    }
+    Ok(())
+}
+
+unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
+    let command_id = (wparam & 0xffff) as usize;
+    let result = match command_id {
+        MENU_ID_LOGIN => show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        MENU_ID_RESTORE_SAVED_SESSION => {
+            submit_restore_saved_session(state_mut(hwnd)).map(|_| Some(()))
+        }
+        MENU_ID_START_SYNC => submit_start_sync(state_mut(hwnd)).map(|_| Some(())),
+        MENU_ID_LOGOUT => submit_logout(state_mut(hwnd)).map(|_| Some(())),
+        _ => return false,
+    };
+
+    if let Err(message) = result {
+        show_error_message(hwnd, "Account", &message);
+    }
+
+    true
+}
+
+unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
+    let Some(form) = show_login_dialog(hwnd)? else {
+        return Ok(false);
+    };
+    submit_login(
+        state_mut(hwnd),
+        form.homeserver_url,
+        form.username,
+        form.password,
+        form.device_display_name,
+    )?;
+    Ok(true)
+}
+
 unsafe fn create_child_window(
     parent: HWND,
     class_name: &str,
@@ -669,6 +988,287 @@ unsafe fn create_child_window(
     Ok(hwnd)
 }
 
+unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
+    let instance = GetModuleHandleW(null());
+    let state = login_dialog_state_mut(hwnd).expect("login dialog state must exist");
+
+    state.homeserver_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Homeserver URL",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.homeserver_url_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+        LOGIN_DIALOG_HOME_SERVER_ID,
+        instance,
+    )?;
+
+    state.username_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Username",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.username_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+        LOGIN_DIALOG_USERNAME_ID,
+        instance,
+    )?;
+
+    state.password_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Password",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.password_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
+        WS_EX_CLIENTEDGE,
+        LOGIN_DIALOG_PASSWORD_ID,
+        instance,
+    )?;
+
+    state.device_display_name_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Device Display Name",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.device_display_name_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+        LOGIN_DIALOG_DEVICE_ID,
+        instance,
+    )?;
+
+    state.ok_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "OK",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        0,
+        LOGIN_DIALOG_OK_ID as u16,
+        instance,
+    )?;
+    state.cancel_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "Cancel",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+        0,
+        LOGIN_DIALOG_CANCEL_ID as u16,
+        instance,
+    )?;
+
+    layout_login_dialog(hwnd);
+    Ok(())
+}
+
+unsafe fn create_login_dialog_control(
+    parent: HWND,
+    class_name: &str,
+    title: &str,
+    style: u32,
+    ex_style: u32,
+    control_id: u16,
+    instance: *mut c_void,
+) -> Result<HWND, String> {
+    create_child_window(
+        parent,
+        class_name,
+        title,
+        style,
+        ex_style,
+        control_id,
+        instance,
+        null_mut(),
+    )
+}
+
+unsafe fn layout_login_dialog(hwnd: HWND) {
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let label_x = 16;
+    let input_x = 16;
+    let input_width = (width - 32).max(0);
+    let label_width = input_width;
+    let label_height = 18;
+    let input_height = 24;
+    let spacing = 8;
+    let block_height = label_height + spacing + input_height + 12;
+    let button_width = 96;
+    let button_height = 28;
+
+    let Some(state) = login_dialog_state(hwnd) else {
+        return;
+    };
+    let labels = [
+        state.homeserver_label,
+        state.username_label,
+        state.password_label,
+        state.device_display_name_label,
+    ];
+    for (index, hwnd_control) in labels.iter().enumerate() {
+        let y = 16 + (index as i32 * block_height);
+        MoveWindow(*hwnd_control, label_x, y, label_width, label_height, 1);
+    }
+    MoveWindow(
+        state.homeserver_url_edit,
+        input_x,
+        16 + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+    MoveWindow(
+        state.username_edit,
+        input_x,
+        16 + block_height + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+    MoveWindow(
+        state.password_edit,
+        input_x,
+        16 + (block_height * 2) + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+    MoveWindow(
+        state.device_display_name_edit,
+        input_x,
+        16 + (block_height * 3) + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+
+    let button_y = 16 + (block_height * 4);
+    let cancel_x = width - 16 - button_width;
+    let ok_x = cancel_x - 12 - button_width;
+    MoveWindow(
+        state.ok_button,
+        ok_x,
+        button_y,
+        button_width,
+        button_height,
+        1,
+    );
+    MoveWindow(
+        state.cancel_button,
+        cancel_x,
+        button_y,
+        button_width,
+        button_height,
+        1,
+    );
+}
+
+unsafe fn show_login_dialog(owner: HWND) -> Result<Option<LoginForm>, String> {
+    let instance = GetModuleHandleW(null());
+    let result = Arc::new(Mutex::new(None));
+    let dialog_state = Box::new(LoginDialogState {
+        result: Arc::clone(&result),
+        homeserver_label: null_mut(),
+        homeserver_url_edit: null_mut(),
+        username_label: null_mut(),
+        username_edit: null_mut(),
+        password_label: null_mut(),
+        password_edit: null_mut(),
+        device_display_name_label: null_mut(),
+        device_display_name_edit: null_mut(),
+        ok_button: null_mut(),
+        cancel_button: null_mut(),
+    });
+    let dialog_state_ptr = Box::into_raw(dialog_state);
+    let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
+    let title = wide_null("Login");
+    let dialog = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        420,
+        320,
+        owner,
+        null_mut(),
+        instance,
+        dialog_state_ptr.cast(),
+    );
+    if dialog.is_null() {
+        drop(Box::from_raw(dialog_state_ptr));
+        return Err(last_os_error("CreateWindowExW login dialog"));
+    }
+
+    EnableWindow(owner, 0);
+    ShowWindow(dialog, SW_SHOW);
+
+    let mut message = MSG::default();
+    while IsWindow(dialog) != 0 {
+        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
+        if get_result <= 0 {
+            break;
+        }
+        let frame = frame_window_for(message.hwnd);
+        if !frame.is_null() {
+            let mdi_client = state_ref(frame).controls.mdi_client;
+            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
+                continue;
+            }
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    EnableWindow(owner, 1);
+    Ok(result
+        .lock()
+        .expect("login dialog result mutex poisoned")
+        .clone())
+}
+
+unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const LoginDialogState;
+    (!state.is_null()).then_some(&*state)
+}
+
+unsafe fn login_dialog_state_mut(hwnd: HWND) -> Option<&'static mut LoginDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LoginDialogState;
+    (!state.is_null()).then_some(&mut *state)
+}
+
 unsafe fn layout_controls(hwnd: HWND) {
     let state = state_mut(hwnd);
     if state.controls.tree.is_null()
@@ -701,16 +1301,35 @@ unsafe fn layout_controls(hwnd: HWND) {
 }
 
 unsafe fn handle_core_events(hwnd: HWND) {
-    drain_core_events_and_refresh(hwnd);
+    if let Err(message) = drain_core_events_and_refresh(hwnd) {
+        state_mut(hwnd).exit_code.store(1, Ordering::Relaxed);
+        eprintln!("{message}");
+        DestroyWindow(hwnd);
+    }
 }
 
-fn apply_core_event(state: &mut WindowState, event: Event) {
+fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String> {
     match event {
         Event::Started => {
             state.model.status = "core started".to_owned();
+            state.model.lifecycle_state = LifecycleState::CoreStarted;
+        }
+        Event::LoggedIn { session } => {
+            let homeserver_url = state.pending_login_homeserver_url.clone().ok_or_else(|| {
+                "received LoggedIn event without a pending homeserver URL".to_owned()
+            })?;
+            save_session(&homeserver_url, &session)?;
+            state.pending_login_homeserver_url = None;
+            state.model.status = "authenticated".to_owned();
+            state.model.lifecycle_state = LifecycleState::Authenticated;
+        }
+        Event::RestoredSession => {
+            state.model.status = "restored saved session".to_owned();
+            state.model.lifecycle_state = LifecycleState::Authenticated;
         }
         Event::SyncedRooms(rooms) => {
             state.model.status = format!("synced {} room(s)", rooms.len());
+            state.model.lifecycle_state = LifecycleState::Ready;
             if state
                 .model
                 .selected_room
@@ -736,7 +1355,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) {
             state.model.last_verification = Some(request);
         }
         Event::LoggedOut => {
+            delete_saved_session()?;
+            state.pending_login_homeserver_url = None;
             state.model.status = "logged out".to_owned();
+            state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
             state.model.selected_room = None;
             state.model.timelines.clear();
@@ -746,16 +1368,19 @@ fn apply_core_event(state: &mut WindowState, event: Event) {
         }
         Event::Stopped => {
             state.model.status = "core stopped".to_owned();
+            state.model.lifecycle_state = LifecycleState::Stopped;
         }
         Event::SyncStarted => {
             state.model.status = "continuous sync started".to_owned();
+            state.model.lifecycle_state = LifecycleState::Syncing;
         }
         Event::Error(error) => {
             state.model.status = format!("error during {}", operation_name(error.operation));
+            state.model.lifecycle_state = LifecycleState::Error;
             state.model.last_error = Some(error);
         }
-        Event::LoggedIn { .. } | Event::RestoredSession => {}
     }
+    Ok(())
 }
 
 fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
@@ -1317,7 +1942,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         }
         ParsedCommand::WaitIdle { id, args } => {
             let _ = args.timeout_ms;
-            drain_core_events_and_refresh(hwnd);
+            drain_core_events_and_refresh(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "state_unavailable", message)
+            })?;
 
             let (pending_core_events, event_generation, synthetic_load_in_progress, idle) = {
                 let state = state_mut(hwnd);
@@ -1355,7 +1982,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, dump)
         }
         ParsedCommand::DumpUiState { id } => {
-            drain_core_events_and_refresh(hwnd);
+            drain_core_events_and_refresh(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "ui_state_unavailable", message)
+            })?;
             sync_views_and_tree(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "ui_state_unavailable", message)
             })?;
@@ -1857,30 +2486,32 @@ unsafe fn drain_core_events(hwnd: HWND) -> Vec<Event> {
     queue.drain(..).collect()
 }
 
-unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) {
+unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(), String> {
     if events.is_empty() {
-        return;
+        return Ok(());
     }
 
     {
         let state = state_mut(hwnd);
         for event in events {
-            apply_core_event(state, event);
+            apply_core_event(state, event)?;
             state.event_generation += 1;
         }
     }
 
-    sync_views_and_tree(hwnd).expect("view refresh after core events must succeed");
+    sync_views_and_tree(hwnd)?;
+    Ok(())
 }
 
 unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usize), String> {
     {
         let state = state_mut(hwnd);
         state.synthetic_load_in_progress = true;
+        state.pending_login_homeserver_url = None;
         state.model = initial_model();
     }
 
-    apply_events_and_refresh(hwnd, events);
+    apply_events_and_refresh(hwnd, events)?;
 
     let (rooms, timeline_events, active_view) = {
         let state = state_mut(hwnd);
@@ -1910,11 +2541,10 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
     Ok((rooms, timeline_events))
 }
 
-unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> usize {
+unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> Result<usize, String> {
     let events = drain_core_events(hwnd);
     let event_count = events.len();
-    apply_events_and_refresh(hwnd, events);
-    event_count
+    apply_events_and_refresh(hwnd, events).map(|()| event_count)
 }
 
 unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
@@ -2002,6 +2632,108 @@ fn submit_compose(
     Ok(room_id)
 }
 
+fn submit_login(
+    state: &mut WindowState,
+    homeserver_url: String,
+    username: String,
+    password: String,
+    device_display_name: String,
+) -> Result<(), String> {
+    if homeserver_url.is_empty() {
+        return Err("homeserver URL must not be empty".to_owned());
+    }
+    if username.is_empty() {
+        return Err("username must not be empty".to_owned());
+    }
+    if password.is_empty() {
+        return Err("password must not be empty".to_owned());
+    }
+
+    let device_display_name = if device_display_name.is_empty() {
+        DEFAULT_DEVICE_DISPLAY_NAME.to_owned()
+    } else {
+        device_display_name
+    };
+
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(Command::Login(LoginRequest {
+            homeserver_url: homeserver_url.clone(),
+            username,
+            password,
+            device_display_name,
+        }))
+        .map_err(|err| format!("failed to enqueue login command: {err}"))?;
+
+    state.pending_login_homeserver_url = Some(homeserver_url);
+    state.model.status = "logging in".to_owned();
+    state.model.lifecycle_state = LifecycleState::LoggingIn;
+    Ok(())
+}
+
+fn submit_restore_session(
+    state: &mut WindowState,
+    homeserver_url: String,
+    session: StoredSession,
+) -> Result<(), String> {
+    if homeserver_url.is_empty() {
+        return Err("homeserver URL must not be empty".to_owned());
+    }
+    if session.user_id.is_empty() {
+        return Err("session user_id must not be empty".to_owned());
+    }
+    if session.device_id.is_empty() {
+        return Err("session device_id must not be empty".to_owned());
+    }
+    if session.access_token.is_empty() {
+        return Err("session access_token must not be empty".to_owned());
+    }
+
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(Command::RestoreSession(RestoreSessionRequest {
+            homeserver_url,
+            session,
+        }))
+        .map_err(|err| format!("failed to enqueue restore session command: {err}"))?;
+
+    state.pending_login_homeserver_url = None;
+    state.model.status = "restoring saved session".to_owned();
+    state.model.lifecycle_state = LifecycleState::Restoring;
+    Ok(())
+}
+
+fn submit_restore_saved_session(state: &mut WindowState) -> Result<(), String> {
+    let saved = load_saved_session()?;
+    submit_restore_session(state, saved.homeserver_url, saved.session)
+}
+
+fn submit_start_sync(state: &mut WindowState) -> Result<(), String> {
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(Command::StartSync)
+        .map_err(|err| format!("failed to enqueue start sync command: {err}"))
+}
+
+fn submit_logout(state: &mut WindowState) -> Result<(), String> {
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(Command::Logout)
+        .map_err(|err| format!("failed to enqueue logout command: {err}"))
+}
+
 unsafe extern "system" fn edit_window_proc(
     hwnd: HWND,
     message: u32,
@@ -2086,6 +2818,7 @@ unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
 fn dump_model_from_ui(model: &UiModel) -> DumpModel {
     DumpModel {
         status: model.status.clone(),
+        lifecycle_state: model.lifecycle_state,
         rooms: model.rooms.iter().map(dump_room_from_summary).collect(),
         last_timeline: model
             .last_timeline
@@ -2153,6 +2886,14 @@ fn set_edit_text(hwnd: HWND, text: &str) {
     }
 }
 
+fn show_error_message(hwnd: HWND, title: &str, message: &str) {
+    let title = wide_null(title);
+    let message = wide_null(message);
+    unsafe {
+        MessageBoxW(hwnd, message.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+    }
+}
+
 fn wide_null(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain([0]).collect()
 }
@@ -2164,10 +2905,14 @@ fn last_os_error(operation: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
     use std::fs;
+    use std::sync::Mutex as StdMutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
+
+    static LOCAL_APP_DATA_LOCK: StdMutex<()> = StdMutex::new(());
 
     fn room(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
         RoomSummary {
@@ -2184,6 +2929,42 @@ mod tests {
         }
     }
 
+    fn stored_session() -> StoredSession {
+        StoredSession {
+            user_id: "@alice:example".to_owned(),
+            device_id: "DEVICE".to_owned(),
+            access_token: "secret-token".to_owned(),
+            refresh_token: None,
+        }
+    }
+
+    fn with_local_app_data<T>(test: impl FnOnce(PathBuf) -> T) -> T {
+        let _guard = LOCAL_APP_DATA_LOCK
+            .lock()
+            .expect("LOCALAPPDATA test mutex must not be poisoned");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after unix epoch")
+            .as_nanos();
+        let root = env::temp_dir().join(format!("mmatrix-ui-local-app-data-{unique}"));
+        fs::create_dir_all(&root).expect("test LOCALAPPDATA root must be created");
+        let previous = env::var_os("LOCALAPPDATA");
+        unsafe {
+            env::set_var("LOCALAPPDATA", &root);
+        }
+        let result = test(root.clone());
+        match previous {
+            Some(previous) => unsafe {
+                env::set_var("LOCALAPPDATA", previous);
+            },
+            None => unsafe {
+                env::remove_var("LOCALAPPDATA");
+            },
+        }
+        let _ = fs::remove_dir_all(root);
+        result
+    }
+
     fn test_state() -> WindowState {
         WindowState {
             controls: Controls::default(),
@@ -2194,6 +2975,7 @@ mod tests {
             event_generation: 0,
             last_idle_probe_generation: None,
             synthetic_load_in_progress: false,
+            pending_login_homeserver_url: None,
             tree_items: BTreeMap::new(),
             views: BTreeMap::new(),
             hwnd_views: BTreeMap::new(),
@@ -2389,7 +3171,10 @@ mod tests {
             .hwnd_views
             .insert(20, ViewId::Room("!room:example".to_owned()));
 
-        apply_core_event(&mut state, Event::LoggedOut);
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut)
+                .expect("logged out event must apply successfully");
+        });
         let removed = take_stale_room_views(&mut state);
 
         assert!(state.model.rooms.is_empty());
@@ -2502,5 +3287,236 @@ mod tests {
             submit_compose(&mut state, "hello".to_owned(), None),
             Err("core command sender is not available".to_owned())
         );
+    }
+
+    #[test]
+    fn lifecycle_events_update_model_and_persist_login_session() {
+        with_local_app_data(|root| {
+            let mut state = test_state();
+            state.pending_login_homeserver_url = Some("https://matrix.example".to_owned());
+
+            apply_core_event(&mut state, Event::Started).unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::CoreStarted);
+
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                },
+            )
+            .unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
+            assert_eq!(state.pending_login_homeserver_url, None);
+
+            let session_path = root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME);
+            let saved = serde_json::from_slice::<SavedSession>(
+                &fs::read(&session_path).expect("saved session file must exist"),
+            )
+            .expect("saved session file must deserialize");
+            assert_eq!(
+                saved,
+                SavedSession {
+                    version: SAVED_SESSION_VERSION,
+                    homeserver_url: "https://matrix.example".to_owned(),
+                    session: stored_session(),
+                }
+            );
+            let session_json =
+                String::from_utf8(fs::read(&session_path).expect("session file must be readable"))
+                    .expect("session file must be utf-8 json");
+            assert!(!session_json.contains("password"));
+
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Syncing);
+
+            apply_core_event(
+                &mut state,
+                Event::SyncedRooms(vec![room("!room:example", "Room", false)]),
+            )
+            .unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Ready);
+
+            apply_core_event(&mut state, Event::RestoredSession).unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
+
+            apply_core_event(
+                &mut state,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::RestoreSession,
+                    message: "restore failed".to_owned(),
+                }),
+            )
+            .unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+            assert_eq!(
+                state.model.last_error,
+                Some(CoreErrorEvent {
+                    operation: Operation::RestoreSession,
+                    message: "restore failed".to_owned(),
+                })
+            );
+
+            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::LoggedOut);
+            assert!(!session_path.exists());
+
+            apply_core_event(&mut state, Event::Stopped).unwrap();
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Stopped);
+        });
+    }
+
+    #[test]
+    fn logged_in_event_requires_pending_homeserver_url() {
+        let mut state = test_state();
+
+        assert_eq!(
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                },
+            ),
+            Err("received LoggedIn event without a pending homeserver URL".to_owned())
+        );
+    }
+
+    #[test]
+    fn saved_session_helpers_round_trip_and_reject_invalid_json() {
+        with_local_app_data(|root| {
+            save_session("https://matrix.example", &stored_session()).unwrap();
+            assert_eq!(
+                load_saved_session().unwrap(),
+                SavedSession {
+                    version: SAVED_SESSION_VERSION,
+                    homeserver_url: "https://matrix.example".to_owned(),
+                    session: stored_session(),
+                }
+            );
+
+            let path = root.join(PROFILE_SUBDIR).join(SESSION_FILE_NAME);
+            fs::write(
+                &path,
+                br#"{"version":2,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null}}"#,
+            )
+            .unwrap();
+            assert!(
+                load_saved_session()
+                    .unwrap_err()
+                    .contains("unsupported saved session version 2")
+            );
+
+            fs::write(
+                &path,
+                br#"{"version":1,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null},"unexpected":true}"#,
+            )
+            .unwrap();
+            assert!(
+                load_saved_session()
+                    .unwrap_err()
+                    .contains("unknown field `unexpected`")
+            );
+
+            fs::write(
+                &path,
+                br#"{"version":1,"homeserver_url":"https://matrix.example","session":{"user_id":"@alice:example","device_id":"DEVICE","access_token":"secret-token","refresh_token":null,"unexpected":"value"}}"#,
+            )
+            .unwrap();
+            assert!(
+                load_saved_session()
+                    .unwrap_err()
+                    .contains("unknown field `unexpected`")
+            );
+
+            delete_saved_session().unwrap();
+            delete_saved_session().unwrap();
+            assert!(!path.exists());
+        });
+    }
+
+    #[test]
+    fn submit_login_and_restore_helpers_validate_inputs_and_update_lifecycle() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+
+        submit_login(
+            &mut state,
+            "https://matrix.example".to_owned(),
+            "@alice:example".to_owned(),
+            "secret".to_owned(),
+            String::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            state.pending_login_homeserver_url,
+            Some("https://matrix.example".to_owned())
+        );
+        assert_eq!(state.model.lifecycle_state, LifecycleState::LoggingIn);
+
+        submit_restore_session(
+            &mut state,
+            "https://matrix.example".to_owned(),
+            stored_session(),
+        )
+        .unwrap();
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
+
+        assert_eq!(
+            submit_login(
+                &mut state,
+                String::new(),
+                "@alice:example".to_owned(),
+                "secret".to_owned(),
+                String::new(),
+            ),
+            Err("homeserver URL must not be empty".to_owned())
+        );
+        assert_eq!(
+            submit_restore_session(&mut state, String::new(), stored_session()),
+            Err("homeserver URL must not be empty".to_owned())
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_restore_saved_session_uses_persisted_session_and_submitters_require_sender() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+
+            let restore_error =
+                submit_restore_saved_session(&mut state).expect_err("missing session must fail");
+            assert!(restore_error.contains("failed to read saved session"));
+            assert!(restore_error.contains(SESSION_FILE_NAME));
+            assert_eq!(
+                submit_start_sync(&mut state),
+                Err("core command sender is not available".to_owned())
+            );
+            assert_eq!(
+                submit_logout(&mut state),
+                Err("core command sender is not available".to_owned())
+            );
+
+            let handle = start_test_core();
+            state.command_sender = Some(handle.command_sender().clone());
+            save_session("https://matrix.example", &stored_session()).unwrap();
+
+            submit_restore_saved_session(&mut state).unwrap();
+            assert_eq!(state.model.status, "restoring saved session");
+            assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
+
+            submit_start_sync(&mut state).unwrap();
+            submit_logout(&mut state).unwrap();
+
+            handle
+                .command_sender()
+                .send(Command::Shutdown)
+                .expect("shutdown command must enqueue");
+            handle.join().expect("test core must stop cleanly");
+        });
     }
 }

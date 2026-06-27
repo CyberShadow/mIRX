@@ -173,6 +173,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     app.wait_idle(Duration::from_secs(5))?;
 
     let model = app.dump_model()?;
+    assert_eq!(model.lifecycle_state, "ready");
     assert_eq!(
         model.rooms,
         vec![
@@ -299,6 +300,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
             body: "delta second".to_owned(),
         })
     );
+    assert_eq!(attached.dump_model()?.lifecycle_state, "ready");
     let replacement_state = attached.dump_ui_state()?;
     assert_eq!(
         replacement_state.mdi.active,
@@ -385,6 +387,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     );
 
     let model = attached.dump_model()?;
+    assert_eq!(model.lifecycle_state, "error");
     assert_eq!(
         model.last_verification,
         Some(Verification {

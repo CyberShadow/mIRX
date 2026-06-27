@@ -52,6 +52,7 @@ fn error_display_formats_each_public_variant() {
 fn data_models_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
+        lifecycle_state: "ready".to_owned(),
         rooms: vec![mmatrix_testkit::Room {
             room_id: "!room:example".to_owned(),
             display_name: "Room".to_owned(),
@@ -156,6 +157,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<Model>(
             r#"{
             "status":"synced",
+            "lifecycle_state":"ready",
             "rooms":[],
             "last_timeline":null,
             "last_verification":null,

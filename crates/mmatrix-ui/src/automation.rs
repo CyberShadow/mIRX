@@ -335,10 +335,32 @@ pub(crate) struct SelectViewResponse {
     pub(crate) active: ViewIdentity,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LifecycleState {
+    Offline,
+    CoreStarted,
+    LoggingIn,
+    Restoring,
+    Authenticated,
+    Syncing,
+    Ready,
+    LoggedOut,
+    Stopped,
+    Error,
+}
+
+impl Default for LifecycleState {
+    fn default() -> Self {
+        Self::Offline
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpModel {
     pub(crate) status: String,
+    pub(crate) lifecycle_state: LifecycleState,
     pub(crate) rooms: Vec<DumpRoom>,
     pub(crate) last_timeline: Option<DumpTimelineLine>,
     pub(crate) last_verification: Option<DumpVerification>,
@@ -538,11 +560,12 @@ mod tests {
         COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_DUMP_UI_STATE,
         COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
         COMMAND_ID_PING, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_WAIT_IDLE, CommandKind, DumpTimelineArgs, DumpTimelineResponse,
-        GetVersionResponse, ListRoomsResponse, LoadEventsArgs, MdiState, MdiView, NavigationNode,
-        NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomArgs, SelectRoomResponse,
-        SelectViewArgs, SelectViewResponse, SendTextArgs, SendTextResponse, UiState, ViewIdentity,
-        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
+        COMMAND_ID_WAIT_IDLE, CommandKind, DumpModel, DumpTimelineArgs, DumpTimelineResponse,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, MdiState, MdiView,
+        NavigationNode, NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SendTextArgs, SendTextResponse,
+        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     #[test]
@@ -907,6 +930,38 @@ mod tests {
                     "event_generation":7,
                     "pending_core_events":0,
                     "synthetic_load_in_progress":false
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(success_response(
+                "model",
+                DumpModel {
+                    status: "ready".to_owned(),
+                    lifecycle_state: LifecycleState::Ready,
+                    rooms: vec![super::DumpRoom {
+                        room_id: "!room:example".to_owned(),
+                        display_name: "Room".to_owned(),
+                        encrypted: true,
+                    }],
+                    last_timeline: None,
+                    last_verification: None,
+                    last_error: None,
+                    selected_room: Some("!room:example".to_owned()),
+                },
+            ))
+            .unwrap(),
+            json!({
+                "id":"model",
+                "ok":true,
+                "json":{
+                    "status":"ready",
+                    "lifecycle_state":"ready",
+                    "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true}],
+                    "last_timeline":null,
+                    "last_verification":null,
+                    "last_error":null,
+                    "selected_room":"!room:example"
                 }
             })
         );
