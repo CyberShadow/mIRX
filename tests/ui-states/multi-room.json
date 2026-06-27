@@ -36,19 +36,32 @@
     }
   },
   {
-    "TimelineText": {
+    "RoomState": {
       "room_id": "!ops:example",
       "sender": "@alice:example",
       "timestamp_ms": 1700000120000,
-      "body": "ops topic: incident review"
+      "event_kind": "Topic",
+      "state_key": "",
+      "content": {
+        "Topic": {
+          "topic": "incident review"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomState": {
       "room_id": "!ops:example",
       "sender": "@bob:example",
       "timestamp_ms": 1700000180000,
-      "body": "encryption enabled for ops"
+      "event_kind": "Member",
+      "state_key": "@bob:example",
+      "content": {
+        "Member": {
+          "membership": "join",
+          "displayname": "bob"
+        }
+      }
     }
   },
   {
