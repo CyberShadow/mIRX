@@ -12,6 +12,9 @@ started_xvfb=0
 xvfb_pid=
 tmpdir=
 app_pid=
+generated_dir=
+diff_dir=
+keep_tmpdir=0
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -100,10 +103,6 @@ start_xvfb_explicit() {
 }
 
 ensure_xvfb() {
-  if [[ -n "${DISPLAY:-}" ]] && display_is_healthy "$DISPLAY"; then
-    return 0
-  fi
-
   if [[ -n "${MMATRIX_WINE_DISPLAY:-}" ]]; then
     start_xvfb_explicit "$MMATRIX_WINE_DISPLAY"
   else
@@ -142,7 +141,9 @@ cleanup() {
     kill "$xvfb_pid" >/dev/null 2>&1 || true
     wait "$xvfb_pid" 2>/dev/null || true
   fi
-  if [[ -n "${tmpdir:-}" ]]; then
+  if [[ "${keep_tmpdir:-0}" -eq 1 ]]; then
+    echo "preserved UI snapshot outputs: $tmpdir" >&2
+  elif [[ -n "${tmpdir:-}" ]]; then
     rm -rf "$tmpdir"
   fi
 }
@@ -232,11 +233,18 @@ run_case() {
   local state_path_win
   local case_name=${state_path##*/}
   case_name=${case_name%.json}
-  local png_path="$artifacts_dir/$case_name.png"
+  local baseline_png="$artifacts_dir/$case_name.png"
+  local generated_png="$generated_dir/$case_name.png"
+  local diff_png="$diff_dir/$case_name.diff.png"
   local driver_stdout="$tmpdir/$case_name.driver.stdout"
   local driver_stderr="$tmpdir/$case_name.driver.stderr"
   local driver_status=0
   local driver_args=()
+
+  if [[ ! -f "$baseline_png" ]]; then
+    echo "missing UI snapshot baseline: $baseline_png" >&2
+    return 1
+  fi
 
   configure_case_expectations "$case_name"
   cleanup_app
@@ -267,8 +275,10 @@ run_case() {
   driver_status=$?
   set -e
 
-  import -window root "$png_path"
-  echo "PNG $png_path"
+  import -window root "$generated_png"
+  echo "PNG $generated_png"
+
+  compare_snapshot_pngs "$baseline_png" "$generated_png" "$diff_png"
 
   if [[ -s "$driver_stdout" ]]; then
     cat "$driver_stdout"
@@ -285,24 +295,52 @@ run_case() {
   cleanup_app
 }
 
+compare_snapshot_pngs() {
+  local baseline_png="$1"
+  local generated_png="$2"
+  local diff_png="$3"
+  local compare_output ae_metric
+
+  set +e
+  compare_output="$(compare -metric AE "$baseline_png" "$generated_png" "$diff_png" 2>&1)"
+  set -e
+
+  ae_metric="${compare_output%%[[:space:]]*}"
+
+  if [[ "$ae_metric" != "0" ]]; then
+    keep_tmpdir=1
+    echo "visual snapshot mismatch" >&2
+    echo "baseline:  $baseline_png" >&2
+    echo "generated: $generated_png" >&2
+    echo "diff:      $diff_png" >&2
+    echo "metric:    $compare_output" >&2
+    return 1
+  fi
+
+  return 0
+}
+
 main() {
   require_command wine
   require_command wineboot
   require_command Xvfb
   require_command import
+  require_command compare
   require_command xdpyinfo
 
   [[ -d "$states_dir" ]] || die "missing states directory: $states_dir"
 
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-ui-snapshot.XXXXXX")
+  generated_dir="$tmpdir/generated-ui-snapshots"
+  diff_dir="$tmpdir/ui-snapshot-diffs"
+  keep_tmpdir=0
+  mkdir -p "$generated_dir" "$diff_dir"
   trap cleanup EXIT
 
   cd "$root_dir"
   ensure_xvfb
   ensure_wineprefix
   ensure_binaries
-
-  mkdir -p "$artifacts_dir"
 
   shopt -s nullglob
   local state_files=("$states_dir"/*.json)
