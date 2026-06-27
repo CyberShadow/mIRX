@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 6;
+pub(crate) const PROTOCOL_VERSION: u32 = 7;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -27,6 +27,8 @@ pub(crate) const COMMAND_ID_LOGOUT: u32 = 16;
 pub(crate) const COMMAND_ID_DUMP_COMPOSE_TEXT: u32 = 17;
 pub(crate) const COMMAND_ID_SET_COMPOSE_TEXT: u32 = 18;
 pub(crate) const COMMAND_ID_SEND_COMPOSE_KEY: u32 = 19;
+pub(crate) const COMMAND_ID_SELECT_NAVIGATION_PATH: u32 = 20;
+pub(crate) const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -49,6 +51,8 @@ pub(crate) enum CommandKind {
     DumpComposeText,
     SetComposeText,
     SendComposeKey,
+    SelectNavigationPath,
+    DumpSelectedNavigationPath,
 }
 
 impl CommandKind {
@@ -73,6 +77,8 @@ impl CommandKind {
             COMMAND_ID_DUMP_COMPOSE_TEXT => Some(Self::DumpComposeText),
             COMMAND_ID_SET_COMPOSE_TEXT => Some(Self::SetComposeText),
             COMMAND_ID_SEND_COMPOSE_KEY => Some(Self::SendComposeKey),
+            COMMAND_ID_SELECT_NAVIGATION_PATH => Some(Self::SelectNavigationPath),
+            COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH => Some(Self::DumpSelectedNavigationPath),
             _ => None,
         }
     }
@@ -147,6 +153,13 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: SendComposeKeyArgs,
     },
+    SelectNavigationPath {
+        id: String,
+        args: SelectNavigationPathArgs,
+    },
+    DumpSelectedNavigationPath {
+        id: String,
+    },
 }
 
 impl ParsedCommand {
@@ -171,6 +184,8 @@ impl ParsedCommand {
             Self::DumpComposeText { .. } => CommandKind::DumpComposeText,
             Self::SetComposeText { .. } => CommandKind::SetComposeText,
             Self::SendComposeKey { .. } => CommandKind::SendComposeKey,
+            Self::SelectNavigationPath { .. } => CommandKind::SelectNavigationPath,
+            Self::DumpSelectedNavigationPath { .. } => CommandKind::DumpSelectedNavigationPath,
         }
     }
 }
@@ -222,6 +237,12 @@ pub(crate) struct SetComposeTextArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SendComposeKeyArgs {
     pub(crate) key: ComposeKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectNavigationPathArgs {
+    pub(crate) path: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -370,6 +391,12 @@ pub(crate) struct ComposeTextResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AcceptedResponse {
     pub(crate) accepted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectedNavigationPathResponse {
+    pub(crate) path: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -985,6 +1012,14 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SendComposeKeyArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::SelectNavigationPath => Ok(ParsedCommand::SelectNavigationPath {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SelectNavigationPathArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::DumpSelectedNavigationPath => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpSelectedNavigationPath { id: envelope.id })
+        }
     }
 }
 
@@ -1048,18 +1083,20 @@ mod tests {
 
     use super::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL,
-        COMMAND_ID_DUMP_TIMELINE, COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION,
-        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
-        COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RESTORE_SAVED_SESSION,
-        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
+        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_TIMELINE,
+        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING,
+        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
+        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
         COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
         COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
         DumpModel, DumpRoomStateContent, DumpRoomStateEventKind, DumpRoomStateLine,
         DumpRoomTopicState, DumpTimelineArgs, DumpTimelineEntry, DumpTimelineLine,
         DumpTimelineResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NoArgs, ParsedCommand,
-        PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectRoomArgs, SelectRoomResponse,
-        SelectViewArgs, SelectViewResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
+        PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectNavigationPathArgs,
+        SelectRoomArgs, SelectRoomResponse, SelectViewArgs, SelectViewResponse,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
         SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
         WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
@@ -1152,10 +1189,21 @@ mod tests {
             Some(CommandKind::SendComposeKey)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SELECT_NAVIGATION_PATH),
+            Some(CommandKind::SelectNavigationPath)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH),
+            Some(CommandKind::DumpSelectedNavigationPath)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
-        assert_eq!(CommandKind::from_id(COMMAND_ID_SEND_COMPOSE_KEY + 1), None);
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH + 1),
+            None
+        );
     }
 
     #[test]
@@ -1395,6 +1443,34 @@ mod tests {
                 }
             );
         }
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_NAVIGATION_PATH,
+                br#"{"id":"select-nav","args":{"path":["mmatrix","rooms: 4","Work","Shared"]}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SelectNavigationPath {
+                id: "select-nav".to_owned(),
+                args: SelectNavigationPathArgs {
+                    path: vec![
+                        "mmatrix".to_owned(),
+                        "rooms: 4".to_owned(),
+                        "Work".to_owned(),
+                        "Shared".to_owned(),
+                    ],
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH,
+                br#"{"id":"selected-nav","args":{}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::DumpSelectedNavigationPath {
+                id: "selected-nav".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -1599,6 +1675,25 @@ mod tests {
     }
 
     #[test]
+    fn select_navigation_path_rejects_unknown_fields() {
+        let error = parse_command_request(
+            COMMAND_ID_SELECT_NAVIGATION_PATH,
+            br#"{"id":"select-nav","args":{"path":["mmatrix"],"unexpected":true}}"#,
+        )
+        .unwrap_err();
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["id"], json!("select-nav"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert!(
+            value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+    }
+
+    #[test]
     fn login_defaults_device_display_name_when_omitted() {
         assert_eq!(
             parse_command_request(
@@ -1702,7 +1797,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":6,
+                    "protocol_version":7,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1760,6 +1855,26 @@ mod tests {
                     "last_verification":null,
                     "last_error":null,
                     "selected_room":"!room:example"
+                }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(success_response(
+                "selected-nav",
+                SelectedNavigationPathResponse {
+                    path: vec![
+                        "mmatrix".to_owned(),
+                        "rooms: 4".to_owned(),
+                        "Work".to_owned(),
+                    ],
+                },
+            ))
+            .unwrap(),
+            json!({
+                "id":"selected-nav",
+                "ok":true,
+                "json":{
+                    "path":["mmatrix","rooms: 4","Work"]
                 }
             })
         );

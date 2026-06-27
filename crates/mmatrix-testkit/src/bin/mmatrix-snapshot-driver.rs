@@ -31,9 +31,11 @@ mod windows_main {
         expect_status_views: Vec<String>,
         expect_status_bars: Vec<String>,
         expect_switchbar_items: Vec<SwitchbarItemExpectation>,
+        expect_no_switchbar_items: Vec<ViewIdentity>,
         expect_switchbar_active: Option<ViewIdentity>,
         expect_switchbar_activity: Vec<ViewIdentity>,
         expect_no_switchbar_activity: Vec<ViewIdentity>,
+        expect_navigation_texts: Vec<String>,
         expect_no_navigation_texts: Vec<String>,
     }
 
@@ -59,9 +61,11 @@ mod windows_main {
                 || !self.expect_status_views.is_empty()
                 || !self.expect_status_bars.is_empty()
                 || !self.expect_switchbar_items.is_empty()
+                || !self.expect_no_switchbar_items.is_empty()
                 || self.expect_switchbar_active.is_some()
                 || !self.expect_switchbar_activity.is_empty()
                 || !self.expect_no_switchbar_activity.is_empty()
+                || !self.expect_navigation_texts.is_empty()
                 || !self.expect_no_navigation_texts.is_empty()
         }
     }
@@ -255,6 +259,16 @@ mod windows_main {
                 );
             }
 
+            for identity in &config.expect_no_switchbar_items {
+                if ui_state.switchbar.item(identity).is_some() {
+                    return Err(format!(
+                        "switchbar item assertion failed: unexpected item {}",
+                        format_view_identity(identity)
+                    ));
+                }
+                println!("PASS switchbar excludes {}", format_view_identity(identity));
+            }
+
             if let Some(expected_identity) = config.expect_switchbar_active.as_ref() {
                 let active_items: Vec<_> = ui_state
                     .switchbar
@@ -322,6 +336,16 @@ mod windows_main {
                     "PASS switchbar no activity {}",
                     format_view_identity(identity)
                 );
+            }
+
+            for substring in &config.expect_navigation_texts {
+                if !navigation_contains(&ui_state.navigation, substring) {
+                    return Err(format!(
+                        "navigation assertion failed: navigation did not contain {:?}",
+                        substring
+                    ));
+                }
+                println!("PASS navigation contains {:?}", substring);
             }
 
             for substring in &config.expect_no_navigation_texts {
@@ -443,6 +467,17 @@ mod windows_main {
                             title_substring: title_substring.to_owned(),
                         });
                 }
+                "--expect-no-switchbar-item" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-no-switchbar-item".to_owned())?;
+                    config
+                        .expect_no_switchbar_items
+                        .push(parse_view_identity_arg(
+                            "--expect-no-switchbar-item",
+                            &value,
+                        )?);
+                }
                 "--expect-switchbar-active" => {
                     let value = args
                         .next()
@@ -481,6 +516,13 @@ mod windows_main {
                             "missing value for --expect-no-navigation-text".to_owned()
                         })?);
                 }
+                "--expect-navigation-text" => {
+                    config.expect_navigation_texts.push(
+                        args.next().ok_or_else(|| {
+                            "missing value for --expect-navigation-text".to_owned()
+                        })?,
+                    );
+                }
                 "--help" => {
                     return Err(usage());
                 }
@@ -507,9 +549,11 @@ mod windows_main {
             "  --expect-status-view <substring>",
             "  --expect-status-bar <substring>",
             "  --expect-switchbar-item <identity>::<title-substring>",
+            "  --expect-no-switchbar-item <status|room:<room_id>>",
             "  --expect-switchbar-active <status|room:<room_id>>",
             "  --expect-switchbar-activity <status|room:<room_id>>",
             "  --expect-no-switchbar-activity <status|room:<room_id>>",
+            "  --expect-navigation-text <substring>",
             "  --expect-no-navigation-text <substring>",
         ]
         .join("\n")

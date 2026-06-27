@@ -38,7 +38,7 @@ use windows_sys::Win32::UI::Controls::{
     STATUSCLASSNAMEW, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE,
     TB_CHECKBUTTON, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TBBUTTON,
     TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
+    TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
     TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
@@ -71,10 +71,10 @@ use crate::{
         DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
         MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
-        SelectViewResponse, SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
-        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
-        parse_command_request, success_response,
+        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_from_summary, dump_timeline_line_from_text,
+        dump_verification_from_request, failure_response, parse_command_request, success_response,
     },
 };
 
@@ -299,6 +299,7 @@ struct WindowState {
     pending_login_homeserver_url: Option<String>,
     current_session_homeserver_url: Option<String>,
     tree_items: BTreeMap<isize, ViewId>,
+    primary_tree_items: BTreeMap<ViewId, isize>,
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
     active_view: ViewId,
@@ -361,6 +362,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         pending_login_homeserver_url: None,
         current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
+        primary_tree_items: BTreeMap::new(),
         views: BTreeMap::new(),
         hwnd_views: BTreeMap::new(),
         active_view: ViewId::Status,
@@ -1252,7 +1254,7 @@ unsafe fn handle_switchbar_command(hwnd: HWND, wparam: WPARAM) -> bool {
         return false;
     };
 
-    if let Err(message) = activate_view(hwnd, &view_id) {
+    if let Err(message) = activate_view(hwnd, &view_id, None) {
         show_error_message(hwnd, "Switchbar", &message);
     }
 
@@ -2012,6 +2014,10 @@ fn room_tree_label(room: &RoomSummary) -> String {
     label
 }
 
+fn space_tree_label(space: &RoomSummary) -> String {
+    space.display_name.clone()
+}
+
 fn view_title(model: &UiModel, view_id: &ViewId) -> String {
     match view_id {
         ViewId::Status => "Status".to_owned(),
@@ -2191,7 +2197,11 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
     Ok(())
 }
 
-unsafe fn activate_view(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
+unsafe fn activate_view(
+    hwnd: HWND,
+    view_id: &ViewId,
+    preferred_tree_item: Option<isize>,
+) -> Result<(), String> {
     let mut cleared_room_activity = false;
     let child = match view_id {
         ViewId::Status => {
@@ -2214,7 +2224,7 @@ unsafe fn activate_view(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
     }
 
     refresh_view_content(hwnd, view_id)?;
-    select_tree_item(hwnd, view_id);
+    select_tree_item(hwnd, view_id, preferred_tree_item);
 
     let mdi_client = state_ref(hwnd).controls.mdi_client;
     SendMessageW(mdi_client, WM_MDIACTIVATE, child as WPARAM, 0);
@@ -2260,7 +2270,7 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     refresh_tree(hwnd);
     rebuild_switchbar(hwnd)?;
     refresh_status_bar(hwnd)?;
-    activate_view(hwnd, &active_view)
+    activate_view(hwnd, &active_view, None)
 }
 
 unsafe fn refresh_tree(hwnd: HWND) {
@@ -2272,41 +2282,143 @@ unsafe fn refresh_tree(hwnd: HWND) {
 
     SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as LPARAM);
     state.tree_items.clear();
+    state.primary_tree_items.clear();
 
     let root = insert_tree_item(tree, TVI_ROOT as isize, "mmatrix");
-    let status = insert_tree_item(tree, root, "status");
-    state.tree_items.insert(status, ViewId::Status);
+    let status = insert_mapped_tree_item(state, root, "status", ViewId::Status);
 
-    let actionable_rooms = state
-        .model
-        .rooms
+    let rooms = state.model.rooms.clone();
+    let actionable_rooms = rooms
         .iter()
         .filter(|room| is_actionable_room(room))
+        .cloned()
         .collect::<Vec<_>>();
-    let rooms_label = if state.model.rooms.is_empty() {
+    let rooms_label = if rooms.is_empty() {
         "rooms: offline".to_owned()
     } else {
         format!("rooms: {}", actionable_rooms.len())
     };
     let rooms_root = insert_tree_item(tree, root, &rooms_label);
-    for room in actionable_rooms {
-        let room_item = insert_tree_item(tree, rooms_root, &room_tree_label(room));
-        state
-            .tree_items
-            .insert(room_item, ViewId::Room(room.room_id.clone()));
+
+    let flat_mode = rooms
+        .iter()
+        .all(|room| !room.is_space && room.space_children.is_empty());
+    if flat_mode {
+        for room in &actionable_rooms {
+            render_room_tree_leaf(state, rooms_root, room);
+        }
+    } else {
+        let room_map = rooms
+            .iter()
+            .cloned()
+            .map(|room| (room.room_id.clone(), room))
+            .collect::<BTreeMap<_, _>>();
+        let valid_space_children = rooms
+            .iter()
+            .filter(|room| room.is_space)
+            .map(|room| {
+                (
+                    room.room_id.clone(),
+                    room.space_children
+                        .iter()
+                        .filter(|child| room_map.contains_key(&child.room_id))
+                        .map(|child| child.room_id.clone())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let child_space_ids = valid_space_children
+            .values()
+            .flatten()
+            .filter_map(|child_id| {
+                room_map
+                    .get(child_id)
+                    .filter(|room| room.is_space)
+                    .map(|_| child_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+        let rooted_room_ids = valid_space_children
+            .values()
+            .flatten()
+            .filter_map(|child_id| {
+                room_map
+                    .get(child_id)
+                    .filter(|room| !room.is_space)
+                    .map(|_| child_id.clone())
+            })
+            .collect::<BTreeSet<_>>();
+
+        let mut rendered_roots = rooms
+            .iter()
+            .filter(|room| room.is_space && !child_space_ids.contains(&room.room_id))
+            .map(|room| room.room_id.clone())
+            .collect::<Vec<_>>();
+        let mut covered_space_ids = BTreeSet::new();
+        for root_id in &rendered_roots {
+            mark_reachable_space_ids(
+                &mut covered_space_ids,
+                &room_map,
+                &valid_space_children,
+                root_id,
+            );
+        }
+        for room in rooms.iter().filter(|room| room.is_space) {
+            if covered_space_ids.contains(&room.room_id) {
+                continue;
+            }
+            rendered_roots.push(room.room_id.clone());
+            mark_reachable_space_ids(
+                &mut covered_space_ids,
+                &room_map,
+                &valid_space_children,
+                &room.room_id,
+            );
+        }
+
+        for root_id in rendered_roots {
+            render_space_tree(
+                state,
+                rooms_root,
+                &room_map,
+                &valid_space_children,
+                &root_id,
+            );
+        }
+
+        let unspaced_rooms = actionable_rooms
+            .into_iter()
+            .filter(|room| !rooted_room_ids.contains(&room.room_id))
+            .collect::<Vec<_>>();
+        if !unspaced_rooms.is_empty() {
+            let label = format!("unspaced rooms: {}", unspaced_rooms.len());
+            let unspaced_root = insert_tree_item(tree, rooms_root, &label);
+            for room in &unspaced_rooms {
+                render_room_tree_leaf(state, unspaced_root, room);
+            }
+            expand_tree_item(tree, unspaced_root);
+        }
     }
 
-    SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, root as LPARAM);
-    SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, rooms_root as LPARAM);
+    expand_tree_item(tree, root);
+    expand_tree_item(tree, rooms_root);
+    debug_assert_eq!(
+        status,
+        *state.primary_tree_items.get(&ViewId::Status).unwrap()
+    );
 }
 
-unsafe fn select_tree_item(hwnd: HWND, view_id: &ViewId) {
+unsafe fn select_tree_item(hwnd: HWND, view_id: &ViewId, preferred_tree_item: Option<isize>) {
     let (tree, item) = {
         let state = state_ref(hwnd);
-        let item = state
-            .tree_items
-            .iter()
-            .find_map(|(item, mapped_view)| (mapped_view == view_id).then_some(*item));
+        let item = preferred_tree_item
+            .filter(|item| {
+                state
+                    .tree_items
+                    .get(item)
+                    .is_some_and(|mapped_view| mapped_view == view_id)
+            })
+            .or_else(|| state.primary_tree_items.get(view_id).copied());
         (state.controls.tree, item)
     };
     let Some(item) = item else {
@@ -2340,6 +2452,118 @@ unsafe fn insert_tree_item(tree: HWND, parent: isize, text: &str) -> isize {
         0,
         (&insert as *const TVINSERTSTRUCTW) as LPARAM,
     ) as isize
+}
+
+unsafe fn expand_tree_item(tree: HWND, item: isize) {
+    SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, item as LPARAM);
+}
+
+unsafe fn insert_mapped_tree_item(
+    state: &mut WindowState,
+    parent: isize,
+    label: &str,
+    view_id: ViewId,
+) -> isize {
+    let item = insert_tree_item(state.controls.tree, parent, label);
+    state.tree_items.insert(item, view_id.clone());
+    state.primary_tree_items.entry(view_id).or_insert(item);
+    item
+}
+
+unsafe fn render_room_tree_leaf(state: &mut WindowState, parent: isize, room: &RoomSummary) {
+    insert_mapped_tree_item(
+        state,
+        parent,
+        &room_tree_label(room),
+        ViewId::Room(room.room_id.clone()),
+    );
+}
+
+fn mark_reachable_space_ids(
+    covered: &mut BTreeSet<String>,
+    room_map: &BTreeMap<String, RoomSummary>,
+    valid_space_children: &BTreeMap<String, Vec<String>>,
+    root_id: &str,
+) {
+    let mut stack = vec![root_id.to_owned()];
+    while let Some(space_id) = stack.pop() {
+        if !covered.insert(space_id.clone()) {
+            continue;
+        }
+        for child_id in valid_space_children
+            .get(&space_id)
+            .into_iter()
+            .flatten()
+            .rev()
+        {
+            let child = room_map
+                .get(child_id)
+                .expect("valid space child must exist in room map");
+            if child.is_space {
+                stack.push(child_id.clone());
+            }
+        }
+    }
+}
+
+unsafe fn render_space_tree_children(
+    state: &mut WindowState,
+    parent: isize,
+    room_map: &BTreeMap<String, RoomSummary>,
+    valid_space_children: &BTreeMap<String, Vec<String>>,
+    space_id: &str,
+    ancestor_chain: &[String],
+) {
+    let mut next_ancestor_chain = ancestor_chain.to_vec();
+    next_ancestor_chain.push(space_id.to_owned());
+
+    for child_id in valid_space_children.get(space_id).into_iter().flatten() {
+        let child = room_map
+            .get(child_id)
+            .expect("valid space child must exist in room map");
+        if child.is_space {
+            let child_item =
+                insert_tree_item(state.controls.tree, parent, &space_tree_label(child));
+            if !next_ancestor_chain
+                .iter()
+                .any(|ancestor| ancestor == child_id)
+            {
+                render_space_tree_children(
+                    state,
+                    child_item,
+                    room_map,
+                    valid_space_children,
+                    child_id,
+                    &next_ancestor_chain,
+                );
+            }
+            expand_tree_item(state.controls.tree, child_item);
+        } else {
+            render_room_tree_leaf(state, parent, child);
+        }
+    }
+}
+
+unsafe fn render_space_tree(
+    state: &mut WindowState,
+    parent: isize,
+    room_map: &BTreeMap<String, RoomSummary>,
+    valid_space_children: &BTreeMap<String, Vec<String>>,
+    space_id: &str,
+) {
+    let space = room_map
+        .get(space_id)
+        .expect("rendered root space must exist in room map");
+    let space_item = insert_tree_item(state.controls.tree, parent, &space_tree_label(space));
+    render_space_tree_children(
+        state,
+        space_item,
+        room_map,
+        valid_space_children,
+        space_id,
+        &[],
+    );
+    expand_tree_item(state.controls.tree, space_item);
 }
 
 unsafe fn enable_automation(hwnd: HWND) -> Result<(), String> {
@@ -2553,6 +2777,12 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, dump)
         }
+        ParsedCommand::DumpSelectedNavigationPath { id } => {
+            let path = dump_selected_navigation_path(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "ui_state_unavailable", message)
+            })?;
+            serialize_success_json(&id, SelectedNavigationPathResponse { path })
+        }
         ParsedCommand::DumpTimeline { id, args } => {
             let room_id = resolve_timeline_room_id(state_ref(hwnd), args.room_id.as_deref())
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
@@ -2580,7 +2810,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, ListRoomsResponse { rooms })
         }
         ParsedCommand::SelectRoom { id, args } => {
-            activate_view(hwnd, &ViewId::Room(args.room_id.clone()))
+            activate_view(hwnd, &ViewId::Room(args.room_id.clone()), None)
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
             serialize_success_json(
                 &id,
@@ -2591,11 +2821,17 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         }
         ParsedCommand::SelectView { id, args } => {
             let requested_view = view_id_from_identity(&args.view);
-            activate_view(hwnd, &requested_view)
+            activate_view(hwnd, &requested_view, None)
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_view", message))?;
             let active = active_view_identity(hwnd)
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_view", message))?;
             serialize_success_json(&id, SelectViewResponse { active })
+        }
+        ParsedCommand::SelectNavigationPath { id, args } => {
+            select_navigation_path(hwnd, &args.path).map_err(|message| {
+                failure_response(Some(id.clone()), "unknown_navigation", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::SendText { id, args } => {
             let body = args.body;
@@ -2701,6 +2937,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::WaitIdle { id, .. }
         | ParsedCommand::DumpModel { id }
         | ParsedCommand::DumpUiState { id }
+        | ParsedCommand::DumpSelectedNavigationPath { id }
         | ParsedCommand::DumpTimeline { id, .. }
         | ParsedCommand::ListRooms { id }
         | ParsedCommand::SelectRoom { id, .. }
@@ -2714,7 +2951,8 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::Logout { id }
         | ParsedCommand::DumpComposeText { id }
         | ParsedCommand::SetComposeText { id, .. }
-        | ParsedCommand::SendComposeKey { id, .. } => id,
+        | ParsedCommand::SendComposeKey { id, .. }
+        | ParsedCommand::SelectNavigationPath { id, .. } => id,
     }
 }
 
@@ -2973,6 +3211,80 @@ unsafe fn dump_navigation_tree(hwnd: HWND) -> Result<NavigationNode, String> {
     }
 
     read_navigation_node(tree, root)
+}
+
+unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<String>, String> {
+    let tree = state_ref(hwnd).controls.tree;
+    if tree.is_null() {
+        return Err("tree control was not created".to_owned());
+    }
+
+    let mut item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
+    if item == 0 {
+        return Err("navigation tree selection was missing".to_owned());
+    }
+
+    let mut path = Vec::new();
+    while item != 0 {
+        path.push(read_tree_item_text(tree, item)?);
+        item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
+    }
+    path.reverse();
+    Ok(path)
+}
+
+unsafe fn select_navigation_path(hwnd: HWND, path: &[String]) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("navigation path must not be empty".to_owned());
+    }
+
+    let tree = state_ref(hwnd).controls.tree;
+    if tree.is_null() {
+        return Err("tree control was not created".to_owned());
+    }
+
+    let mut current = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
+    if current == 0 {
+        return Err("navigation tree root was missing".to_owned());
+    }
+
+    let root_text = read_tree_item_text(tree, current)?;
+    if root_text != path[0] {
+        return Err(format!("unknown navigation path: {}", path.join(" > ")));
+    }
+
+    for segment in &path[1..] {
+        let mut child = SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            TVGN_CHILD as WPARAM,
+            current as LPARAM,
+        ) as isize;
+        let mut matched_child = None;
+        while child != 0 {
+            if read_tree_item_text(tree, child)? == *segment {
+                matched_child = Some(child);
+                break;
+            }
+            child =
+                SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
+        }
+
+        current = matched_child
+            .ok_or_else(|| format!("unknown navigation path: {}", path.join(" > ")))?;
+    }
+
+    let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
+    if selected != current {
+        SendMessageW(
+            tree,
+            TVM_SELECTITEM,
+            TVGN_CARET as WPARAM,
+            current as LPARAM,
+        );
+    }
+
+    Ok(())
 }
 
 unsafe fn dump_status_bar_state(hwnd: HWND) -> Result<StatusBarState, String> {
@@ -3352,7 +3664,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
 
     state_mut(hwnd).synthetic_load_in_progress = false;
     sync_views_and_tree(hwnd)?;
-    activate_view(hwnd, &active_view)?;
+    activate_view(hwnd, &active_view, None)?;
 
     Ok((rooms, timeline_events))
 }
@@ -3381,7 +3693,7 @@ unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
 
     let view_id = state_ref(hwnd).tree_items.get(&selected_item).cloned();
     if let Some(view_id) = view_id {
-        let _ = activate_view(hwnd, &view_id);
+        let _ = activate_view(hwnd, &view_id, Some(selected_item));
     }
 
     true
@@ -4012,6 +4324,7 @@ mod tests {
             pending_login_homeserver_url: None,
             current_session_homeserver_url: None,
             tree_items: BTreeMap::new(),
+            primary_tree_items: BTreeMap::new(),
             views: BTreeMap::new(),
             hwnd_views: BTreeMap::new(),
             active_view: ViewId::Status,

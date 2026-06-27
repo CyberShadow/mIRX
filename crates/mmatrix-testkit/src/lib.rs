@@ -52,6 +52,10 @@ const COMMAND_ID_SET_COMPOSE_TEXT: u32 = 18;
 #[cfg(windows)]
 const COMMAND_ID_SEND_COMPOSE_KEY: u32 = 19;
 #[cfg(windows)]
+const COMMAND_ID_SELECT_NAVIGATION_PATH: u32 = 20;
+#[cfg(windows)]
+const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -687,12 +691,28 @@ impl MmatrixApp {
         self.inner.select_view(view)
     }
 
+    pub fn select_navigation_path(&self, path: &[&str]) -> Result<(), TestkitError> {
+        self.inner.select_navigation_path(path)
+    }
+
+    pub fn selected_navigation_path(&self) -> Result<Vec<String>, TestkitError> {
+        self.inner.selected_navigation_path()
+    }
+
     pub fn select_status_view(&self) -> Result<(), TestkitError> {
         self.inner.select_status_view()
     }
 
     pub fn send_text(&self, room_id: Option<&str>, body: &str) -> Result<(), TestkitError> {
-        self.inner.send_text(room_id, body)
+        self.send_text_target(room_id, body).map(|_| ())
+    }
+
+    pub fn send_text_target(
+        &self,
+        room_id: Option<&str>,
+        body: &str,
+    ) -> Result<String, TestkitError> {
+        self.inner.send_text_target(room_id, body)
     }
 
     pub fn compose_text(&self) -> Result<String, TestkitError> {
@@ -877,6 +897,13 @@ struct SelectViewArgs {
 }
 
 #[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectNavigationPathArgs<'a> {
+    path: Vec<&'a str>,
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawResponseEnvelope<T> {
@@ -953,6 +980,13 @@ struct ComposeTextResponse {
 #[serde(deny_unknown_fields)]
 struct AcceptedResponse {
     accepted: bool,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SelectedNavigationPathResponse {
+    path: Vec<String>,
 }
 
 #[cfg(windows)]
@@ -1052,17 +1086,29 @@ mod imp {
             ))
         }
 
+        pub(crate) fn select_navigation_path(&self, _path: &[&str]) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn selected_navigation_path(&self) -> Result<Vec<String>, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
         }
 
-        pub(crate) fn send_text(
+        pub(crate) fn send_text_target(
             &self,
             _room_id: Option<&str>,
             _body: &str,
-        ) -> Result<(), TestkitError> {
+        ) -> Result<String, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1382,19 +1428,41 @@ mod imp {
             }
         }
 
+        pub(crate) fn select_navigation_path(&self, path: &[&str]) -> Result<(), TestkitError> {
+            let response: AcceptedResponse = self.send_command(
+                COMMAND_ID_SELECT_NAVIGATION_PATH,
+                SelectNavigationPathArgs {
+                    path: path.to_vec(),
+                },
+            )?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "SELECT_NAVIGATION_PATH was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn selected_navigation_path(&self) -> Result<Vec<String>, TestkitError> {
+            let response: SelectedNavigationPathResponse =
+                self.send_command(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, EmptyArgs {})?;
+            Ok(response.path)
+        }
+
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
             self.select_view(ViewIdentity::Status)
         }
 
-        pub(crate) fn send_text(
+        pub(crate) fn send_text_target(
             &self,
             room_id: Option<&str>,
             body: &str,
-        ) -> Result<(), TestkitError> {
+        ) -> Result<String, TestkitError> {
             let response: SendTextResponse =
                 self.send_command(COMMAND_ID_SEND_TEXT, SendTextArgs { room_id, body })?;
             if response.accepted {
-                Ok(())
+                Ok(response.room_id)
             } else {
                 Err(TestkitError::InvalidResponse(format!(
                     "SEND_TEXT was not accepted for room {}",

@@ -125,7 +125,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 6,
+        protocol_version: 7,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -393,7 +393,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":6,
+            "protocol_version":7,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -880,6 +880,30 @@ fn non_windows_new_methods_report_unsupported_driver() {
     let error = app
         .select_status_view()
         .expect_err("select_status_view must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .select_navigation_path(&["mmatrix", "status"])
+        .expect_err("select_navigation_path must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .selected_navigation_path()
+        .expect_err("selected_navigation_path must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .send_text_target(None, "hello")
+        .expect_err("send_text_target must fail off Windows");
     assert_eq!(
         error.to_string(),
         "mmatrix-testkit requires the Windows target"

@@ -359,6 +359,13 @@ fn assert_navigation_not_contains(node: &NavigationNode, substring: &str) {
     );
 }
 
+fn nav(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
+    NavigationNode {
+        text: text.to_owned(),
+        children,
+    }
+}
+
 fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
     let wide = text.encode_utf16().chain([0]).collect::<Vec<_>>();
     let bytes_len = std::mem::size_of_val(wide.as_slice());
@@ -546,7 +553,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 6);
+    assert_eq!(version.protocol_version, 7);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -974,6 +981,221 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     ));
     assert!(view_contains(ops_view, "* [22:14] carol joined"));
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let fixture_path = fixture_state_path("space-hierarchy.json");
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events_from_file(&fixture_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.dump_model()?.rooms,
+        vec![
+            listed_space(
+                "!work:example",
+                "Work",
+                vec![
+                    SpaceChild {
+                        room_id: "!ops:example".to_owned(),
+                        suggested: true,
+                        order: Some("a".to_owned()),
+                    },
+                    SpaceChild {
+                        room_id: "!shared:example".to_owned(),
+                        suggested: false,
+                        order: Some("b".to_owned()),
+                    },
+                ],
+            ),
+            listed_space(
+                "!social:example",
+                "Social",
+                vec![
+                    SpaceChild {
+                        room_id: "!shared:example".to_owned(),
+                        suggested: false,
+                        order: Some("a".to_owned()),
+                    },
+                    SpaceChild {
+                        room_id: "!random:example".to_owned(),
+                        suggested: false,
+                        order: Some("b".to_owned()),
+                    },
+                ],
+            ),
+            listed_room("!ops:example", "Ops", true),
+            listed_room("!shared:example", "Shared", false),
+            listed_room("!random:example", "Random", false),
+            listed_room("!direct:example", "Direct", true),
+        ]
+    );
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(
+        initial_state.navigation,
+        nav(
+            "mmatrix",
+            vec![
+                nav("status", vec![]),
+                nav(
+                    "rooms: 4",
+                    vec![
+                        nav(
+                            "Work",
+                            vec![nav("Ops [e2ee]", vec![]), nav("Shared", vec![])],
+                        ),
+                        nav("Social", vec![nav("Shared", vec![]), nav("Random", vec![])],),
+                        nav("unspaced rooms: 1", vec![nav("Direct [e2ee]", vec![])]),
+                    ],
+                ),
+            ],
+        )
+    );
+    assert_eq!(
+        initial_state
+            .mdi
+            .views
+            .iter()
+            .map(|view| view.identity.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ViewIdentity::Status,
+            room_identity("!ops:example"),
+            room_identity("!shared:example"),
+            room_identity("!random:example"),
+            room_identity("!direct:example"),
+        ]
+    );
+    assert_eq!(
+        initial_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| item.identity.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ViewIdentity::Status,
+            room_identity("!ops:example"),
+            room_identity("!shared:example"),
+            room_identity("!random:example"),
+            room_identity("!direct:example"),
+        ]
+    );
+    assert_eq!(initial_state.mdi.active, room_identity("!ops:example"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!ops:example")
+    );
+    assert_switchbar_activity(&initial_state, &room_identity("!ops:example"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!shared:example"), true);
+    assert_switchbar_activity(&initial_state, &room_identity("!random:example"), true);
+    assert_switchbar_activity(&initial_state, &room_identity("!direct:example"), false);
+    assert_eq!(
+        app.selected_navigation_path()?,
+        vec![
+            "mmatrix".to_owned(),
+            "rooms: 4".to_owned(),
+            "Work".to_owned(),
+            "Ops [e2ee]".to_owned(),
+        ]
+    );
+
+    app.select_navigation_path(&["mmatrix", "rooms: 4", "Work"])?;
+    assert_eq!(
+        app.selected_navigation_path()?,
+        vec![
+            "mmatrix".to_owned(),
+            "rooms: 4".to_owned(),
+            "Work".to_owned(),
+        ]
+    );
+    let work_state = app.dump_ui_state()?;
+    assert_eq!(work_state.mdi.active, room_identity("!ops:example"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!ops:example")
+    );
+
+    app.select_navigation_path(&["mmatrix", "rooms: 4", "Social", "Shared"])?;
+    assert_eq!(
+        app.selected_navigation_path()?,
+        vec![
+            "mmatrix".to_owned(),
+            "rooms: 4".to_owned(),
+            "Social".to_owned(),
+            "Shared".to_owned(),
+        ]
+    );
+    let shared_state = app.dump_ui_state()?;
+    assert_eq!(shared_state.mdi.active, room_identity("!shared:example"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!shared:example")
+    );
+    assert_switchbar_activity(&shared_state, &room_identity("!shared:example"), false);
+
+    app.select_room("!shared:example")?;
+    assert_eq!(
+        app.selected_navigation_path()?,
+        vec![
+            "mmatrix".to_owned(),
+            "rooms: 4".to_owned(),
+            "Work".to_owned(),
+            "Shared".to_owned(),
+        ]
+    );
+    let shared_primary_state = app.dump_ui_state()?;
+    assert_eq!(
+        shared_primary_state.mdi.active,
+        room_identity("!shared:example")
+    );
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!shared:example")
+    );
+
+    match app.select_room("!work:example") {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "unknown_room");
+            assert_eq!(message, "unknown room id: !work:example");
+        }
+        other => panic!("expected select_room unknown_room for space, got {other:?}"),
+    }
+    match app.send_text(Some("!work:example"), "hello") {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "unknown_room");
+            assert_eq!(message, "unknown room id: !work:example");
+        }
+        other => panic!("expected send_text unknown_room for space, got {other:?}"),
+    }
+
+    app.select_navigation_path(&["mmatrix", "rooms: 4", "Work", "Ops [e2ee]"])?;
+    assert_eq!(
+        app.send_text_target(None, "queued for ops")?,
+        "!ops:example"
+    );
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+    assert_eq!(
+        app.dump_model()?.last_error,
+        Some(UiError {
+            operation: "send_text".to_owned(),
+            message: "send text requires an authenticated session".to_owned(),
+        })
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

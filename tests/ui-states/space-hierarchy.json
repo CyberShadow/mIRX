@@ -1,0 +1,95 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!work:example",
+        "display_name": "Work",
+        "encrypted": false,
+        "is_space": true,
+        "space_children": [
+          {
+            "room_id": "!ops:example",
+            "suggested": true,
+            "order": "a"
+          },
+          {
+            "room_id": "!shared:example",
+            "suggested": false,
+            "order": "b"
+          }
+        ]
+      },
+      {
+        "room_id": "!social:example",
+        "display_name": "Social",
+        "encrypted": false,
+        "is_space": true,
+        "space_children": [
+          {
+            "room_id": "!shared:example",
+            "suggested": false,
+            "order": "a"
+          },
+          {
+            "room_id": "!random:example",
+            "suggested": false,
+            "order": "b"
+          }
+        ]
+      },
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "encrypted": true,
+        "is_space": false,
+        "space_children": []
+      },
+      {
+        "room_id": "!shared:example",
+        "display_name": "Shared",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      },
+      {
+        "room_id": "!random:example",
+        "display_name": "Random",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      },
+      {
+        "room_id": "!direct:example",
+        "display_name": "Direct",
+        "encrypted": true,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "TimelineText": {
+      "room_id": "!ops:example",
+      "sender": "@alice:example",
+      "timestamp_ms": 1700000000000,
+      "body": "ops workspace is ready"
+    }
+  },
+  {
+    "TimelineText": {
+      "room_id": "!shared:example",
+      "sender": "@bob:example",
+      "timestamp_ms": 1700000060000,
+      "body": "shared room has updates"
+    }
+  },
+  {
+    "TimelineText": {
+      "room_id": "!random:example",
+      "sender": "@carol:example",
+      "timestamp_ms": 1700000120000,
+      "body": "random room has updates"
+    }
+  }
+]

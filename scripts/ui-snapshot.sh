@@ -161,8 +161,10 @@ configure_case_expectations() {
   status_view_expect_args=()
   status_bar_expect_args=()
   switchbar_item_expect_args=()
+  switchbar_no_item_expect_args=()
   switchbar_activity_expect_args=()
   switchbar_no_activity_expect_args=()
+  navigation_expect_args=()
   navigation_forbid_args=()
   expect_selected=
   expect_error=
@@ -215,6 +217,56 @@ configure_case_expectations() {
         --expect-no-navigation-text 'incident review'
         --expect-no-navigation-text 'encryption enabled'
         --expect-no-navigation-text 'deploy window opens'
+      )
+      ;;
+    space-hierarchy)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      room_expect_args=(
+        --expect-room '!work:example'
+        --expect-room '!social:example'
+        --expect-room '!ops:example'
+        --expect-room '!shared:example'
+        --expect-room '!random:example'
+        --expect-room '!direct:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'room:!shared:example::Shared'
+        --expect-switchbar-item 'room:!random:example::Random'
+        --expect-switchbar-item 'room:!direct:example::Direct'
+      )
+      switchbar_no_item_expect_args=(
+        --expect-no-switchbar-item 'room:!work:example'
+        --expect-no-switchbar-item 'room:!social:example'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!shared:example'
+        --expect-switchbar-activity 'room:!random:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'room:!direct:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ops:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'Work'
+        --expect-navigation-text 'Social'
+        --expect-navigation-text 'unspaced rooms: 1'
+        --expect-navigation-text 'Ops [e2ee]'
+        --expect-navigation-text 'Shared'
+        --expect-navigation-text 'Random'
+        --expect-navigation-text 'Direct [e2ee]'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'ops workspace is ready'
+        --expect-no-navigation-text 'shared room has updates'
+        --expect-no-navigation-text 'random room has updates'
       )
       ;;
     verification-error)
@@ -305,8 +357,10 @@ run_case() {
     "${status_view_expect_args[@]}"
     "${status_bar_expect_args[@]}"
     "${switchbar_item_expect_args[@]}"
+    "${switchbar_no_item_expect_args[@]}"
     "${switchbar_activity_expect_args[@]}"
     "${switchbar_no_activity_expect_args[@]}"
+    "${navigation_expect_args[@]}"
     "${navigation_forbid_args[@]}"
   )
 
