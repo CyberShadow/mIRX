@@ -11,9 +11,10 @@ use mmatrix_core::{
     Event, RoomSummary, SpaceChildSummary, StoredSession as CoreStoredSession, TimelineText,
 };
 use mmatrix_testkit::{
-    ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, Room, RoomMemberState,
-    RoomStateContent, RoomStateEventKind, RoomStateLine, SpaceChild, StoredSession, SwitchbarItem,
-    TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification, ViewIdentity,
+    ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
+    RoomMemberState, RoomStateContent, RoomStateEventKind, RoomStateLine, SpaceChild,
+    StoredSession, SwitchbarItem, TestkitError, TimelineEntry, TimelineLine, UiError, UiState,
+    Verification, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -366,6 +367,20 @@ fn nav(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
     }
 }
 
+fn nav_path(labels: &[&str]) -> Vec<NavigationPathSegment> {
+    labels
+        .iter()
+        .map(|label| NavigationPathSegment::first(*label))
+        .collect()
+}
+
+fn nav_segment(text: &str, same_text_index: u32) -> NavigationPathSegment {
+    NavigationPathSegment {
+        text: text.to_owned(),
+        same_text_index,
+    }
+}
+
 fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
     let wide = text.encode_utf16().chain([0]).collect::<Vec<_>>();
     let bytes_len = std::mem::size_of_val(wide.as_slice());
@@ -553,7 +568,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 7);
+    assert_eq!(version.protocol_version, 8);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -1103,22 +1118,13 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert_switchbar_activity(&initial_state, &room_identity("!direct:example"), false);
     assert_eq!(
         app.selected_navigation_path()?,
-        vec![
-            "mmatrix".to_owned(),
-            "rooms: 4".to_owned(),
-            "Work".to_owned(),
-            "Ops [e2ee]".to_owned(),
-        ]
+        nav_path(&["mmatrix", "rooms: 4", "Work", "Ops [e2ee]"])
     );
 
-    app.select_navigation_path(&["mmatrix", "rooms: 4", "Work"])?;
+    app.select_navigation_labels(&["mmatrix", "rooms: 4", "Work"])?;
     assert_eq!(
         app.selected_navigation_path()?,
-        vec![
-            "mmatrix".to_owned(),
-            "rooms: 4".to_owned(),
-            "Work".to_owned(),
-        ]
+        nav_path(&["mmatrix", "rooms: 4", "Work"])
     );
     let work_state = app.dump_ui_state()?;
     assert_eq!(work_state.mdi.active, room_identity("!ops:example"));
@@ -1127,14 +1133,14 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         Some("!ops:example")
     );
 
-    app.select_navigation_path(&["mmatrix", "rooms: 4", "Social", "Shared"])?;
+    app.select_navigation_labels(&["mmatrix", "rooms: 4", "Social", "Shared"])?;
     assert_eq!(
         app.selected_navigation_path()?,
         vec![
-            "mmatrix".to_owned(),
-            "rooms: 4".to_owned(),
-            "Social".to_owned(),
-            "Shared".to_owned(),
+            nav_segment("mmatrix", 0),
+            nav_segment("rooms: 4", 0),
+            nav_segment("Social", 0),
+            nav_segment("Shared", 0),
         ]
     );
     let shared_state = app.dump_ui_state()?;
@@ -1148,12 +1154,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     app.select_room("!shared:example")?;
     assert_eq!(
         app.selected_navigation_path()?,
-        vec![
-            "mmatrix".to_owned(),
-            "rooms: 4".to_owned(),
-            "Work".to_owned(),
-            "Shared".to_owned(),
-        ]
+        nav_path(&["mmatrix", "rooms: 4", "Work", "Shared"])
     );
     let shared_primary_state = app.dump_ui_state()?;
     assert_eq!(
@@ -1180,7 +1181,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         other => panic!("expected send_text unknown_room for space, got {other:?}"),
     }
 
-    app.select_navigation_path(&["mmatrix", "rooms: 4", "Work", "Ops [e2ee]"])?;
+    app.select_navigation_labels(&["mmatrix", "rooms: 4", "Work", "Ops [e2ee]"])?;
     assert_eq!(
         app.send_text_target(None, "queued for ops")?,
         "!ops:example"

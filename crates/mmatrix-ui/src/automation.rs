@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 7;
+pub(crate) const PROTOCOL_VERSION: u32 = 8;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -242,7 +242,7 @@ pub(crate) struct SendComposeKeyArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectNavigationPathArgs {
-    pub(crate) path: Vec<String>,
+    pub(crate) path: Vec<NavigationPathSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -395,8 +395,15 @@ pub(crate) struct AcceptedResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct NavigationPathSegment {
+    pub(crate) text: String,
+    pub(crate) same_text_index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SelectedNavigationPathResponse {
-    pub(crate) path: Vec<String>,
+    pub(crate) path: Vec<NavigationPathSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1093,12 +1100,13 @@ mod tests {
         DumpModel, DumpRoomStateContent, DumpRoomStateEventKind, DumpRoomStateLine,
         DumpRoomTopicState, DumpTimelineArgs, DumpTimelineEntry, DumpTimelineLine,
         DumpTimelineResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NoArgs, ParsedCommand,
-        PongResponse, ResponseEnvelope, RestoreSessionArgs, SelectNavigationPathArgs,
-        SelectRoomArgs, SelectRoomResponse, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
-        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
-        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1446,17 +1454,29 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_SELECT_NAVIGATION_PATH,
-                br#"{"id":"select-nav","args":{"path":["mmatrix","rooms: 4","Work","Shared"]}}"#,
+                br#"{"id":"select-nav","args":{"path":[{"text":"mmatrix","same_text_index":0},{"text":"rooms: 4","same_text_index":0},{"text":"Work","same_text_index":0},{"text":"Shared","same_text_index":0}]}}"#,
             )
             .unwrap(),
             ParsedCommand::SelectNavigationPath {
                 id: "select-nav".to_owned(),
                 args: SelectNavigationPathArgs {
                     path: vec![
-                        "mmatrix".to_owned(),
-                        "rooms: 4".to_owned(),
-                        "Work".to_owned(),
-                        "Shared".to_owned(),
+                        NavigationPathSegment {
+                            text: "mmatrix".to_owned(),
+                            same_text_index: 0,
+                        },
+                        NavigationPathSegment {
+                            text: "rooms: 4".to_owned(),
+                            same_text_index: 0,
+                        },
+                        NavigationPathSegment {
+                            text: "Work".to_owned(),
+                            same_text_index: 0,
+                        },
+                        NavigationPathSegment {
+                            text: "Shared".to_owned(),
+                            same_text_index: 0,
+                        },
                     ],
                 },
             }
@@ -1678,7 +1698,7 @@ mod tests {
     fn select_navigation_path_rejects_unknown_fields() {
         let error = parse_command_request(
             COMMAND_ID_SELECT_NAVIGATION_PATH,
-            br#"{"id":"select-nav","args":{"path":["mmatrix"],"unexpected":true}}"#,
+            br#"{"id":"select-nav","args":{"path":[{"text":"mmatrix","same_text_index":0}],"unexpected":true}}"#,
         )
         .unwrap_err();
         let value = serde_json::to_value(error).unwrap();
@@ -1797,7 +1817,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":7,
+                    "protocol_version":8,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1863,9 +1883,18 @@ mod tests {
                 "selected-nav",
                 SelectedNavigationPathResponse {
                     path: vec![
-                        "mmatrix".to_owned(),
-                        "rooms: 4".to_owned(),
-                        "Work".to_owned(),
+                        NavigationPathSegment {
+                            text: "mmatrix".to_owned(),
+                            same_text_index: 0,
+                        },
+                        NavigationPathSegment {
+                            text: "rooms: 4".to_owned(),
+                            same_text_index: 0,
+                        },
+                        NavigationPathSegment {
+                            text: "Work".to_owned(),
+                            same_text_index: 0,
+                        },
                     ],
                 },
             ))
@@ -1874,7 +1903,11 @@ mod tests {
                 "id":"selected-nav",
                 "ok":true,
                 "json":{
-                    "path":["mmatrix","rooms: 4","Work"]
+                    "path":[
+                        {"text":"mmatrix","same_text_index":0},
+                        {"text":"rooms: 4","same_text_index":0},
+                        {"text":"Work","same_text_index":0}
+                    ]
                 }
             })
         );

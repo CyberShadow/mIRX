@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
-    ProtocolVersion, RestoreSessionArgs, RoomMemberState, RoomStateContent, RoomStateEventKind,
-    RoomStateLine, RoomTopicState, SpaceChild, StatusBarState, StoredSession, SwitchbarItem,
-    SwitchbarState, TestkitError, TimelineEntry, TimelineLine, UiError, UiState, Verification,
-    ViewIdentity,
+    NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomMemberState, RoomStateContent,
+    RoomStateEventKind, RoomStateLine, RoomTopicState, SpaceChild, StatusBarState, StoredSession,
+    SwitchbarItem, SwitchbarState, TestkitError, TimelineEntry, TimelineLine, UiError, UiState,
+    Verification, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -125,7 +125,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 7,
+        protocol_version: 8,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -199,6 +199,13 @@ fn data_models_round_trip_through_json() {
             ],
         },
     };
+    let navigation_path = vec![
+        NavigationPathSegment::first("mmatrix"),
+        NavigationPathSegment {
+            text: "Same".to_owned(),
+            same_text_index: 1,
+        },
+    ];
     let events = serde_json::json!([
         "Started",
         {
@@ -252,6 +259,8 @@ fn data_models_round_trip_through_json() {
     let login_json = serde_json::to_vec(&login).expect("serialize login args");
     let restore_json = serde_json::to_vec(&restore).expect("serialize restore args");
     let ui_state_json = serde_json::to_vec(&ui_state).expect("serialize ui state");
+    let navigation_path_json =
+        serde_json::to_vec(&navigation_path).expect("serialize navigation path");
     let events_json = serde_json::to_vec(&events).expect("serialize events");
 
     assert_eq!(
@@ -278,6 +287,11 @@ fn data_models_round_trip_through_json() {
     assert_eq!(
         serde_json::from_slice::<UiState>(&ui_state_json).expect("deserialize ui state"),
         ui_state
+    );
+    assert_eq!(
+        serde_json::from_slice::<Vec<NavigationPathSegment>>(&navigation_path_json)
+            .expect("deserialize navigation path"),
+        navigation_path
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&events_json).expect("deserialize events"),
@@ -393,7 +407,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":7,
+            "protocol_version":8,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -886,8 +900,16 @@ fn non_windows_new_methods_report_unsupported_driver() {
     );
 
     let error = app
-        .select_navigation_path(&["mmatrix", "status"])
+        .select_navigation_path(&[NavigationPathSegment::first("mmatrix")])
         .expect_err("select_navigation_path must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .select_navigation_labels(&["mmatrix", "status"])
+        .expect_err("select_navigation_labels must fail off Windows");
     assert_eq!(
         error.to_string(),
         "mmatrix-testkit requires the Windows target"

@@ -435,6 +435,22 @@ pub struct NavigationNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NavigationPathSegment {
+    pub text: String,
+    pub same_text_index: u32,
+}
+
+impl NavigationPathSegment {
+    pub fn first(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            same_text_index: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MdiState {
     pub active: ViewIdentity,
     pub views: Vec<MdiView>,
@@ -691,11 +707,18 @@ impl MmatrixApp {
         self.inner.select_view(view)
     }
 
-    pub fn select_navigation_path(&self, path: &[&str]) -> Result<(), TestkitError> {
+    pub fn select_navigation_path(
+        &self,
+        path: &[NavigationPathSegment],
+    ) -> Result<(), TestkitError> {
         self.inner.select_navigation_path(path)
     }
 
-    pub fn selected_navigation_path(&self) -> Result<Vec<String>, TestkitError> {
+    pub fn select_navigation_labels(&self, path: &[&str]) -> Result<(), TestkitError> {
+        self.inner.select_navigation_labels(path)
+    }
+
+    pub fn selected_navigation_path(&self) -> Result<Vec<NavigationPathSegment>, TestkitError> {
         self.inner.selected_navigation_path()
     }
 
@@ -900,7 +923,7 @@ struct SelectViewArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SelectNavigationPathArgs<'a> {
-    path: Vec<&'a str>,
+    path: &'a [NavigationPathSegment],
 }
 
 #[cfg(windows)]
@@ -986,7 +1009,7 @@ struct AcceptedResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SelectedNavigationPathResponse {
-    path: Vec<String>,
+    path: Vec<NavigationPathSegment>,
 }
 
 #[cfg(windows)]
@@ -1086,13 +1109,24 @@ mod imp {
             ))
         }
 
-        pub(crate) fn select_navigation_path(&self, _path: &[&str]) -> Result<(), TestkitError> {
+        pub(crate) fn select_navigation_path(
+            &self,
+            _path: &[NavigationPathSegment],
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
         }
 
-        pub(crate) fn selected_navigation_path(&self) -> Result<Vec<String>, TestkitError> {
+        pub(crate) fn select_navigation_labels(&self, _path: &[&str]) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn selected_navigation_path(
+            &self,
+        ) -> Result<Vec<NavigationPathSegment>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1428,12 +1462,13 @@ mod imp {
             }
         }
 
-        pub(crate) fn select_navigation_path(&self, path: &[&str]) -> Result<(), TestkitError> {
+        pub(crate) fn select_navigation_path(
+            &self,
+            path: &[NavigationPathSegment],
+        ) -> Result<(), TestkitError> {
             let response: AcceptedResponse = self.send_command(
                 COMMAND_ID_SELECT_NAVIGATION_PATH,
-                SelectNavigationPathArgs {
-                    path: path.to_vec(),
-                },
+                SelectNavigationPathArgs { path },
             )?;
             if response.accepted {
                 Ok(())
@@ -1444,7 +1479,17 @@ mod imp {
             }
         }
 
-        pub(crate) fn selected_navigation_path(&self) -> Result<Vec<String>, TestkitError> {
+        pub(crate) fn select_navigation_labels(&self, path: &[&str]) -> Result<(), TestkitError> {
+            let path = path
+                .iter()
+                .map(|segment| NavigationPathSegment::first(*segment))
+                .collect::<Vec<_>>();
+            self.select_navigation_path(&path)
+        }
+
+        pub(crate) fn selected_navigation_path(
+            &self,
+        ) -> Result<Vec<NavigationPathSegment>, TestkitError> {
             let response: SelectedNavigationPathResponse =
                 self.send_command(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, EmptyArgs {})?;
             Ok(response.path)

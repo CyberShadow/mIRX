@@ -70,11 +70,12 @@ use crate::{
         DumpRoomStateEventKind as AutomationRoomStateEventKind, DumpRoomStateLine,
         DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
-        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_from_summary, dump_timeline_line_from_text,
-        dump_verification_from_request, failure_response, parse_command_request, success_response,
+        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        ResponseEnvelope, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
+        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -3213,7 +3214,55 @@ unsafe fn dump_navigation_tree(hwnd: HWND) -> Result<NavigationNode, String> {
     read_navigation_node(tree, root)
 }
 
-unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<String>, String> {
+fn format_navigation_path(path: &[NavigationPathSegment]) -> String {
+    path.iter()
+        .map(|segment| {
+            if segment.same_text_index == 0 {
+                segment.text.clone()
+            } else {
+                format!("{} [{}]", segment.text, segment.same_text_index)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" > ")
+}
+
+unsafe fn same_text_index_for_tree_item(tree: HWND, item: isize) -> Result<u32, String> {
+    let parent =
+        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
+    let target_text = read_tree_item_text(tree, item)?;
+    let mut current = if parent == 0 {
+        SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize
+    } else {
+        SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            TVGN_CHILD as WPARAM,
+            parent as LPARAM,
+        ) as isize
+    };
+    let mut same_text_index = 0u32;
+    while current != 0 {
+        if read_tree_item_text(tree, current)? == target_text {
+            if current == item {
+                return Ok(same_text_index);
+            }
+            same_text_index += 1;
+        }
+        current = SendMessageW(
+            tree,
+            TVM_GETNEXTITEM,
+            TVGN_NEXT as WPARAM,
+            current as LPARAM,
+        ) as isize;
+    }
+
+    Err(format!(
+        "tree item 0x{item:x} was not found among its siblings"
+    ))
+}
+
+unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<NavigationPathSegment>, String> {
     let tree = state_ref(hwnd).controls.tree;
     if tree.is_null() {
         return Err("tree control was not created".to_owned());
@@ -3226,14 +3275,17 @@ unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<String>, Strin
 
     let mut path = Vec::new();
     while item != 0 {
-        path.push(read_tree_item_text(tree, item)?);
+        path.push(NavigationPathSegment {
+            text: read_tree_item_text(tree, item)?,
+            same_text_index: same_text_index_for_tree_item(tree, item)?,
+        });
         item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
     }
     path.reverse();
     Ok(path)
 }
 
-unsafe fn select_navigation_path(hwnd: HWND, path: &[String]) -> Result<(), String> {
+unsafe fn select_navigation_path(hwnd: HWND, path: &[NavigationPathSegment]) -> Result<(), String> {
     if path.is_empty() {
         return Err("navigation path must not be empty".to_owned());
     }
@@ -3249,8 +3301,12 @@ unsafe fn select_navigation_path(hwnd: HWND, path: &[String]) -> Result<(), Stri
     }
 
     let root_text = read_tree_item_text(tree, current)?;
-    if root_text != path[0] {
-        return Err(format!("unknown navigation path: {}", path.join(" > ")));
+    let root_same_text_index = same_text_index_for_tree_item(tree, current)?;
+    if root_text != path[0].text || root_same_text_index != path[0].same_text_index {
+        return Err(format!(
+            "unknown navigation path: {}",
+            format_navigation_path(path)
+        ));
     }
 
     for segment in &path[1..] {
@@ -3261,17 +3317,21 @@ unsafe fn select_navigation_path(hwnd: HWND, path: &[String]) -> Result<(), Stri
             current as LPARAM,
         ) as isize;
         let mut matched_child = None;
+        let mut same_text_index = 0u32;
         while child != 0 {
-            if read_tree_item_text(tree, child)? == *segment {
-                matched_child = Some(child);
-                break;
+            if read_tree_item_text(tree, child)? == segment.text {
+                if same_text_index == segment.same_text_index {
+                    matched_child = Some(child);
+                    break;
+                }
+                same_text_index += 1;
             }
             child =
                 SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
         }
 
         current = matched_child
-            .ok_or_else(|| format!("unknown navigation path: {}", path.join(" > ")))?;
+            .ok_or_else(|| format!("unknown navigation path: {}", format_navigation_path(path)))?;
     }
 
     let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
