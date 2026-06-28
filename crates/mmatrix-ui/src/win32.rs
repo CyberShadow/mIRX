@@ -8,7 +8,7 @@ use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::ptr::{null, null_mut};
+use std::ptr::{copy_nonoverlapping, null, null_mut};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
 use std::thread;
@@ -24,7 +24,10 @@ use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WPARAM,
 };
-use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
+use windows_sys::Win32::Graphics::Gdi::{
+    BeginPaint, COLOR_WINDOW, EndPaint, FillRect, HBRUSH, InvalidateRect, PAINTSTRUCT, SetBkMode,
+    TRANSPARENT, TextOutW,
+};
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
@@ -35,9 +38,9 @@ use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
-    STATUSCLASSNAMEW, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE,
-    TB_CHECKBUTTON, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TBBUTTON,
-    TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET,
+    STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
+    TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE,
+    TBBUTTON, TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET,
     TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
     TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
@@ -47,17 +50,19 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
-    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA, GWLP_WNDPROC,
-    GetClientRect, GetMessageW, GetParent, GetWindowLongPtrW, HMENU, IDC_ARROW, IsWindow,
-    KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
+    GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, IDC_ARROW,
+    IsWindow, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING,
+    MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
+    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
+    SB_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_SHOW,
     SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
     WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PASTE,
-    WM_SETTEXT, WM_SIZE, WM_TIMER, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
+    WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -81,6 +86,7 @@ use crate::{
 
 const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
+const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const FRAME_TITLE: &str = "mmatrix";
 const TREE_CLASS_NAME: &str = "SysTreeView32";
@@ -93,7 +99,7 @@ const MDI_ID: u16 = 1002;
 const EDIT_ID: u16 = 1003;
 const STATUS_BAR_ID: u16 = 1004;
 const SWITCHBAR_ID: u16 = 1005;
-const VIEW_EDIT_ID: u16 = 2001;
+const VIEW_CONTENT_ID: u16 = 2001;
 const MENU_ID_LOGIN: usize = 40001;
 const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
 const MENU_ID_START_SYNC: usize = 40003;
@@ -108,6 +114,7 @@ const LOGIN_DIALOG_OK_ID: usize = 5005;
 const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
+const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
@@ -115,6 +122,9 @@ const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
 const SWITCHBAR_HEIGHT: i32 = 28;
 const STATUS_BAR_HEIGHT: i32 = 22;
+const TIMELINE_ROW_HEIGHT: i32 = 20;
+const TIMELINE_LEFT_PADDING: i32 = 8;
+const TIMELINE_VERTICAL_PADDING: i32 = 6;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
@@ -146,7 +156,31 @@ enum ViewId {
 
 struct MdiViewState {
     child: HWND,
-    edit: HWND,
+    content: HWND,
+}
+
+struct MdiChildCreateState {
+    view_id: ViewId,
+}
+
+struct TimelineState {
+    rendered_text: String,
+    lines: Vec<String>,
+    top_line: usize,
+    line_height: i32,
+    vertical_padding: i32,
+}
+
+impl Default for TimelineState {
+    fn default() -> Self {
+        Self {
+            rendered_text: String::new(),
+            lines: Vec::new(),
+            top_line: 0,
+            line_height: TIMELINE_ROW_HEIGHT,
+            vertical_padding: TIMELINE_VERTICAL_PADDING,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -346,6 +380,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     init_common_controls()?;
     register_frame_class(instance)?;
     register_mdi_child_class(instance)?;
+    register_timeline_class(instance)?;
     register_login_dialog_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
@@ -800,6 +835,34 @@ fn register_mdi_child_class(instance: *mut c_void) -> Result<(), String> {
     Ok(())
 }
 
+fn register_timeline_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(TIMELINE_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(timeline_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error("RegisterClassExW timeline"));
+        }
+    }
+
+    Ok(())
+}
+
 fn register_login_dialog_class(instance: *mut c_void) -> Result<(), String> {
     let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
     let window_class = WNDCLASSEXW {
@@ -952,40 +1015,24 @@ unsafe extern "system" fn mdi_child_window_proc(
 ) -> LRESULT {
     match message {
         WM_CREATE => {
-            let instance = GetModuleHandleW(null());
-            let edit = CreateWindowExW(
-                WS_EX_CLIENTEDGE,
-                wide_null(EDIT_CLASS_NAME).as_ptr(),
-                wide_null("").as_ptr(),
-                WS_CHILD
-                    | WS_VISIBLE
-                    | ES_MULTILINE as u32
-                    | ES_READONLY as u32
-                    | ES_AUTOVSCROLL as u32
-                    | ES_WANTRETURN as u32
-                    | WS_VSCROLL,
-                0,
-                0,
-                0,
-                0,
-                hwnd,
-                VIEW_EDIT_ID as usize as HMENU,
-                instance,
-                null_mut(),
-            );
-            if edit.is_null() {
-                return -1;
+            match create_mdi_child_content(hwnd, &mdi_child_create_state(lparam).view_id) {
+                Ok(content) => {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, content as isize);
+                    0
+                }
+                Err(message) => {
+                    eprintln!("{message}");
+                    -1
+                }
             }
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, edit as isize);
-            0
         }
         WM_SIZE => {
-            let edit = mdi_child_edit(hwnd);
-            if !edit.is_null() {
+            let content = mdi_child_content(hwnd);
+            if !content.is_null() {
                 let mut rect = RECT::default();
                 GetClientRect(hwnd, &mut rect);
                 MoveWindow(
-                    edit,
+                    content,
                     0,
                     0,
                     rect.right - rect.left,
@@ -1002,6 +1049,255 @@ unsafe extern "system" fn mdi_child_window_proc(
         }
         _ => DefMDIChildProcW(hwnd, message, wparam, lparam),
     }
+}
+
+unsafe extern "system" fn timeline_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_CREATE => {
+            let state = Box::new(TimelineState::default());
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        WM_SETTEXT => set_timeline_text(hwnd, lparam as *const u16),
+        WM_GETTEXTLENGTH => timeline_text_len(hwnd),
+        WM_GETTEXT => timeline_get_text(hwnd, wparam, lparam),
+        WM_TIMELINE_GET_TOP_LINE => timeline_state_ref(hwnd).top_line as LRESULT,
+        WM_SIZE => {
+            update_timeline_scrollbar(hwnd);
+            0
+        }
+        WM_VSCROLL => scroll_timeline(hwnd, wparam),
+        WM_PAINT => {
+            paint_timeline(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            let state_ptr = timeline_state_ptr(hwnd);
+            if !state_ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(state_ptr));
+            }
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
+unsafe fn mdi_child_create_state(lparam: LPARAM) -> &'static MdiChildCreateState {
+    let create = &*(lparam as *const CREATESTRUCTW);
+    let mdi_create = &*(create.lpCreateParams as *const MDICREATESTRUCTW);
+    let state_ptr = mdi_create.lParam as *const MdiChildCreateState;
+    assert!(
+        !state_ptr.is_null(),
+        "MDI child creation state must be present during WM_CREATE"
+    );
+    &*state_ptr
+}
+
+unsafe fn timeline_state_ptr(hwnd: HWND) -> *mut TimelineState {
+    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TimelineState
+}
+
+unsafe fn timeline_state_ref(hwnd: HWND) -> &'static TimelineState {
+    let state_ptr = timeline_state_ptr(hwnd);
+    assert!(
+        !state_ptr.is_null(),
+        "timeline state must exist while the control is alive"
+    );
+    &*state_ptr
+}
+
+unsafe fn timeline_state_mut(hwnd: HWND) -> &'static mut TimelineState {
+    let state_ptr = timeline_state_ptr(hwnd);
+    assert!(
+        !state_ptr.is_null(),
+        "timeline state must exist while the control is alive"
+    );
+    &mut *state_ptr
+}
+
+unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
+    let rendered_text = wide_ptr_to_string(text_ptr);
+    let state = timeline_state_mut(hwnd);
+    state.rendered_text = rendered_text;
+    state.lines = split_rendered_lines(&state.rendered_text);
+    clamp_timeline_top_line(hwnd);
+    update_timeline_scrollbar(hwnd);
+    InvalidateRect(hwnd, null(), 1);
+    1
+}
+
+unsafe fn timeline_text_len(hwnd: HWND) -> LRESULT {
+    timeline_state_ref(hwnd)
+        .rendered_text
+        .encode_utf16()
+        .count() as LRESULT
+}
+
+unsafe fn timeline_get_text(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if wparam == 0 || lparam == 0 {
+        return 0;
+    }
+
+    let state = timeline_state_ref(hwnd);
+    let capacity = wparam as usize;
+    let buffer = lparam as *mut u16;
+    let encoded = state.rendered_text.encode_utf16().collect::<Vec<_>>();
+    let copied = encoded.len().min(capacity.saturating_sub(1));
+    copy_nonoverlapping(encoded.as_ptr(), buffer, copied);
+    *buffer.add(copied) = 0;
+    copied as LRESULT
+}
+
+unsafe fn timeline_visible_rows(hwnd: HWND) -> usize {
+    let state = timeline_state_ref(hwnd);
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let client_height = rect.bottom - rect.top;
+    let usable_height = (client_height - state.vertical_padding * 2).max(state.line_height);
+    (usable_height / state.line_height).max(1) as usize
+}
+
+fn timeline_max_top_line(line_count: usize, visible_rows: usize) -> usize {
+    line_count.saturating_sub(visible_rows)
+}
+
+unsafe fn clamp_timeline_top_line(hwnd: HWND) {
+    let visible_rows = timeline_visible_rows(hwnd);
+    let state = timeline_state_mut(hwnd);
+    state.top_line = state
+        .top_line
+        .min(timeline_max_top_line(state.lines.len(), visible_rows));
+}
+
+unsafe fn update_timeline_scrollbar(hwnd: HWND) {
+    let visible_rows = timeline_visible_rows(hwnd);
+    let state = timeline_state_ref(hwnd);
+    let expected_max = state.lines.len().saturating_sub(1) as i32;
+    let expected_page = visible_rows.max(1).min(state.lines.len().max(1)) as u32;
+    let scroll_info = SCROLLINFO {
+        cbSize: size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        nMin: 0,
+        nMax: expected_max,
+        nPage: visible_rows as u32,
+        nPos: state.top_line as i32,
+        nTrackPos: 0,
+    };
+    let set_result = SetScrollInfo(hwnd, SB_VERT, &scroll_info, 1);
+
+    let mut actual = SCROLLINFO {
+        cbSize: size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_ALL,
+        nMin: 0,
+        nMax: 0,
+        nPage: 0,
+        nPos: 0,
+        nTrackPos: 0,
+    };
+    let get_success = GetScrollInfo(hwnd, SB_VERT, &mut actual);
+    if get_success == 0
+        || actual.nMax != expected_max
+        || actual.nPage != expected_page
+        || actual.nPos != state.top_line as i32
+    {
+        let mut rect = RECT::default();
+        GetClientRect(hwnd, &mut rect);
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let error = if get_success == 0 { GetLastError() } else { 0 };
+        eprintln!(
+            "timeline scrollbar mismatch: hwnd={:#x} style=0x{style:x} rect={}x{} lines={} visible_rows={} expected_max={} expected_page={} expected_pos={} set_result={} get_success={} actual_max={} actual_page={} actual_pos={} last_error={}",
+            hwnd as usize,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            state.lines.len(),
+            visible_rows,
+            expected_max,
+            expected_page,
+            state.top_line,
+            set_result,
+            get_success,
+            actual.nMax,
+            actual.nPage,
+            actual.nPos,
+            error
+        );
+    }
+}
+
+unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
+    let command = (wparam & 0xffff) as i32;
+    let visible_rows = timeline_visible_rows(hwnd);
+    let max_top_line = {
+        let state = timeline_state_ref(hwnd);
+        timeline_max_top_line(state.lines.len(), visible_rows)
+    };
+    let current = timeline_state_ref(hwnd).top_line;
+
+    let next = match command {
+        SB_TOP => 0,
+        SB_BOTTOM => max_top_line,
+        SB_LINEUP => current.saturating_sub(1),
+        SB_LINEDOWN => current.saturating_add(1),
+        SB_PAGEUP => current.saturating_sub(visible_rows),
+        SB_PAGEDOWN => current.saturating_add(visible_rows),
+        SB_THUMBPOSITION | SB_THUMBTRACK => {
+            let mut scroll_info = SCROLLINFO {
+                cbSize: size_of::<SCROLLINFO>() as u32,
+                fMask: SIF_TRACKPOS,
+                nMin: 0,
+                nMax: 0,
+                nPage: 0,
+                nPos: 0,
+                nTrackPos: 0,
+            };
+            GetScrollInfo(hwnd, SB_VERT, &mut scroll_info);
+            scroll_info.nTrackPos.max(0) as usize
+        }
+        _ => current,
+    }
+    .min(max_top_line);
+
+    if next != current {
+        timeline_state_mut(hwnd).top_line = next;
+        update_timeline_scrollbar(hwnd);
+        InvalidateRect(hwnd, null(), 1);
+    }
+
+    0
+}
+
+unsafe fn paint_timeline(hwnd: HWND) {
+    let mut paint = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut paint);
+    FillRect(hdc, &paint.rcPaint, (COLOR_WINDOW as isize + 1) as HBRUSH);
+    SetBkMode(hdc, TRANSPARENT as i32);
+
+    let state = timeline_state_ref(hwnd);
+    let visible_rows = timeline_visible_rows(hwnd);
+    for (row, line) in state
+        .lines
+        .iter()
+        .skip(state.top_line)
+        .take(visible_rows)
+        .enumerate()
+    {
+        let text = wide_null(line);
+        TextOutW(
+            hdc,
+            TIMELINE_LEFT_PADDING,
+            state.vertical_padding + row as i32 * state.line_height,
+            text.as_ptr(),
+            text.len() as i32 - 1,
+        );
+    }
+
+    EndPaint(hwnd, &paint);
 }
 
 unsafe extern "system" fn login_dialog_window_proc(
@@ -2054,7 +2350,11 @@ fn view_id_from_identity(identity: &ViewIdentity) -> ViewId {
     }
 }
 
-unsafe fn create_mdi_child(frame_hwnd: HWND, title: &str) -> Result<HWND, String> {
+unsafe fn create_mdi_child(
+    frame_hwnd: HWND,
+    title: &str,
+    view_id: &ViewId,
+) -> Result<HWND, String> {
     let mdi_client = state_ref(frame_hwnd).controls.mdi_client;
     if mdi_client.is_null() {
         return Err("MDI client control was not created".to_owned());
@@ -2063,6 +2363,10 @@ unsafe fn create_mdi_child(frame_hwnd: HWND, title: &str) -> Result<HWND, String
     let instance = GetModuleHandleW(null());
     let mut class_name = wide_null(MDI_CHILD_CLASS_NAME);
     let mut title_wide = wide_null(title);
+    let create_state = Box::new(MdiChildCreateState {
+        view_id: view_id.clone(),
+    });
+    let create_state_ptr = Box::into_raw(create_state);
     let create = MDICREATESTRUCTW {
         szClass: class_name.as_mut_ptr(),
         szTitle: title_wide.as_mut_ptr(),
@@ -2072,7 +2376,7 @@ unsafe fn create_mdi_child(frame_hwnd: HWND, title: &str) -> Result<HWND, String
         cx: CW_USEDEFAULT,
         cy: CW_USEDEFAULT,
         style: WS_CHILD | WS_VISIBLE,
-        lParam: 0,
+        lParam: create_state_ptr as isize,
     };
     let child = SendMessageW(
         mdi_client,
@@ -2080,6 +2384,7 @@ unsafe fn create_mdi_child(frame_hwnd: HWND, title: &str) -> Result<HWND, String
         0,
         (&create as *const MDICREATESTRUCTW) as LPARAM,
     ) as HWND;
+    drop(Box::from_raw(create_state_ptr));
     if child.is_null() {
         return Err(last_os_error("WM_MDICREATE"));
     }
@@ -2087,7 +2392,59 @@ unsafe fn create_mdi_child(frame_hwnd: HWND, title: &str) -> Result<HWND, String
     Ok(child)
 }
 
-unsafe fn mdi_child_edit(hwnd: HWND) -> HWND {
+unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND, String> {
+    let instance = GetModuleHandleW(null());
+    let (class_name, style, ex_style) = match view_id {
+        ViewId::Status => (
+            EDIT_CLASS_NAME,
+            WS_CHILD
+                | WS_VISIBLE
+                | ES_MULTILINE as u32
+                | ES_READONLY as u32
+                | ES_AUTOVSCROLL as u32
+                | ES_WANTRETURN as u32
+                | WS_VSCROLL,
+            WS_EX_CLIENTEDGE,
+        ),
+        ViewId::Room(_) => (
+            TIMELINE_CLASS_NAME,
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+            WS_EX_CLIENTEDGE,
+        ),
+    };
+    let content = CreateWindowExW(
+        ex_style,
+        wide_null(class_name).as_ptr(),
+        wide_null("").as_ptr(),
+        style,
+        0,
+        0,
+        0,
+        0,
+        child,
+        VIEW_CONTENT_ID as usize as HMENU,
+        instance,
+        null_mut(),
+    );
+    if content.is_null() {
+        return Err(last_os_error("CreateWindowExW MDI child content"));
+    }
+
+    let mut rect = RECT::default();
+    GetClientRect(child, &mut rect);
+    MoveWindow(
+        content,
+        0,
+        0,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+        1,
+    );
+
+    Ok(content)
+}
+
+unsafe fn mdi_child_content(hwnd: HWND) -> HWND {
     GetWindowLongPtrW(hwnd, GWLP_USERDATA) as HWND
 }
 
@@ -2122,7 +2479,9 @@ unsafe fn unregister_destroyed_view(child: HWND) {
 }
 
 unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
-    IsWindow(view.child) != 0 && IsWindow(view.edit) != 0 && mdi_child_edit(view.child) == view.edit
+    IsWindow(view.child) != 0
+        && IsWindow(view.content) != 0
+        && mdi_child_content(view.child) == view.content
 }
 
 unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
@@ -2142,15 +2501,15 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
     }
 
     let title = view_title(&state_ref(hwnd).model, &view_id);
-    let child = create_mdi_child(hwnd, &title)?;
-    let edit = mdi_child_edit(child);
-    if edit.is_null() {
-        return Err("MDI child edit control was not created".to_owned());
+    let child = create_mdi_child(hwnd, &title, &view_id)?;
+    let content = mdi_child_content(child);
+    if content.is_null() {
+        return Err("MDI child content control was not created".to_owned());
     }
 
     let state = state_mut(hwnd);
     state.hwnd_views.insert(child as isize, view_id.clone());
-    state.views.insert(view_id, MdiViewState { child, edit });
+    state.views.insert(view_id, MdiViewState { child, content });
     Ok(child)
 }
 
@@ -2178,7 +2537,7 @@ unsafe fn destroy_stale_room_views(hwnd: HWND) {
 }
 
 unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
-    let (child, edit, title, text) = {
+    let (child, content, title, text) = {
         let state = state_ref(hwnd);
         let view = state
             .views
@@ -2189,12 +2548,15 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             ViewId::Status => render_status_lines(&state.model),
             ViewId::Room(room_id) => render_room_lines(&state.model, room_id),
         };
-        (view.child, view.edit, title, render_view_text(&lines))
+        (view.child, view.content, title, render_view_text(&lines))
     };
 
     let title = wide_null(&title);
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
-    set_edit_text(edit, &text);
+    match view_id {
+        ViewId::Status => set_edit_text(content, &text),
+        ViewId::Room(_) => set_window_text(content, &text),
+    }
     Ok(())
 }
 
@@ -3398,7 +3760,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                 .ok_or_else(|| "view state was not tracked".to_owned())?;
             if !cached_view_is_alive(view) {
                 return Err(format!(
-                    "tracked view {:?} referenced a dead child or edit control",
+                    "tracked view {:?} referenced a dead child or content control",
                     view_id
                 ));
             }
@@ -3407,7 +3769,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
             Ok(MdiView {
                 title: read_window_text(view.child),
                 active: identity == active,
-                lines: split_rendered_lines(&read_window_text(view.edit)),
+                lines: split_rendered_lines(&read_window_text(view.content)),
                 identity,
             })
         })
@@ -4186,11 +4548,15 @@ unsafe fn read_window_text(hwnd: HWND) -> String {
     String::from_utf16_lossy(&text[..text_len as usize])
 }
 
-fn set_edit_text(hwnd: HWND, text: &str) {
+fn set_window_text(hwnd: HWND, text: &str) {
     let text = wide_null(text);
     unsafe {
         SendMessageW(hwnd, WM_SETTEXT, 0, text.as_ptr() as LPARAM);
     }
+}
+
+fn set_edit_text(hwnd: HWND, text: &str) {
+    set_window_text(hwnd, text);
 }
 
 unsafe fn set_compose_edit_text(hwnd: HWND, text: &str) {
@@ -4209,6 +4575,18 @@ fn show_error_message(hwnd: HWND, title: &str, message: &str) {
 
 fn wide_null(text: &str) -> Vec<u16> {
     OsStr::new(text).encode_wide().chain([0]).collect()
+}
+
+unsafe fn wide_ptr_to_string(text_ptr: *const u16) -> String {
+    if text_ptr.is_null() {
+        return String::new();
+    }
+
+    let mut len = 0usize;
+    while *text_ptr.add(len) != 0 {
+        len += 1;
+    }
+    String::from_utf16_lossy(std::slice::from_raw_parts(text_ptr, len))
 }
 
 fn last_os_error(operation: &str) -> String {
