@@ -99,6 +99,7 @@ enum WorkerState {
         client: Client,
         sync_task: Option<TokioJoinHandle<()>>,
         session_update_task: TokioJoinHandle<()>,
+        send_queue_update_task: TokioJoinHandle<()>,
     },
 }
 
@@ -214,13 +215,23 @@ async fn handle_login(
         }
     };
 
+    client
+        .send_queue()
+        .respawn_tasks_for_rooms_with_unsent_requests()
+        .await;
     let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
+    let send_queue_update_task = matrix::start_send_queue_update_task(
+        client.clone(),
+        session.user_id.clone(),
+        event_tx.clone(),
+    );
     let rooms = matrix::initial_room_sync(&client).await;
 
     *state = WorkerState::Ready {
         client,
         sync_task: None,
         session_update_task,
+        send_queue_update_task,
     };
     emit_event(event_tx, Event::LoggedIn { session });
 
@@ -257,18 +268,27 @@ async fn handle_restore_session(
 
     matrix::register_event_handlers(&client, event_tx.clone());
 
+    let current_user_id = request.session.user_id.clone();
+
     if let Err(err) = matrix::restore_session(&client, request.session).await {
         emit_matrix_error(event_tx, Operation::RestoreSession, err);
         return false;
     }
 
+    client
+        .send_queue()
+        .respawn_tasks_for_rooms_with_unsent_requests()
+        .await;
     let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
+    let send_queue_update_task =
+        matrix::start_send_queue_update_task(client.clone(), current_user_id, event_tx.clone());
     let rooms = matrix::initial_room_sync(&client).await;
 
     *state = WorkerState::Ready {
         client,
         sync_task: None,
         session_update_task,
+        send_queue_update_task,
     };
     emit_event(event_tx, Event::RestoredSession);
 
@@ -336,6 +356,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
         client,
         sync_task,
         session_update_task,
+        send_queue_update_task,
     } = state
     else {
         emit_invalid_state(
@@ -348,6 +369,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
 
     abort_sync_task(sync_task);
     session_update_task.abort();
+    send_queue_update_task.abort();
 
     if let Err(err) = matrix::logout(client.clone()).await {
         emit_matrix_error(event_tx, Operation::Logout, err);
@@ -363,11 +385,13 @@ fn shutdown_state(state: &mut WorkerState) {
     if let WorkerState::Ready {
         sync_task,
         session_update_task,
+        send_queue_update_task,
         ..
     } = state
     {
         abort_sync_task(sync_task);
         session_update_task.abort();
+        send_queue_update_task.abort();
     }
 
     *state = WorkerState::NoClient;
@@ -431,6 +455,7 @@ mod tests {
                 client,
                 sync_task: Some(existing_task),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
             };
 
             assert!(!handle_start_sync(&event_tx as &EventSender, &mut state));
@@ -449,6 +474,7 @@ mod tests {
             if let WorkerState::Ready {
                 sync_task,
                 session_update_task,
+                send_queue_update_task,
                 ..
             } = &mut state
             {
@@ -456,6 +482,7 @@ mod tests {
                     task.abort();
                 }
                 session_update_task.abort();
+                send_queue_update_task.abort();
             }
         });
     }

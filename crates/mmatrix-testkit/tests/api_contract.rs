@@ -6,8 +6,8 @@ use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomMemberState, RoomStateContent,
     RoomStateEventKind, RoomStateLine, RoomTopicState, SpaceChild, StatusBarState, StoredSession,
-    SwitchbarItem, SwitchbarState, TestkitError, TimelineEntry, TimelineLine, UiError, UiState,
-    Verification, ViewIdentity,
+    SwitchbarItem, SwitchbarState, TestkitError, TimelineEntry, TimelineLine, TimelineSendError,
+    TimelineSendState, UiError, UiState, Verification, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -110,9 +110,13 @@ fn data_models_round_trip_through_json() {
         ],
         last_timeline: Some(TimelineLine {
             room_id: "!room:example".to_owned(),
+            event_id: Some("$event:example".to_owned()),
+            transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
             body: "hello".to_owned(),
+            send_state: TimelineSendState::Sent,
+            send_error: None,
         }),
         last_verification: Some(Verification {
             flow_id: "flow".to_owned(),
@@ -125,7 +129,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 8,
+        protocol_version: 9,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -303,9 +307,16 @@ fn data_models_round_trip_through_json() {
 fn timeline_entries_round_trip_through_json() {
     let text = TimelineEntry::Text(TimelineLine {
         room_id: "!room:example".to_owned(),
+        event_id: Some("$event:example".to_owned()),
+        transaction_id: Some("txn-1".to_owned()),
         sender: "@alice:example".to_owned(),
         timestamp_ms: 1_700_000_000_000,
         body: "hello".to_owned(),
+        send_state: TimelineSendState::Failed,
+        send_error: Some(TimelineSendError {
+            message: "send failed".to_owned(),
+            recoverable: true,
+        }),
     });
     let topic = TimelineEntry::RoomState(RoomStateLine {
         room_id: "!room:example".to_owned(),
@@ -334,9 +345,16 @@ fn timeline_entries_round_trip_through_json() {
         serde_json::json!({
             "type": "text",
             "room_id": "!room:example",
+            "event_id": "$event:example",
+            "transaction_id": "txn-1",
             "sender": "@alice:example",
             "timestamp_ms": 1700000000000u64,
-            "body": "hello"
+            "body": "hello",
+            "send_state": "failed",
+            "send_error": {
+                "message": "send failed",
+                "recoverable": true
+            }
         })
     );
     assert_eq!(
@@ -407,7 +425,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":8,
+            "protocol_version":9,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -454,9 +472,13 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<TimelineLine>(
             r#"{
             "room_id":"!room:example",
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
             "sender":"@alice:example",
             "timestamp_ms":1700000000000,
             "body":"hello",
+            "send_state":"sent",
+            "send_error":null,
             "unexpected":true
         }"#
         )
@@ -467,9 +489,13 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "type":"text",
             "room_id":"!room:example",
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
             "sender":"@alice:example",
             "timestamp_ms":1700000000000,
             "body":"hello",
+            "send_state":"sent",
+            "send_error":null,
             "unexpected":true
         }"#
         )

@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 8;
+pub(crate) const PROTOCOL_VERSION: u32 = 9;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -622,9 +622,28 @@ pub(crate) struct DumpRoom {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpTimelineLine {
     pub(crate) room_id: String,
+    pub(crate) event_id: Option<String>,
+    pub(crate) transaction_id: Option<String>,
     pub(crate) sender: String,
     pub(crate) timestamp_ms: u64,
     pub(crate) body: String,
+    pub(crate) send_state: DumpTimelineSendState,
+    pub(crate) send_error: Option<DumpTimelineSendError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpTimelineSendState {
+    Pending,
+    Sent,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpTimelineSendError {
+    pub(crate) message: String,
+    pub(crate) recoverable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -675,9 +694,13 @@ pub(crate) struct DumpRoomMemberState {
 enum DumpTimelineEntrySerde {
     Text {
         room_id: String,
+        event_id: Option<String>,
+        transaction_id: Option<String>,
         sender: String,
         timestamp_ms: u64,
         body: String,
+        send_state: DumpTimelineSendState,
+        send_error: Option<DumpTimelineSendError>,
     },
     RoomState {
         room_id: String,
@@ -720,9 +743,13 @@ impl Serialize for DumpTimelineEntry {
         match self {
             Self::Text(line) => DumpTimelineEntrySerde::Text {
                 room_id: line.room_id.clone(),
+                event_id: line.event_id.clone(),
+                transaction_id: line.transaction_id.clone(),
                 sender: line.sender.clone(),
                 timestamp_ms: line.timestamp_ms,
                 body: line.body.clone(),
+                send_state: line.send_state,
+                send_error: line.send_error.clone(),
             },
             Self::RoomState(line) => DumpTimelineEntrySerde::RoomState {
                 room_id: line.room_id.clone(),
@@ -745,14 +772,22 @@ impl<'de> Deserialize<'de> for DumpTimelineEntry {
         match DumpTimelineEntrySerde::deserialize(deserializer)? {
             DumpTimelineEntrySerde::Text {
                 room_id,
+                event_id,
+                transaction_id,
                 sender,
                 timestamp_ms,
                 body,
+                send_state,
+                send_error,
             } => Ok(Self::Text(DumpTimelineLine {
                 room_id,
+                event_id,
+                transaction_id,
                 sender,
                 timestamp_ms,
                 body,
+                send_state,
+                send_error,
             })),
             DumpTimelineEntrySerde::RoomState {
                 room_id,
@@ -911,9 +946,13 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
 pub(crate) fn dump_timeline_line_from_text(timeline: &TimelineText) -> DumpTimelineLine {
     DumpTimelineLine {
         room_id: timeline.room_id.clone(),
+        event_id: Some(timeline.event_id.clone()),
+        transaction_id: timeline.transaction_id.clone(),
         sender: timeline.sender.clone(),
         timestamp_ms: timeline.timestamp_ms,
         body: timeline.body.clone(),
+        send_state: DumpTimelineSendState::Sent,
+        send_error: None,
     }
 }
 
@@ -1099,14 +1138,14 @@ mod tests {
         COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
         DumpModel, DumpRoomStateContent, DumpRoomStateEventKind, DumpRoomStateLine,
         DumpRoomTopicState, DumpTimelineArgs, DumpTimelineEntry, DumpTimelineLine,
-        DumpTimelineResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        DumpTimelineResponse, DumpTimelineSendError, DumpTimelineSendState, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
+        NavigationNode, NavigationPathSegment, NoArgs, ParsedCommand, PongResponse,
+        ResponseEnvelope, RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
+        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1294,7 +1333,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"TimelineText":{"room_id":"!room:example","sender":"@alice:example","timestamp_ms":1700000000000,"body":"hello"}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"TimelineText":{"room_id":"!room:example","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","timestamp_ms":1700000000000,"body":"hello"}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -1311,6 +1350,8 @@ mod tests {
                         }]),
                         Event::TimelineText(TimelineText {
                             room_id: "!room:example".to_owned(),
+                            event_id: "$event:example".to_owned(),
+                            transaction_id: None,
                             sender: "@alice:example".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
                             body: "hello".to_owned(),
@@ -1817,7 +1858,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":8,
+                    "protocol_version":9,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1919,9 +1960,16 @@ mod tests {
                     entries: vec![
                         DumpTimelineEntry::Text(DumpTimelineLine {
                             room_id: "!room:example".to_owned(),
+                            event_id: Some("$event:example".to_owned()),
+                            transaction_id: Some("txn-1".to_owned()),
                             sender: "@alice:example".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
                             body: "hello".to_owned(),
+                            send_state: DumpTimelineSendState::Failed,
+                            send_error: Some(DumpTimelineSendError {
+                                message: "send failed".to_owned(),
+                                recoverable: true,
+                            }),
                         }),
                         DumpTimelineEntry::RoomState(DumpRoomStateLine {
                             room_id: "!room:example".to_owned(),
@@ -1946,9 +1994,13 @@ mod tests {
                         {
                             "type":"text",
                             "room_id":"!room:example",
+                            "event_id":"$event:example",
+                            "transaction_id":"txn-1",
                             "sender":"@alice:example",
                             "timestamp_ms":1700000000000u64,
-                            "body":"hello"
+                            "body":"hello",
+                            "send_state":"failed",
+                            "send_error":{"message":"send failed","recoverable":true}
                         },
                         {
                             "type":"room_state",
@@ -2231,24 +2283,34 @@ mod tests {
         assert_eq!(
             super::dump_timeline_line_from_text(&TimelineText {
                 room_id: "!room:example".to_owned(),
+                event_id: "$event:example".to_owned(),
+                transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 body: "hello".to_owned(),
             }),
             super::DumpTimelineLine {
                 room_id: "!room:example".to_owned(),
+                event_id: Some("$event:example".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 body: "hello".to_owned(),
+                send_state: DumpTimelineSendState::Sent,
+                send_error: None,
             }
         );
         assert!(
             serde_json::from_value::<DumpTimelineEntry>(json!({
                 "type":"text",
                 "room_id":"!room:example",
+                "event_id":"$event:example",
+                "transaction_id":"txn-1",
                 "sender":"@alice:example",
                 "timestamp_ms":1700000000000u64,
                 "body":"hello",
+                "send_state":"sent",
+                "send_error":null,
                 "unexpected":true
             }))
             .is_err()

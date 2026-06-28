@@ -16,8 +16,9 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
-    RestoreSessionRequest, RoomStateContent, RoomStateEventKind, RoomSummary, SendTextRequest,
-    StoredSession, TimelineText, VerificationRequest, start,
+    OutgoingTextFailed, OutgoingTextQueued, OutgoingTextSent, RestoreSessionRequest,
+    RoomStateContent, RoomStateEventKind, RoomSummary, SendTextRequest, StoredSession,
+    TimelineText, VerificationRequest, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -73,14 +74,14 @@ use crate::{
         ComposeTextResponse, DumpModel, DumpRoomMemberState,
         DumpRoomStateContent as AutomationRoomStateContent,
         DumpRoomStateEventKind as AutomationRoomStateEventKind, DumpRoomStateLine,
-        DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, FailureEnvelope,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_from_summary,
-        dump_timeline_line_from_text, dump_verification_from_request, failure_response,
-        parse_command_request, success_response,
+        DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, DumpTimelineSendError,
+        DumpTimelineSendState, FailureEnvelope, GetVersionResponse, LifecycleState,
+        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
+        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
+        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_from_summary, dump_verification_from_request,
+        failure_response, parse_command_request, success_response,
     },
 };
 
@@ -190,7 +191,7 @@ struct UiModel {
     rooms: Vec<RoomSummary>,
     selected_room: Option<String>,
     room_views: BTreeMap<String, RoomViewModel>,
-    last_timeline: Option<TimelineText>,
+    last_timeline: Option<LastTimelineText>,
     last_verification: Option<VerificationRequest>,
     last_error: Option<CoreErrorEvent>,
 }
@@ -201,12 +202,41 @@ struct RoomViewModel {
     entries: Vec<RoomTimelineEntry>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimelineSendState {
+    Pending,
+    Sent,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineSendError {
+    message: String,
+    recoverable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LastTimelineText {
+    room_id: String,
+    event_id: Option<String>,
+    transaction_id: Option<String>,
+    sender: String,
+    timestamp_ms: u64,
+    body: String,
+    send_state: TimelineSendState,
+    send_error: Option<TimelineSendError>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RoomTimelineEntry {
     Text {
+        event_id: Option<String>,
+        transaction_id: Option<String>,
         sender: String,
         timestamp_ms: u64,
         body: String,
+        send_state: TimelineSendState,
+        send_error: Option<TimelineSendError>,
     },
     System {
         sender: String,
@@ -216,6 +246,133 @@ enum RoomTimelineEntry {
         display_name: Option<String>,
         text: String,
     },
+}
+
+impl RoomViewModel {
+    fn upsert_synced_text(&mut self, timeline: TimelineText) {
+        let new_entry = RoomTimelineEntry::Text {
+            event_id: Some(timeline.event_id),
+            transaction_id: timeline.transaction_id,
+            sender: timeline.sender,
+            timestamp_ms: timeline.timestamp_ms,
+            body: timeline.body,
+            send_state: TimelineSendState::Sent,
+            send_error: None,
+        };
+
+        if let Some(entry) =
+            self.find_text_entry_mut(text_transaction_id(&new_entry), text_event_id(&new_entry))
+        {
+            *entry = new_entry;
+        } else {
+            self.entries.push(new_entry);
+        }
+    }
+
+    fn insert_or_update_outgoing_queued(&mut self, queued: OutgoingTextQueued) {
+        let new_entry = RoomTimelineEntry::Text {
+            event_id: None,
+            transaction_id: Some(queued.transaction_id),
+            sender: queued.sender,
+            timestamp_ms: queued.timestamp_ms,
+            body: queued.body,
+            send_state: TimelineSendState::Pending,
+            send_error: None,
+        };
+
+        if let Some(entry) =
+            self.find_text_entry_mut(text_transaction_id(&new_entry), text_event_id(&new_entry))
+        {
+            *entry = new_entry;
+        } else {
+            self.entries.push(new_entry);
+        }
+    }
+
+    fn mark_outgoing_sent(&mut self, sent: OutgoingTextSent) {
+        let Some(RoomTimelineEntry::Text {
+            event_id,
+            send_state,
+            send_error,
+            ..
+        }) = self.find_text_entry_mut(
+            Some(sent.transaction_id.as_str()),
+            Some(sent.event_id.as_str()),
+        )
+        else {
+            return;
+        };
+
+        *event_id = Some(sent.event_id);
+        *send_state = TimelineSendState::Sent;
+        *send_error = None;
+    }
+
+    fn mark_outgoing_failed(&mut self, failed: OutgoingTextFailed) {
+        let Some(RoomTimelineEntry::Text {
+            send_state,
+            send_error,
+            ..
+        }) = self.find_text_entry_mut(Some(failed.transaction_id.as_str()), None)
+        else {
+            return;
+        };
+
+        *send_state = TimelineSendState::Failed;
+        *send_error = Some(TimelineSendError {
+            message: failed.message,
+            recoverable: failed.recoverable,
+        });
+    }
+
+    fn find_text_entry_mut(
+        &mut self,
+        transaction_id: Option<&str>,
+        event_id: Option<&str>,
+    ) -> Option<&mut RoomTimelineEntry> {
+        let index = if let Some(transaction_id) = transaction_id {
+            self.entries.iter().position(|entry| {
+                matches!(
+                    entry,
+                    RoomTimelineEntry::Text {
+                        transaction_id: Some(existing_transaction_id),
+                        ..
+                    } if existing_transaction_id == transaction_id
+                )
+            })
+        } else {
+            None
+        }
+        .or_else(|| {
+            event_id.and_then(|event_id| {
+                self.entries.iter().position(|entry| {
+                    matches!(
+                        entry,
+                        RoomTimelineEntry::Text {
+                            event_id: Some(existing_event_id),
+                            ..
+                        } if existing_event_id == event_id
+                    )
+                })
+            })
+        })?;
+
+        self.entries.get_mut(index)
+    }
+}
+
+fn text_event_id(entry: &RoomTimelineEntry) -> Option<&str> {
+    match entry {
+        RoomTimelineEntry::Text { event_id, .. } => event_id.as_deref(),
+        RoomTimelineEntry::System { .. } => None,
+    }
+}
+
+fn text_transaction_id(entry: &RoomTimelineEntry) -> Option<&str> {
+    match entry {
+        RoomTimelineEntry::Text { transaction_id, .. } => transaction_id.as_deref(),
+        RoomTimelineEntry::System { .. } => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2013,18 +2170,82 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                 state.room_activity.insert(timeline.room_id.clone());
             }
             state.model.status = format!("timeline update from {}", timeline.room_id);
+            let room_id = timeline.room_id.clone();
+            let room_view = state.model.room_views.entry(room_id.clone()).or_default();
+            room_view.upsert_synced_text(timeline.clone());
+            state.model.last_timeline = Some(LastTimelineText {
+                room_id,
+                event_id: Some(timeline.event_id),
+                transaction_id: timeline.transaction_id,
+                sender: timeline.sender,
+                timestamp_ms: timeline.timestamp_ms,
+                body: timeline.body,
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            });
+        }
+        Event::OutgoingTextQueued(queued) => {
+            state.model.status = format!("timeline update from {}", queued.room_id);
             state
                 .model
                 .room_views
-                .entry(timeline.room_id.clone())
+                .entry(queued.room_id.clone())
                 .or_default()
-                .entries
-                .push(RoomTimelineEntry::Text {
-                    sender: timeline.sender.clone(),
-                    timestamp_ms: timeline.timestamp_ms,
-                    body: timeline.body.clone(),
-                });
-            state.model.last_timeline = Some(timeline);
+                .insert_or_update_outgoing_queued(queued.clone());
+            state.model.last_timeline = Some(LastTimelineText {
+                room_id: queued.room_id,
+                event_id: None,
+                transaction_id: Some(queued.transaction_id),
+                sender: queued.sender,
+                timestamp_ms: queued.timestamp_ms,
+                body: queued.body,
+                send_state: TimelineSendState::Pending,
+                send_error: None,
+            });
+        }
+        Event::OutgoingTextSent(sent) => {
+            state.model.status = format!("timeline update from {}", sent.room_id);
+            state
+                .model
+                .room_views
+                .entry(sent.room_id.clone())
+                .or_default()
+                .mark_outgoing_sent(sent.clone());
+            if let Some(last_timeline) = state.model.last_timeline.as_mut() {
+                if last_timeline.room_id == sent.room_id
+                    && last_timeline.transaction_id.as_deref() == Some(sent.transaction_id.as_str())
+                {
+                    last_timeline.event_id = Some(sent.event_id);
+                    last_timeline.send_state = TimelineSendState::Sent;
+                    last_timeline.send_error = None;
+                }
+            }
+        }
+        Event::OutgoingTextFailed(failed) => {
+            if state.active_view != ViewId::Room(failed.room_id.clone())
+                && actionable_room_by_id(&state.model.rooms, &failed.room_id).is_some()
+            {
+                state.room_activity.insert(failed.room_id.clone());
+            }
+            state.model.status = format!("timeline update from {}", failed.room_id);
+            state
+                .model
+                .room_views
+                .entry(failed.room_id.clone())
+                .or_default()
+                .mark_outgoing_failed(failed.clone());
+            if let Some(last_timeline) = state.model.last_timeline.as_mut() {
+                if last_timeline.room_id == failed.room_id
+                    && last_timeline.transaction_id.as_deref()
+                        == Some(failed.transaction_id.as_str())
+                {
+                    last_timeline.send_state = TimelineSendState::Failed;
+                    last_timeline.send_error = Some(TimelineSendError {
+                        message: failed.message,
+                        recoverable: failed.recoverable,
+                    });
+                }
+            }
         }
         Event::RoomState(room_state) => {
             if state.active_view != ViewId::Room(room_state.room_id.clone())
@@ -2122,13 +2343,22 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
         for entry in &room_view.entries {
             match entry {
                 RoomTimelineEntry::Text {
+                    send_state,
                     sender,
                     timestamp_ms,
                     body,
-                } => lines.push(format!(
-                    "[{}] {sender}: {body}",
-                    format_timestamp_hhmm_utc(*timestamp_ms)
-                )),
+                    ..
+                } => {
+                    let suffix = match send_state {
+                        TimelineSendState::Pending => " (sending)",
+                        TimelineSendState::Sent => "",
+                        TimelineSendState::Failed => " (failed)",
+                    };
+                    lines.push(format!(
+                        "[{}] {sender}: {body}{suffix}",
+                        format_timestamp_hhmm_utc(*timestamp_ms)
+                    ));
+                }
                 RoomTimelineEntry::System {
                     sender,
                     timestamp_ms,
@@ -3937,18 +4167,24 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
         ]),
         Event::TimelineText(TimelineText {
             room_id: "!one:example".to_owned(),
+            event_id: "$one-first".to_owned(),
+            transaction_id: None,
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
             body: "first line".to_owned(),
         }),
         Event::TimelineText(TimelineText {
             room_id: "!one:example".to_owned(),
+            event_id: "$one-second".to_owned(),
+            transaction_id: None,
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_060_000,
             body: "second line".to_owned(),
         }),
         Event::TimelineText(TimelineText {
             room_id: "!two:example".to_owned(),
+            event_id: "$two-third".to_owned(),
+            transaction_id: None,
             sender: "@bob:example".to_owned(),
             timestamp_ms: 1_700_000_120_000,
             body: "third line".to_owned(),
@@ -4001,16 +4237,24 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                     {
                         "type":"text",
                         "room_id":"!one:example",
+                        "event_id":"$one-first",
+                        "transaction_id":null,
                         "sender":"@alice:example",
                         "timestamp_ms":1700000000000u64,
-                        "body":"first line"
+                        "body":"first line",
+                        "send_state":"sent",
+                        "send_error":null
                     },
                     {
                         "type":"text",
                         "room_id":"!one:example",
+                        "event_id":"$one-second",
+                        "transaction_id":null,
                         "sender":"@alice:example",
                         "timestamp_ms":1700000060000u64,
-                        "body":"second line"
+                        "body":"second line",
+                        "send_state":"sent",
+                        "send_error":null
                     }
                 ]
             })
@@ -4456,7 +4700,7 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
         last_timeline: model
             .last_timeline
             .as_ref()
-            .map(dump_timeline_line_from_text),
+            .map(dump_timeline_line_from_last_timeline),
         last_verification: model
             .last_verification
             .as_ref()
@@ -4472,14 +4716,22 @@ fn dump_timeline_entry_from_room_entry(
 ) -> DumpTimelineEntry {
     match entry {
         RoomTimelineEntry::Text {
+            event_id,
+            transaction_id,
             sender,
             timestamp_ms,
             body,
+            send_state,
+            send_error,
         } => DumpTimelineEntry::Text(crate::automation::DumpTimelineLine {
             room_id: room_id.to_owned(),
+            event_id: event_id.clone(),
+            transaction_id: transaction_id.clone(),
             sender: sender.clone(),
             timestamp_ms: *timestamp_ms,
             body: body.clone(),
+            send_state: dump_timeline_send_state(*send_state),
+            send_error: send_error.as_ref().map(dump_timeline_send_error_from_model),
         }),
         RoomTimelineEntry::System {
             sender,
@@ -4508,6 +4760,39 @@ fn dump_timeline_entry_from_room_entry(
                 }
             },
         }),
+    }
+}
+
+fn dump_timeline_line_from_last_timeline(
+    timeline: &LastTimelineText,
+) -> crate::automation::DumpTimelineLine {
+    crate::automation::DumpTimelineLine {
+        room_id: timeline.room_id.clone(),
+        event_id: timeline.event_id.clone(),
+        transaction_id: timeline.transaction_id.clone(),
+        sender: timeline.sender.clone(),
+        timestamp_ms: timeline.timestamp_ms,
+        body: timeline.body.clone(),
+        send_state: dump_timeline_send_state(timeline.send_state),
+        send_error: timeline
+            .send_error
+            .as_ref()
+            .map(dump_timeline_send_error_from_model),
+    }
+}
+
+fn dump_timeline_send_state(send_state: TimelineSendState) -> DumpTimelineSendState {
+    match send_state {
+        TimelineSendState::Pending => DumpTimelineSendState::Pending,
+        TimelineSendState::Sent => DumpTimelineSendState::Sent,
+        TimelineSendState::Failed => DumpTimelineSendState::Failed,
+    }
+}
+
+fn dump_timeline_send_error_from_model(send_error: &TimelineSendError) -> DumpTimelineSendError {
+    DumpTimelineSendError {
+        message: send_error.message.clone(),
+        recoverable: send_error.recoverable,
     }
 }
 
@@ -4641,10 +4926,39 @@ mod tests {
     fn timeline(room_id: &str, body: &str) -> TimelineText {
         TimelineText {
             room_id: room_id.to_owned(),
+            event_id: format!("${room_id}:{}", body.replace(' ', "_")),
+            transaction_id: None,
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
             body: body.to_owned(),
         }
+    }
+
+    fn outgoing_queued(room_id: &str, transaction_id: &str, body: &str) -> Event {
+        Event::OutgoingTextQueued(OutgoingTextQueued {
+            room_id: room_id.to_owned(),
+            transaction_id: transaction_id.to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            body: body.to_owned(),
+        })
+    }
+
+    fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
+        Event::OutgoingTextSent(OutgoingTextSent {
+            room_id: room_id.to_owned(),
+            transaction_id: transaction_id.to_owned(),
+            event_id: event_id.to_owned(),
+        })
+    }
+
+    fn outgoing_failed(room_id: &str, transaction_id: &str, message: &str) -> Event {
+        Event::OutgoingTextFailed(OutgoingTextFailed {
+            room_id: room_id.to_owned(),
+            transaction_id: transaction_id.to_owned(),
+            message: message.to_owned(),
+            recoverable: true,
+        })
     }
 
     fn topic_state(room_id: &str, topic: &str) -> Event {
@@ -4845,14 +5159,22 @@ mod tests {
                 .map(|view| &view.entries),
             Some(&vec![
                 RoomTimelineEntry::Text {
+                    event_id: Some("$!one:example:first".to_owned()),
+                    transaction_id: None,
                     sender: "@alice:example".to_owned(),
                     timestamp_ms: 1_700_000_000_000,
                     body: "first".to_owned(),
+                    send_state: TimelineSendState::Sent,
+                    send_error: None,
                 },
                 RoomTimelineEntry::Text {
+                    event_id: Some("$!one:example:second".to_owned()),
+                    transaction_id: None,
                     sender: "@alice:example".to_owned(),
                     timestamp_ms: 1_700_000_000_000,
                     body: "second".to_owned(),
+                    send_state: TimelineSendState::Sent,
+                    send_error: None,
                 },
             ])
         );
@@ -4863,14 +5185,265 @@ mod tests {
                 .get("!two:example")
                 .map(|view| &view.entries),
             Some(&vec![RoomTimelineEntry::Text {
+                event_id: Some("$!two:example:third".to_owned()),
+                transaction_id: None,
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 body: "third".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
             }])
         );
         assert_eq!(
             state.model.last_timeline,
-            Some(timeline("!two:example", "third"))
+            Some(LastTimelineText {
+                room_id: "!two:example".to_owned(),
+                event_id: Some("$!two:example:third".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "third".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            })
+        );
+    }
+
+    #[test]
+    fn outgoing_text_queued_creates_one_pending_row_keyed_by_transaction_id() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: None,
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Pending,
+                send_error: None,
+            }])
+        );
+        assert_eq!(
+            state.model.last_timeline,
+            Some(LastTimelineText {
+                room_id: "!ops:example".to_owned(),
+                event_id: None,
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Pending,
+                send_error: None,
+            })
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello (sending)".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn outgoing_text_sent_updates_existing_row_and_clears_pending_marker() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            }])
+        );
+        assert_eq!(
+            state.model.last_timeline,
+            Some(LastTimelineText {
+                room_id: "!ops:example".to_owned(),
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            })
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn outgoing_text_reconciles_by_transaction_id_without_duplicate_rows() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(TimelineText {
+                room_id: "!ops:example".to_owned(),
+                event_id: "$event:example.org".to_owned(),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                body: "hello".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            }])
+        );
+    }
+
+    #[test]
+    fn synced_text_before_sent_update_remains_idempotent() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(TimelineText {
+                room_id: "!ops:example".to_owned(),
+                event_id: "$event:example.org".to_owned(),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                body: "hello".to_owned(),
+            }),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| view.entries.len()),
+            Some(1)
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn outgoing_text_failure_keeps_visible_failed_row_and_error_details() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_failed("!ops:example", "txn-1", "send failed"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: None,
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Failed,
+                send_error: Some(TimelineSendError {
+                    message: "send failed".to_owned(),
+                    recoverable: true,
+                }),
+            }])
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello (failed)".to_owned(),
+            ]
         );
     }
 
@@ -4888,6 +5461,8 @@ mod tests {
             &mut state,
             Event::TimelineText(TimelineText {
                 room_id: "!ops:example".to_owned(),
+                event_id: "$event:example.org".to_owned(),
+                transaction_id: None,
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 body: "<body>".to_owned(),
@@ -5137,13 +5712,26 @@ mod tests {
             RoomViewModel {
                 topic: Some("incident review".to_owned()),
                 entries: vec![RoomTimelineEntry::Text {
+                    event_id: Some("$!room:example:hello".to_owned()),
+                    transaction_id: None,
                     sender: "@alice:example".to_owned(),
                     timestamp_ms: 1_700_000_000_000,
                     body: "hello".to_owned(),
+                    send_state: TimelineSendState::Sent,
+                    send_error: None,
                 }],
             },
         );
-        state.model.last_timeline = Some(timeline("!room:example", "hello"));
+        state.model.last_timeline = Some(LastTimelineText {
+            room_id: "!room:example".to_owned(),
+            event_id: Some("$!room:example:hello".to_owned()),
+            transaction_id: None,
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            body: "hello".to_owned(),
+            send_state: TimelineSendState::Sent,
+            send_error: None,
+        });
         state.model.last_verification = Some(VerificationRequest {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),

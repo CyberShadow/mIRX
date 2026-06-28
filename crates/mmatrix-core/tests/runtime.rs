@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CoreConfig, Event, LoginRequest, Operation, RoomMemberState, RoomStateContent,
-    RoomStateEntry, RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest,
-    SpaceChildSummary, StoredSession, TimelineText, start,
+    Command, CoreConfig, Event, LoginRequest, Operation, OutgoingTextFailed, OutgoingTextQueued,
+    OutgoingTextSent, RoomMemberState, RoomStateContent, RoomStateEntry, RoomStateEventKind,
+    RoomSummary, RoomTopicState, SendTextRequest, SpaceChildSummary, StoredSession, TimelineText,
+    start,
 };
 use tempfile::TempDir;
 
@@ -384,10 +385,30 @@ fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
 fn timeline_text_and_room_state_events_round_trip_through_serde() {
     let timeline = TimelineText {
         room_id: "!ops:example.org".to_owned(),
+        event_id: "$event:example.org".to_owned(),
+        transaction_id: Some("txn-1".to_owned()),
         sender: "@alice:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_000,
         body: "hello".to_owned(),
     };
+    let queued_event = Event::OutgoingTextQueued(OutgoingTextQueued {
+        room_id: "!ops:example.org".to_owned(),
+        transaction_id: "txn-1".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        body: "hello".to_owned(),
+    });
+    let sent_event = Event::OutgoingTextSent(OutgoingTextSent {
+        room_id: "!ops:example.org".to_owned(),
+        transaction_id: "txn-1".to_owned(),
+        event_id: "$event:example.org".to_owned(),
+    });
+    let failed_event = Event::OutgoingTextFailed(OutgoingTextFailed {
+        room_id: "!ops:example.org".to_owned(),
+        transaction_id: "txn-1".to_owned(),
+        message: "send failed".to_owned(),
+        recoverable: true,
+    });
     let topic_event = Event::RoomState(RoomStateEntry {
         room_id: "!ops:example.org".to_owned(),
         sender: "@alice:example.org".to_owned(),
@@ -415,6 +436,20 @@ fn timeline_text_and_room_state_events_round_trip_through_serde() {
         serde_json::from_str(&timeline_json).expect("deserialize timeline text");
     assert_eq!(restored_timeline, timeline);
 
+    let queued_json = serde_json::to_string(&queued_event).expect("serialize queued event");
+    let restored_queued: Event =
+        serde_json::from_str(&queued_json).expect("deserialize queued event");
+    assert_eq!(restored_queued, queued_event);
+
+    let sent_json = serde_json::to_string(&sent_event).expect("serialize sent event");
+    let restored_sent: Event = serde_json::from_str(&sent_json).expect("deserialize sent event");
+    assert_eq!(restored_sent, sent_event);
+
+    let failed_json = serde_json::to_string(&failed_event).expect("serialize failed event");
+    let restored_failed: Event =
+        serde_json::from_str(&failed_json).expect("deserialize failed event");
+    assert_eq!(restored_failed, failed_event);
+
     let topic_json = serde_json::to_string(&topic_event).expect("serialize topic room state");
     let restored_topic: Event =
         serde_json::from_str(&topic_json).expect("deserialize topic room state");
@@ -430,10 +465,34 @@ fn timeline_text_and_room_state_events_round_trip_through_serde() {
 fn timeline_text_and_room_state_entry_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<TimelineText>(
-            r#"{"room_id":"!ops:example.org","sender":"@alice:example.org","timestamp_ms":1700000000000,"body":"hello","unexpected":"value"}"#
+            r#"{"room_id":"!ops:example.org","event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","timestamp_ms":1700000000000,"body":"hello","unexpected":"value"}"#
         )
         .is_err(),
         "timeline text must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"OutgoingTextQueued":{"room_id":"!ops:example.org","transaction_id":"txn-1","sender":"@alice:example.org","timestamp_ms":1700000000000,"body":"hello","unexpected":"value"}}"#
+        )
+        .is_err(),
+        "queued text event must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"OutgoingTextSent":{"room_id":"!ops:example.org","transaction_id":"txn-1","event_id":"$event:example.org","unexpected":"value"}}"#
+        )
+        .is_err(),
+        "sent text event must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"OutgoingTextFailed":{"room_id":"!ops:example.org","transaction_id":"txn-1","message":"send failed","recoverable":true,"unexpected":"value"}}"#
+        )
+        .is_err(),
+        "failed text event must reject unknown fields"
     );
 
     assert!(

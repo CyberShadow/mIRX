@@ -145,9 +145,28 @@ pub struct Room {
 #[serde(deny_unknown_fields)]
 pub struct TimelineLine {
     pub room_id: String,
+    pub event_id: Option<String>,
+    pub transaction_id: Option<String>,
     pub sender: String,
     pub timestamp_ms: u64,
     pub body: String,
+    pub send_state: TimelineSendState,
+    pub send_error: Option<TimelineSendError>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineSendState {
+    Pending,
+    Sent,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineSendError {
+    pub message: String,
+    pub recoverable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,9 +245,13 @@ pub struct RoomMemberState {
 enum TimelineEntrySerde {
     Text {
         room_id: String,
+        event_id: Option<String>,
+        transaction_id: Option<String>,
         sender: String,
         timestamp_ms: u64,
         body: String,
+        send_state: TimelineSendState,
+        send_error: Option<TimelineSendError>,
     },
     RoomState {
         room_id: String,
@@ -271,9 +294,13 @@ impl Serialize for TimelineEntry {
         match self {
             Self::Text(line) => TimelineEntrySerde::Text {
                 room_id: line.room_id.clone(),
+                event_id: line.event_id.clone(),
+                transaction_id: line.transaction_id.clone(),
                 sender: line.sender.clone(),
                 timestamp_ms: line.timestamp_ms,
                 body: line.body.clone(),
+                send_state: line.send_state,
+                send_error: line.send_error.clone(),
             },
             Self::RoomState(line) => TimelineEntrySerde::RoomState {
                 room_id: line.room_id.clone(),
@@ -296,14 +323,22 @@ impl<'de> Deserialize<'de> for TimelineEntry {
         match TimelineEntrySerde::deserialize(deserializer)? {
             TimelineEntrySerde::Text {
                 room_id,
+                event_id,
+                transaction_id,
                 sender,
                 timestamp_ms,
                 body,
+                send_state,
+                send_error,
             } => Ok(Self::Text(TimelineLine {
                 room_id,
+                event_id,
+                transaction_id,
                 sender,
                 timestamp_ms,
                 body,
+                send_state,
+                send_error,
             })),
             TimelineEntrySerde::RoomState {
                 room_id,

@@ -8,13 +8,14 @@ use std::ptr::copy_nonoverlapping;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
-    Event, RoomSummary, SpaceChildSummary, StoredSession as CoreStoredSession, TimelineText,
+    Event, OutgoingTextFailed, OutgoingTextQueued, RoomSummary, SpaceChildSummary,
+    StoredSession as CoreStoredSession, TimelineText,
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
     RoomMemberState, RoomStateContent, RoomStateEventKind, RoomStateLine, SpaceChild,
-    StoredSession, SwitchbarItem, TestkitError, TimelineEntry, TimelineLine, UiError, UiState,
-    Verification, ViewIdentity,
+    StoredSession, SwitchbarItem, TestkitError, TimelineEntry, TimelineLine, TimelineSendState,
+    UiError, UiState, Verification, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -205,24 +206,24 @@ fn base_events() -> Vec<Event> {
             room_summary("!beta:example", "Beta", true),
             room_summary("!alpha:example", "Alpha", false),
         ]),
-        Event::TimelineText(TimelineText {
-            room_id: "!alpha:example".to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            body: "alpha first".to_owned(),
-        }),
-        Event::TimelineText(TimelineText {
-            room_id: "!beta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_060_000,
-            body: "beta first".to_owned(),
-        }),
-        Event::TimelineText(TimelineText {
-            room_id: "!beta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_120_000,
-            body: "beta second".to_owned(),
-        }),
+        Event::TimelineText(timeline_text(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "alpha first",
+        )),
+        Event::TimelineText(timeline_text(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta first",
+        )),
+        Event::TimelineText(timeline_text(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta second",
+        )),
     ]
 }
 
@@ -233,34 +234,53 @@ fn replacement_events() -> Vec<Event> {
             room_summary("!gamma:example", "Gamma", false),
             room_summary("!delta:example", "Delta", false),
         ]),
-        Event::TimelineText(TimelineText {
-            room_id: "!gamma:example".to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            body: "gamma only".to_owned(),
-        }),
-        Event::TimelineText(TimelineText {
-            room_id: "!delta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_060_000,
-            body: "delta first".to_owned(),
-        }),
-        Event::TimelineText(TimelineText {
-            room_id: "!delta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_120_000,
-            body: "delta second".to_owned(),
-        }),
+        Event::TimelineText(timeline_text(
+            "!gamma:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "gamma only",
+        )),
+        Event::TimelineText(timeline_text(
+            "!delta:example",
+            "@bob:example",
+            1_700_000_060_000,
+            "delta first",
+        )),
+        Event::TimelineText(timeline_text(
+            "!delta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "delta second",
+        )),
     ]
 }
 
-fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineEntry {
-    TimelineEntry::Text(TimelineLine {
+fn timeline_text(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineText {
+    TimelineText {
         room_id: room_id.to_owned(),
+        event_id: format!("${room_id}:{}", body.replace(' ', "_")),
+        transaction_id: None,
         sender: sender.to_owned(),
         timestamp_ms,
         body: body.to_owned(),
-    })
+    }
+}
+
+fn timeline_line(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineLine {
+    TimelineLine {
+        room_id: room_id.to_owned(),
+        event_id: Some(format!("${room_id}:{}", body.replace(' ', "_"))),
+        transaction_id: None,
+        sender: sender.to_owned(),
+        timestamp_ms,
+        body: body.to_owned(),
+        send_state: TimelineSendState::Sent,
+        send_error: None,
+    }
+}
+
+fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineEntry {
+    TimelineEntry::Text(timeline_line(room_id, sender, timestamp_ms, body))
 }
 
 fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> TimelineEntry {
@@ -472,12 +492,12 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
     assert_eq!(
         model.last_timeline,
-        Some(TimelineLine {
-            room_id: "!beta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_120_000,
-            body: "beta second".to_owned(),
-        })
+        Some(timeline_line(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta second",
+        ))
     );
 
     let timeline = app.timeline(Some("!beta:example"))?;
@@ -558,6 +578,67 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
 }
 
 #[test]
+fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
+        Event::OutgoingTextQueued(OutgoingTextQueued {
+            room_id: "!ops:example".to_owned(),
+            transaction_id: "txn-1".to_owned(),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            body: "hello".to_owned(),
+        }),
+        Event::OutgoingTextFailed(OutgoingTextFailed {
+            room_id: "!ops:example".to_owned(),
+            transaction_id: "txn-1".to_owned(),
+            message: "send failed".to_owned(),
+            recoverable: true,
+        }),
+        Event::Error(mmatrix_core::CoreErrorEvent {
+            operation: mmatrix_core::Operation::SendText,
+            message: "send failed".to_owned(),
+        }),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.timeline(Some("!ops:example"))?,
+        vec![TimelineEntry::Text(TimelineLine {
+            room_id: "!ops:example".to_owned(),
+            event_id: None,
+            transaction_id: Some("txn-1".to_owned()),
+            sender: "@alice:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            body: "hello".to_owned(),
+            send_state: TimelineSendState::Failed,
+            send_error: Some(mmatrix_testkit::TimelineSendError {
+                message: "send failed".to_owned(),
+                recoverable: true,
+            }),
+        })]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&ui_state, &room_identity("!ops:example")),
+        "hello (failed)"
+    ));
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_can_attach_and_replace_state_via_testkit()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
@@ -575,7 +656,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 8);
+    assert_eq!(version.protocol_version, 9);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -624,12 +705,12 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     );
     assert_eq!(
         attached.dump_model()?.last_timeline,
-        Some(TimelineLine {
-            room_id: "!delta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_120_000,
-            body: "delta second".to_owned(),
-        })
+        Some(timeline_line(
+            "!delta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "delta second",
+        ))
     );
     assert_eq!(attached.dump_model()?.lifecycle_state, "ready");
     let replacement_state = attached.dump_ui_state()?;
@@ -720,12 +801,12 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
             },
             room_summary("!room:example", "Room", true),
         ]),
-        Event::TimelineText(TimelineText {
-            room_id: "!room:example".to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            body: "hello".to_owned(),
-        }),
+        Event::TimelineText(timeline_text(
+            "!room:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "hello",
+        )),
     ])?;
 
     let args = [
@@ -943,12 +1024,12 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     assert_eq!(model.selected_room.as_deref(), Some("!ops:example"));
     assert_eq!(
         model.last_timeline,
-        Some(TimelineLine {
-            room_id: "!random:example".to_owned(),
-            sender: "@dave:example".to_owned(),
-            timestamp_ms: 1_700_000_300_000,
-            body: "random: lunch votes are in".to_owned(),
-        })
+        Some(timeline_line(
+            "!random:example",
+            "@dave:example",
+            1_700_000_300_000,
+            "random: lunch votes are in",
+        ))
     );
     assert_eq!(
         app.timeline(Some("!ops:example"))?,
@@ -1019,12 +1100,13 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
     for index in 0..80 {
-        events.push(Event::TimelineText(TimelineText {
-            room_id: "!beta:example".to_owned(),
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_001_000_000 + index * 60_000,
-            body: format!("scroll row {index:02}"),
-        }));
+        let body = format!("scroll row {index:02}");
+        events.push(Event::TimelineText(timeline_text(
+            "!beta:example",
+            "@bob:example",
+            1_700_001_000_000 + index * 60_000,
+            &body,
+        )));
     }
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -1129,12 +1211,12 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
-    events.push(Event::TimelineText(TimelineText {
-        room_id: "!beta:example".to_owned(),
-        sender: "@bob:example".to_owned(),
-        timestamp_ms: 1_700_001_000_000,
-        body: "multiline row 00 line a\nmultiline row 00 line b".to_owned(),
-    }));
+    events.push(Event::TimelineText(timeline_text(
+        "!beta:example",
+        "@bob:example",
+        1_700_001_000_000,
+        "multiline row 00 line a\nmultiline row 00 line b",
+    )));
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
@@ -1178,12 +1260,12 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
-    events.push(Event::TimelineText(TimelineText {
-        room_id: "!beta:example".to_owned(),
-        sender: "@bob:example".to_owned(),
-        timestamp_ms: 1_700_001_000_000,
-        body: "trailing blank line a\n".to_owned(),
-    }));
+    events.push(Event::TimelineText(timeline_text(
+        "!beta:example",
+        "@bob:example",
+        1_700_001_000_000,
+        "trailing blank line a\n",
+    )));
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
@@ -1561,12 +1643,12 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     );
     assert_eq!(
         model.last_timeline,
-        Some(TimelineLine {
-            room_id: "!verify:example".to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_180_000,
-            body: "waiting for confirmation".to_owned(),
-        })
+        Some(timeline_line(
+            "!verify:example",
+            "@alice:example",
+            1_700_000_180_000,
+            "waiting for confirmation",
+        ))
     );
     let ui_state = attached.dump_ui_state()?;
     assert!(ui_state.status_bar.text.contains("error during send text"));

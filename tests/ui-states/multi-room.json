@@ -28,6 +28,8 @@
   {
     "TimelineText": {
       "room_id": "!lobby:example",
+      "event_id": "$lobby-1",
+      "transaction_id": null,
       "sender": "@alice:example",
       "timestamp_ms": 1700000000000,
       "body": "welcome to the lobby"
@@ -36,6 +38,8 @@
   {
     "TimelineText": {
       "room_id": "!lobby:example",
+      "event_id": "$lobby-2",
+      "transaction_id": null,
       "sender": "@bob:example",
       "timestamp_ms": 1700000060000,
       "body": "build is green"
@@ -73,6 +77,8 @@
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "event_id": "$ops-1",
+      "transaction_id": null,
       "sender": "@alice:example",
       "timestamp_ms": 1700000120000,
       "body": "ops topic: incident review"
@@ -81,6 +87,8 @@
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "event_id": "$ops-2",
+      "transaction_id": null,
       "sender": "@bob:example",
       "timestamp_ms": 1700000180000,
       "body": "encryption enabled for ops"
@@ -89,6 +97,8 @@
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "event_id": "$ops-3",
+      "transaction_id": null,
       "sender": "@carol:example",
       "timestamp_ms": 1700000240000,
       "body": "deploy window opens at 18:00 UTC"
@@ -97,6 +107,8 @@
   {
     "TimelineText": {
       "room_id": "!random:example",
+      "event_id": "$random-1",
+      "transaction_id": null,
       "sender": "@dave:example",
       "timestamp_ms": 1700000300000,
       "body": "random: lunch votes are in"

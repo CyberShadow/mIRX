@@ -9,7 +9,7 @@ use matrix_sdk::{
     deserialized_responses::SyncOrStrippedState,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
     ruma::{
-        OwnedDeviceId, OwnedUserId,
+        MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent,
             room::{
@@ -20,14 +20,16 @@ use matrix_sdk::{
             space::child::{SpaceChildEventContent, SpaceChildOrd},
         },
     },
-    store::RoomLoadSettings,
+    send_queue::{LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
+    store::{RoomLoadSettings, SerializableEventContent},
 };
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomMemberState, RoomStateContent,
-    RoomStateEntry, RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest,
-    SpaceChildSummary, StoredSession, TimelineText,
+    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, OutgoingTextFailed,
+    OutgoingTextQueued, OutgoingTextSent, RoomMemberState, RoomStateContent, RoomStateEntry,
+    RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest, SpaceChildSummary,
+    StoredSession, TimelineText,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -205,16 +207,9 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
         async move {
-            if let MessageType::Text(text) = &event.content.msgtype {
-                emit_event(
-                    &events,
-                    Event::TimelineText(TimelineText {
-                        room_id: room.room_id().to_string(),
-                        sender: event.sender.to_string(),
-                        timestamp_ms: event.origin_server_ts.get().into(),
-                        body: text.body.to_string(),
-                    }),
-                );
+            if let Some(timeline) = timeline_text_from_sync_message(room.room_id().as_str(), &event)
+            {
+                emit_event(&events, Event::TimelineText(timeline));
             }
         }
     });
@@ -262,6 +257,28 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             }
         }
     });
+}
+
+fn timeline_text_from_sync_message(
+    room_id: &str,
+    event: &OriginalSyncRoomMessageEvent,
+) -> Option<TimelineText> {
+    let MessageType::Text(text) = &event.content.msgtype else {
+        return None;
+    };
+
+    Some(TimelineText {
+        room_id: room_id.to_owned(),
+        event_id: event.event_id.to_string(),
+        transaction_id: event
+            .unsigned
+            .transaction_id
+            .as_ref()
+            .map(ToString::to_string),
+        sender: event.sender.to_string(),
+        timestamp_ms: event.origin_server_ts.get().into(),
+        body: text.body.to_string(),
+    })
 }
 
 pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle<()> {
@@ -313,6 +330,140 @@ pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> 
     })
 }
 
+pub(crate) fn start_send_queue_update_task(
+    client: Client,
+    current_user_id: String,
+    events: EventSender,
+) -> JoinHandle<()> {
+    let mut updates = client.send_queue().subscribe();
+
+    tokio::task::spawn_local(async move {
+        loop {
+            match updates.recv().await {
+                Ok(update) => match map_send_queue_update(update, &current_user_id) {
+                    Ok(mapped_events) => {
+                        for event in mapped_events {
+                            emit_event(&events, event);
+                        }
+                    }
+                    Err(err) => emit_event(
+                        &events,
+                        Event::Error(CoreErrorEvent {
+                            operation: Operation::SendText,
+                            message: format!("failed to map Matrix send queue update: {err}"),
+                        }),
+                    ),
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
+                    &events,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::SendText,
+                        message: "missed Matrix send queue update".to_owned(),
+                    }),
+                ),
+            }
+        }
+    })
+}
+
+fn map_send_queue_update(
+    update: SendQueueUpdate,
+    current_user_id: &str,
+) -> Result<Vec<Event>, MatrixCoreError> {
+    let room_id = update.room_id.to_string();
+
+    match update.update {
+        RoomSendQueueUpdate::NewLocalEvent(local_echo) => {
+            let transaction_id = local_echo.transaction_id.to_string();
+            let LocalEchoContent::Event {
+                serialized_event,
+                send_handle,
+                ..
+            } = local_echo.content
+            else {
+                return Ok(Vec::new());
+            };
+
+            map_local_text_queued(
+                room_id,
+                transaction_id,
+                current_user_id,
+                send_handle.created_at,
+                &serialized_event,
+            )
+            .map(|event| event.into_iter().map(Event::OutgoingTextQueued).collect())
+        }
+        RoomSendQueueUpdate::SentEvent {
+            transaction_id,
+            event_id,
+        } => Ok(vec![Event::OutgoingTextSent(OutgoingTextSent {
+            room_id,
+            transaction_id: transaction_id.to_string(),
+            event_id: event_id.to_string(),
+        })]),
+        RoomSendQueueUpdate::SendError {
+            transaction_id,
+            error,
+            is_recoverable,
+        } => {
+            let message = error.to_string();
+            Ok(vec![
+                Event::OutgoingTextFailed(OutgoingTextFailed {
+                    room_id,
+                    transaction_id: transaction_id.to_string(),
+                    message: message.clone(),
+                    recoverable: is_recoverable,
+                }),
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::SendText,
+                    message,
+                }),
+            ])
+        }
+        RoomSendQueueUpdate::CancelledLocalEvent { .. }
+        | RoomSendQueueUpdate::ReplacedLocalEvent { .. }
+        | RoomSendQueueUpdate::RetryEvent { .. }
+        | RoomSendQueueUpdate::MediaUpload { .. } => Ok(Vec::new()),
+    }
+}
+
+fn map_local_text_queued(
+    room_id: String,
+    transaction_id: String,
+    current_user_id: &str,
+    created_at: MilliSecondsSinceUnixEpoch,
+    serialized_event: &SerializableEventContent,
+) -> Result<Option<OutgoingTextQueued>, MatrixCoreError> {
+    let Some(body) = text_body_from_serialized_event(serialized_event)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(OutgoingTextQueued {
+        room_id,
+        transaction_id,
+        sender: current_user_id.to_owned(),
+        timestamp_ms: created_at.get().into(),
+        body,
+    }))
+}
+
+fn text_body_from_serialized_event(
+    serialized_event: &SerializableEventContent,
+) -> Result<Option<String>, MatrixCoreError> {
+    let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
+        .deserialize()
+        .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
+    else {
+        return Ok(None);
+    };
+    let MessageType::Text(text) = content.msgtype else {
+        return Ok(None);
+    };
+
+    Ok(Some(text.body))
+}
+
 pub(crate) async fn send_text(
     client: &Client,
     request: SendTextRequest,
@@ -348,5 +499,169 @@ pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> Stor
         device_id: session.meta.device_id.to_string(),
         access_token: session.tokens.access_token,
         refresh_token: session.tokens.refresh_token,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::{
+        map_local_text_queued, map_send_queue_update, text_body_from_serialized_event,
+        timeline_text_from_sync_message,
+    };
+    use crate::api::{CoreErrorEvent, Event, Operation, OutgoingTextFailed, OutgoingTextSent};
+    use matrix_sdk::{
+        ruma::{
+            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
+            events::{AnyMessageLikeEventContent, room::message::RoomMessageEventContent},
+        },
+        send_queue::{RoomSendQueueUpdate, SendQueueUpdate},
+        store::SerializableEventContent,
+    };
+
+    fn room_id() -> OwnedRoomId {
+        OwnedRoomId::try_from("!room:example.org").expect("valid room id")
+    }
+
+    fn transaction_id() -> OwnedTransactionId {
+        "txn-1".into()
+    }
+
+    fn event_id() -> OwnedEventId {
+        OwnedEventId::try_from("$event:example.org").expect("valid event id")
+    }
+
+    #[test]
+    fn timeline_text_from_sync_message_copies_event_identity() {
+        let event: matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.message",
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "hello"
+                },
+                "event_id": "$event:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000000u64,
+                "unsigned": {
+                    "transaction_id": "txn-1"
+                }
+            }))
+            .expect("deserialize sync message event");
+
+        assert_eq!(
+            timeline_text_from_sync_message("!room:example.org", &event),
+            Some(crate::api::TimelineText {
+                room_id: "!room:example.org".to_owned(),
+                event_id: "$event:example.org".to_owned(),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn local_text_queue_mapping_extracts_public_metadata() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let serialized_event = SerializableEventContent::new(
+            &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
+        )
+        .expect("serialize text event");
+
+        let queued = map_local_text_queued(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+        )
+        .expect("map local text")
+        .expect("text local echo");
+
+        assert_eq!(
+            queued,
+            crate::api::OutgoingTextQueued {
+                room_id: "!room:example.org".to_owned(),
+                transaction_id: "txn-1".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                body: "hello".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn text_body_extraction_ignores_non_text_local_echoes() {
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(
+                RoomMessageEventContent::notice_plain("heads up"),
+            ))
+            .expect("serialize notice event");
+
+        assert_eq!(
+            text_body_from_serialized_event(&serialized_event).expect("read local echo body"),
+            None
+        );
+    }
+
+    #[test]
+    fn send_queue_sent_update_maps_to_outgoing_text_sent() {
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SentEvent {
+                    transaction_id: transaction_id(),
+                    event_id: event_id(),
+                },
+            },
+            "@alice:example.org",
+        )
+        .expect("map sent update");
+
+        assert_eq!(
+            events,
+            vec![Event::OutgoingTextSent(OutgoingTextSent {
+                room_id: "!room:example.org".to_owned(),
+                transaction_id: "txn-1".to_owned(),
+                event_id: "$event:example.org".to_owned(),
+            })]
+        );
+    }
+
+    #[test]
+    fn send_queue_error_maps_to_failed_event_and_error_surface() {
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SendError {
+                    transaction_id: transaction_id(),
+                    error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
+                        "send failed",
+                    ))),
+                    is_recoverable: true,
+                },
+            },
+            "@alice:example.org",
+        )
+        .expect("map send error");
+
+        assert_eq!(
+            events,
+            vec![
+                Event::OutgoingTextFailed(OutgoingTextFailed {
+                    room_id: "!room:example.org".to_owned(),
+                    transaction_id: "txn-1".to_owned(),
+                    message: "send failed".to_owned(),
+                    recoverable: true,
+                }),
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::SendText,
+                    message: "send failed".to_owned(),
+                }),
+            ]
+        );
     }
 }

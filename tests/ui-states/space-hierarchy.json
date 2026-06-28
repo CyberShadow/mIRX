@@ -71,6 +71,8 @@
   {
     "TimelineText": {
       "room_id": "!ops:example",
+      "event_id": "$ops-space-1",
+      "transaction_id": null,
       "sender": "@alice:example",
       "timestamp_ms": 1700000000000,
       "body": "ops workspace is ready"
@@ -79,6 +81,8 @@
   {
     "TimelineText": {
       "room_id": "!shared:example",
+      "event_id": "$shared-space-1",
+      "transaction_id": null,
       "sender": "@bob:example",
       "timestamp_ms": 1700000060000,
       "body": "shared room has updates"
@@ -87,6 +91,8 @@
   {
     "TimelineText": {
       "room_id": "!random:example",
+      "event_id": "$random-space-1",
+      "transaction_id": null,
       "sender": "@carol:example",
       "timestamp_ms": 1700000120000,
       "body": "random room has updates"

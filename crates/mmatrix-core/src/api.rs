@@ -67,9 +67,38 @@ pub struct RoomSummary {
 #[serde(deny_unknown_fields)]
 pub struct TimelineText {
     pub room_id: String,
+    pub event_id: String,
+    pub transaction_id: Option<String>,
     pub sender: String,
     pub timestamp_ms: u64,
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutgoingTextQueued {
+    pub room_id: String,
+    pub transaction_id: String,
+    pub sender: String,
+    pub timestamp_ms: u64,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutgoingTextSent {
+    pub room_id: String,
+    pub transaction_id: String,
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutgoingTextFailed {
+    pub room_id: String,
+    pub transaction_id: String,
+    pub message: String,
+    pub recoverable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -181,6 +210,9 @@ pub enum Event {
     SyncStarted,
     SyncedRooms(Vec<RoomSummary>),
     TimelineText(TimelineText),
+    OutgoingTextQueued(OutgoingTextQueued),
+    OutgoingTextSent(OutgoingTextSent),
+    OutgoingTextFailed(OutgoingTextFailed),
     RoomState(RoomStateEntry),
     VerificationRequest(VerificationRequest),
     LoggedOut,
