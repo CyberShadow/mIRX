@@ -13,9 +13,9 @@ use matrix_sdk::{
         events::{
             AnyMessageLikeEventContent, SyncStateEvent,
             room::{
-                member::SyncRoomMemberEvent,
+                member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
-                topic::SyncRoomTopicEvent,
+                topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
             space::child::{SpaceChildEventContent, SpaceChildOrd},
         },
@@ -26,10 +26,10 @@ use matrix_sdk::{
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, OutgoingTextFailed,
-    OutgoingTextQueued, OutgoingTextSent, RoomMemberState, RoomStateContent, RoomStateEntry,
-    RoomStateEventKind, RoomSummary, RoomTopicState, SendTextRequest, SpaceChildSummary,
-    StoredSession, TimelineText,
+    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, SendTextRequest,
+    SpaceChildSummary, StoredSession,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -207,9 +207,9 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
         async move {
-            if let Some(timeline) = timeline_text_from_sync_message(room.room_id().as_str(), &event)
+            if let Some(activity) = room_activity_from_sync_message(room.room_id().as_str(), &event)
             {
-                emit_event(&events, Event::TimelineText(timeline));
+                emit_event(&events, Event::RoomActivity(activity));
             }
         }
     });
@@ -221,16 +221,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             if let SyncRoomTopicEvent::Original(event) = event {
                 emit_event(
                     &events,
-                    Event::RoomState(RoomStateEntry {
-                        room_id: room.room_id().to_string(),
-                        sender: event.sender.to_string(),
-                        timestamp_ms: event.origin_server_ts.get().into(),
-                        event_kind: RoomStateEventKind::Topic,
-                        state_key: String::new(),
-                        content: RoomStateContent::Topic(RoomTopicState {
-                            topic: event.content.topic.to_string(),
-                        }),
-                    }),
+                    Event::RoomActivity(room_activity_from_sync_topic(
+                        room.room_id().as_str(),
+                        &event,
+                    )),
                 );
             }
         }
@@ -242,43 +236,79 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             if let SyncRoomMemberEvent::Original(event) = event {
                 emit_event(
                     &events,
-                    Event::RoomState(RoomStateEntry {
-                        room_id: room.room_id().to_string(),
-                        sender: event.sender.to_string(),
-                        timestamp_ms: event.origin_server_ts.get().into(),
-                        event_kind: RoomStateEventKind::Member,
-                        state_key: event.state_key.to_string(),
-                        content: RoomStateContent::Member(RoomMemberState {
-                            membership: event.content.membership.to_string(),
-                            displayname: event.content.displayname,
-                        }),
-                    }),
+                    Event::RoomActivity(room_activity_from_sync_member(
+                        room.room_id().as_str(),
+                        &event,
+                    )),
                 );
             }
         }
     });
 }
 
-fn timeline_text_from_sync_message(
+fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
-) -> Option<TimelineText> {
+) -> Option<RoomActivity> {
     let MessageType::Text(text) = &event.content.msgtype else {
         return None;
     };
 
-    Some(TimelineText {
+    Some(RoomActivity {
         room_id: room_id.to_owned(),
-        event_id: event.event_id.to_string(),
-        transaction_id: event
-            .unsigned
-            .transaction_id
-            .as_ref()
-            .map(ToString::to_string),
-        sender: event.sender.to_string(),
+        activity_id: format!("event:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
-        body: text.body.to_string(),
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event.event_id.to_string()),
+            transaction_id: event
+                .unsigned
+                .transaction_id
+                .as_ref()
+                .map(ToString::to_string),
+            sender: event.sender.to_string(),
+            body: text.body.to_string(),
+            send_state: RoomMessageSendState::Sent,
+        }),
     })
+}
+
+fn room_activity_from_sync_topic(
+    room_id: &str,
+    event: &OriginalSyncRoomTopicEvent,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("state:{}", event.event_id),
+        timestamp_ms: event.origin_server_ts.get().into(),
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: event.event_id.to_string(),
+            sender: event.sender.to_string(),
+            state_key: String::new(),
+            content: RoomStateNoticeContent::Topic {
+                topic: event.content.topic.to_string(),
+            },
+        }),
+    }
+}
+
+fn room_activity_from_sync_member(
+    room_id: &str,
+    event: &OriginalSyncRoomMemberEvent,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("state:{}", event.event_id),
+        timestamp_ms: event.origin_server_ts.get().into(),
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: event.event_id.to_string(),
+            sender: event.sender.to_string(),
+            state_key: event.state_key.to_string(),
+            content: RoomStateNoticeContent::Member {
+                membership: event.content.membership.to_string(),
+                displayname: event.content.displayname.clone(),
+            },
+        }),
+    }
 }
 
 pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle<()> {
@@ -395,10 +425,12 @@ fn map_send_queue_update(
         RoomSendQueueUpdate::SentEvent {
             transaction_id,
             event_id,
-        } => Ok(vec![Event::OutgoingTextSent(OutgoingTextSent {
+        } => Ok(vec![Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id,
             transaction_id: transaction_id.to_string(),
-            event_id: event_id.to_string(),
+            kind: RoomActivityUpdateKind::MessageSent {
+                event_id: event_id.to_string(),
+            },
         })]),
         RoomSendQueueUpdate::SendError {
             transaction_id,
@@ -407,11 +439,13 @@ fn map_send_queue_update(
         } => {
             let message = error.to_string();
             Ok(vec![
-                Event::OutgoingTextFailed(OutgoingTextFailed {
+                Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id,
                     transaction_id: transaction_id.to_string(),
-                    message: message.clone(),
-                    recoverable: is_recoverable,
+                    kind: RoomActivityUpdateKind::MessageFailed {
+                        message: message.clone(),
+                        recoverable: is_recoverable,
+                    },
                 }),
                 Event::Error(CoreErrorEvent {
                     operation: Operation::SendText,
@@ -481,7 +515,7 @@ fn outgoing_events_from_local_echo_event(
     serialized_event: &SerializableEventContent,
     send_error: Option<String>,
 ) -> Result<Vec<Event>, MatrixCoreError> {
-    let Some(queued) = map_local_text_queued(
+    let Some(activity) = map_local_message_activity(
         room_id.clone(),
         transaction_id.clone(),
         current_user_id,
@@ -492,13 +526,15 @@ fn outgoing_events_from_local_echo_event(
         return Ok(Vec::new());
     };
 
-    let mut events = vec![Event::OutgoingTextQueued(queued)];
+    let mut events = vec![Event::RoomActivity(activity)];
     if let Some(send_error) = send_error {
-        events.push(Event::OutgoingTextFailed(OutgoingTextFailed {
+        events.push(Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id,
             transaction_id,
-            message: send_error.clone(),
-            recoverable: false,
+            kind: RoomActivityUpdateKind::MessageFailed {
+                message: send_error.clone(),
+                recoverable: false,
+            },
         }));
         events.push(Event::Error(CoreErrorEvent {
             operation: Operation::SendText,
@@ -509,23 +545,28 @@ fn outgoing_events_from_local_echo_event(
     Ok(events)
 }
 
-fn map_local_text_queued(
+fn map_local_message_activity(
     room_id: String,
     transaction_id: String,
     current_user_id: &str,
     created_at: MilliSecondsSinceUnixEpoch,
     serialized_event: &SerializableEventContent,
-) -> Result<Option<OutgoingTextQueued>, MatrixCoreError> {
+) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(body) = text_body_from_serialized_event(serialized_event)? else {
         return Ok(None);
     };
 
-    Ok(Some(OutgoingTextQueued {
+    Ok(Some(RoomActivity {
         room_id,
-        transaction_id,
-        sender: current_user_id.to_owned(),
+        activity_id: format!("txn:{transaction_id}"),
         timestamp_ms: created_at.get().into(),
-        body,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: None,
+            transaction_id: Some(transaction_id),
+            sender: current_user_id.to_owned(),
+            body,
+            send_state: RoomMessageSendState::Pending,
+        }),
     }))
 }
 
@@ -588,14 +629,26 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        map_local_text_queued, map_send_queue_update, outgoing_events_from_local_echo_event,
-        text_body_from_serialized_event, timeline_text_from_sync_message,
+        map_local_message_activity, map_send_queue_update, outgoing_events_from_local_echo_event,
+        room_activity_from_sync_member, room_activity_from_sync_message,
+        room_activity_from_sync_topic, text_body_from_serialized_event,
     };
-    use crate::api::{CoreErrorEvent, Event, Operation, OutgoingTextFailed, OutgoingTextSent};
+    use crate::api::{
+        CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+        RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity,
+        RoomStateNoticeContent,
+    };
     use matrix_sdk::{
         ruma::{
             MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
-            events::{AnyMessageLikeEventContent, room::message::RoomMessageEventContent},
+            events::{
+                AnyMessageLikeEventContent,
+                room::{
+                    member::OriginalSyncRoomMemberEvent,
+                    message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+                    topic::OriginalSyncRoomTopicEvent,
+                },
+            },
         },
         send_queue::{RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
@@ -614,33 +667,122 @@ mod tests {
     }
 
     #[test]
-    fn timeline_text_from_sync_message_copies_event_identity() {
-        let event: matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent =
-            serde_json::from_value(serde_json::json!({
-                "type": "m.room.message",
-                "content": {
-                    "msgtype": "m.text",
-                    "body": "hello"
-                },
-                "event_id": "$event:example.org",
-                "sender": "@alice:example.org",
-                "origin_server_ts": 1700000000000u64,
-                "unsigned": {
-                    "transaction_id": "txn-1"
-                }
-            }))
-            .expect("deserialize sync message event");
+    fn room_activity_from_sync_message_copies_event_identity() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello"
+            },
+            "event_id": "$event:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000000u64,
+            "unsigned": {
+                "transaction_id": "txn-1"
+            }
+        }))
+        .expect("deserialize sync message event");
 
         assert_eq!(
-            timeline_text_from_sync_message("!room:example.org", &event),
-            Some(crate::api::TimelineText {
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
-                event_id: "$event:example.org".to_owned(),
-                transaction_id: Some("txn-1".to_owned()),
-                sender: "@alice:example.org".to_owned(),
+                activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
-                body: "hello".to_owned(),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$event:example.org".to_owned()),
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "hello".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
             })
+        );
+    }
+
+    #[test]
+    fn non_text_sync_message_mapping_is_ignored() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.notice",
+                "body": "heads up"
+            },
+            "event_id": "$event:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000000u64
+        }))
+        .expect("deserialize sync notice event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            None
+        );
+    }
+
+    #[test]
+    fn topic_state_mapping_produces_state_notice_activity() {
+        let event: OriginalSyncRoomTopicEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.topic",
+            "content": {
+                "topic": "incident review"
+            },
+            "event_id": "$topic:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000001u64,
+            "state_key": ""
+        }))
+        .expect("deserialize topic event");
+
+        assert_eq!(
+            room_activity_from_sync_topic("!room:example.org", &event),
+            RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "state:$topic:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_001,
+                kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    event_id: "$topic:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    state_key: String::new(),
+                    content: RoomStateNoticeContent::Topic {
+                        topic: "incident review".to_owned(),
+                    },
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn member_state_mapping_produces_state_notice_activity() {
+        let event: OriginalSyncRoomMemberEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.member",
+            "content": {
+                "membership": "join",
+                "displayname": "carol"
+            },
+            "event_id": "$member:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000002u64,
+            "state_key": "@carol:example.org"
+        }))
+        .expect("deserialize member event");
+
+        assert_eq!(
+            room_activity_from_sync_member("!room:example.org", &event),
+            RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "state:$member:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_002,
+                kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    event_id: "$member:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    state_key: "@carol:example.org".to_owned(),
+                    content: RoomStateNoticeContent::Member {
+                        membership: "join".to_owned(),
+                        displayname: Some("carol".to_owned()),
+                    },
+                }),
+            }
         );
     }
 
@@ -652,7 +794,7 @@ mod tests {
         )
         .expect("serialize text event");
 
-        let queued = map_local_text_queued(
+        let activity = map_local_message_activity(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
             "@alice:example.org",
@@ -663,13 +805,18 @@ mod tests {
         .expect("text local echo");
 
         assert_eq!(
-            queued,
-            crate::api::OutgoingTextQueued {
+            activity,
+            RoomActivity {
                 room_id: "!room:example.org".to_owned(),
-                transaction_id: "txn-1".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
-                body: "hello".to_owned(),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "hello".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
             }
         );
     }
@@ -689,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn send_queue_sent_update_maps_to_outgoing_text_sent() {
+    fn send_queue_sent_update_maps_to_room_activity_update() {
         let events = map_send_queue_update(
             SendQueueUpdate {
                 room_id: room_id(),
@@ -704,16 +851,18 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::OutgoingTextSent(OutgoingTextSent {
+            vec![Event::RoomActivityUpdate(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
                 transaction_id: "txn-1".to_owned(),
-                event_id: "$event:example.org".to_owned(),
+                kind: RoomActivityUpdateKind::MessageSent {
+                    event_id: "$event:example.org".to_owned(),
+                },
             })]
         );
     }
 
     #[test]
-    fn restored_local_echo_hydrates_to_outgoing_text_queued() {
+    fn restored_local_echo_hydrates_to_pending_room_activity() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
         let serialized_event = SerializableEventContent::new(
             &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
@@ -732,12 +881,17 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::OutgoingTextQueued(crate::api::OutgoingTextQueued {
+            vec![Event::RoomActivity(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
-                transaction_id: "txn-1".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
-                body: "hello".to_owned(),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "hello".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
             })]
         );
     }
@@ -763,18 +917,25 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                Event::OutgoingTextQueued(crate::api::OutgoingTextQueued {
+                Event::RoomActivity(RoomActivity {
                     room_id: "!room:example.org".to_owned(),
-                    transaction_id: "txn-1".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    activity_id: "txn:txn-1".to_owned(),
                     timestamp_ms: created_at.get().into(),
-                    body: "hello".to_owned(),
+                    kind: RoomActivityKind::Message(RoomMessageActivity {
+                        event_id: None,
+                        transaction_id: Some("txn-1".to_owned()),
+                        sender: "@alice:example.org".to_owned(),
+                        body: "hello".to_owned(),
+                        send_state: RoomMessageSendState::Pending,
+                    }),
                 }),
-                Event::OutgoingTextFailed(OutgoingTextFailed {
+                Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     transaction_id: "txn-1".to_owned(),
-                    message: "Other unrecoverable error: wedged".to_owned(),
-                    recoverable: false,
+                    kind: RoomActivityUpdateKind::MessageFailed {
+                        message: "Other unrecoverable error: wedged".to_owned(),
+                        recoverable: false,
+                    },
                 }),
                 Event::Error(CoreErrorEvent {
                     operation: Operation::SendText,
@@ -785,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn send_queue_error_maps_to_failed_event_and_error_surface() {
+    fn send_queue_error_maps_to_failed_activity_update_and_error_surface() {
         let events = map_send_queue_update(
             SendQueueUpdate {
                 room_id: room_id(),
@@ -804,11 +965,13 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                Event::OutgoingTextFailed(OutgoingTextFailed {
+                Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     transaction_id: "txn-1".to_owned(),
-                    message: "send failed".to_owned(),
-                    recoverable: true,
+                    kind: RoomActivityUpdateKind::MessageFailed {
+                        message: "send failed".to_owned(),
+                        recoverable: true,
+                    },
                 }),
                 Event::Error(CoreErrorEvent {
                     operation: Operation::SendText,

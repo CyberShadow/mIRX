@@ -76,6 +76,76 @@ pub struct TimelineText {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomActivity {
+    pub room_id: String,
+    pub activity_id: String,
+    pub timestamp_ms: u64,
+    pub kind: RoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityKind {
+    Message(RoomMessageActivity),
+    StateNotice(RoomStateNoticeActivity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomMessageActivity {
+    pub event_id: Option<String>,
+    pub transaction_id: Option<String>,
+    pub sender: String,
+    pub body: String,
+    pub send_state: RoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomMessageSendState {
+    Pending,
+    Sent,
+    Failed { message: String, recoverable: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomStateNoticeActivity {
+    pub event_id: String,
+    pub sender: String,
+    pub state_key: String,
+    pub content: RoomStateNoticeContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomStateNoticeContent {
+    Topic {
+        topic: String,
+    },
+    Member {
+        membership: String,
+        displayname: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomActivityUpdate {
+    pub room_id: String,
+    pub transaction_id: String,
+    pub kind: RoomActivityUpdateKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityUpdateKind {
+    MessageSent { event_id: String },
+    MessageFailed { message: String, recoverable: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OutgoingTextQueued {
     pub room_id: String,
     pub transaction_id: String,
@@ -209,6 +279,8 @@ pub enum Event {
     RestoredSession,
     SyncStarted,
     SyncedRooms(Vec<RoomSummary>),
+    RoomActivity(RoomActivity),
+    RoomActivityUpdate(RoomActivityUpdate),
     TimelineText(TimelineText),
     OutgoingTextQueued(OutgoingTextQueued),
     OutgoingTextSent(OutgoingTextSent),
