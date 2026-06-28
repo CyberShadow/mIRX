@@ -9,14 +9,14 @@ use windows_sys::Win32::Security::Cryptography::{
 };
 
 pub(crate) fn protect(data: &[u8], description: &str, entropy: &[u8]) -> Result<Vec<u8>, String> {
-    let mut input = blob(data);
+    let input = blob(data);
     let mut optional_entropy = blob(entropy);
     let mut output = CRYPT_INTEGER_BLOB::default();
     let description: Vec<u16> = description.encode_utf16().chain(once(0)).collect();
 
     let protected = unsafe {
         CryptProtectData(
-            &mut input,
+            &input,
             description.as_ptr(),
             blob_ptr(entropy, &mut optional_entropy),
             null(),
@@ -33,13 +33,13 @@ pub(crate) fn protect(data: &[u8], description: &str, entropy: &[u8]) -> Result<
 }
 
 pub(crate) fn unprotect(data: &[u8], entropy: &[u8]) -> Result<Vec<u8>, String> {
-    let mut input = blob(data);
+    let input = blob(data);
     let mut optional_entropy = blob(entropy);
     let mut output = CRYPT_INTEGER_BLOB::default();
 
     let unprotected = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &input,
             null_mut(),
             blob_ptr(entropy, &mut optional_entropy),
             null(),
@@ -81,7 +81,7 @@ fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
     }
 }
 
-fn blob_ptr<'a>(data: &[u8], blob: &'a mut CRYPT_INTEGER_BLOB) -> *mut CRYPT_INTEGER_BLOB {
+fn blob_ptr(data: &[u8], blob: &mut CRYPT_INTEGER_BLOB) -> *mut CRYPT_INTEGER_BLOB {
     if data.is_empty() { null_mut() } else { blob }
 }
 

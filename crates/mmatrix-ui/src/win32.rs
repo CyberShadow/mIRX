@@ -359,8 +359,8 @@ impl RoomViewModel {
         transaction_id: Option<&str>,
         event_id: Option<&str>,
     ) -> Option<usize> {
-        if let Some(transaction_id) = transaction_id {
-            if let Some(index) = self.entries.iter().position(|entry| {
+        if let Some(transaction_id) = transaction_id
+            && let Some(index) = self.entries.iter().position(|entry| {
                 matches!(
                     entry,
                     RoomTimelineEntry::Text {
@@ -368,13 +368,13 @@ impl RoomViewModel {
                         ..
                     } if existing_transaction_id == transaction_id
                 )
-            }) {
-                return Some(index);
-            }
+            })
+        {
+            return Some(index);
         }
 
-        if let Some(event_id) = event_id {
-            if let Some(index) = self.entries.iter().position(|entry| {
+        if let Some(event_id) = event_id
+            && let Some(index) = self.entries.iter().position(|entry| {
                 matches!(
                     entry,
                     RoomTimelineEntry::Text {
@@ -382,9 +382,9 @@ impl RoomViewModel {
                         ..
                     } if existing_event_id == event_id
                 )
-            }) {
-                return Some(index);
-            }
+            })
+        {
+            return Some(index);
         }
 
         None
@@ -1342,7 +1342,7 @@ unsafe fn timeline_get_text(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESU
     }
 
     let state = timeline_state_ref(hwnd);
-    let capacity = wparam as usize;
+    let capacity = wparam;
     let buffer = lparam as *mut u16;
     let encoded = state.rendered_text.encode_utf16().collect::<Vec<_>>();
     let copied = encoded.len().min(capacity.saturating_sub(1));
@@ -1519,7 +1519,7 @@ unsafe extern "system" fn login_dialog_window_proc(
             }
         },
         WM_COMMAND => {
-            let command_id = (_wparam & 0xffff) as usize;
+            let command_id = _wparam & 0xffff;
             match command_id {
                 LOGIN_DIALOG_OK_ID => {
                     let Some(state) = login_dialog_state(hwnd) else {
@@ -1721,7 +1721,7 @@ unsafe fn append_menu_text(
 }
 
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
-    let command_id = (wparam & 0xffff) as usize;
+    let command_id = wparam & 0xffff;
     let result = match command_id {
         MENU_ID_LOGIN => show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
         MENU_ID_RESTORE_SAVED_SESSION => submit_restore_saved_session(state_mut(hwnd))
@@ -1740,7 +1740,7 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
 }
 
 unsafe fn handle_switchbar_command(hwnd: HWND, wparam: WPARAM) -> bool {
-    let command_id = (wparam & 0xffff) as usize;
+    let command_id = wparam & 0xffff;
     if !(SWITCHBAR_COMMAND_FIRST..=SWITCHBAR_COMMAND_LAST).contains(&command_id) {
         return false;
     }
@@ -1772,6 +1772,7 @@ unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn create_child_window(
     parent: HWND,
     class_name: &str,
@@ -2250,14 +2251,13 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                 .entry(sent.room_id.clone())
                 .or_default()
                 .mark_outgoing_sent(sent.clone());
-            if let Some(last_timeline) = state.model.last_timeline.as_mut() {
-                if last_timeline.room_id == sent.room_id
-                    && last_timeline.transaction_id.as_deref() == Some(sent.transaction_id.as_str())
-                {
-                    last_timeline.event_id = Some(sent.event_id);
-                    last_timeline.send_state = TimelineSendState::Sent;
-                    last_timeline.send_error = None;
-                }
+            if let Some(last_timeline) = state.model.last_timeline.as_mut()
+                && last_timeline.room_id == sent.room_id
+                && last_timeline.transaction_id.as_deref() == Some(sent.transaction_id.as_str())
+            {
+                last_timeline.event_id = Some(sent.event_id);
+                last_timeline.send_state = TimelineSendState::Sent;
+                last_timeline.send_error = None;
             }
         }
         Event::OutgoingTextFailed(failed) => {
@@ -2273,17 +2273,16 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                 .entry(failed.room_id.clone())
                 .or_default()
                 .mark_outgoing_failed(failed.clone());
-            if let Some(last_timeline) = state.model.last_timeline.as_mut() {
-                if last_timeline.room_id == failed.room_id
-                    && last_timeline.transaction_id.as_deref()
-                        == Some(failed.transaction_id.as_str())
-                {
-                    last_timeline.send_state = TimelineSendState::Failed;
-                    last_timeline.send_error = Some(TimelineSendError {
-                        message: failed.message,
-                        recoverable: failed.recoverable,
-                    });
-                }
+            if let Some(last_timeline) = state.model.last_timeline.as_mut()
+                && last_timeline.room_id == failed.room_id
+                && last_timeline.transaction_id.as_deref()
+                    == Some(failed.transaction_id.as_str())
+            {
+                last_timeline.send_state = TimelineSendState::Failed;
+                last_timeline.send_error = Some(TimelineSendError {
+                    message: failed.message,
+                    recoverable: failed.recoverable,
+                });
             }
         }
         Event::RoomState(room_state) => {
@@ -2919,7 +2918,7 @@ unsafe fn refresh_tree(hwnd: HWND) {
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
-    let root = insert_tree_item(tree, TVI_ROOT as isize, "mmatrix");
+    let root = insert_tree_item(tree, TVI_ROOT, "mmatrix");
     let status = insert_mapped_tree_item(state, root, "status", ViewId::Status);
 
     let rooms = state.model.rooms.clone();
