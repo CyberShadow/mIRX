@@ -155,7 +155,7 @@ ensure_binaries() {
 
 configure_case_expectations() {
   local case_name=$1
-  timeline_expect_args=()
+  room_activity_expect_args=()
   room_expect_args=()
   room_view_expect_args=()
   status_view_expect_args=()
@@ -181,12 +181,12 @@ configure_case_expectations() {
         --expect-room '!ops:example'
         --expect-room '!random:example'
       )
-      timeline_expect_args=(
-        --expect-timeline '!ops:example::incident review'
-        --expect-timeline '!ops:example::carol'
-        --expect-timeline '!ops:example::join'
-        --expect-timeline '!ops:example::@alice:example'
-        --expect-timeline '!ops:example::deploy window opens'
+      room_activity_expect_args=(
+        --expect-room-activity '!ops:example::incident review'
+        --expect-room-activity '!ops:example::carol'
+        --expect-room-activity '!ops:example::join'
+        --expect-room-activity '!ops:example::@alice:example'
+        --expect-room-activity '!ops:example::deploy window opens'
       )
       room_view_expect_args=(
         --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
@@ -278,11 +278,11 @@ configure_case_expectations() {
         --expect-room '!support:example'
         --expect-room '!verify:example'
       )
-      timeline_expect_args=(
-        --expect-timeline '!verify:example::@alice:example'
-        --expect-timeline '!verify:example::verification requested'
-        --expect-timeline '!verify:example::sas emoji ready'
-        --expect-timeline '!verify:example::waiting for confirmation'
+      room_activity_expect_args=(
+        --expect-room-activity '!verify:example::@alice:example'
+        --expect-room-activity '!verify:example::verification requested'
+        --expect-room-activity '!verify:example::sas emoji ready'
+        --expect-room-activity '!verify:example::waiting for confirmation'
       )
       room_view_expect_args=(
         --expect-room-view '!verify:example::Room: Verify [e2ee] (!verify:example)'
@@ -320,6 +320,46 @@ configure_case_expectations() {
         --expect-no-navigation-text 'message send failed'
       )
       ;;
+    mixed-room-activity)
+      expect_selected='!mixed:example'
+      expect_active_view='room:!mixed:example'
+      room_expect_args=(
+        --expect-room '!mixed:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!mixed:example::synced hello'
+        --expect-room-activity '!mixed:example::pending local echo'
+        --expect-room-activity '!mixed:example::failed local echo'
+        --expect-room-activity '!mixed:example::mixed room topic'
+        --expect-room-activity '!mixed:example::join'
+        --expect-room-activity '!mixed:example::leave'
+        --expect-room-activity '!mixed:example::"state":"failed"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!mixed:example::Room: Mixed [e2ee] (!mixed:example)'
+        --expect-room-view '!mixed:example::Topic: mixed room topic'
+        --expect-room-view '!mixed:example::[22:13] @alice:example: synced hello'
+        --expect-room-view '!mixed:example::* [22:14] @alice:example set topic: mixed room topic'
+        --expect-room-view '!mixed:example::* [22:15] bob joined'
+        --expect-room-view '!mixed:example::* [22:16] @carol:example left'
+        --expect-room-view '!mixed:example::[22:17] @alice:example: pending local echo (sending)'
+        --expect-room-view '!mixed:example::[22:18] @alice:example: failed local echo (failed)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!mixed:example::Mixed'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!mixed:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!mixed:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'synced hello'
+        --expect-no-navigation-text 'pending local echo'
+        --expect-no-navigation-text 'failed local echo'
+      )
+      ;;
     *)
       die "no expectations configured for snapshot case: $case_name"
       ;;
@@ -352,7 +392,7 @@ run_case() {
     --expect-selected "$expect_selected"
     --expect-active-view "$expect_active_view"
     "${room_expect_args[@]}"
-    "${timeline_expect_args[@]}"
+    "${room_activity_expect_args[@]}"
     "${room_view_expect_args[@]}"
     "${status_view_expect_args[@]}"
     "${status_bar_expect_args[@]}"

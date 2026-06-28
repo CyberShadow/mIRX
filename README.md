@@ -6,6 +6,8 @@
 
 - Vertical-slice prototype scaffold is in place.
 - `mmatrix-core` owns the Matrix SDK runtime boundary and has offline tests plus env-gated live Matrix coverage.
+- Matrix SDK timeline, state, and send-queue inputs enter `mmatrix-core`, which normalizes them into typed room activity/state events that Win32 stores and renders.
+- Future reactions, media, receipts, typing, threads, and verification UX should extend that typed boundary instead of adding separate UI-only paths.
 - `mmatrix-ui` is a native Win32 shell with deterministic Wine automation and a live login/session-restore/sync/rooms/send slice through `mmatrix-core`.
 - CI is intended to run the full local check sequence through the Nix devshell.
 

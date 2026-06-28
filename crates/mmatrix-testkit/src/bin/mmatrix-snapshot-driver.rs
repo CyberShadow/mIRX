@@ -394,7 +394,7 @@ mod windows_main {
                             .ok_or_else(|| "missing value for --expect-room".to_owned())?,
                     );
                 }
-                "--expect-room-activity" | "--expect-timeline" => {
+                "--expect-room-activity" => {
                     let value = args
                         .next()
                         .ok_or_else(|| "missing value for room activity expectation".to_owned())?;
@@ -544,7 +544,6 @@ mod windows_main {
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
             "  --expect-room-activity <room_id>::<substring>",
-            "  --expect-timeline <room_id>::<substring>  compatibility alias",
             "  --expect-error <substring>",
             "  --expect-verification <flow_id>",
             "  --expect-active-view <status|room:<room_id>>",

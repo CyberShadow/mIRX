@@ -63,6 +63,11 @@ from scratch.
 - All Matrix/crypto state lives behind an internal **app-service facade**, so SDK
   API churn is contained and the core stays UI-agnostic (and testable, and
   portable later).
+- Matrix SDK timeline, state, and send-queue inputs first enter `mmatrix-core`,
+  which normalizes them into typed room activity/state events before Win32 stores
+  and renders them.
+- Future reactions, media, receipts, typing, threads, and verification UX should
+  extend that typed boundary rather than adding separate UI-only paths.
 
 ## UI model (mIRC-faithful)
 
@@ -159,9 +164,9 @@ Windows. Validated layered approach:
 ## Current prototype capability
 
 The current vertical slice already covers login, saved-session restore, room
-sync, room listing, timeline text rendering, send, and logout through the
-`mmatrix-core` boundary, with deterministic offline fixtures plus env-gated
-live automation coverage.
+sync, room listing, typed room activity/state rendering, send, and logout
+through the `mmatrix-core` boundary, with deterministic offline fixtures plus
+env-gated live automation coverage.
 
 ## v1 feature set
 
