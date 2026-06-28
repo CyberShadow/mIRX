@@ -11,7 +11,8 @@ use matrix_sdk::{
     ruma::{
         MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId,
         events::{
-            AnyMessageLikeEventContent, SyncStateEvent,
+            AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
+            key::verification::request::ToDeviceKeyVerificationRequestEventContent,
             room::{
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
@@ -30,7 +31,7 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
-    SpaceChildSummary, StoredSession,
+    SpaceChildSummary, StoredSession, VerificationRequest,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -260,6 +261,19 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             );
         }
     });
+
+    let verification_events = events.clone();
+    client.add_event_handler(
+        move |event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>| {
+            let events = verification_events.clone();
+            async move {
+                emit_event(
+                    &events,
+                    Event::VerificationRequest(verification_request_from_to_device(&event)),
+                );
+            }
+        },
+    );
 }
 
 fn room_activity_from_sync_message(
@@ -336,6 +350,15 @@ fn room_typing_from_sync_typing(room_id: &str, event: &SyncTypingEvent) -> RoomT
             .iter()
             .map(ToString::to_string)
             .collect(),
+    }
+}
+
+fn verification_request_from_to_device(
+    event: &ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>,
+) -> VerificationRequest {
+    VerificationRequest {
+        flow_id: event.content.transaction_id.to_string(),
+        user_id: event.sender.to_string(),
     }
 }
 
@@ -660,18 +683,19 @@ mod tests {
         map_local_message_activity, map_send_queue_update, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_typing_from_sync_typing,
-        text_body_from_serialized_event,
+        text_body_from_serialized_event, verification_request_from_to_device,
     };
     use crate::api::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTyping,
+        RoomStateNoticeContent, RoomTyping, VerificationRequest,
     };
     use matrix_sdk::{
         ruma::{
             MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
             events::{
-                AnyMessageLikeEventContent,
+                AnyMessageLikeEventContent, ToDeviceEvent,
+                key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 room::{
                     member::OriginalSyncRoomMemberEvent,
                     message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
@@ -834,6 +858,30 @@ mod tests {
                     "@alice:example.org".to_owned(),
                     "@bob:example.org".to_owned(),
                 ],
+            }
+        );
+    }
+
+    #[test]
+    fn to_device_verification_request_mapping_uses_transaction_id_and_sender() {
+        let event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent> =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.key.verification.request",
+                "sender": "@alice:example.org",
+                "content": {
+                    "from_device": "ALICEDEVICE",
+                    "transaction_id": "txn-123",
+                    "methods": ["m.sas.v1"],
+                    "timestamp": 1700000000003u64
+                }
+            }))
+            .expect("deserialize to-device verification request");
+
+        assert_eq!(
+            verification_request_from_to_device(&event),
+            VerificationRequest {
+                flow_id: "txn-123".to_owned(),
+                user_id: "@alice:example.org".to_owned(),
             }
         );
     }
