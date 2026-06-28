@@ -1117,6 +1117,55 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     Ok(())
 }
 
+#[test]
+fn custom_room_timeline_gettext_normalizes_multiline_bodies()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.push(Event::TimelineText(TimelineText {
+        room_id: "!beta:example".to_owned(),
+        sender: "@bob:example".to_owned(),
+        timestamp_ms: 1_700_001_000_000,
+        body: "multiline row 00 line a\nmultiline row 00 line b".to_owned(),
+    }));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_timeline_contains(
+        Some("!beta:example"),
+        "multiline row 00 line a",
+        Duration::from_secs(5),
+    )?;
+
+    let timeline_hwnd = unsafe { active_mdi_content_hwnd(&app) };
+    let text = unsafe { read_window_text(timeline_hwnd) };
+    assert!(
+        text.contains("multiline row 00 line a\r\nmultiline row 00 line b"),
+        "timeline WM_GETTEXT must normalize embedded multiline bodies to CRLF: {text:?}"
+    );
+
+    app.select_status_view()?;
+    app.wait_idle(Duration::from_secs(2))?;
+    app.select_room("!beta:example")?;
+    app.wait_idle(Duration::from_secs(2))?;
+
+    let text_after_switch = unsafe { read_window_text(active_mdi_content_hwnd(&app)) };
+    assert!(
+        text_after_switch.contains("multiline row 00 line a\r\nmultiline row 00 line b"),
+        "timeline WM_GETTEXT must preserve CRLF normalization after view switches: {text_after_switch:?}"
+    );
+
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 unsafe fn active_mdi_content_hwnd(app: &MmatrixApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };

@@ -1122,10 +1122,10 @@ unsafe fn timeline_state_mut(hwnd: HWND) -> &'static mut TimelineState {
 }
 
 unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
-    let rendered_text = wide_ptr_to_string(text_ptr);
+    let (rendered_text, lines) = normalize_timeline_text(&wide_ptr_to_string(text_ptr));
     let state = timeline_state_mut(hwnd);
     state.rendered_text = rendered_text;
-    state.lines = split_rendered_lines(&state.rendered_text);
+    state.lines = lines;
     clamp_timeline_top_line(hwnd);
     update_timeline_scrollbar(hwnd);
     InvalidateRect(hwnd, null(), 1);
@@ -3403,6 +3403,12 @@ fn split_rendered_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn normalize_timeline_text(text: &str) -> (String, Vec<String>) {
+    let lines = split_rendered_lines(text);
+    let normalized = render_view_text(&lines);
+    (normalized, lines)
+}
+
 fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
     let mut ordered = Vec::new();
     if state.views.contains_key(&ViewId::Status) {
@@ -4777,7 +4783,7 @@ mod tests {
     fn tracked_view(hwnd_value: isize) -> MdiViewState {
         MdiViewState {
             child: hwnd_value as HWND,
-            edit: (hwnd_value + 1) as HWND,
+            content: (hwnd_value + 1) as HWND,
         }
     }
 
@@ -4928,6 +4934,24 @@ mod tests {
         assert!(status_text.contains("flow_id: flow-verify-123"));
         assert!(status_text.contains("operation: send text"));
         assert!(status_text.contains("message: message send failed"));
+    }
+
+    #[test]
+    fn normalize_timeline_text_converts_embedded_newlines_to_crlf() {
+        let text = "[22:13] @bob:example: multiline row 00 line a\nmultiline row 00 line b";
+        let (normalized, lines) = normalize_timeline_text(text);
+
+        assert_eq!(
+            normalized,
+            "[22:13] @bob:example: multiline row 00 line a\r\nmultiline row 00 line b"
+        );
+        assert_eq!(
+            lines,
+            vec![
+                "[22:13] @bob:example: multiline row 00 line a".to_owned(),
+                "multiline row 00 line b".to_owned(),
+            ]
+        );
     }
 
     #[test]
