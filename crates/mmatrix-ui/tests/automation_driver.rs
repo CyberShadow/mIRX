@@ -1059,8 +1059,9 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     assert_eq!(model.selected_room.as_deref(), Some("!ops:example"));
     assert_eq!(
         model.last_timeline,
-        Some(timeline_line(
+        Some(timeline_line_with_event_id(
             "!random:example",
+            "$random-1",
             "@dave:example",
             1_700_000_300_000,
             "random: lunch votes are in",
@@ -1083,20 +1084,23 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
                 "join",
                 Some("carol"),
             ),
-            text_entry(
+            text_entry_with_event_id(
                 "!ops:example",
+                "$ops-1",
                 "@alice:example",
                 1_700_000_120_000,
                 "ops topic: incident review",
             ),
-            text_entry(
+            text_entry_with_event_id(
                 "!ops:example",
+                "$ops-2",
                 "@bob:example",
                 1_700_000_180_000,
                 "encryption enabled for ops",
             ),
-            text_entry(
+            text_entry_with_event_id(
                 "!ops:example",
+                "$ops-3",
                 "@carol:example",
                 1_700_000_240_000,
                 "deploy window opens at 18:00 UTC",
