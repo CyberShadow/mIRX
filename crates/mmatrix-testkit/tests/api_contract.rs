@@ -406,6 +406,29 @@ fn timeline_entries_round_trip_through_json() {
 }
 
 #[test]
+fn timeline_entry_contains_matches_identity_and_send_state_fields() {
+    let text = TimelineEntry::Text(TimelineLine {
+        room_id: "!room:example".to_owned(),
+        event_id: Some("$event:example".to_owned()),
+        transaction_id: Some("txn-1".to_owned()),
+        sender: "@alice:example".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        body: "hello".to_owned(),
+        send_state: TimelineSendState::Failed,
+        send_error: Some(TimelineSendError {
+            message: "send failed".to_owned(),
+            recoverable: true,
+        }),
+    });
+
+    assert!(text.contains("@alice:example"));
+    assert!(text.contains("\"event_id\":\"$event:example\""));
+    assert!(text.contains("\"transaction_id\":\"txn-1\""));
+    assert!(text.contains("\"send_state\":\"failed\""));
+    assert!(text.contains("\"send_error\":{\"message\":\"send failed\",\"recoverable\":true}"));
+}
+
+#[test]
 fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<Model>(

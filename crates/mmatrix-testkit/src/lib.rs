@@ -175,31 +175,9 @@ pub enum TimelineEntry {
     RoomState(RoomStateLine),
 }
 
-#[cfg(windows)]
 impl TimelineEntry {
-    fn contains(&self, substr: &str) -> bool {
-        match self {
-            Self::Text(line) => {
-                line.room_id.contains(substr)
-                    || line.sender.contains(substr)
-                    || line.body.contains(substr)
-            }
-            Self::RoomState(line) => {
-                line.room_id.contains(substr)
-                    || line.sender.contains(substr)
-                    || line.state_key.contains(substr)
-                    || match &line.content {
-                        RoomStateContent::Topic(topic) => topic.topic.contains(substr),
-                        RoomStateContent::Member(member) => {
-                            member.membership.contains(substr)
-                                || member
-                                    .displayname
-                                    .as_deref()
-                                    .is_some_and(|displayname| displayname.contains(substr))
-                        }
-                    }
-            }
-        }
+    pub fn contains(&self, substr: &str) -> bool {
+        serde_json::to_string(self).is_ok_and(|json| json.contains(substr))
     }
 }
 

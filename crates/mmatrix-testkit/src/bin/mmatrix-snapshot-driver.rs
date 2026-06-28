@@ -12,7 +12,7 @@ mod windows_main {
     use std::time::Duration;
 
     use mmatrix_testkit::{
-        MdiView, MmatrixApp, NavigationNode, RoomStateContent, TimelineEntry, UiState, ViewIdentity,
+        MdiView, MmatrixApp, NavigationNode, TimelineEntry, UiState, ViewIdentity,
     };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -600,28 +600,7 @@ mod windows_main {
     }
 
     fn timeline_entry_contains(entry: &TimelineEntry, substring: &str) -> bool {
-        match entry {
-            TimelineEntry::Text(line) => {
-                line.room_id.contains(substring)
-                    || line.sender.contains(substring)
-                    || line.body.contains(substring)
-            }
-            TimelineEntry::RoomState(line) => {
-                line.room_id.contains(substring)
-                    || line.sender.contains(substring)
-                    || line.state_key.contains(substring)
-                    || match &line.content {
-                        RoomStateContent::Topic(topic) => topic.topic.contains(substring),
-                        RoomStateContent::Member(member) => {
-                            member.membership.contains(substring)
-                                || member
-                                    .displayname
-                                    .as_deref()
-                                    .is_some_and(|displayname| displayname.contains(substring))
-                        }
-                    }
-            }
-        }
+        entry.contains(substring)
     }
 
     fn navigation_contains(node: &NavigationNode, substring: &str) -> bool {

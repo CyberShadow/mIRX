@@ -497,8 +497,12 @@ fn outgoing_events_from_local_echo_event(
         events.push(Event::OutgoingTextFailed(OutgoingTextFailed {
             room_id,
             transaction_id,
-            message: send_error,
+            message: send_error.clone(),
             recoverable: false,
+        }));
+        events.push(Event::Error(CoreErrorEvent {
+            operation: Operation::SendText,
+            message: send_error,
         }));
     }
 
@@ -739,7 +743,7 @@ mod tests {
     }
 
     #[test]
-    fn restored_failed_local_echo_hydrates_to_visible_failed_lifecycle() {
+    fn restored_failed_local_echo_re_emits_error_surface() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
         let serialized_event = SerializableEventContent::new(
             &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
@@ -771,6 +775,10 @@ mod tests {
                     transaction_id: "txn-1".to_owned(),
                     message: "Other unrecoverable error: wedged".to_owned(),
                     recoverable: false,
+                }),
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::SendText,
+                    message: "Other unrecoverable error: wedged".to_owned(),
                 }),
             ]
         );
