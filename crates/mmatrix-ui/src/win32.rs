@@ -1068,6 +1068,7 @@ unsafe extern "system" fn timeline_window_proc(
         WM_GETTEXT => timeline_get_text(hwnd, wparam, lparam),
         WM_TIMELINE_GET_TOP_LINE => timeline_state_ref(hwnd).top_line as LRESULT,
         WM_SIZE => {
+            clamp_timeline_top_line(hwnd);
             update_timeline_scrollbar(hwnd);
             0
         }
@@ -1167,12 +1168,14 @@ fn timeline_max_top_line(line_count: usize, visible_rows: usize) -> usize {
     line_count.saturating_sub(visible_rows)
 }
 
+fn clamped_timeline_top_line(top_line: usize, line_count: usize, visible_rows: usize) -> usize {
+    top_line.min(timeline_max_top_line(line_count, visible_rows))
+}
+
 unsafe fn clamp_timeline_top_line(hwnd: HWND) {
     let visible_rows = timeline_visible_rows(hwnd);
     let state = timeline_state_mut(hwnd);
-    state.top_line = state
-        .top_line
-        .min(timeline_max_top_line(state.lines.len(), visible_rows));
+    state.top_line = clamped_timeline_top_line(state.top_line, state.lines.len(), visible_rows);
 }
 
 unsafe fn update_timeline_scrollbar(hwnd: HWND) {
@@ -3398,7 +3401,11 @@ fn write_response_bytes_if_fits(automation: &AutomationState, response_bytes: &[
 }
 
 fn split_rendered_lines(text: &str) -> Vec<String> {
-    text.lines()
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    text.split('\n')
         .map(|line| line.trim_end_matches('\r').to_owned())
         .collect()
 }
@@ -4952,6 +4959,25 @@ mod tests {
                 "multiline row 00 line b".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn normalize_timeline_text_preserves_trailing_blank_line() {
+        let text = "trailing blank line a\n";
+        let (normalized, lines) = normalize_timeline_text(text);
+
+        assert_eq!(normalized, "trailing blank line a\r\n");
+        assert_eq!(
+            lines,
+            vec!["trailing blank line a".to_owned(), String::new()]
+        );
+    }
+
+    #[test]
+    fn clamped_timeline_top_line_respects_visible_row_growth() {
+        assert_eq!(clamped_timeline_top_line(8, 10, 3), 7);
+        assert_eq!(clamped_timeline_top_line(8, 10, 5), 5);
+        assert_eq!(clamped_timeline_top_line(2, 10, 20), 0);
     }
 
     #[test]
