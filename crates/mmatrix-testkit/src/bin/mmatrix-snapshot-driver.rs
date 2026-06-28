@@ -12,7 +12,7 @@ mod windows_main {
     use std::time::Duration;
 
     use mmatrix_testkit::{
-        MdiView, MmatrixApp, NavigationNode, TimelineEntry, UiState, ViewIdentity,
+        MdiView, MmatrixApp, NavigationNode, RoomActivity, UiState, ViewIdentity,
     };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -23,7 +23,7 @@ mod windows_main {
         wait_idle: Duration,
         expect_selected: Option<String>,
         expect_rooms: Vec<String>,
-        expect_timelines: Vec<TimelineExpectation>,
+        expect_room_activities: Vec<RoomActivityExpectation>,
         expect_error: Option<String>,
         expect_verification: Option<String>,
         expect_active_view: Option<ViewIdentity>,
@@ -39,7 +39,7 @@ mod windows_main {
         expect_no_navigation_texts: Vec<String>,
     }
 
-    struct TimelineExpectation {
+    struct RoomActivityExpectation {
         room_id: String,
         substring: String,
     }
@@ -139,34 +139,36 @@ mod windows_main {
             println!("PASS error contains {:?}", expected_substring);
         }
 
-        let mut timeline_cache = BTreeMap::<String, Vec<TimelineEntry>>::new();
-        for expectation in &config.expect_timelines {
-            let entries = if let Some(entries) = timeline_cache.get(&expectation.room_id) {
+        let mut room_activity_cache = BTreeMap::<String, Vec<RoomActivity>>::new();
+        for expectation in &config.expect_room_activities {
+            let entries = if let Some(entries) = room_activity_cache.get(&expectation.room_id) {
                 entries
             } else {
-                let entries = app.timeline(Some(&expectation.room_id)).map_err(|error| {
-                    format!(
-                        "DUMP_TIMELINE failed for room {}: {error}",
-                        expectation.room_id
-                    )
-                })?;
-                timeline_cache.insert(expectation.room_id.clone(), entries);
-                timeline_cache
+                let entries = app
+                    .room_activity(Some(&expectation.room_id))
+                    .map_err(|error| {
+                        format!(
+                            "DUMP_ROOM_ACTIVITY failed for room {}: {error}",
+                            expectation.room_id
+                        )
+                    })?;
+                room_activity_cache.insert(expectation.room_id.clone(), entries);
+                room_activity_cache
                     .get(&expectation.room_id)
-                    .expect("timeline cache entry must exist after insert")
+                    .expect("room activity cache entry must exist after insert")
             };
 
             let found = entries
                 .iter()
-                .any(|entry| timeline_entry_contains(entry, &expectation.substring));
+                .any(|entry| room_activity_contains(entry, &expectation.substring));
             if !found {
                 return Err(format!(
-                    "timeline assertion failed: room {} did not contain {:?}",
+                    "room activity assertion failed: room {} did not contain {:?}",
                     expectation.room_id, expectation.substring
                 ));
             }
             println!(
-                "PASS timeline {} contains {:?}",
+                "PASS room activity {} contains {:?}",
                 expectation.room_id, expectation.substring
             );
         }
@@ -392,16 +394,16 @@ mod windows_main {
                             .ok_or_else(|| "missing value for --expect-room".to_owned())?,
                     );
                 }
-                "--expect-timeline" => {
+                "--expect-room-activity" | "--expect-timeline" => {
                     let value = args
                         .next()
-                        .ok_or_else(|| "missing value for --expect-timeline".to_owned())?;
+                        .ok_or_else(|| "missing value for room activity expectation".to_owned())?;
                     let (room_id, substring) = value.split_once("::").ok_or_else(|| {
                         format!(
-                            "invalid --expect-timeline value {value:?}; expected <room_id>::<substring>"
+                            "invalid room activity expectation {value:?}; expected <room_id>::<substring>"
                         )
                     })?;
-                    config.expect_timelines.push(TimelineExpectation {
+                    config.expect_room_activities.push(RoomActivityExpectation {
                         room_id: room_id.to_owned(),
                         substring: substring.to_owned(),
                     });
@@ -541,7 +543,8 @@ mod windows_main {
             "  --wait-idle-ms <ms>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
-            "  --expect-timeline <room_id>::<substring>",
+            "  --expect-room-activity <room_id>::<substring>",
+            "  --expect-timeline <room_id>::<substring>  compatibility alias",
             "  --expect-error <substring>",
             "  --expect-verification <flow_id>",
             "  --expect-active-view <status|room:<room_id>>",
@@ -599,7 +602,7 @@ mod windows_main {
         view.lines.iter().any(|line| line.contains(substring))
     }
 
-    fn timeline_entry_contains(entry: &TimelineEntry, substring: &str) -> bool {
+    fn room_activity_contains(entry: &RoomActivity, substring: &str) -> bool {
         entry.contains(substring)
     }
 

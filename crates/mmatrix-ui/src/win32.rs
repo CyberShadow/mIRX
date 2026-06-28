@@ -72,19 +72,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::{
     AppCommand, HELP, RunOptions,
     automation::{
-        AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_TIMELINE,
+        AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, DumpModel, DumpRoomMemberState,
-        DumpRoomStateContent as AutomationRoomStateContent,
-        DumpRoomStateEventKind as AutomationRoomStateEventKind, DumpRoomStateLine,
-        DumpRoomTopicState, DumpTimelineEntry, DumpTimelineResponse, DumpTimelineSendError,
-        DumpTimelineSendState, FailureEnvelope, GetVersionResponse, LifecycleState,
+        ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityResponse,
+        DumpRoomMessageActivityLine, FailureEnvelope, GetVersionResponse, LifecycleState,
         ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
         NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
         SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
         SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_from_summary, dump_verification_from_request,
-        failure_response, parse_command_request, success_response,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_verification_from_request, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -3535,7 +3533,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, SelectedNavigationPathResponse { path })
         }
-        ParsedCommand::DumpTimeline { id, args } => {
+        ParsedCommand::DumpRoomActivity { id, args } => {
             let room_id = resolve_timeline_room_id(state_ref(hwnd), args.room_id.as_deref())
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_room", message))?;
             let entries = state_ref(hwnd)
@@ -3546,11 +3544,11 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     room_view
                         .activities
                         .iter()
-                        .map(|activity| dump_timeline_entry_from_room_entry(&room_id, activity))
+                        .map(dump_room_activity_entry_from_room_entry)
                         .collect()
                 })
                 .unwrap_or_default();
-            serialize_success_json(&id, DumpTimelineResponse { room_id, entries })
+            serialize_success_json(&id, DumpRoomActivityResponse { room_id, entries })
         }
         ParsedCommand::ListRooms { id } => {
             let rooms = state_ref(hwnd)
@@ -3690,7 +3688,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::DumpModel { id }
         | ParsedCommand::DumpUiState { id }
         | ParsedCommand::DumpSelectedNavigationPath { id }
-        | ParsedCommand::DumpTimeline { id, .. }
+        | ParsedCommand::DumpRoomActivity { id, .. }
         | ParsedCommand::ListRooms { id }
         | ParsedCommand::SelectRoom { id, .. }
         | ParsedCommand::SelectView { id, .. }
@@ -4382,7 +4380,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
 
     let timeline = send_automation_request(
         hwnd,
-        COMMAND_ID_DUMP_TIMELINE,
+        COMMAND_ID_DUMP_ROOM_ACTIVITY,
         json!({"id":"timeline","args":{"room_id":"!one:example"}}),
     )?;
     if timeline["ok"] != json!(true)
@@ -4391,32 +4389,36 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 "room_id":"!one:example",
                 "entries":[
                     {
-                        "type":"text",
                         "room_id":"!one:example",
-                        "event_id":"$one-first",
-                        "transaction_id":null,
-                        "sender":"@alice:example",
+                        "activity_id":"event:$one-first",
                         "timestamp_ms":1700000000000u64,
-                        "body":"first line",
-                        "send_state":"sent",
-                        "send_error":null
+                        "kind":{
+                            "type":"message",
+                            "event_id":"$one-first",
+                            "transaction_id":null,
+                            "sender":"@alice:example",
+                            "body":"first line",
+                            "send_state":{"state":"sent"}
+                        }
                     },
                     {
-                        "type":"text",
                         "room_id":"!one:example",
-                        "event_id":"$one-second",
-                        "transaction_id":null,
-                        "sender":"@alice:example",
+                        "activity_id":"event:$one-second",
                         "timestamp_ms":1700000060000u64,
-                        "body":"second line",
-                        "send_state":"sent",
-                        "send_error":null
+                        "kind":{
+                            "type":"message",
+                            "event_id":"$one-second",
+                            "transaction_id":null,
+                            "sender":"@alice:example",
+                            "body":"second line",
+                            "send_state":{"state":"sent"}
+                        }
                     }
                 ]
             })
     {
         return Err(format!(
-            "self-test failed: unexpected dump-timeline response {timeline}"
+            "self-test failed: unexpected dump-room-activity response {timeline}"
         ));
     }
 
@@ -4997,10 +4999,10 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
         status: model.status.clone(),
         lifecycle_state: model.lifecycle_state,
         rooms: model.rooms.iter().map(dump_room_from_summary).collect(),
-        last_timeline: model
+        last_activity: model
             .last_timeline
             .as_ref()
-            .map(dump_timeline_line_from_last_timeline),
+            .map(dump_room_message_activity_line_from_last_timeline),
         last_verification: model
             .last_verification
             .as_ref()
@@ -5010,89 +5012,32 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
     }
 }
 
-fn dump_timeline_entry_from_room_entry(
-    room_id: &str,
-    activity: &RoomActivity,
-) -> DumpTimelineEntry {
-    match &activity.kind {
-        RoomActivityKind::Message(message) => {
-            DumpTimelineEntry::Text(crate::automation::DumpTimelineLine {
-                room_id: room_id.to_owned(),
-                event_id: message.event_id.clone(),
-                transaction_id: message.transaction_id.clone(),
-                sender: message.sender.clone(),
-                timestamp_ms: activity.timestamp_ms,
-                body: message.body.clone(),
-                send_state: dump_timeline_send_state(&message.send_state),
-                send_error: dump_timeline_send_error_from_send_state(&message.send_state),
-            })
-        }
-        RoomActivityKind::StateNotice(notice) => DumpTimelineEntry::RoomState(DumpRoomStateLine {
-            room_id: room_id.to_owned(),
-            sender: notice.sender.clone(),
-            timestamp_ms: activity.timestamp_ms,
-            event_kind: dump_room_state_event_kind(&notice.content),
-            state_key: notice.state_key.clone(),
-            content: match &notice.content {
-                RoomStateNoticeContent::Topic { topic } => {
-                    AutomationRoomStateContent::Topic(DumpRoomTopicState {
-                        topic: topic.clone(),
-                    })
-                }
-                RoomStateNoticeContent::Member {
-                    membership,
-                    displayname,
-                } => AutomationRoomStateContent::Member(DumpRoomMemberState {
-                    membership: membership.clone(),
-                    displayname: displayname.clone(),
-                }),
-            },
-        }),
-    }
+fn dump_room_activity_entry_from_room_entry(activity: &RoomActivity) -> DumpRoomActivity {
+    dump_room_activity_from_activity(activity)
 }
 
-fn dump_timeline_line_from_last_timeline(
+fn dump_room_message_activity_line_from_last_timeline(
     timeline: &LastTimelineText,
-) -> crate::automation::DumpTimelineLine {
-    crate::automation::DumpTimelineLine {
+) -> DumpRoomMessageActivityLine {
+    DumpRoomMessageActivityLine {
         room_id: timeline.room_id.clone(),
+        activity_id: timeline
+            .event_id
+            .as_ref()
+            .map(|event_id| format!("event:{event_id}"))
+            .or_else(|| {
+                timeline
+                    .transaction_id
+                    .as_ref()
+                    .map(|transaction_id| format!("txn:{transaction_id}"))
+            })
+            .expect("last timeline message must have an event id or transaction id"),
+        timestamp_ms: timeline.timestamp_ms,
         event_id: timeline.event_id.clone(),
         transaction_id: timeline.transaction_id.clone(),
         sender: timeline.sender.clone(),
-        timestamp_ms: timeline.timestamp_ms,
         body: timeline.body.clone(),
-        send_state: dump_timeline_send_state(&timeline.send_state),
-        send_error: dump_timeline_send_error_from_send_state(&timeline.send_state),
-    }
-}
-
-fn dump_timeline_send_state(send_state: &RoomMessageSendState) -> DumpTimelineSendState {
-    match send_state {
-        RoomMessageSendState::Pending => DumpTimelineSendState::Pending,
-        RoomMessageSendState::Sent => DumpTimelineSendState::Sent,
-        RoomMessageSendState::Failed { .. } => DumpTimelineSendState::Failed,
-    }
-}
-
-fn dump_timeline_send_error_from_send_state(
-    send_state: &RoomMessageSendState,
-) -> Option<DumpTimelineSendError> {
-    match send_state {
-        RoomMessageSendState::Failed {
-            message,
-            recoverable,
-        } => Some(DumpTimelineSendError {
-            message: message.clone(),
-            recoverable: *recoverable,
-        }),
-        RoomMessageSendState::Pending | RoomMessageSendState::Sent => None,
-    }
-}
-
-fn dump_room_state_event_kind(content: &RoomStateNoticeContent) -> AutomationRoomStateEventKind {
-    match content {
-        RoomStateNoticeContent::Topic { .. } => AutomationRoomStateEventKind::Topic,
-        RoomStateNoticeContent::Member { .. } => AutomationRoomStateEventKind::Member,
+        send_state: dump_room_message_send_state_from_core(&timeline.send_state),
     }
 }
 

@@ -13,9 +13,9 @@ use mmatrix_core::{
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
-    RoomMemberState, RoomStateContent, RoomStateEventKind, RoomStateLine, SpaceChild,
-    StoredSession, SwitchbarItem, TestkitError, TimelineEntry, TimelineLine, TimelineSendState,
-    UiError, UiState, Verification, ViewIdentity,
+    RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
+    StoredSession, SwitchbarItem, TestkitError, UiError, UiState, Verification, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -266,16 +266,21 @@ fn timeline_text(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> 
     }
 }
 
-fn timeline_line(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineLine {
-    TimelineLine {
+fn timeline_line(
+    room_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> RoomMessageActivityLine {
+    RoomMessageActivityLine {
         room_id: room_id.to_owned(),
+        activity_id: format!("event:${room_id}:{}", body.replace(' ', "_")),
+        timestamp_ms,
         event_id: Some(format!("${room_id}:{}", body.replace(' ', "_"))),
         transaction_id: None,
         sender: sender.to_owned(),
-        timestamp_ms,
         body: body.to_owned(),
-        send_state: TimelineSendState::Sent,
-        send_error: None,
+        send_state: RoomMessageSendState::Sent,
     }
 }
 
@@ -285,21 +290,32 @@ fn timeline_line_with_event_id(
     sender: &str,
     timestamp_ms: u64,
     body: &str,
-) -> TimelineLine {
-    TimelineLine {
+) -> RoomMessageActivityLine {
+    RoomMessageActivityLine {
         room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
         event_id: Some(event_id.to_owned()),
         transaction_id: None,
         sender: sender.to_owned(),
-        timestamp_ms,
         body: body.to_owned(),
-        send_state: TimelineSendState::Sent,
-        send_error: None,
+        send_state: RoomMessageSendState::Sent,
     }
 }
 
-fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineEntry {
-    TimelineEntry::Text(timeline_line(room_id, sender, timestamp_ms, body))
+fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:${room_id}:{}", body.replace(' ', "_")),
+        timestamp_ms,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(format!("${room_id}:{}", body.replace(' ', "_"))),
+            transaction_id: None,
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    }
 }
 
 fn text_entry_with_event_id(
@@ -308,27 +324,35 @@ fn text_entry_with_event_id(
     sender: &str,
     timestamp_ms: u64,
     body: &str,
-) -> TimelineEntry {
-    TimelineEntry::Text(timeline_line_with_event_id(
-        room_id,
-        event_id,
-        sender,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
         timestamp_ms,
-        body,
-    ))
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event_id.to_owned()),
+            transaction_id: None,
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    }
 }
 
-fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> TimelineEntry {
-    TimelineEntry::RoomState(RoomStateLine {
+fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> RoomActivity {
+    RoomActivity {
         room_id: room_id.to_owned(),
-        sender: sender.to_owned(),
+        activity_id: format!("state:${room_id}:topic:{}", topic.replace(' ', "_")),
         timestamp_ms,
-        event_kind: RoomStateEventKind::Topic,
-        state_key: String::new(),
-        content: RoomStateContent::Topic(mmatrix_testkit::RoomTopicState {
-            topic: topic.to_owned(),
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: format!("${room_id}:topic:{}", topic.replace(' ', "_")),
+            sender: sender.to_owned(),
+            state_key: String::new(),
+            content: RoomStateNoticeContent::Topic {
+                topic: topic.to_owned(),
+            },
         }),
-    })
+    }
 }
 
 fn member_entry(
@@ -338,18 +362,21 @@ fn member_entry(
     state_key: &str,
     membership: &str,
     displayname: Option<&str>,
-) -> TimelineEntry {
-    TimelineEntry::RoomState(RoomStateLine {
+) -> RoomActivity {
+    RoomActivity {
         room_id: room_id.to_owned(),
-        sender: sender.to_owned(),
+        activity_id: format!("state:${room_id}:{state_key}:{membership}"),
         timestamp_ms,
-        event_kind: RoomStateEventKind::Member,
-        state_key: state_key.to_owned(),
-        content: RoomStateContent::Member(RoomMemberState {
-            membership: membership.to_owned(),
-            displayname: displayname.map(str::to_owned),
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: format!("${room_id}:{state_key}:{membership}"),
+            sender: sender.to_owned(),
+            state_key: state_key.to_owned(),
+            content: RoomStateNoticeContent::Member {
+                membership: membership.to_owned(),
+                displayname: displayname.map(str::to_owned),
+            },
         }),
-    })
+    }
 }
 
 fn room_identity(room_id: &str) -> ViewIdentity {
@@ -526,7 +553,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     );
     assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
     assert_eq!(
-        model.last_timeline,
+        model.last_activity,
         Some(timeline_line(
             "!beta:example",
             "@bob:example",
@@ -535,7 +562,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
         ))
     );
 
-    let timeline = app.timeline(Some("!beta:example"))?;
+    let timeline = app.room_activity(Some("!beta:example"))?;
     assert_eq!(
         timeline,
         vec![
@@ -601,7 +628,11 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     assert_navigation_not_contains(&ui_state.navigation, "beta first");
     assert_navigation_not_contains(&ui_state.navigation, "beta second");
 
-    app.wait_for_timeline_contains(Some("!beta:example"), "beta second", Duration::from_secs(5))?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "beta second",
+        Duration::from_secs(5),
+    )?;
     let screenshot_path = unique_screenshot_path();
     app.screenshot(&screenshot_path)?;
     let screenshot_bytes = fs::read(&screenshot_path)?;
@@ -647,20 +678,22 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
-        app.timeline(Some("!ops:example"))?,
-        vec![TimelineEntry::Text(TimelineLine {
+        app.room_activity(Some("!ops:example"))?,
+        vec![RoomActivity {
             room_id: "!ops:example".to_owned(),
-            event_id: None,
-            transaction_id: Some("txn-1".to_owned()),
-            sender: "@alice:example".to_owned(),
+            activity_id: "txn:txn-1".to_owned(),
             timestamp_ms: 1_700_000_000_000,
-            body: "hello".to_owned(),
-            send_state: TimelineSendState::Failed,
-            send_error: Some(mmatrix_testkit::TimelineSendError {
-                message: "send failed".to_owned(),
-                recoverable: true,
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: None,
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                body: "hello".to_owned(),
+                send_state: RoomMessageSendState::Failed {
+                    message: "send failed".to_owned(),
+                    recoverable: true,
+                },
             }),
-        })]
+        }]
     );
 
     let ui_state = app.dump_ui_state()?;
@@ -704,7 +737,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
 
     attached.select_room("!alpha:example")?;
     assert_eq!(
-        attached.timeline(None)?,
+        attached.room_activity(None)?,
         vec![text_entry(
             "!alpha:example",
             "@alice:example",
@@ -730,7 +763,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
         ]
     );
     assert_eq!(
-        attached.timeline(None)?,
+        attached.room_activity(None)?,
         vec![text_entry(
             "!gamma:example",
             "@alice:example",
@@ -739,7 +772,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
         )]
     );
     assert_eq!(
-        attached.dump_model()?.last_timeline,
+        attached.dump_model()?.last_activity,
         Some(timeline_line(
             "!delta:example",
             "@bob:example",
@@ -885,7 +918,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
         }
         other => panic!("expected send_text unknown_room for space, got {other:?}"),
     }
-    match app.timeline(Some("!space:example")) {
+    match app.room_activity(Some("!space:example")) {
         Err(TestkitError::Protocol { code, message }) => {
             assert_eq!(code, "unknown_room");
             assert_eq!(message, "unknown room id: !space:example");
@@ -1058,7 +1091,7 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     let model = app.dump_model()?;
     assert_eq!(model.selected_room.as_deref(), Some("!ops:example"));
     assert_eq!(
-        model.last_timeline,
+        model.last_activity,
         Some(timeline_line_with_event_id(
             "!random:example",
             "$random-1",
@@ -1068,7 +1101,7 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
         ))
     );
     assert_eq!(
-        app.timeline(Some("!ops:example"))?,
+        app.room_activity(Some("!ops:example"))?,
         vec![
             topic_entry(
                 "!ops:example",
@@ -1150,7 +1183,7 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
-    app.wait_for_timeline_contains(
+    app.wait_for_room_activity_contains(
         Some("!beta:example"),
         "scroll row 79",
         Duration::from_secs(5),
@@ -1259,7 +1292,7 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
-    app.wait_for_timeline_contains(
+    app.wait_for_room_activity_contains(
         Some("!beta:example"),
         "multiline row 00 line a",
         Duration::from_secs(5),
@@ -1308,7 +1341,7 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
-    app.wait_for_timeline_contains(
+    app.wait_for_room_activity_contains(
         Some("!beta:example"),
         "trailing blank line a",
         Duration::from_secs(5),
@@ -1641,7 +1674,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         Some("!verify:example")
     );
     assert_eq!(
-        attached.timeline(None)?,
+        attached.room_activity(None)?,
         vec![
             text_entry_with_event_id(
                 "!verify:example",
@@ -1684,7 +1717,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         })
     );
     assert_eq!(
-        model.last_timeline,
+        model.last_activity,
         Some(timeline_line_with_event_id(
             "!verify:example",
             "$verify-3",
@@ -2309,7 +2342,7 @@ fn automation_driver_slash_clear_clears_only_active_room_timeline()
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
 
-    let before_clear = app.timeline(Some("!beta:example"))?;
+    let before_clear = app.room_activity(Some("!beta:example"))?;
     assert!(before_clear.iter().any(|entry| entry
         == &text_entry(
             "!beta:example",
@@ -2329,9 +2362,9 @@ fn automation_driver_slash_clear_clears_only_active_room_timeline()
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
-    assert!(app.timeline(Some("!beta:example"))?.is_empty());
+    assert!(app.room_activity(Some("!beta:example"))?.is_empty());
     assert_eq!(
-        app.timeline(Some("!alpha:example"))?,
+        app.room_activity(Some("!alpha:example"))?,
         vec![text_entry(
             "!alpha:example",
             "@alice:example",
@@ -2536,7 +2569,7 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
         );
         app.select_room(room_id)?;
         app.send_text(Some(room_id), &unique_body)?;
-        app.wait_for_timeline_contains(Some(room_id), &unique_body, Duration::from_secs(120))?;
+        app.wait_for_room_activity_contains(Some(room_id), &unique_body, Duration::from_secs(120))?;
     }
 
     drop(app);

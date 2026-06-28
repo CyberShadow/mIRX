@@ -4,10 +4,10 @@ use std::time::Duration;
 
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
-    NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomMemberState, RoomStateContent,
-    RoomStateEventKind, RoomStateLine, RoomTopicState, SpaceChild, StatusBarState, StoredSession,
-    SwitchbarItem, SwitchbarState, TestkitError, TimelineEntry, TimelineLine, TimelineSendError,
-    TimelineSendState, UiError, UiState, Verification, ViewIdentity,
+    NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomActivity, RoomActivityKind,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, SpaceChild, StatusBarState, StoredSession, SwitchbarItem,
+    SwitchbarState, TestkitError, UiError, UiState, Verification, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -108,15 +108,15 @@ fn data_models_round_trip_through_json() {
                 space_children: vec![],
             },
         ],
-        last_timeline: Some(TimelineLine {
+        last_activity: Some(RoomMessageActivityLine {
             room_id: "!room:example".to_owned(),
+            activity_id: "activity-1".to_owned(),
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
             body: "hello".to_owned(),
-            send_state: TimelineSendState::Sent,
-            send_error: None,
+            send_state: RoomMessageSendState::Sent,
         }),
         last_verification: Some(Verification {
             flow_id: "flow".to_owned(),
@@ -129,7 +129,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 9,
+        protocol_version: 10,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -304,128 +304,290 @@ fn data_models_round_trip_through_json() {
 }
 
 #[test]
-fn timeline_entries_round_trip_through_json() {
-    let text = TimelineEntry::Text(TimelineLine {
+fn room_activity_sent_message_round_trips_through_json() {
+    let activity = RoomActivity {
         room_id: "!room:example".to_owned(),
-        event_id: Some("$event:example".to_owned()),
-        transaction_id: Some("txn-1".to_owned()),
-        sender: "@alice:example".to_owned(),
+        activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
-        body: "hello".to_owned(),
-        send_state: TimelineSendState::Failed,
-        send_error: Some(TimelineSendError {
-            message: "send failed".to_owned(),
-            recoverable: true,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some("$event:example".to_owned()),
+            transaction_id: Some("txn-1".to_owned()),
+            sender: "@alice:example".to_owned(),
+            body: "hello".to_owned(),
+            send_state: RoomMessageSendState::Sent,
         }),
-    });
-    let topic = TimelineEntry::RoomState(RoomStateLine {
-        room_id: "!room:example".to_owned(),
-        sender: "@alice:example".to_owned(),
-        timestamp_ms: 1_700_000_060_000,
-        event_kind: RoomStateEventKind::Topic,
-        state_key: String::new(),
-        content: RoomStateContent::Topic(RoomTopicState {
-            topic: "incident review".to_owned(),
-        }),
-    });
-    let member = TimelineEntry::RoomState(RoomStateLine {
-        room_id: "!room:example".to_owned(),
-        sender: "@carol:example".to_owned(),
-        timestamp_ms: 1_700_000_120_000,
-        event_kind: RoomStateEventKind::Member,
-        state_key: "@carol:example".to_owned(),
-        content: RoomStateContent::Member(RoomMemberState {
-            membership: "join".to_owned(),
-            displayname: Some("carol".to_owned()),
-        }),
-    });
+    };
 
     assert_eq!(
-        serde_json::to_value(&text).expect("serialize text timeline entry"),
+        serde_json::to_value(&activity).expect("serialize sent message activity"),
         serde_json::json!({
-            "type": "text",
             "room_id": "!room:example",
-            "event_id": "$event:example",
-            "transaction_id": "txn-1",
-            "sender": "@alice:example",
+            "activity_id": "activity-1",
             "timestamp_ms": 1700000000000u64,
-            "body": "hello",
-            "send_state": "failed",
-            "send_error": {
-                "message": "send failed",
-                "recoverable": true
+            "kind": {
+                "type": "message",
+                "event_id": "$event:example",
+                "transaction_id": "txn-1",
+                "sender": "@alice:example",
+                "body": "hello",
+                "send_state": {
+                    "state": "sent"
+                }
             }
         })
     );
     assert_eq!(
-        serde_json::from_value::<TimelineEntry>(serde_json::to_value(&text).unwrap())
-            .expect("deserialize text timeline entry"),
-        text
-    );
-    assert_eq!(
-        serde_json::to_value(&topic).expect("serialize topic room-state entry"),
-        serde_json::json!({
-            "type": "room_state",
-            "room_id": "!room:example",
-            "sender": "@alice:example",
-            "timestamp_ms": 1700000060000u64,
-            "event_kind": "topic",
-            "state_key": "",
-            "content": {
-                "type": "topic",
-                "topic": "incident review"
-            }
-        })
-    );
-    assert_eq!(
-        serde_json::from_value::<TimelineEntry>(serde_json::to_value(&topic).unwrap())
-            .expect("deserialize topic room-state entry"),
-        topic
-    );
-    assert_eq!(
-        serde_json::to_value(&member).expect("serialize member room-state entry"),
-        serde_json::json!({
-            "type": "room_state",
-            "room_id": "!room:example",
-            "sender": "@carol:example",
-            "timestamp_ms": 1700000120000u64,
-            "event_kind": "member",
-            "state_key": "@carol:example",
-            "content": {
-                "type": "member",
-                "membership": "join",
-                "displayname": "carol"
-            }
-        })
-    );
-    assert_eq!(
-        serde_json::from_value::<TimelineEntry>(serde_json::to_value(&member).unwrap())
-            .expect("deserialize member room-state entry"),
-        member
+        serde_json::from_value::<RoomActivity>(serde_json::to_value(&activity).unwrap())
+            .expect("deserialize sent message activity"),
+        activity
     );
 }
 
 #[test]
-fn timeline_entry_contains_matches_identity_and_send_state_fields() {
-    let text = TimelineEntry::Text(TimelineLine {
+fn room_activity_pending_message_round_trips_through_json() {
+    let activity = RoomActivity {
         room_id: "!room:example".to_owned(),
-        event_id: Some("$event:example".to_owned()),
-        transaction_id: Some("txn-1".to_owned()),
-        sender: "@alice:example".to_owned(),
-        timestamp_ms: 1_700_000_000_000,
-        body: "hello".to_owned(),
-        send_state: TimelineSendState::Failed,
-        send_error: Some(TimelineSendError {
-            message: "send failed".to_owned(),
-            recoverable: true,
+        activity_id: "activity-2".to_owned(),
+        timestamp_ms: 1_700_000_060_000,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: None,
+            transaction_id: Some("txn-2".to_owned()),
+            sender: "@alice:example".to_owned(),
+            body: "queued".to_owned(),
+            send_state: RoomMessageSendState::Pending,
         }),
-    });
+    };
 
-    assert!(text.contains("@alice:example"));
-    assert!(text.contains("\"event_id\":\"$event:example\""));
-    assert!(text.contains("\"transaction_id\":\"txn-1\""));
-    assert!(text.contains("\"send_state\":\"failed\""));
-    assert!(text.contains("\"send_error\":{\"message\":\"send failed\",\"recoverable\":true}"));
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize pending message activity"),
+        serde_json::json!({
+            "room_id": "!room:example",
+            "activity_id": "activity-2",
+            "timestamp_ms": 1700000060000u64,
+            "kind": {
+                "type": "message",
+                "event_id": null,
+                "transaction_id": "txn-2",
+                "sender": "@alice:example",
+                "body": "queued",
+                "send_state": {
+                    "state": "pending"
+                }
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(serde_json::to_value(&activity).unwrap())
+            .expect("deserialize pending message activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_failed_message_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-3".to_owned(),
+        timestamp_ms: 1_700_000_120_000,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: None,
+            transaction_id: Some("txn-3".to_owned()),
+            sender: "@alice:example".to_owned(),
+            body: "retry me".to_owned(),
+            send_state: RoomMessageSendState::Failed {
+                message: "send failed".to_owned(),
+                recoverable: true,
+            },
+        }),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize failed message activity"),
+        serde_json::json!({
+            "room_id": "!room:example",
+            "activity_id": "activity-3",
+            "timestamp_ms": 1700000120000u64,
+            "kind": {
+                "type": "message",
+                "event_id": null,
+                "transaction_id": "txn-3",
+                "sender": "@alice:example",
+                "body": "retry me",
+                "send_state": {
+                    "state": "failed",
+                    "message": "send failed",
+                    "recoverable": true
+                }
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(serde_json::to_value(&activity).unwrap())
+            .expect("deserialize failed message activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_topic_state_notice_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-4".to_owned(),
+        timestamp_ms: 1_700_000_180_000,
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: "$topic:example".to_owned(),
+            sender: "@alice:example".to_owned(),
+            state_key: String::new(),
+            content: RoomStateNoticeContent::Topic {
+                topic: "incident review".to_owned(),
+            },
+        }),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize topic state-notice activity"),
+        serde_json::json!({
+            "room_id": "!room:example",
+            "activity_id": "activity-4",
+            "timestamp_ms": 1700000180000u64,
+            "kind": {
+                "type": "state_notice",
+                "event_id": "$topic:example",
+                "sender": "@alice:example",
+                "state_key": "",
+                "content": {
+                    "type": "topic",
+                    "topic": "incident review"
+                }
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(serde_json::to_value(&activity).unwrap())
+            .expect("deserialize topic state-notice activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_member_state_notice_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-5".to_owned(),
+        timestamp_ms: 1_700_000_240_000,
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: "$member:example".to_owned(),
+            sender: "@carol:example".to_owned(),
+            state_key: "@carol:example".to_owned(),
+            content: RoomStateNoticeContent::Member {
+                membership: "join".to_owned(),
+                displayname: Some("carol".to_owned()),
+            },
+        }),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize member state-notice activity"),
+        serde_json::json!({
+            "room_id": "!room:example",
+            "activity_id": "activity-5",
+            "timestamp_ms": 1700000240000u64,
+            "kind": {
+                "type": "state_notice",
+                "event_id": "$member:example",
+                "sender": "@carol:example",
+                "state_key": "@carol:example",
+                "content": {
+                    "type": "member",
+                    "membership": "join",
+                    "displayname": "carol"
+                }
+            }
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(serde_json::to_value(&activity).unwrap())
+            .expect("deserialize member state-notice activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_contains_matches_identity_and_send_state_fields() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-1".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some("$event:example".to_owned()),
+            transaction_id: Some("txn-1".to_owned()),
+            sender: "@alice:example".to_owned(),
+            body: "hello".to_owned(),
+            send_state: RoomMessageSendState::Failed {
+                message: "send failed".to_owned(),
+                recoverable: true,
+            },
+        }),
+    };
+
+    assert!(activity.contains("@alice:example"));
+    assert!(activity.contains("\"activity_id\":\"activity-1\""));
+    assert!(activity.contains("\"event_id\":\"$event:example\""));
+    assert!(activity.contains("\"transaction_id\":\"txn-1\""));
+    assert!(activity.contains(
+        "\"send_state\":{\"state\":\"failed\",\"message\":\"send failed\",\"recoverable\":true}"
+    ));
+}
+
+#[test]
+fn model_last_activity_round_trips_through_json() {
+    let model = Model {
+        status: "synced".to_owned(),
+        lifecycle_state: "ready".to_owned(),
+        rooms: vec![],
+        last_activity: Some(RoomMessageActivityLine {
+            room_id: "!room:example".to_owned(),
+            activity_id: "activity-6".to_owned(),
+            timestamp_ms: 1_700_000_300_000,
+            event_id: Some("$event:last:example".to_owned()),
+            transaction_id: None,
+            sender: "@alice:example".to_owned(),
+            body: "latest".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        last_verification: None,
+        last_error: None,
+        selected_room: Some("!room:example".to_owned()),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&model).expect("serialize model with last_activity"),
+        serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": {
+                "room_id": "!room:example",
+                "activity_id": "activity-6",
+                "timestamp_ms": 1700000300000u64,
+                "event_id": "$event:last:example",
+                "transaction_id": null,
+                "sender": "@alice:example",
+                "body": "latest",
+                "send_state": {
+                    "state": "sent"
+                }
+            },
+            "last_verification": null,
+            "last_error": null,
+            "selected_room": "!room:example"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<Model>(serde_json::to_value(&model).unwrap())
+            .expect("deserialize model with last_activity"),
+        model
+    );
 }
 
 #[test]
@@ -436,7 +598,7 @@ fn data_models_reject_unknown_fields() {
             "status":"synced",
             "lifecycle_state":"ready",
             "rooms":[],
-            "last_timeline":null,
+            "last_activity":null,
             "last_verification":null,
             "last_error":null,
             "selected_room":null,
@@ -448,7 +610,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":9,
+            "protocol_version":10,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -492,45 +654,84 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
-        serde_json::from_str::<TimelineLine>(
+        serde_json::from_str::<RoomMessageActivityLine>(
             r#"{
             "room_id":"!room:example",
+            "activity_id":"activity-1",
+            "timestamp_ms":1700000000000,
             "event_id":"$event:example",
             "transaction_id":"txn-1",
             "sender":"@alice:example",
-            "timestamp_ms":1700000000000,
             "body":"hello",
-            "send_state":"sent",
-            "send_error":null,
+            "send_state":{"state":"sent"},
             "unexpected":true
         }"#
         )
         .is_err()
     );
     assert!(
-        serde_json::from_str::<TimelineEntry>(
+        serde_json::from_str::<RoomActivity>(
             r#"{
-            "type":"text",
             "room_id":"!room:example",
-            "event_id":"$event:example",
-            "transaction_id":"txn-1",
-            "sender":"@alice:example",
+            "activity_id":"activity-1",
             "timestamp_ms":1700000000000,
-            "body":"hello",
-            "send_state":"sent",
-            "send_error":null,
+            "kind":{
+                "type":"message",
+                "event_id":"$event:example",
+                "transaction_id":"txn-1",
+                "sender":"@alice:example",
+                "body":"hello",
+                "send_state":{"state":"sent"}
+            },
             "unexpected":true
         }"#
         )
         .is_err()
     );
     assert!(
-        serde_json::from_str::<RoomStateLine>(
+        serde_json::from_str::<RoomActivityKind>(
             r#"{
-            "room_id":"!room:example",
+            "type":"message",
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
             "sender":"@alice:example",
-            "timestamp_ms":1700000060000,
-            "event_kind":"topic",
+            "body":"hello",
+            "send_state":{"state":"sent"},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMessageActivity>(
+            r#"{
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
+            "sender":"@alice:example",
+            "body":"hello",
+            "send_state":{"state":"sent"},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMessageSendState>(
+            r#"{
+            "state":"failed",
+            "message":"send failed",
+            "recoverable":true,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityKind>(
+            r#"{
+            "type":"state_notice",
+            "event_id":"$topic:example",
+            "sender":"@alice:example",
             "state_key":"",
             "content":{"type":"topic","topic":"incident review"},
             "unexpected":true
@@ -539,7 +740,19 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
-        serde_json::from_str::<RoomStateContent>(
+        serde_json::from_str::<RoomStateNoticeActivity>(
+            r#"{
+            "event_id":"$topic:example",
+            "sender":"@alice:example",
+            "state_key":"",
+            "content":{"type":"topic","topic":"incident review"},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomStateNoticeContent>(
             r#"{
             "type":"topic",
             "topic":"incident review",
@@ -549,69 +762,9 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
-        serde_json::from_str::<RoomTopicState>(
+        serde_json::from_str::<RoomStateNoticeContent>(
             r#"{
-            "topic":"incident review",
-            "unexpected":true
-        }"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<RoomStateLine>(
-            r#"{
-            "room_id":"!room:example",
-            "sender":"@alice:example",
-            "timestamp_ms":1700000060000,
-            "event_kind":"topic",
-            "state_key":"",
-            "content":{
-                "type":"topic",
-                "topic":"incident review",
-                "unexpected":true
-            }
-        }"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<TimelineEntry>(
-            r#"{
-            "type":"room_state",
-            "room_id":"!ops:example",
-            "sender":"@alice:example",
-            "timestamp_ms":1700000000000,
-            "event_kind":"topic",
-            "state_key":"",
-            "content":{
-                "type":"member",
-                "membership":"join",
-                "displayname":"alice"
-            }
-        }"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<RoomStateLine>(
-            r#"{
-            "room_id":"!ops:example",
-            "sender":"@alice:example",
-            "timestamp_ms":1700000000000,
-            "event_kind":"topic",
-            "state_key":"",
-            "content":{
-                "type":"member",
-                "membership":"join",
-                "displayname":"alice"
-            }
-        }"#
-        )
-        .is_err()
-    );
-    assert!(
-        serde_json::from_str::<RoomMemberState>(
-            r#"{
+            "type":"member",
             "membership":"join",
             "displayname":"carol",
             "unexpected":true
@@ -744,6 +897,35 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "kind":"space",
             "room_id":"!space:example"
+        }"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn room_state_notice_content_rejects_impossible_tagged_combinations() {
+    assert!(
+        serde_json::from_str::<RoomStateNoticeContent>(
+            r#"{
+            "type":"topic",
+            "membership":"join",
+            "displayname":"alice"
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomStateNoticeActivity>(
+            r#"{
+            "event_id":"$member:example",
+            "sender":"@alice:example",
+            "state_key":"@alice:example",
+            "content":{
+                "type":"member",
+                "membership":"join",
+                "topic":"incident review"
+            }
         }"#
         )
         .is_err()

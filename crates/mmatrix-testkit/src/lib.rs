@@ -22,7 +22,7 @@ const COMMAND_ID_WAIT_IDLE: u32 = 3;
 #[cfg(windows)]
 const COMMAND_ID_DUMP_MODEL: u32 = 4;
 #[cfg(windows)]
-const COMMAND_ID_DUMP_TIMELINE: u32 = 5;
+const COMMAND_ID_DUMP_ROOM_ACTIVITY: u32 = 5;
 #[cfg(windows)]
 const COMMAND_ID_LIST_ROOMS: u32 = 6;
 #[cfg(windows)]
@@ -117,7 +117,7 @@ pub struct Model {
     pub status: String,
     pub lifecycle_state: String,
     pub rooms: Vec<Room>,
-    pub last_timeline: Option<TimelineLine>,
+    pub last_activity: Option<RoomMessageActivityLine>,
     pub last_verification: Option<Verification>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
@@ -143,107 +143,63 @@ pub struct Room {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TimelineLine {
+pub struct RoomMessageActivityLine {
     pub room_id: String,
+    pub activity_id: String,
+    pub timestamp_ms: u64,
     pub event_id: Option<String>,
     pub transaction_id: Option<String>,
     pub sender: String,
-    pub timestamp_ms: u64,
     pub body: String,
-    pub send_state: TimelineSendState,
-    pub send_error: Option<TimelineSendError>,
+    pub send_state: RoomMessageSendState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TimelineSendState {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomActivity {
+    pub room_id: String,
+    pub activity_id: String,
+    pub timestamp_ms: u64,
+    pub kind: RoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityKind {
+    Message(RoomMessageActivity),
+    StateNotice(RoomStateNoticeActivity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomMessageActivity {
+    pub event_id: Option<String>,
+    pub transaction_id: Option<String>,
+    pub sender: String,
+    pub body: String,
+    pub send_state: RoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomMessageSendState {
     Pending,
     Sent,
-    Failed,
+    Failed { message: String, recoverable: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TimelineSendError {
-    pub message: String,
-    pub recoverable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TimelineEntry {
-    Text(TimelineLine),
-    RoomState(RoomStateLine),
-}
-
-impl TimelineEntry {
-    pub fn contains(&self, substr: &str) -> bool {
-        serde_json::to_string(self).is_ok_and(|json| json.contains(substr))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RoomStateLine {
-    pub room_id: String,
+pub struct RoomStateNoticeActivity {
+    pub event_id: String,
     pub sender: String,
-    pub timestamp_ms: u64,
-    pub event_kind: RoomStateEventKind,
     pub state_key: String,
-    pub content: RoomStateContent,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RoomStateEventKind {
-    Topic,
-    Member,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RoomStateContent {
-    Topic(RoomTopicState),
-    Member(RoomMemberState),
+    pub content: RoomStateNoticeContent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RoomTopicState {
-    pub topic: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RoomMemberState {
-    pub membership: String,
-    pub displayname: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
-enum TimelineEntrySerde {
-    Text {
-        room_id: String,
-        event_id: Option<String>,
-        transaction_id: Option<String>,
-        sender: String,
-        timestamp_ms: u64,
-        body: String,
-        send_state: TimelineSendState,
-        send_error: Option<TimelineSendError>,
-    },
-    RoomState {
-        room_id: String,
-        sender: String,
-        timestamp_ms: u64,
-        event_kind: RoomStateEventKind,
-        state_key: String,
-        content: RoomStateContent,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
-enum RoomStateContentSerde {
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomStateNoticeContent {
     Topic {
         topic: String,
     },
@@ -253,160 +209,10 @@ enum RoomStateContentSerde {
     },
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoomStateLineSerde {
-    room_id: String,
-    sender: String,
-    timestamp_ms: u64,
-    event_kind: RoomStateEventKind,
-    state_key: String,
-    content: RoomStateContent,
-}
-
-impl Serialize for TimelineEntry {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::Text(line) => TimelineEntrySerde::Text {
-                room_id: line.room_id.clone(),
-                event_id: line.event_id.clone(),
-                transaction_id: line.transaction_id.clone(),
-                sender: line.sender.clone(),
-                timestamp_ms: line.timestamp_ms,
-                body: line.body.clone(),
-                send_state: line.send_state,
-                send_error: line.send_error.clone(),
-            },
-            Self::RoomState(line) => TimelineEntrySerde::RoomState {
-                room_id: line.room_id.clone(),
-                sender: line.sender.clone(),
-                timestamp_ms: line.timestamp_ms,
-                event_kind: line.event_kind,
-                state_key: line.state_key.clone(),
-                content: line.content.clone(),
-            },
-        }
-        .serialize(serializer)
+impl RoomActivity {
+    pub fn contains(&self, substr: &str) -> bool {
+        serde_json::to_string(self).is_ok_and(|json| json.contains(substr))
     }
-}
-
-impl<'de> Deserialize<'de> for TimelineEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        match TimelineEntrySerde::deserialize(deserializer)? {
-            TimelineEntrySerde::Text {
-                room_id,
-                event_id,
-                transaction_id,
-                sender,
-                timestamp_ms,
-                body,
-                send_state,
-                send_error,
-            } => Ok(Self::Text(TimelineLine {
-                room_id,
-                event_id,
-                transaction_id,
-                sender,
-                timestamp_ms,
-                body,
-                send_state,
-                send_error,
-            })),
-            TimelineEntrySerde::RoomState {
-                room_id,
-                sender,
-                timestamp_ms,
-                event_kind,
-                state_key,
-                content,
-            } => Ok(Self::RoomState(
-                validate_room_state_line(RoomStateLineSerde {
-                    room_id,
-                    sender,
-                    timestamp_ms,
-                    event_kind,
-                    state_key,
-                    content,
-                })
-                .map_err(serde::de::Error::custom)?,
-            )),
-        }
-    }
-}
-
-impl Serialize for RoomStateContent {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            Self::Topic(topic) => RoomStateContentSerde::Topic {
-                topic: topic.topic.clone(),
-            },
-            Self::Member(member) => RoomStateContentSerde::Member {
-                membership: member.membership.clone(),
-                displayname: member.displayname.clone(),
-            },
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for RoomStateContent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        match RoomStateContentSerde::deserialize(deserializer)? {
-            RoomStateContentSerde::Topic { topic } => Ok(Self::Topic(RoomTopicState { topic })),
-            RoomStateContentSerde::Member {
-                membership,
-                displayname,
-            } => Ok(Self::Member(RoomMemberState {
-                membership,
-                displayname,
-            })),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for RoomStateLine {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let dto = RoomStateLineSerde::deserialize(deserializer)?;
-        validate_room_state_line(dto).map_err(serde::de::Error::custom)
-    }
-}
-
-fn validate_room_state_line(dto: RoomStateLineSerde) -> Result<RoomStateLine, &'static str> {
-    if !room_state_content_matches_kind(dto.event_kind, &dto.content) {
-        return Err("room state event_kind must match content type");
-    }
-
-    Ok(RoomStateLine {
-        room_id: dto.room_id,
-        sender: dto.sender,
-        timestamp_ms: dto.timestamp_ms,
-        event_kind: dto.event_kind,
-        state_key: dto.state_key,
-        content: dto.content,
-    })
-}
-
-fn room_state_content_matches_kind(kind: RoomStateEventKind, content: &RoomStateContent) -> bool {
-    matches!(
-        (kind, content),
-        (RoomStateEventKind::Topic, RoomStateContent::Topic(_))
-            | (RoomStateEventKind::Member, RoomStateContent::Member(_))
-    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -712,8 +518,8 @@ impl MmatrixApp {
         self.inner.dump_ui_state()
     }
 
-    pub fn timeline(&self, room_id: Option<&str>) -> Result<Vec<TimelineEntry>, TestkitError> {
-        self.inner.timeline(room_id)
+    pub fn room_activity(&self, room_id: Option<&str>) -> Result<Vec<RoomActivity>, TestkitError> {
+        self.inner.room_activity(room_id)
     }
 
     pub fn list_rooms(&self) -> Result<Vec<Room>, TestkitError> {
@@ -822,14 +628,14 @@ impl MmatrixApp {
         self.inner.load_events_from_file(path.as_ref())
     }
 
-    pub fn wait_for_timeline_contains(
+    pub fn wait_for_room_activity_contains(
         &self,
         room_id: Option<&str>,
         substr: &str,
         timeout: Duration,
     ) -> Result<(), TestkitError> {
         self.inner
-            .wait_for_timeline_contains(room_id, substr, timeout)
+            .wait_for_room_activity_contains(room_id, substr, timeout)
     }
 
     pub fn screenshot(&self, path: impl AsRef<Path>) -> Result<(), TestkitError> {
@@ -898,7 +704,7 @@ struct WaitIdleArgs {
 
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct DumpTimelineArgs<'a> {
+struct DumpRoomActivityArgs<'a> {
     room_id: Option<&'a str>,
 }
 
@@ -985,9 +791,9 @@ struct WaitIdleResponse {
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DumpTimelineResponse {
+struct DumpRoomActivityResponse {
     room_id: String,
-    entries: Vec<TimelineEntry>,
+    entries: Vec<RoomActivity>,
 }
 
 #[cfg(windows)]
@@ -1113,10 +919,10 @@ mod imp {
             ))
         }
 
-        pub(crate) fn timeline(
+        pub(crate) fn room_activity(
             &self,
             _room_id: Option<&str>,
-        ) -> Result<Vec<TimelineEntry>, TestkitError> {
+        ) -> Result<Vec<RoomActivity>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1242,7 +1048,7 @@ mod imp {
             ))
         }
 
-        pub(crate) fn wait_for_timeline_contains(
+        pub(crate) fn wait_for_room_activity_contains(
             &self,
             _room_id: Option<&str>,
             _substr: &str,
@@ -1465,12 +1271,14 @@ mod imp {
             self.send_command(COMMAND_ID_DUMP_UI_STATE, EmptyArgs {})
         }
 
-        pub(crate) fn timeline(
+        pub(crate) fn room_activity(
             &self,
             room_id: Option<&str>,
-        ) -> Result<Vec<TimelineEntry>, TestkitError> {
-            let response: DumpTimelineResponse =
-                self.send_command(COMMAND_ID_DUMP_TIMELINE, DumpTimelineArgs { room_id })?;
+        ) -> Result<Vec<RoomActivity>, TestkitError> {
+            let response: DumpRoomActivityResponse = self.send_command(
+                COMMAND_ID_DUMP_ROOM_ACTIVITY,
+                DumpRoomActivityArgs { room_id },
+            )?;
             Ok(response.entries)
         }
 
@@ -1657,7 +1465,7 @@ mod imp {
                 Ok(())
             } else {
                 Err(TestkitError::InvalidResponse(format!(
-                    "LOAD_SYNTHETIC_STATE reported loaded=false after {} room(s) and {} timeline event(s)",
+                    "LOAD_SYNTHETIC_STATE reported loaded=false after {} room(s) and {} room activity event(s)",
                     response.rooms, response.timeline_events
                 )))
             }
@@ -1668,7 +1476,7 @@ mod imp {
             self.load_events(&events_json)
         }
 
-        pub(crate) fn wait_for_timeline_contains(
+        pub(crate) fn wait_for_room_activity_contains(
             &self,
             room_id: Option<&str>,
             substr: &str,
@@ -1678,13 +1486,13 @@ mod imp {
             loop {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 self.wait_idle(remaining)?;
-                let entries = self.timeline(room_id)?;
+                let entries = self.room_activity(room_id)?;
                 if entries.iter().any(|entry| entry.contains(substr)) {
                     return Ok(());
                 }
                 if Instant::now() >= deadline {
                     return Err(TestkitError::Timeout(format!(
-                        "timeline never contained {:?} for pid {} hwnd 0x{:x}",
+                        "room activity never contained {:?} for pid {} hwnd 0x{:x}",
                         substr, self.pid, self.hwnd as usize
                     )));
                 }
