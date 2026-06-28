@@ -1,5 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{OsStr, c_void};
 use std::fs;
@@ -516,6 +517,26 @@ impl ComposeHistory {
 enum ComposeHistoryDirection {
     Previous,
     Next,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ComposeSubmission<'a> {
+    Text { body: Cow<'a, str> },
+    LocalCommand(LocalSlashCommand<'a>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalSlashCommand<'a> {
+    Status,
+    Window { target: &'a str },
+    Clear,
+    Invalid { feedback: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowTargetError {
+    Unknown,
+    Ambiguous,
 }
 
 struct WindowState {
@@ -4424,8 +4445,26 @@ fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<String, String> {
-    submit_compose_from_control(hwnd, None)
+unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
+    let edit = compose_edit(hwnd)?;
+    let input = read_window_text(edit);
+    if input.is_empty() {
+        return Err("message body must not be empty".to_owned());
+    }
+
+    match parse_compose_submission(&input) {
+        ComposeSubmission::Text { body } => {
+            submit_compose_with_history_entry(state_mut(hwnd), body.into_owned(), input, None)?;
+        }
+        ComposeSubmission::LocalCommand(command) => {
+            execute_local_slash_command(hwnd, command)?;
+            state_mut(hwnd).compose_history.record_submission(input);
+        }
+    }
+
+    let empty = wide_null("");
+    SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+    Ok(())
 }
 
 unsafe fn compose_edit(hwnd: HWND) -> Result<HWND, String> {
@@ -4471,9 +4510,62 @@ unsafe fn submit_compose_from_control(
     Ok(room_id)
 }
 
+fn parse_compose_submission(input: &str) -> ComposeSubmission<'_> {
+    if !input.starts_with('/') {
+        return ComposeSubmission::Text {
+            body: Cow::Borrowed(input),
+        };
+    }
+
+    if input.starts_with("//") {
+        return ComposeSubmission::Text {
+            body: Cow::Owned(input[1..].to_owned()),
+        };
+    }
+
+    ComposeSubmission::LocalCommand(parse_slash_command(input))
+}
+
+fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
+    let command_end = input
+        .bytes()
+        .position(|byte| byte.is_ascii_whitespace())
+        .unwrap_or(input.len());
+    let command_name = &input[1..command_end];
+    let argument = input[command_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
+
+    match command_name.to_ascii_lowercase().as_str() {
+        "status" if argument.is_empty() => LocalSlashCommand::Status,
+        "status" => LocalSlashCommand::Invalid {
+            feedback: "usage: /status".to_owned(),
+        },
+        "window" if !argument.is_empty() => LocalSlashCommand::Window { target: argument },
+        "window" => LocalSlashCommand::Invalid {
+            feedback: "usage: /window <room-id-or-display-name>".to_owned(),
+        },
+        "clear" if argument.is_empty() => LocalSlashCommand::Clear,
+        "clear" => LocalSlashCommand::Invalid {
+            feedback: "usage: /clear".to_owned(),
+        },
+        _ => LocalSlashCommand::Invalid {
+            feedback: format!("unknown command: {}", &input[..command_end]),
+        },
+    }
+}
+
 fn submit_compose(
     state: &mut WindowState,
     body: String,
+    explicit_room_id: Option<&str>,
+) -> Result<String, String> {
+    let history_entry = body.clone();
+    submit_compose_with_history_entry(state, body, history_entry, explicit_room_id)
+}
+
+fn submit_compose_with_history_entry(
+    state: &mut WindowState,
+    body: String,
+    history_entry: String,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
     if body.is_empty() {
@@ -4504,9 +4596,88 @@ fn submit_compose(
             body: send_body,
         }))
         .map_err(|err| format!("failed to enqueue send text command: {err}"))?;
-    state.compose_history.record_submission(body);
+    state.compose_history.record_submission(history_entry);
 
     Ok(room_id)
+}
+
+unsafe fn execute_local_slash_command(
+    hwnd: HWND,
+    command: LocalSlashCommand<'_>,
+) -> Result<(), String> {
+    match command {
+        LocalSlashCommand::Status => {
+            activate_view(hwnd, &ViewId::Status, None)?;
+            set_local_command_status(hwnd, "status window active".to_owned())
+        }
+        LocalSlashCommand::Window { target } => {
+            let room_id = match resolve_window_command_target(&state_ref(hwnd).model.rooms, target)
+            {
+                Ok(room_id) => room_id,
+                Err(WindowTargetError::Unknown) => {
+                    return set_local_command_status(
+                        hwnd,
+                        format!("unknown window target: {target}"),
+                    );
+                }
+                Err(WindowTargetError::Ambiguous) => {
+                    return set_local_command_status(
+                        hwnd,
+                        format!("ambiguous window target: {target}"),
+                    );
+                }
+            };
+            activate_view(hwnd, &ViewId::Room(room_id), None)?;
+            set_local_command_status(hwnd, format!("window active: {target}"))
+        }
+        LocalSlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
+            ViewId::Room(room_id) => {
+                if let Some(view) = state_mut(hwnd).model.room_views.get_mut(&room_id) {
+                    view.entries.clear();
+                }
+                refresh_view_content(hwnd, &ViewId::Room(room_id.clone()))?;
+                set_local_command_status(hwnd, format!("cleared window: {room_id}"))
+            }
+            ViewId::Status => {
+                set_local_command_status(hwnd, "nothing to clear in status view".to_owned())
+            }
+        },
+        LocalSlashCommand::Invalid { feedback } => set_local_command_status(hwnd, feedback),
+    }
+}
+
+unsafe fn set_local_command_status(hwnd: HWND, message: String) -> Result<(), String> {
+    let has_status_view = {
+        let state = state_mut(hwnd);
+        state.model.status = message;
+        state.views.contains_key(&ViewId::Status)
+    };
+
+    refresh_status_bar(hwnd)?;
+    if has_status_view {
+        refresh_view_content(hwnd, &ViewId::Status)?;
+    }
+    Ok(())
+}
+
+fn resolve_window_command_target(
+    rooms: &[RoomSummary],
+    target: &str,
+) -> Result<String, WindowTargetError> {
+    if let Some(room) = actionable_room_by_id(rooms, target) {
+        return Ok(room.room_id.clone());
+    }
+
+    let mut matches = rooms
+        .iter()
+        .filter(|room| is_actionable_room(room) && room.display_name == target);
+    let Some(room) = matches.next() else {
+        return Err(WindowTargetError::Unknown);
+    };
+    if matches.next().is_some() {
+        return Err(WindowTargetError::Ambiguous);
+    }
+    Ok(room.room_id.clone())
 }
 
 unsafe fn navigate_compose_history(
@@ -6094,6 +6265,112 @@ mod tests {
     }
 
     #[test]
+    fn parse_compose_submission_distinguishes_text_literal_slash_and_commands() {
+        assert_eq!(
+            parse_compose_submission("hello"),
+            ComposeSubmission::Text {
+                body: Cow::Borrowed("hello"),
+            }
+        );
+        assert_eq!(
+            parse_compose_submission("//status"),
+            ComposeSubmission::Text {
+                body: Cow::Owned("/status".to_owned()),
+            }
+        );
+        assert_eq!(
+            parse_compose_submission("///status"),
+            ComposeSubmission::Text {
+                body: Cow::Owned("//status".to_owned()),
+            }
+        );
+        assert_eq!(
+            parse_compose_submission("/status"),
+            ComposeSubmission::LocalCommand(LocalSlashCommand::Status)
+        );
+        assert_eq!(
+            parse_compose_submission("/"),
+            ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
+                feedback: "unknown command: /".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_slash_command_rejects_unknown_and_usage_errors() {
+        assert_eq!(parse_slash_command("/StAtUs"), LocalSlashCommand::Status);
+        assert_eq!(
+            parse_slash_command("/wat now"),
+            LocalSlashCommand::Invalid {
+                feedback: "unknown command: /wat".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/status now"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /status".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/window"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /window <room-id-or-display-name>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/clear now"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /clear".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_window_command_target_accepts_room_id_and_unique_display_name() {
+        let rooms = vec![
+            room("!alpha:example", "Alpha", false),
+            room("!beta:example", "Beta", false),
+            room("!alpha-target:example", "!alpha:example", false),
+        ];
+
+        assert_eq!(
+            resolve_window_command_target(&rooms, "!alpha:example"),
+            Ok("!alpha:example".to_owned())
+        );
+        assert_eq!(
+            resolve_window_command_target(&rooms, "Beta"),
+            Ok("!beta:example".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_window_command_target_rejects_unknown_spaces_and_ambiguous_display_names() {
+        let rooms = vec![
+            space("!work:example", "Work"),
+            room("!shared-one:example", "Shared", false),
+            room("!shared-two:example", "Shared", false),
+            room("!alpha:example", "Alpha", false),
+        ];
+
+        assert_eq!(
+            resolve_window_command_target(&rooms, "!work:example"),
+            Err(WindowTargetError::Unknown)
+        );
+        assert_eq!(
+            resolve_window_command_target(&rooms, "Work"),
+            Err(WindowTargetError::Unknown)
+        );
+        assert_eq!(
+            resolve_window_command_target(&rooms, "Missing"),
+            Err(WindowTargetError::Unknown)
+        );
+        assert_eq!(
+            resolve_window_command_target(&rooms, "Shared"),
+            Err(WindowTargetError::Ambiguous)
+        );
+    }
+
+    #[test]
     fn submit_compose_uses_explicit_or_selected_room() {
         let mut state = test_state();
         let handle = start_test_core();
@@ -6114,6 +6391,31 @@ mod tests {
             state.compose_history.entries,
             vec!["hello".to_owned(), "hi".to_owned()]
         );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_compose_records_literal_slash_history_with_stripped_send_body() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.rooms = vec![room("!beta:example", "Beta", false)];
+        state.model.selected_room = Some("!beta:example".to_owned());
+
+        let room_id = submit_compose_with_history_entry(
+            &mut state,
+            "/status".to_owned(),
+            "//status".to_owned(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(room_id, "!beta:example");
+        assert_eq!(state.compose_history.entries, vec!["//status".to_owned()]);
 
         handle
             .command_sender()

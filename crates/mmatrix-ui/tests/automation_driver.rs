@@ -2092,6 +2092,357 @@ fn automation_driver_return_compose_key_submits_through_edit_control()
 }
 
 #[test]
+fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("/status")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room, None);
+    assert_eq!(model.last_error, None);
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert_active_switchbar_item(&ui_state, &ViewIdentity::Status);
+    assert!(ui_state.status_bar.text.contains("status window active"));
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "status"])
+    );
+    assert!(view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        "status window active"
+    ));
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "/status");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_window_switches_by_room_id_and_display_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/window Alpha")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(app.dump_model()?.last_error, None);
+    let alpha_state = app.dump_ui_state()?;
+    assert_eq!(alpha_state.mdi.active, room_identity("!alpha:example"));
+    assert_active_switchbar_item(&alpha_state, &room_identity("!alpha:example"));
+    assert!(alpha_state.status_bar.text.contains("window active: Alpha"));
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "rooms: 2", "Alpha"])
+    );
+
+    app.set_compose_text("/window !beta:example")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(app.dump_model()?.last_error, None);
+    let beta_state = app.dump_ui_state()?;
+    assert_eq!(beta_state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&beta_state, &room_identity("!beta:example"));
+    assert!(
+        beta_state
+            .status_bar
+            .text
+            .contains("window active: !beta:example")
+    );
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "rooms: 2", "Beta [e2ee]"])
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let events = vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            room_summary("!shared-one:example", "Shared", false),
+            room_summary("!shared-two:example", "Shared", false),
+        ]),
+        Event::TimelineText(timeline_text(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta first",
+        )),
+    ];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.set_compose_text("/window Shared")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let ambiguous_state = app.dump_ui_state()?;
+    assert_eq!(ambiguous_state.mdi.active, room_identity("!beta:example"));
+    assert!(
+        ambiguous_state
+            .status_bar
+            .text
+            .contains("ambiguous window target: Shared")
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    app.set_compose_text("/window Missing")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let missing_state = app.dump_ui_state()?;
+    assert_eq!(missing_state.mdi.active, room_identity("!beta:example"));
+    assert!(
+        missing_state
+            .status_bar
+            .text
+            .contains("unknown window target: Missing")
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_clear_clears_only_active_room_timeline()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    let before_clear = app.timeline(Some("!beta:example"))?;
+    assert!(before_clear.iter().any(|entry| entry
+        == &text_entry(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta first",
+        )));
+    assert!(before_clear.iter().any(|entry| entry
+        == &text_entry(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta second",
+        )));
+
+    app.set_compose_text("/clear")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert!(app.timeline(Some("!beta:example"))?.is_empty());
+    assert_eq!(
+        app.timeline(Some("!alpha:example"))?,
+        vec![text_entry(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "alpha first",
+        )]
+    );
+    let cleared_state = app.dump_ui_state()?;
+    assert_eq!(cleared_state.mdi.active, room_identity("!beta:example"));
+    assert!(
+        cleared_state
+            .status_bar
+            .text
+            .contains("cleared window: !beta:example")
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_clear_in_status_view_is_a_no_op()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/status")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+
+    app.set_compose_text("/clear")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("nothing to clear in status view")
+    );
+    assert!(view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        "nothing to clear in status view"
+    ));
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "/clear");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("/doesnotexist")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("unknown command: /doesnotexist")
+    );
+    assert!(
+        !ui_state
+            .status_bar
+            .text
+            .contains("send text requires an authenticated session")
+    );
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "/doesnotexist");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_literal_slash_submission_is_sent_as_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("//status")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+    assert_eq!(
+        app.dump_model()?.last_error,
+        Some(UiError {
+            operation: "send_text".to_owned(),
+            message: "send text requires an authenticated session".to_owned(),
+        })
+    );
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "//status");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
     let Some(homeserver_url) = env::var("MMATRIX_HS")
         .ok()
