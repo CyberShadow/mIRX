@@ -279,8 +279,43 @@ fn timeline_line(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> 
     }
 }
 
+fn timeline_line_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> TimelineLine {
+    TimelineLine {
+        room_id: room_id.to_owned(),
+        event_id: Some(event_id.to_owned()),
+        transaction_id: None,
+        sender: sender.to_owned(),
+        timestamp_ms,
+        body: body.to_owned(),
+        send_state: TimelineSendState::Sent,
+        send_error: None,
+    }
+}
+
 fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineEntry {
     TimelineEntry::Text(timeline_line(room_id, sender, timestamp_ms, body))
+}
+
+fn text_entry_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> TimelineEntry {
+    TimelineEntry::Text(timeline_line_with_event_id(
+        room_id,
+        event_id,
+        sender,
+        timestamp_ms,
+        body,
+    ))
 }
 
 fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> TimelineEntry {
@@ -1604,20 +1639,23 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     assert_eq!(
         attached.timeline(None)?,
         vec![
-            text_entry(
+            text_entry_with_event_id(
                 "!verify:example",
+                "$verify-1",
                 "@alice:example",
                 1_700_000_060_000,
                 "verification requested by @alice:example",
             ),
-            text_entry(
+            text_entry_with_event_id(
                 "!verify:example",
+                "$verify-2",
                 "@alice:example",
                 1_700_000_120_000,
                 "sas emoji ready",
             ),
-            text_entry(
+            text_entry_with_event_id(
                 "!verify:example",
+                "$verify-3",
                 "@alice:example",
                 1_700_000_180_000,
                 "waiting for confirmation",
@@ -1643,8 +1681,9 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     );
     assert_eq!(
         model.last_timeline,
-        Some(timeline_line(
+        Some(timeline_line_with_event_id(
             "!verify:example",
+            "$verify-3",
             "@alice:example",
             1_700_000_180_000,
             "waiting for confirmation",
