@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
+use std::{any::Any, panic::AssertUnwindSafe};
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
@@ -3521,9 +3522,10 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         }
         ParsedCommand::LoadSyntheticState { id, args } => {
             let (rooms, timeline_events) =
-                apply_event_load(hwnd, args.events).map_err(|message| {
-                    failure_response(Some(id.clone()), "invalid_synthetic_state", message)
-                })?;
+                run_synthetic_event_boundary(|| unsafe { apply_event_load(hwnd, args.events) })
+                    .map_err(|message| {
+                        failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+                    })?;
             serialize_success_json(
                 &id,
                 LoadEventsResponse {
@@ -3534,9 +3536,10 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )
         }
         ParsedCommand::AppendSyntheticEvents { id, args } => {
-            apply_events_and_refresh(hwnd, args.events).map_err(|message| {
-                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
-            })?;
+            run_synthetic_event_boundary(|| unsafe { apply_events_and_refresh(hwnd, args.events) })
+                .map_err(|message| {
+                    failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+                })?;
             let rooms = state_ref(hwnd).model.rooms.len();
             let timeline_events = state_ref(hwnd)
                 .model
@@ -3631,6 +3634,25 @@ fn serialize_success_json<T: Serialize>(id: &str, payload: T) -> Result<Value, F
             format!("failed to serialize response payload: {err}"),
         )
     })
+}
+
+fn run_synthetic_event_boundary<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String>,
+{
+    std::panic::catch_unwind(AssertUnwindSafe(f))
+        .map_err(panic_message)
+        .and_then(|result| result)
+}
+
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(message) => *message,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(message) => (*message).to_owned(),
+            Err(_) => "synthetic event load panicked".to_owned(),
+        },
+    }
 }
 
 fn serialize_response_envelope(
@@ -5376,6 +5398,32 @@ mod tests {
             store_passphrase: "mmatrix-ui-win32-tests".to_owned(),
         })
         .expect("test core must start")
+    }
+
+    #[test]
+    fn synthetic_event_boundary_converts_invalid_message_sent_sequence_into_error() {
+        let result = run_synthetic_event_boundary(|| {
+            let mut state = test_state();
+            state.model.rooms = vec![room("!ops:example", "Ops", false)];
+            apply_core_event(
+                &mut state,
+                outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+            )?;
+            Ok(())
+        });
+
+        assert_eq!(
+            result,
+            Err("outgoing sent requires an existing queued timeline row".to_owned())
+        );
+    }
+
+    #[test]
+    fn synthetic_event_boundary_preserves_regular_error_results() {
+        assert_eq!(
+            run_synthetic_event_boundary::<(), _>(|| Err("invalid stream".to_owned())),
+            Err("invalid stream".to_owned())
+        );
     }
 
     #[test]
