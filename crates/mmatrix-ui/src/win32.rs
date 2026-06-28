@@ -19,9 +19,9 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
     OutgoingTextFailed, OutgoingTextQueued, OutgoingTextSent, RestoreSessionRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessageSendState, RoomStateContent, RoomStateEntry, RoomStateEventKind,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, SendTextRequest, StoredSession,
-    TimelineText, VerificationRequest, start,
+    RoomMessageSendState, RoomStateContent, RoomStateEntry, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, SendTextRequest, StoredSession, TimelineText,
+    VerificationRequest, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -231,33 +231,35 @@ impl RoomViewModel {
 
     fn apply_activity(&mut self, activity: RoomActivity) {
         match &activity.kind {
-            RoomActivityKind::Message(message) => match &message.send_state {
-                RoomMessageSendState::Pending => {
-                    let transaction_id = message
-                        .transaction_id
-                        .clone()
-                        .expect("pending room activity requires a transaction id");
-                    self.upsert_message_activity(activity, Some(transaction_id.as_str()), None);
+            RoomActivityKind::Message(message) => {
+                let transaction_id = message.transaction_id.clone();
+                let event_id = message.event_id.clone();
+                match &message.send_state {
+                    RoomMessageSendState::Pending => {
+                        let transaction_id = transaction_id
+                            .as_deref()
+                            .expect("pending room activity requires a transaction id");
+                        self.upsert_message_activity(activity, Some(transaction_id), None);
+                    }
+                    RoomMessageSendState::Sent => {
+                        let event_id = event_id
+                            .as_deref()
+                            .expect("sent room activity requires an event id");
+                        self.upsert_message_activity(
+                            activity,
+                            transaction_id.as_deref(),
+                            Some(event_id),
+                        );
+                    }
+                    RoomMessageSendState::Failed { .. } => {
+                        self.upsert_message_activity(
+                            activity,
+                            transaction_id.as_deref(),
+                            event_id.as_deref(),
+                        );
+                    }
                 }
-                RoomMessageSendState::Sent => {
-                    let event_id = message
-                        .event_id
-                        .clone()
-                        .expect("sent room activity requires an event id");
-                    self.upsert_message_activity(
-                        activity,
-                        message.transaction_id.as_deref(),
-                        Some(event_id.as_str()),
-                    );
-                }
-                RoomMessageSendState::Failed { .. } => {
-                    self.upsert_message_activity(
-                        activity,
-                        message.transaction_id.as_deref(),
-                        message.event_id.as_deref(),
-                    );
-                }
-            },
+            }
             RoomActivityKind::StateNotice(notice) => {
                 if let RoomStateNoticeContent::Topic { topic } = &notice.content {
                     self.topic = Some(topic.clone());
@@ -290,7 +292,7 @@ impl RoomViewModel {
             panic!("message sent update requires a sent activity update");
         };
         let transaction_index = self
-            .find_message_activity_index(Some(transaction_id.as_str()), None)
+            .find_pending_message_activity_index(transaction_id.as_str())
             .expect("outgoing sent requires an existing queued timeline row");
         let duplicate_event_index = self
             .find_message_activity_index(None, Some(event_id.as_str()))
@@ -360,7 +362,7 @@ impl RoomViewModel {
             panic!("message failed update requires a failed activity update");
         };
         let activity = self
-            .find_message_activity_mut(Some(transaction_id.as_str()), None)
+            .find_pending_message_activity_mut(transaction_id.as_str())
             .expect("outgoing failed requires an existing queued timeline row");
         let RoomActivityKind::Message(room_message) = &mut activity.kind else {
             panic!("outgoing failed requires a message room activity");
@@ -408,12 +410,24 @@ impl RoomViewModel {
         None
     }
 
-    fn find_message_activity_mut(
+    fn find_pending_message_activity_index(&self, transaction_id: &str) -> Option<usize> {
+        self.activities.iter().position(|activity| {
+            matches!(
+                &activity.kind,
+                RoomActivityKind::Message(RoomMessageActivity {
+                    transaction_id: Some(existing_transaction_id),
+                    send_state: RoomMessageSendState::Pending,
+                    ..
+                }) if existing_transaction_id == transaction_id
+            )
+        })
+    }
+
+    fn find_pending_message_activity_mut(
         &mut self,
-        transaction_id: Option<&str>,
-        event_id: Option<&str>,
+        transaction_id: &str,
     ) -> Option<&mut RoomActivity> {
-        let index = self.find_message_activity_index(transaction_id, event_id)?;
+        let index = self.find_pending_message_activity_index(transaction_id)?;
         self.activities.get_mut(index)
     }
 }
@@ -5416,7 +5430,7 @@ mod tests {
             room_id: room_id.to_owned(),
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_060_000,
-            event_kind: RoomStateEventKind::Topic,
+            event_kind: mmatrix_core::RoomStateEventKind::Topic,
             state_key: String::new(),
             content: RoomStateContent::Topic(mmatrix_core::RoomTopicState {
                 topic: topic.to_owned(),
@@ -5456,7 +5470,7 @@ mod tests {
             room_id: room_id.to_owned(),
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_120_000,
-            event_kind: RoomStateEventKind::Member,
+            event_kind: mmatrix_core::RoomStateEventKind::Member,
             state_key: state_key.to_owned(),
             content: RoomStateContent::Member(mmatrix_core::RoomMemberState {
                 membership: membership.to_owned(),
@@ -6262,6 +6276,48 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "outgoing sent requires an existing queued timeline row")]
+    fn room_activity_update_sent_after_sent_row_with_same_transaction_id_panics() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event:example.org",
+                Some("txn-1"),
+                "hello",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "outgoing sent requires an existing queued timeline row")]
+    fn room_activity_update_sent_after_failed_row_with_same_transaction_id_panics() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            failed_message("!ops:example", "txn-1", "hello", "send failed"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+    }
+
+    #[test]
     #[should_panic(expected = "outgoing failed requires an existing queued timeline row")]
     fn room_activity_update_failed_without_existing_queued_row_panics() {
         let mut state = test_state();
@@ -6270,6 +6326,48 @@ mod tests {
         apply_core_event(
             &mut state,
             outgoing_failed("!ops:example", "txn-1", "send failed"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "outgoing failed requires an existing queued timeline row")]
+    fn room_activity_update_failed_after_sent_row_with_same_transaction_id_panics() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event:example.org",
+                Some("txn-1"),
+                "hello",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_failed("!ops:example", "txn-1", "send failed"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "outgoing failed requires an existing queued timeline row")]
+    fn room_activity_update_failed_after_failed_row_with_same_transaction_id_panics() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            failed_message("!ops:example", "txn-1", "hello", "send failed"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_failed("!ops:example", "txn-1", "send failed again"),
         )
         .unwrap();
     }
