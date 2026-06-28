@@ -887,6 +887,54 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
 }
 
 #[test]
+fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!ops:example")?;
+
+    match app.append_synthetic_events(&serde_json::to_string(&vec![message_sent_update_event(
+        "!ops:example",
+        "txn-missing",
+        "$event:example.org",
+    )])?) {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "invalid_synthetic_state");
+            assert_eq!(
+                message,
+                "outgoing sent requires an existing queued timeline row"
+            );
+        }
+        other => panic!("expected invalid_synthetic_state for append, got {other:?}"),
+    }
+
+    app.ping()?;
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        Vec::<RoomActivity>::new()
+    );
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!ops:example")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_can_attach_and_replace_state_via_testkit()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

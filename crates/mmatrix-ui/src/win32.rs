@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
-use std::{any::Any, panic::AssertUnwindSafe};
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
@@ -196,7 +195,7 @@ struct UiModel {
     last_error: Option<CoreErrorEvent>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct RoomViewModel {
     topic: Option<String>,
     activities: Vec<RoomActivity>,
@@ -427,6 +426,54 @@ impl RoomViewModel {
         let index = self.find_pending_message_activity_index(transaction_id)?;
         self.activities.get_mut(index)
     }
+
+    fn validate_update(&self, update: &RoomActivityUpdate) -> Result<(), String> {
+        let (transaction_id, error_message) = match &update.kind {
+            RoomActivityUpdateKind::MessageSent { .. } => (
+                update.transaction_id.as_str(),
+                "outgoing sent requires an existing queued timeline row",
+            ),
+            RoomActivityUpdateKind::MessageFailed { .. } => (
+                update.transaction_id.as_str(),
+                "outgoing failed requires an existing queued timeline row",
+            ),
+        };
+
+        self.find_pending_message_activity_index(transaction_id)
+            .map(|_| ())
+            .ok_or_else(|| error_message.to_owned())
+    }
+}
+
+fn validate_synthetic_room_activity_events(
+    room_views: &BTreeMap<String, RoomViewModel>,
+    events: &[Event],
+) -> Result<(), String> {
+    let mut room_views = room_views.clone();
+
+    for event in events {
+        match event {
+            Event::RoomActivity(activity) => room_views
+                .entry(activity.room_id.clone())
+                .or_default()
+                .apply_activity(activity.clone()),
+            Event::RoomActivityUpdate(update) => {
+                let room_view = room_views.entry(update.room_id.clone()).or_default();
+                room_view.validate_update(update)?;
+                match &update.kind {
+                    RoomActivityUpdateKind::MessageSent { .. } => {
+                        room_view.mark_message_sent(update.clone())
+                    }
+                    RoomActivityUpdateKind::MessageFailed { .. } => {
+                        room_view.mark_message_failed(update.clone())
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessageActivity> {
@@ -3521,11 +3568,13 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::LoadSyntheticState { id, args } => {
+            validate_synthetic_room_activity_events(&BTreeMap::new(), &args.events).map_err(
+                |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
+            )?;
             let (rooms, timeline_events) =
-                run_synthetic_event_boundary(|| unsafe { apply_event_load(hwnd, args.events) })
-                    .map_err(|message| {
-                        failure_response(Some(id.clone()), "invalid_synthetic_state", message)
-                    })?;
+                unsafe { apply_event_load(hwnd, args.events) }.map_err(|message| {
+                    failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+                })?;
             serialize_success_json(
                 &id,
                 LoadEventsResponse {
@@ -3536,10 +3585,13 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )
         }
         ParsedCommand::AppendSyntheticEvents { id, args } => {
-            run_synthetic_event_boundary(|| unsafe { apply_events_and_refresh(hwnd, args.events) })
-                .map_err(|message| {
-                    failure_response(Some(id.clone()), "invalid_synthetic_state", message)
-                })?;
+            let room_views = state_ref(hwnd).model.room_views.clone();
+            validate_synthetic_room_activity_events(&room_views, &args.events).map_err(
+                |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
+            )?;
+            unsafe { apply_events_and_refresh(hwnd, args.events) }.map_err(|message| {
+                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+            })?;
             let rooms = state_ref(hwnd).model.rooms.len();
             let timeline_events = state_ref(hwnd)
                 .model
@@ -3634,25 +3686,6 @@ fn serialize_success_json<T: Serialize>(id: &str, payload: T) -> Result<Value, F
             format!("failed to serialize response payload: {err}"),
         )
     })
-}
-
-fn run_synthetic_event_boundary<T, F>(f: F) -> Result<T, String>
-where
-    F: FnOnce() -> Result<T, String>,
-{
-    std::panic::catch_unwind(AssertUnwindSafe(f))
-        .map_err(panic_message)
-        .and_then(|result| result)
-}
-
-fn panic_message(payload: Box<dyn Any + Send>) -> String {
-    match payload.downcast::<String>() {
-        Ok(message) => *message,
-        Err(payload) => match payload.downcast::<&'static str>() {
-            Ok(message) => (*message).to_owned(),
-            Err(_) => "synthetic event load panicked".to_owned(),
-        },
-    }
 }
 
 fn serialize_response_envelope(
@@ -5401,28 +5434,27 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_event_boundary_converts_invalid_message_sent_sequence_into_error() {
-        let result = run_synthetic_event_boundary(|| {
-            let mut state = test_state();
-            state.model.rooms = vec![room("!ops:example", "Ops", false)];
-            apply_core_event(
-                &mut state,
-                outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
-            )?;
-            Ok(())
-        });
-
+    fn synthetic_event_validation_rejects_invalid_message_sent_sequence() {
         assert_eq!(
-            result,
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[outgoing_sent("!ops:example", "txn-1", "$event:example.org")]
+            ),
             Err("outgoing sent requires an existing queued timeline row".to_owned())
         );
     }
 
     #[test]
-    fn synthetic_event_boundary_preserves_regular_error_results() {
+    fn synthetic_event_validation_accepts_pending_then_sent_sequence() {
         assert_eq!(
-            run_synthetic_event_boundary::<(), _>(|| Err("invalid stream".to_owned())),
-            Err("invalid stream".to_owned())
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[
+                    outgoing_queued("!ops:example", "txn-1", "hello"),
+                    outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+                ]
+            ),
+            Ok(())
         );
     }
 
