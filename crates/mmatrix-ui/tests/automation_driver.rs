@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mmatrix_core::{
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
-    RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping,
-    SpaceChildSummary, StoredSession as CoreStoredSession,
+    RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
+    StoredSession as CoreStoredSession,
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
@@ -347,7 +347,10 @@ fn message_failed_update_event(
 fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
     Event::RoomTyping(RoomTyping {
         room_id: room_id.to_owned(),
-        user_ids: user_ids.iter().map(|user_id| (*user_id).to_owned()).collect(),
+        user_ids: user_ids
+            .iter()
+            .map(|user_id| (*user_id).to_owned())
+            .collect(),
     })
 }
 

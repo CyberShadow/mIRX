@@ -5151,6 +5151,8 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use mmatrix_core::RoomStateNoticeActivity;
+
     use super::*;
 
     static LOCAL_APP_DATA_LOCK: StdMutex<()> = StdMutex::new(());
@@ -5336,7 +5338,10 @@ mod tests {
     fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
         Event::RoomTyping(RoomTyping {
             room_id: room_id.to_owned(),
-            user_ids: user_ids.iter().map(|user_id| (*user_id).to_owned()).collect(),
+            user_ids: user_ids
+                .iter()
+                .map(|user_id| (*user_id).to_owned())
+                .collect(),
         })
     }
 
@@ -6064,10 +6069,7 @@ mod tests {
         apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
         apply_core_event(
             &mut state,
-            typing_event(
-                "!ops:example",
-                &["@alice:example.org", "@bob:example.org"],
-            ),
+            typing_event("!ops:example", &["@alice:example.org", "@bob:example.org"]),
         )
         .unwrap();
         apply_core_event(
@@ -6132,10 +6134,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            typing_event(
-                "!ops:example",
-                &["@alice:example.org", "@bob:example.org"],
-            ),
+            typing_event("!ops:example", &["@alice:example.org", "@bob:example.org"]),
         )
         .unwrap();
         assert_eq!(
@@ -6195,7 +6194,7 @@ mod tests {
 
         assert_eq!(state.model.last_activity, None);
         assert!(state.room_activity.is_empty());
-        assert_eq!(state.model.status, String::new());
+        assert_eq!(state.model.status, "offline");
     }
 
     #[test]

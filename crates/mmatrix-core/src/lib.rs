@@ -7,9 +7,10 @@ pub const FOUNDATION_PHASE: &str = "bootstrap";
 
 pub use api::{
     Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RestoreSessionRequest,
-    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomTyping,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, SendTextRequest, SpaceChildSummary, StoredSession, VerificationRequest,
+    RoomSummary, RoomTyping, SendTextRequest, SpaceChildSummary, StoredSession,
+    VerificationRequest,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

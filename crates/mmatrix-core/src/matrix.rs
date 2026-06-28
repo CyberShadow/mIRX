@@ -253,7 +253,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         async move {
             emit_event(
                 &events,
-                Event::RoomTyping(room_typing_from_sync_typing(room.room_id().as_str(), &event)),
+                Event::RoomTyping(room_typing_from_sync_typing(
+                    room.room_id().as_str(),
+                    &event,
+                )),
             );
         }
     });
