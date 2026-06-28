@@ -2137,6 +2137,43 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    assert_eq!(
+        app.send_text_target(Some("!beta:example"), "/status")?,
+        "!beta:example"
+    );
+    assert_eq!(app.compose_text()?, "");
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+    assert_eq!(
+        app.dump_model()?.last_error,
+        Some(UiError {
+            operation: "send_text".to_owned(),
+            message: "send text requires an authenticated session".to_owned(),
+        })
+    );
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert!(!ui_state.status_bar.text.contains("status window active"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_slash_window_switches_by_room_id_and_display_name()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

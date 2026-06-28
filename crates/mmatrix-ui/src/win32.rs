@@ -250,6 +250,18 @@ enum RoomTimelineEntry {
 }
 
 impl RoomViewModel {
+    fn clear_visible_entries(&mut self) {
+        self.entries.retain(|entry| {
+            matches!(
+                entry,
+                RoomTimelineEntry::Text {
+                    send_state: TimelineSendState::Pending,
+                    ..
+                }
+            )
+        });
+    }
+
     fn upsert_synced_text(&mut self, timeline: TimelineText) {
         let new_entry = RoomTimelineEntry::Text {
             event_id: Some(timeline.event_id),
@@ -4633,7 +4645,7 @@ unsafe fn execute_local_slash_command(
         LocalSlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
             ViewId::Room(room_id) => {
                 if let Some(view) = state_mut(hwnd).model.room_views.get_mut(&room_id) {
-                    view.entries.clear();
+                    view.clear_visible_entries();
                 }
                 refresh_view_content(hwnd, &ViewId::Room(room_id.clone()))?;
                 set_local_command_status(hwnd, format!("cleared window: {room_id}"))
@@ -5705,6 +5717,70 @@ mod tests {
                 "Room: Ops (!ops:example)".to_owned(),
                 "[22:13] @alice:example: hello (failed)".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn clear_room_timeline_preserves_pending_outgoing_row_for_sent_update() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(timeline("!ops:example", "first")),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view must exist after timeline update")
+            .clear_visible_entries();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: None,
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Pending,
+                send_error: None,
+            }])
+        );
+
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            }])
         );
     }
 
