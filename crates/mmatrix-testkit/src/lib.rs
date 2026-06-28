@@ -652,6 +652,10 @@ impl MmatrixApp {
         imp::AppHandle::find(timeout).map(|inner| Self { inner })
     }
 
+    pub fn find_by_pid(pid: u32, timeout: Duration) -> Result<Self, TestkitError> {
+        imp::AppHandle::find_by_pid(pid, timeout).map(|inner| Self { inner })
+    }
+
     pub fn launch(
         exe_path: impl AsRef<Path>,
         args: &[impl AsRef<OsStr>],
@@ -677,6 +681,10 @@ impl MmatrixApp {
 
     pub fn get_version(&self) -> Result<ProtocolVersion, TestkitError> {
         self.inner.get_version()
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.inner.pid()
     }
 
     pub fn wait_idle(&self, timeout: Duration) -> Result<(), TestkitError> {
@@ -1042,6 +1050,12 @@ mod imp {
             ))
         }
 
+        pub(crate) fn find_by_pid(_pid: u32, _timeout: Duration) -> Result<Self, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn launch(
             _exe_path: &Path,
             _args: &[OsString],
@@ -1062,6 +1076,10 @@ mod imp {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
+        }
+
+        pub(crate) fn pid(&self) -> u32 {
+            0
         }
 
         pub(crate) fn wait_idle(&self, _timeout: Duration) -> Result<(), TestkitError> {
@@ -1298,10 +1316,21 @@ mod imp {
         }
 
         pub(crate) fn find(timeout: Duration) -> Result<Self, TestkitError> {
+            Self::find_by_pid_internal(None, timeout)
+        }
+
+        pub(crate) fn find_by_pid(pid: u32, timeout: Duration) -> Result<Self, TestkitError> {
+            Self::find_by_pid_internal(Some(pid), timeout)
+        }
+
+        fn find_by_pid_internal(
+            pid_filter: Option<u32>,
+            timeout: Duration,
+        ) -> Result<Self, TestkitError> {
             let deadline = Instant::now() + timeout;
             let mut last_error = None;
             while Instant::now() < deadline {
-                match attach_to_window(None) {
+                match attach_to_window(pid_filter) {
                     Ok(app) => match app.ping() {
                         Ok(()) => return Ok(app),
                         Err(error) => last_error = Some(error),
@@ -1315,6 +1344,10 @@ mod imp {
                 Some(error) => format!("timed out waiting for automation window: {error}"),
                 None => "timed out waiting for automation window".to_owned(),
             }))
+        }
+
+        pub(crate) fn pid(&self) -> u32 {
+            self.pid
         }
 
         pub(crate) fn launch(

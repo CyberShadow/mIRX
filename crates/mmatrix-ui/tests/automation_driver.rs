@@ -564,7 +564,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     let app = MmatrixApp::launch(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let attached = MmatrixApp::find(Duration::from_secs(5))?;
+    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
     attached.ping()?;
 
     let version = attached.get_version()?;
@@ -1214,7 +1214,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     let app = MmatrixApp::launch(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let attached = MmatrixApp::find(Duration::from_secs(5))?;
+    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
     let fixture_path = fixture_state_path("verification-error.json");
     attached.load_events_from_file(&fixture_path)?;
     attached.wait_idle(Duration::from_secs(5))?;

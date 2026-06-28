@@ -810,6 +810,13 @@ fn non_windows_platform_reports_unsupported_driver() {
         "mmatrix-testkit requires the Windows target"
     );
 
+    let error = MmatrixApp::find_by_pid(7, Duration::from_millis(1))
+        .expect_err("find_by_pid must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
     let launch_error = MmatrixApp::launch("mmatrix-ui.exe", &[OsString::from("--automation")])
         .expect_err("launch must fail off Windows");
     assert_eq!(
@@ -858,6 +865,7 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
     unsupported(app.logout());
     unsupported(app.wait_for_lifecycle_state("ready", Duration::from_millis(1)));
     unsupported(app.wait_for_min_rooms(1, Duration::from_millis(1)));
+    assert_eq!(app.pid(), 0);
     unsupported(app.set_compose_text("draft"));
     unsupported(app.send_compose_key(ComposeKey::Return));
 }
