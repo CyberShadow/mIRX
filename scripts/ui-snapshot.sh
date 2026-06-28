@@ -360,6 +360,25 @@ configure_case_expectations() {
         --expect-no-navigation-text 'failed local echo'
       )
       ;;
+    typing-indicator)
+      expect_selected='!typing:example'
+      expect_active_view='room:!typing:example'
+      room_expect_args=(
+        --expect-room '!typing:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!typing:example::Room: Typing (!typing:example)'
+        --expect-room-view '!typing:example::* @alice:example, @bob:example are typing'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!typing:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!typing:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'are typing'
+      )
+      ;;
     *)
       die "no expectations configured for snapshot case: $case_name"
       ;;

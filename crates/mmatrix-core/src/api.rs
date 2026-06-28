@@ -127,6 +127,13 @@ pub struct RoomActivityUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomTyping {
+    pub room_id: String,
+    pub user_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityUpdateKind {
     MessageSent { event_id: String },
@@ -168,6 +175,7 @@ pub enum Event {
     SyncedRooms(Vec<RoomSummary>),
     RoomActivity(RoomActivity),
     RoomActivityUpdate(RoomActivityUpdate),
+    RoomTyping(RoomTyping),
     VerificationRequest(VerificationRequest),
     LoggedOut,
     Stopped,

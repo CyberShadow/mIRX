@@ -1,0 +1,40 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!typing:example",
+        "display_name": "Typing",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!typing:example",
+      "activity_id": "event:$typing-context",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$typing-context",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "body": "typing context",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomTyping": {
+      "room_id": "!typing:example",
+      "user_ids": [
+        "@alice:example",
+        "@bob:example"
+      ]
+    }
+  }
+]

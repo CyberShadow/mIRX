@@ -3,7 +3,7 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CoreConfig, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, SendTextRequest,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
     SpaceChildSummary, StoredSession, start,
 };
 use tempfile::TempDir;
@@ -516,6 +516,26 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 }
 
 #[test]
+fn room_typing_event_round_trips_through_serde() {
+    let event = Event::RoomTyping(RoomTyping {
+        room_id: "!ops:example.org".to_owned(),
+        user_ids: vec![
+            "@alice:example.org".to_owned(),
+            "@bob:example.org".to_owned(),
+        ],
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize room typing event");
+    assert_eq!(
+        json,
+        r#"{"RoomTyping":{"room_id":"!ops:example.org","user_ids":["@alice:example.org","@bob:example.org"]}}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize room typing event");
+    assert_eq!(restored, event);
+}
+
+#[test]
 fn room_activity_dtos_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<RoomActivity>(
@@ -571,6 +591,14 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "failed room activity update must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomTyping>(
+            r#"{"room_id":"!ops:example.org","user_ids":["@alice:example.org"],"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room typing must reject unknown fields"
     );
 }
 

@@ -19,7 +19,7 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
     RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeContent,
-    RoomSummary, SendTextRequest, StoredSession, VerificationRequest, start,
+    RoomSummary, RoomTyping, SendTextRequest, StoredSession, VerificationRequest, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -199,6 +199,7 @@ struct UiModel {
 struct RoomViewModel {
     topic: Option<String>,
     activities: Vec<RoomActivity>,
+    typing_user_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,6 +264,10 @@ impl RoomViewModel {
                 self.activities.push(activity);
             }
         }
+    }
+
+    fn replace_typing(&mut self, typing: RoomTyping) {
+        self.typing_user_ids = typing.user_ids;
     }
 
     fn upsert_message_activity(
@@ -578,6 +583,15 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
     if let Some(last_activity) = state.model.last_activity.as_mut() {
         update_last_activity_from_room_activity_update(last_activity, &update);
     }
+}
+
+fn apply_room_typing_event(state: &mut WindowState, typing: RoomTyping) {
+    state
+        .model
+        .room_views
+        .entry(typing.room_id.clone())
+        .or_default()
+        .replace_typing(typing);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2387,10 +2401,16 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state
                 .room_activity
                 .retain(|room_id| actionable_room_by_id(&rooms, room_id).is_some());
+            for (room_id, room_view) in &mut state.model.room_views {
+                if actionable_room_by_id(&rooms, room_id).is_none() {
+                    room_view.typing_user_ids.clear();
+                }
+            }
             state.model.rooms = rooms;
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
+        Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::VerificationRequest(request) => {
             state.model.status = format!("verification request from {}", request.user_id);
             state.model.last_verification = Some(request);
@@ -2442,6 +2462,16 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
     }
 
     if let Some(room_view) = room_view {
+        if !room_view.typing_user_ids.is_empty() {
+            let users = room_view.typing_user_ids.join(", ");
+            let verb = if room_view.typing_user_ids.len() == 1 {
+                "is"
+            } else {
+                "are"
+            };
+            lines.push(format!("* {users} {verb} typing"));
+        }
+
         for activity in &room_view.activities {
             match &activity.kind {
                 RoomActivityKind::Message(message) => {
@@ -5303,6 +5333,13 @@ mod tests {
         })
     }
 
+    fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
+        Event::RoomTyping(RoomTyping {
+            room_id: room_id.to_owned(),
+            user_ids: user_ids.iter().map(|user_id| (*user_id).to_owned()).collect(),
+        })
+    }
+
     fn stored_session() -> StoredSession {
         StoredSession {
             user_id: "@alice:example".to_owned(),
@@ -6027,6 +6064,14 @@ mod tests {
         apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
         apply_core_event(
             &mut state,
+            typing_event(
+                "!ops:example",
+                &["@alice:example.org", "@bob:example.org"],
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
             timeline_with_transaction_id(
                 "!ops:example",
                 "$event:example.org",
@@ -6057,6 +6102,7 @@ mod tests {
             vec![
                 "Room: Ops [e2ee] (!ops:example)".to_owned(),
                 "Topic: incident review".to_owned(),
+                "* @alice:example.org, @bob:example.org are typing".to_owned(),
                 "* [22:14] @alice:example set topic: incident review".to_owned(),
                 "[22:13] @alice:example: <body>".to_owned(),
                 "* [22:15] carol joined".to_owned(),
@@ -6064,6 +6110,92 @@ mod tests {
                 "* [22:15] @erin:example membership: ban".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn room_typing_replaces_prior_user_list_and_empty_list_clears_it() {
+        let mut state = test_state();
+
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| view.typing_user_ids.clone()),
+            Some(vec!["@alice:example.org".to_owned()])
+        );
+
+        apply_core_event(
+            &mut state,
+            typing_event(
+                "!ops:example",
+                &["@alice:example.org", "@bob:example.org"],
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| view.typing_user_ids.clone()),
+            Some(vec![
+                "@alice:example.org".to_owned(),
+                "@bob:example.org".to_owned(),
+            ])
+        );
+
+        apply_core_event(&mut state, typing_event("!ops:example", &[])).unwrap();
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| view.typing_user_ids.clone()),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn render_room_lines_use_singular_typing_verb_for_one_user() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "* @alice:example.org is typing".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn room_typing_does_not_change_last_activity_or_room_activity_markers() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        state.active_view = ViewId::Status;
+
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.last_activity, None);
+        assert!(state.room_activity.is_empty());
+        assert_eq!(state.model.status, String::new());
     }
 
     #[test]
@@ -6255,6 +6387,45 @@ mod tests {
     }
 
     #[test]
+    fn synced_rooms_clears_typing_for_non_actionable_rooms() {
+        let mut state = test_state();
+
+        apply_core_event(
+            &mut state,
+            typing_event("!keep:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!drop:example", &["@bob:example.org"]),
+        )
+        .unwrap();
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![room("!keep:example", "Keep", false)]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!keep:example")
+                .map(|view| view.typing_user_ids.clone()),
+            Some(vec!["@alice:example.org".to_owned()])
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!drop:example")
+                .map(|view| view.typing_user_ids.clone()),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
     fn synced_rooms_clear_selected_room_when_room_becomes_space() {
         let mut state = test_state();
         state.model.selected_room = Some("!room:example".to_owned());
@@ -6285,6 +6456,7 @@ mod tests {
                     "hello",
                     1_700_000_000_000,
                 )],
+                typing_user_ids: vec!["@alice:example.org".to_owned()],
             },
         );
         state.model.last_activity = Some(LastMessageActivity {

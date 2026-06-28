@@ -18,6 +18,7 @@ use matrix_sdk::{
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
             space::child::{SpaceChildEventContent, SpaceChildOrd},
+            typing::SyncTypingEvent,
         },
     },
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
@@ -28,7 +29,7 @@ use tokio::task::JoinHandle;
 use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, SendTextRequest,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
     SpaceChildSummary, StoredSession,
 };
 use crate::runtime::{EventSender, emit_event};
@@ -230,8 +231,9 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         }
     });
 
+    let member_events = events.clone();
     client.add_event_handler(move |event: SyncRoomMemberEvent, room: Room| {
-        let events = events.clone();
+        let events = member_events.clone();
         async move {
             if let SyncRoomMemberEvent::Original(event) = event {
                 emit_event(
@@ -242,6 +244,17 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
                     )),
                 );
             }
+        }
+    });
+
+    let typing_events = events.clone();
+    client.add_event_handler(move |event: SyncTypingEvent, room: Room| {
+        let events = typing_events.clone();
+        async move {
+            emit_event(
+                &events,
+                Event::RoomTyping(room_typing_from_sync_typing(room.room_id().as_str(), &event)),
+            );
         }
     });
 }
@@ -308,6 +321,18 @@ fn room_activity_from_sync_member(
                 displayname: event.content.displayname.clone(),
             },
         }),
+    }
+}
+
+fn room_typing_from_sync_typing(room_id: &str, event: &SyncTypingEvent) -> RoomTyping {
+    RoomTyping {
+        room_id: room_id.to_owned(),
+        user_ids: event
+            .content
+            .user_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
     }
 }
 
@@ -631,12 +656,13 @@ mod tests {
     use super::{
         map_local_message_activity, map_send_queue_update, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, text_body_from_serialized_event,
+        room_activity_from_sync_topic, room_typing_from_sync_typing,
+        text_body_from_serialized_event,
     };
     use crate::api::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity,
-        RoomStateNoticeContent,
+        RoomStateNoticeContent, RoomTyping,
     };
     use matrix_sdk::{
         ruma::{
@@ -648,6 +674,7 @@ mod tests {
                     message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
                     topic::OriginalSyncRoomTopicEvent,
                 },
+                typing::SyncTypingEvent,
             },
         },
         send_queue::{RoomSendQueueUpdate, SendQueueUpdate},
@@ -782,6 +809,28 @@ mod tests {
                         displayname: Some("carol".to_owned()),
                     },
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn typing_event_mapping_replaces_user_list_for_room() {
+        let event: SyncTypingEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.typing",
+            "content": {
+                "user_ids": ["@alice:example.org", "@bob:example.org"]
+            }
+        }))
+        .expect("deserialize typing event");
+
+        assert_eq!(
+            room_typing_from_sync_typing("!room:example.org", &event),
+            RoomTyping {
+                room_id: "!room:example.org".to_owned(),
+                user_ids: vec![
+                    "@alice:example.org".to_owned(),
+                    "@bob:example.org".to_owned(),
+                ],
             }
         );
     }

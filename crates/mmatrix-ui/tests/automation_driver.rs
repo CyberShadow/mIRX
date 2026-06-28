@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mmatrix_core::{
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
-    RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, SpaceChildSummary,
-    StoredSession as CoreStoredSession,
+    RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping,
+    SpaceChildSummary, StoredSession as CoreStoredSession,
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
@@ -341,6 +341,13 @@ fn message_failed_update_event(
             message: message.to_owned(),
             recoverable,
         },
+    })
+}
+
+fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
+    Event::RoomTyping(RoomTyping {
+        room_id: room_id.to_owned(),
+        user_ids: user_ids.iter().map(|user_id| (*user_id).to_owned()).collect(),
     })
 }
 
@@ -2072,6 +2079,296 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
             ),
         ]
     );
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_renders_room_typing_only_for_selected_room_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!alpha:example", "Alpha", false),
+            room_summary("!beta:example", "Beta", false),
+        ]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        ),
+        typing_event("!alpha:example", &["@alice:example.org"]),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let typing_line = "* @alice:example.org is typing";
+
+    app.select_room("!beta:example")?;
+    let beta_state = app.dump_ui_state()?;
+    assert_eq!(beta_state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&beta_state, &room_identity("!beta:example"));
+    assert!(!view_contains(
+        find_view(&beta_state, &room_identity("!beta:example")),
+        typing_line,
+    ));
+
+    app.select_room("!alpha:example")?;
+    let alpha_state = app.dump_ui_state()?;
+    assert_eq!(alpha_state.mdi.active, room_identity("!alpha:example"));
+    assert_active_switchbar_item(&alpha_state, &room_identity("!alpha:example"));
+    let alpha_view = find_view(&alpha_state, &room_identity("!alpha:example"));
+    assert!(view_contains(alpha_view, "alpha context"));
+    assert!(view_contains(alpha_view, typing_line));
+    assert!(!view_contains(
+        find_view(&alpha_state, &room_identity("!beta:example")),
+        typing_line,
+    ));
+    assert_eq!(
+        app.room_activity(Some("!alpha:example"))?,
+        vec![text_entry_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        )]
+    );
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_list()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!alpha:example", "Alpha", false),
+            room_summary("!beta:example", "Beta", false),
+        ]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        ),
+        typing_event(
+            "!alpha:example",
+            &["@alice:example.org", "@bob:example.org"],
+        ),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let typing_line = "* @alice:example.org, @bob:example.org are typing";
+
+    app.select_room("!alpha:example")?;
+    let initial_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&initial_state, &room_identity("!alpha:example")),
+        typing_line,
+    ));
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!alpha:example", "Alpha", false),
+            room_summary("!beta:example", "Beta", false),
+        ]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!alpha:example")?;
+    let replaced_state = app.dump_ui_state()?;
+    let replaced_alpha_view = find_view(&replaced_state, &room_identity("!alpha:example"));
+    assert!(view_contains(replaced_alpha_view, "alpha context"));
+    assert!(!view_contains(replaced_alpha_view, typing_line));
+    assert!(!view_contains(replaced_alpha_view, " is typing"));
+    assert!(!view_contains(replaced_alpha_view, " are typing"));
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!alpha:example", "Alpha", false),
+            room_summary("!beta:example", "Beta", false),
+        ]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        ),
+        typing_event(
+            "!alpha:example",
+            &["@alice:example.org", "@bob:example.org"],
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!alpha:example")?;
+    let restored_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&restored_state, &room_identity("!alpha:example")),
+        typing_line,
+    ));
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!alpha:example", "Alpha", false),
+            room_summary("!beta:example", "Beta", false),
+        ]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        ),
+        typing_event("!alpha:example", &[]),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!alpha:example")?;
+    let cleared_state = app.dump_ui_state()?;
+    let cleared_alpha_view = find_view(&cleared_state, &room_identity("!alpha:example"));
+    assert!(view_contains(cleared_alpha_view, "alpha context"));
+    assert!(!view_contains(cleared_alpha_view, typing_line));
+    assert!(!view_contains(cleared_alpha_view, " is typing"));
+    assert!(!view_contains(cleared_alpha_view, " are typing"));
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_clears_room_typing_on_logged_out_event()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-context",
+            "@carol:example.org",
+            1_700_000_000_000,
+            "alpha context",
+        ),
+        typing_event(
+            "!alpha:example",
+            &["@alice:example.org", "@bob:example.org"],
+        ),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!alpha:example")?;
+    let initial_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&initial_state, &room_identity("!alpha:example")),
+        "* @alice:example.org, @bob:example.org are typing",
+    ));
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::LoggedOut,
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "logged out");
+    assert_eq!(model.selected_room, None);
+    assert!(model.rooms.is_empty());
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert_active_switchbar_item(&ui_state, &ViewIdentity::Status);
+    let status_view = find_view(&ui_state, &ViewIdentity::Status);
+    assert!(!view_contains(status_view, " is typing"));
+    assert!(!view_contains(status_view, " are typing"));
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_loads_typing_indicator_fixture_via_file_api()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
+    let fixture_path = fixture_state_path("typing-indicator.json");
+    attached.load_events_from_file(&fixture_path)?;
+    attached.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        attached.list_rooms()?,
+        vec![listed_room("!typing:example", "Typing", false)]
+    );
+    assert_eq!(
+        attached.dump_model()?.selected_room.as_deref(),
+        Some("!typing:example")
+    );
+    assert_eq!(
+        attached.room_activity(None)?,
+        vec![text_entry_with_event_id(
+            "!typing:example",
+            "$typing-context",
+            "@carol:example",
+            1_700_000_000_000,
+            "typing context",
+        )]
+    );
+
+    let ui_state = attached.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!typing:example"));
+    assert_active_switchbar_item(&ui_state, &room_identity("!typing:example"));
+    let typing_view = find_view(&ui_state, &room_identity("!typing:example"));
+    assert!(view_contains(typing_view, "typing context"));
+    assert!(view_contains(
+        typing_view,
+        "* @alice:example, @bob:example are typing",
+    ));
 
     let _ = fs::remove_file(&state_path);
     Ok(())
