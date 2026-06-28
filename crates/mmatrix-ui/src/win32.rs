@@ -2275,8 +2275,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                 .mark_outgoing_failed(failed.clone());
             if let Some(last_timeline) = state.model.last_timeline.as_mut()
                 && last_timeline.room_id == failed.room_id
-                && last_timeline.transaction_id.as_deref()
-                    == Some(failed.transaction_id.as_str())
+                && last_timeline.transaction_id.as_deref() == Some(failed.transaction_id.as_str())
             {
                 last_timeline.send_state = TimelineSendState::Failed;
                 last_timeline.send_error = Some(TimelineSendError {
