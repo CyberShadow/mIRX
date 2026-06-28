@@ -1,6 +1,11 @@
 # Execution Report
 
-Output commit: `1e6ed7f Finish room activity fixture and automation migration`
+## Final commits produced
+
+- `1e6ed7f` `Finish room activity fixture and automation migration`
+- `27363f5` `Add room activity migration report`
+- `6ac9fc4` `Handle invalid synthetic event panics at automation boundary`
+- `4822da9` `Validate synthetic room activity updates deterministically`
 
 ## What changed
 
@@ -22,18 +27,20 @@ Output commit: `1e6ed7f Finish room activity fixture and automation migration`
   - remote-echo reconciliation after `MessageSent`
   - `/clear` preserving only the pending row and later reconciling it in place
   - loading the new mixed fixture through the file API
+  - invalid `AppendSyntheticEvents` with a missing pending transaction returning `invalid_synthetic_state` while the UI process stays alive
 - Updated `crates/mmatrix-ui/tests/mdi_child_reactivation.rs` to use typed sent-message activities.
 - Updated `crates/mmatrix-ui/src/automation.rs` command tests to use typed event payloads only.
+- Added a narrow append-only automation command through:
+  - `crates/mmatrix-ui/src/automation.rs`
+  - `crates/mmatrix-ui/src/win32.rs`
+  - `crates/mmatrix-testkit/src/lib.rs`
+- Removed the old unwind-based automation boundary handling in `crates/mmatrix-ui/src/win32.rs` and replaced it with deterministic pre-validation of synthetic room-activity updates before `LoadSyntheticState` / `AppendSyntheticEvents` mutate live state.
 - Removed old core room DTOs/event variants from:
   - `crates/mmatrix-core/src/api.rs`
   - `crates/mmatrix-core/src/lib.rs`
 - Removed remaining downstream legacy references and Win32 compatibility branches from:
   - `crates/mmatrix-ui/src/win32.rs`
   - `crates/mmatrix-core/tests/live_matrix.rs`
-- Added a narrow append-only automation command through:
-  - `crates/mmatrix-ui/src/automation.rs`
-  - `crates/mmatrix-ui/src/win32.rs`
-  - `crates/mmatrix-testkit/src/lib.rs`
 
 ## Deviation from plan
 
@@ -41,10 +48,14 @@ Output commit: `1e6ed7f Finish room activity fixture and automation migration`
 - The actual code only had replacement semantics through `LoadSyntheticState`.
 - After escalation, I added a narrow append-only command reusing `LoadEventsArgs` / `LoadEventsResponse` so the `/clear` automation test could prove later in-session `MessageSent` reconciliation without changing replacement behavior.
 - This required a protocol bump from `10` to `11`.
+- The first boundary fix for invalid synthetic updates used an unwind-based wrapper in `6ac9fc4`; review rejected that because release builds use `panic = "abort"`.
+- `4822da9` replaced it with deterministic validation at the automation boundary, preserving the internal fail-fast panics while guaranteeing protocol-level `invalid_synthetic_state` responses for invalid synthetic update sequencing.
 
 ## Verification
 
-Ran successfully:
+Review passed after the deterministic validation rework.
+
+Required commands passed:
 
 ```sh
 TMPDIR=$PWD/.tmp-verification nix develop -c cargo fmt --check
@@ -53,11 +64,12 @@ TMPDIR=$PWD/.tmp-verification nix develop -c cargo test --target x86_64-pc-windo
 TMPDIR=$PWD/.tmp-verification nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Notes:
+Final results and environment notes:
 
-- The first Windows-target automation-driver attempt failed before test execution with `wine-runner: Xvfb did not publish a display number`.
-- I reran the same required command unchanged; the second run passed (`34 passed`).
-- Wine emitted non-fatal `Fontconfig` noise and final `X connection ... broken` shutdown messages after the successful run.
+- Host `fmt`, workspace tests, and workspace `clippy` passed.
+- The Windows automation command passed on immediate identical reruns during the unit, first at `34 passed` and then after the deterministic validation fix at `35 passed`.
+- The environment also showed repeated unrelated Wine launch-timeout flakes in `automation_driver_can_activate_status_view_and_return_to_room` during later verification/review runs outside the code fix path.
+- Wine emitted non-fatal `Fontconfig` noise and final `X connection ... broken` shutdown messages after successful runs.
 
 ## Old core DTO/event removal
 
@@ -86,11 +98,11 @@ rg "TimelineText|OutgoingTextQueued|OutgoingTextSent|OutgoingTextFailed|RoomStat
 
 ## Blockers
 
-- No remaining code blockers.
+- No old blockers remain.
 
 ## Next unit
 
 - Finalize snapshot script/baseline work deferred by plan:
   - update `scripts/ui-snapshot.sh` expectations for `mixed-room-activity.json`
   - add the matching PNG baseline under `artifacts/ui-snapshots/`
-- Handle any documentation follow-up that should mention the now-complete room-activity contract and the append-only automation test hook if that surface is meant to be documented externally.
+- Handle the documentation follow-up for the completed room-activity migration and any public-facing mention of the automation test surface that remains appropriate.
