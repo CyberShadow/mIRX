@@ -20,7 +20,7 @@ use matrix_sdk::{
             space::child::{SpaceChildEventContent, SpaceChildOrd},
         },
     },
-    send_queue::{LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
+    send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
 };
 use tokio::task::JoinHandle;
@@ -338,6 +338,21 @@ pub(crate) fn start_send_queue_update_task(
     let mut updates = client.send_queue().subscribe();
 
     tokio::task::spawn_local(async move {
+        match hydrate_send_queue_local_echoes(&client, &current_user_id).await {
+            Ok(initial_events) => {
+                for event in initial_events {
+                    emit_event(&events, event);
+                }
+            }
+            Err(err) => emit_event(
+                &events,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::SendText,
+                    message: format!("failed to hydrate Matrix send queue local echoes: {err}"),
+                }),
+            ),
+        }
+
         loop {
             match updates.recv().await {
                 Ok(update) => match map_send_queue_update(update, &current_user_id) {
@@ -375,24 +390,7 @@ fn map_send_queue_update(
 
     match update.update {
         RoomSendQueueUpdate::NewLocalEvent(local_echo) => {
-            let transaction_id = local_echo.transaction_id.to_string();
-            let LocalEchoContent::Event {
-                serialized_event,
-                send_handle,
-                ..
-            } = local_echo.content
-            else {
-                return Ok(Vec::new());
-            };
-
-            map_local_text_queued(
-                room_id,
-                transaction_id,
-                current_user_id,
-                send_handle.created_at,
-                &serialized_event,
-            )
-            .map(|event| event.into_iter().map(Event::OutgoingTextQueued).collect())
+            map_local_echo(room_id, local_echo, current_user_id)
         }
         RoomSendQueueUpdate::SentEvent {
             transaction_id,
@@ -426,6 +424,85 @@ fn map_send_queue_update(
         | RoomSendQueueUpdate::RetryEvent { .. }
         | RoomSendQueueUpdate::MediaUpload { .. } => Ok(Vec::new()),
     }
+}
+
+async fn hydrate_send_queue_local_echoes(
+    client: &Client,
+    current_user_id: &str,
+) -> Result<Vec<Event>, MatrixCoreError> {
+    let local_echoes = client.send_queue().local_echoes().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to load Matrix local echoes: {err}"))
+    })?;
+
+    let mut events = Vec::new();
+    for (room_id, room_local_echoes) in local_echoes {
+        for local_echo in room_local_echoes {
+            events.extend(map_local_echo(
+                room_id.to_string(),
+                local_echo,
+                current_user_id,
+            )?);
+        }
+    }
+
+    Ok(events)
+}
+
+fn map_local_echo(
+    room_id: String,
+    local_echo: LocalEcho,
+    current_user_id: &str,
+) -> Result<Vec<Event>, MatrixCoreError> {
+    let transaction_id = local_echo.transaction_id.to_string();
+    let LocalEchoContent::Event {
+        serialized_event,
+        send_handle,
+        send_error,
+    } = local_echo.content
+    else {
+        return Ok(Vec::new());
+    };
+
+    outgoing_events_from_local_echo_event(
+        room_id,
+        transaction_id,
+        current_user_id,
+        send_handle.created_at,
+        &serialized_event,
+        send_error.as_ref().map(ToString::to_string),
+    )
+}
+
+fn outgoing_events_from_local_echo_event(
+    room_id: String,
+    transaction_id: String,
+    current_user_id: &str,
+    created_at: MilliSecondsSinceUnixEpoch,
+    serialized_event: &SerializableEventContent,
+    send_error: Option<String>,
+) -> Result<Vec<Event>, MatrixCoreError> {
+    let Some(queued) = map_local_text_queued(
+        room_id.clone(),
+        transaction_id.clone(),
+        current_user_id,
+        created_at,
+        serialized_event,
+    )?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut events = vec![Event::OutgoingTextQueued(queued)];
+    if let Some(send_error) = send_error {
+        events.push(Event::OutgoingTextFailed(OutgoingTextFailed {
+            room_id,
+            transaction_id,
+            message: send_error,
+            recoverable: false,
+        }));
+    }
+
+    Ok(events)
 }
 
 fn map_local_text_queued(
@@ -507,8 +584,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        map_local_text_queued, map_send_queue_update, text_body_from_serialized_event,
-        timeline_text_from_sync_message,
+        map_local_text_queued, map_send_queue_update, outgoing_events_from_local_echo_event,
+        text_body_from_serialized_event, timeline_text_from_sync_message,
     };
     use crate::api::{CoreErrorEvent, Event, Operation, OutgoingTextFailed, OutgoingTextSent};
     use matrix_sdk::{
@@ -628,6 +705,74 @@ mod tests {
                 transaction_id: "txn-1".to_owned(),
                 event_id: "$event:example.org".to_owned(),
             })]
+        );
+    }
+
+    #[test]
+    fn restored_local_echo_hydrates_to_outgoing_text_queued() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let serialized_event = SerializableEventContent::new(
+            &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
+        )
+        .expect("serialize text event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+            None,
+        )
+        .expect("map restored local echo");
+
+        assert_eq!(
+            events,
+            vec![Event::OutgoingTextQueued(crate::api::OutgoingTextQueued {
+                room_id: "!room:example.org".to_owned(),
+                transaction_id: "txn-1".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                body: "hello".to_owned(),
+            })]
+        );
+    }
+
+    #[test]
+    fn restored_failed_local_echo_hydrates_to_visible_failed_lifecycle() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let serialized_event = SerializableEventContent::new(
+            &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
+        )
+        .expect("serialize text event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+            Some("Other unrecoverable error: wedged".to_owned()),
+        )
+        .expect("map restored failed local echo");
+
+        assert_eq!(
+            events,
+            vec![
+                Event::OutgoingTextQueued(crate::api::OutgoingTextQueued {
+                    room_id: "!room:example.org".to_owned(),
+                    transaction_id: "txn-1".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: created_at.get().into(),
+                    body: "hello".to_owned(),
+                }),
+                Event::OutgoingTextFailed(OutgoingTextFailed {
+                    room_id: "!room:example.org".to_owned(),
+                    transaction_id: "txn-1".to_owned(),
+                    message: "Other unrecoverable error: wedged".to_owned(),
+                    recoverable: false,
+                }),
+            ]
         );
     }
 

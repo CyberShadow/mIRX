@@ -260,10 +260,10 @@ impl RoomViewModel {
             send_error: None,
         };
 
-        if let Some(entry) =
-            self.find_text_entry_mut(text_transaction_id(&new_entry), text_event_id(&new_entry))
+        if let Some(index) =
+            self.find_text_entry_index(text_transaction_id(&new_entry), text_event_id(&new_entry))
         {
-            *entry = new_entry;
+            self.entries[index] = new_entry;
         } else {
             self.entries.push(new_entry);
         }
@@ -280,42 +280,71 @@ impl RoomViewModel {
             send_error: None,
         };
 
-        if let Some(entry) =
-            self.find_text_entry_mut(text_transaction_id(&new_entry), text_event_id(&new_entry))
+        if let Some(index) =
+            self.find_text_entry_index(text_transaction_id(&new_entry), text_event_id(&new_entry))
         {
-            *entry = new_entry;
+            self.entries[index] = new_entry;
         } else {
             self.entries.push(new_entry);
         }
     }
 
     fn mark_outgoing_sent(&mut self, sent: OutgoingTextSent) {
-        let Some(RoomTimelineEntry::Text {
+        let transaction_index = self
+            .find_text_entry_index(Some(sent.transaction_id.as_str()), None)
+            .expect("outgoing sent requires an existing queued timeline row");
+        let duplicate_event_index = self
+            .find_text_entry_index(None, Some(sent.event_id.as_str()))
+            .filter(|event_index| *event_index != transaction_index);
+        let duplicate_event =
+            duplicate_event_index.map(|event_index| self.entries[event_index].clone());
+
+        let RoomTimelineEntry::Text {
             event_id,
+            sender,
+            timestamp_ms,
+            body,
             send_state,
             send_error,
             ..
-        }) = self.find_text_entry_mut(
-            Some(sent.transaction_id.as_str()),
-            Some(sent.event_id.as_str()),
-        )
+        } = self
+            .entries
+            .get_mut(transaction_index)
+            .expect("transaction row index must resolve")
         else {
-            return;
+            panic!("outgoing sent requires a text timeline row");
         };
 
         *event_id = Some(sent.event_id);
+        if let Some(RoomTimelineEntry::Text {
+            sender: synced_sender,
+            timestamp_ms: synced_timestamp_ms,
+            body: synced_body,
+            ..
+        }) = duplicate_event
+        {
+            *sender = synced_sender;
+            *timestamp_ms = synced_timestamp_ms;
+            *body = synced_body;
+        }
         *send_state = TimelineSendState::Sent;
         *send_error = None;
+
+        if let Some(duplicate_event_index) = duplicate_event_index {
+            self.entries.remove(duplicate_event_index);
+        }
     }
 
     fn mark_outgoing_failed(&mut self, failed: OutgoingTextFailed) {
-        let Some(RoomTimelineEntry::Text {
+        let RoomTimelineEntry::Text {
             send_state,
             send_error,
             ..
-        }) = self.find_text_entry_mut(Some(failed.transaction_id.as_str()), None)
+        } = self
+            .find_text_entry_mut(Some(failed.transaction_id.as_str()), None)
+            .expect("outgoing failed requires an existing queued timeline row")
         else {
-            return;
+            panic!("outgoing failed requires a text timeline row");
         };
 
         *send_state = TimelineSendState::Failed;
@@ -325,13 +354,13 @@ impl RoomViewModel {
         });
     }
 
-    fn find_text_entry_mut(
-        &mut self,
+    fn find_text_entry_index(
+        &self,
         transaction_id: Option<&str>,
         event_id: Option<&str>,
-    ) -> Option<&mut RoomTimelineEntry> {
-        let index = if let Some(transaction_id) = transaction_id {
-            self.entries.iter().position(|entry| {
+    ) -> Option<usize> {
+        if let Some(transaction_id) = transaction_id {
+            if let Some(index) = self.entries.iter().position(|entry| {
                 matches!(
                     entry,
                     RoomTimelineEntry::Text {
@@ -339,24 +368,34 @@ impl RoomViewModel {
                         ..
                     } if existing_transaction_id == transaction_id
                 )
-            })
-        } else {
-            None
+            }) {
+                return Some(index);
+            }
         }
-        .or_else(|| {
-            event_id.and_then(|event_id| {
-                self.entries.iter().position(|entry| {
-                    matches!(
-                        entry,
-                        RoomTimelineEntry::Text {
-                            event_id: Some(existing_event_id),
-                            ..
-                        } if existing_event_id == event_id
-                    )
-                })
-            })
-        })?;
 
+        if let Some(event_id) = event_id {
+            if let Some(index) = self.entries.iter().position(|entry| {
+                matches!(
+                    entry,
+                    RoomTimelineEntry::Text {
+                        event_id: Some(existing_event_id),
+                        ..
+                    } if existing_event_id == event_id
+                )
+            }) {
+                return Some(index);
+            }
+        }
+
+        None
+    }
+
+    fn find_text_entry_mut(
+        &mut self,
+        transaction_id: Option<&str>,
+        event_id: Option<&str>,
+    ) -> Option<&mut RoomTimelineEntry> {
+        let index = self.find_text_entry_index(transaction_id, event_id)?;
         self.entries.get_mut(index)
     }
 }
@@ -5404,6 +5443,59 @@ mod tests {
     }
 
     #[test]
+    fn synced_text_without_transaction_id_collapses_into_outgoing_row_after_sent_update() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::TimelineText(TimelineText {
+                room_id: "!ops:example".to_owned(),
+                event_id: "$event:example.org".to_owned(),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                body: "hello".to_owned(),
+            }),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.entries),
+            Some(&vec![RoomTimelineEntry::Text {
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                body: "hello".to_owned(),
+                send_state: TimelineSendState::Sent,
+                send_error: None,
+            }])
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn outgoing_text_failure_keeps_visible_failed_row_and_error_details() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -5445,6 +5537,32 @@ mod tests {
                 "[22:13] @alice:example: hello (failed)".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "outgoing sent requires an existing queued timeline row")]
+    fn outgoing_text_sent_without_existing_queued_row_panics() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "outgoing failed requires an existing queued timeline row")]
+    fn outgoing_text_failed_without_existing_queued_row_panics() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            outgoing_failed("!ops:example", "txn-1", "send failed"),
+        )
+        .unwrap();
     }
 
     #[test]
