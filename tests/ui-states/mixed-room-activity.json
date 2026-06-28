@@ -1,0 +1,129 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!mixed:example",
+        "display_name": "Mixed",
+        "encrypted": true,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "event:$mixed-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$mixed-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "synced hello",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "state:$mixed-topic-1",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$mixed-topic-1",
+        "sender": "@alice:example",
+        "state_key": "",
+        "content": {
+          "type": "topic",
+          "topic": "mixed room topic"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "state:$mixed-join-1",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$mixed-join-1",
+        "sender": "@bob:example",
+        "state_key": "@bob:example",
+        "content": {
+          "type": "member",
+          "membership": "join",
+          "displayname": "bob"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "state:$mixed-leave-1",
+      "timestamp_ms": 1700000180000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$mixed-leave-1",
+        "sender": "@carol:example",
+        "state_key": "@carol:example",
+        "content": {
+          "type": "member",
+          "membership": "leave",
+          "displayname": null
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "txn:txn-pending-1",
+      "timestamp_ms": 1700000240000,
+      "kind": {
+        "type": "message",
+        "event_id": null,
+        "transaction_id": "txn-pending-1",
+        "sender": "@alice:example",
+        "body": "pending local echo",
+        "send_state": {
+          "state": "pending"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "txn:txn-failed-1",
+      "timestamp_ms": 1700000300000,
+      "kind": {
+        "type": "message",
+        "event_id": null,
+        "transaction_id": "txn-failed-1",
+        "sender": "@alice:example",
+        "body": "failed local echo",
+        "send_state": {
+          "state": "pending"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!mixed:example",
+      "transaction_id": "txn-failed-1",
+      "kind": {
+        "type": "message_failed",
+        "message": "send failed",
+        "recoverable": true
+      }
+    }
+  }
+]

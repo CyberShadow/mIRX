@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{Event, RoomSummary, TimelineText};
+use mmatrix_core::{
+    Event, RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageSendState, RoomSummary,
+};
 use mmatrix_testkit::{LaunchOptions, MmatrixApp};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::Memory::{FILE_MAP_READ, OpenFileMappingW};
@@ -76,6 +78,27 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
     }
 }
 
+fn sent_message_activity(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event_id.to_owned()),
+            transaction_id: None,
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    }
+}
+
 fn base_events() -> Vec<Event> {
     vec![
         Event::Started,
@@ -83,22 +106,20 @@ fn base_events() -> Vec<Event> {
             room_summary("!beta:example", "Beta", true),
             room_summary("!alpha:example", "Alpha", false),
         ]),
-        Event::TimelineText(TimelineText {
-            room_id: "!alpha:example".to_owned(),
-            event_id: "$alpha-first".to_owned(),
-            transaction_id: None,
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            body: "alpha first".to_owned(),
-        }),
-        Event::TimelineText(TimelineText {
-            room_id: "!beta:example".to_owned(),
-            event_id: "$beta-first".to_owned(),
-            transaction_id: None,
-            sender: "@bob:example".to_owned(),
-            timestamp_ms: 1_700_000_060_000,
-            body: "beta first".to_owned(),
-        }),
+        Event::RoomActivity(sent_message_activity(
+            "!alpha:example",
+            "$alpha-first",
+            "@alice:example",
+            1_700_000_000_000,
+            "alpha first",
+        )),
+        Event::RoomActivity(sent_message_activity(
+            "!beta:example",
+            "$beta-first",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta first",
+        )),
     ]
 }
 

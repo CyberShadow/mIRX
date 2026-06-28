@@ -129,7 +129,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 10,
+        protocol_version: 11,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -610,7 +610,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":10,
+            "protocol_version":11,
             "app_version":"0.1.0",
             "unexpected":true
         }"#

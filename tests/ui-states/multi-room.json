@@ -26,48 +26,68 @@
     ]
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!lobby:example",
-      "event_id": "$lobby-1",
-      "transaction_id": null,
-      "sender": "@alice:example",
+      "activity_id": "event:$lobby-1",
       "timestamp_ms": 1700000000000,
-      "body": "welcome to the lobby"
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "welcome to the lobby",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!lobby:example",
-      "event_id": "$lobby-2",
-      "transaction_id": null,
-      "sender": "@bob:example",
+      "activity_id": "event:$lobby-2",
       "timestamp_ms": 1700000060000,
-      "body": "build is green"
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-2",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "body": "build is green",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "RoomState": {
+    "RoomActivity": {
       "room_id": "!ops:example",
-      "sender": "@alice:example",
+      "activity_id": "state:$ops-topic-1",
       "timestamp_ms": 1700000000000,
-      "event_kind": "Topic",
-      "state_key": "",
-      "content": {
-        "Topic": {
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$ops-topic-1",
+        "sender": "@alice:example",
+        "state_key": "",
+        "content": {
+          "type": "topic",
           "topic": "incident review"
         }
       }
     }
   },
   {
-    "RoomState": {
+    "RoomActivity": {
       "room_id": "!ops:example",
-      "sender": "@carol:example",
+      "activity_id": "state:$ops-member-1",
       "timestamp_ms": 1700000060000,
-      "event_kind": "Member",
-      "state_key": "@carol:example",
-      "content": {
-        "Member": {
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$ops-member-1",
+        "sender": "@carol:example",
+        "state_key": "@carol:example",
+        "content": {
+          "type": "member",
           "membership": "join",
           "displayname": "carol"
         }
@@ -75,43 +95,71 @@
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!ops:example",
-      "event_id": "$ops-1",
-      "transaction_id": null,
-      "sender": "@alice:example",
+      "activity_id": "event:$ops-1",
       "timestamp_ms": 1700000120000,
-      "body": "ops topic: incident review"
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "ops topic: incident review",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!ops:example",
-      "event_id": "$ops-2",
-      "transaction_id": null,
-      "sender": "@bob:example",
+      "activity_id": "event:$ops-2",
       "timestamp_ms": 1700000180000,
-      "body": "encryption enabled for ops"
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-2",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "body": "encryption enabled for ops",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!ops:example",
-      "event_id": "$ops-3",
-      "transaction_id": null,
-      "sender": "@carol:example",
+      "activity_id": "event:$ops-3",
       "timestamp_ms": 1700000240000,
-      "body": "deploy window opens at 18:00 UTC"
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-3",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "body": "deploy window opens at 18:00 UTC",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!random:example",
-      "event_id": "$random-1",
-      "transaction_id": null,
-      "sender": "@dave:example",
+      "activity_id": "event:$random-1",
       "timestamp_ms": 1700000300000,
-      "body": "random: lunch votes are in"
+      "kind": {
+        "type": "message",
+        "event_id": "$random-1",
+        "transaction_id": null,
+        "sender": "@dave:example",
+        "body": "random: lunch votes are in",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   }
 ]

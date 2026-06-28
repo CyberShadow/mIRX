@@ -56,6 +56,8 @@ const COMMAND_ID_SELECT_NAVIGATION_PATH: u32 = 20;
 #[cfg(windows)]
 const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
 #[cfg(windows)]
+const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -628,6 +630,10 @@ impl MmatrixApp {
         self.inner.load_events_from_file(path.as_ref())
     }
 
+    pub fn append_synthetic_events(&self, events_json: &str) -> Result<(), TestkitError> {
+        self.inner.append_synthetic_events(events_json)
+    }
+
     pub fn wait_for_room_activity_contains(
         &self,
         room_id: Option<&str>,
@@ -1043,6 +1049,15 @@ mod imp {
         }
 
         pub(crate) fn load_events_from_file(&self, _path: &Path) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn append_synthetic_events(
+            &self,
+            _events_json: &str,
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1474,6 +1489,25 @@ mod imp {
         pub(crate) fn load_events_from_file(&self, path: &Path) -> Result<(), TestkitError> {
             let events_json = fs::read_to_string(path)?;
             self.load_events(&events_json)
+        }
+
+        pub(crate) fn append_synthetic_events(
+            &self,
+            events_json: &str,
+        ) -> Result<(), TestkitError> {
+            let events = serde_json::from_str(events_json)?;
+            let response: LoadEventsResponse = self.send_command(
+                COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
+                LoadEventsArgs { events },
+            )?;
+            if response.loaded {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(format!(
+                    "APPEND_SYNTHETIC_EVENTS reported loaded=false after {} room(s) and {} room activity event(s)",
+                    response.rooms, response.timeline_events
+                )))
+            }
         }
 
         pub(crate) fn wait_for_room_activity_contains(

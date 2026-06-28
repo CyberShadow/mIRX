@@ -8,8 +8,10 @@ use std::ptr::copy_nonoverlapping;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
-    Event, OutgoingTextFailed, OutgoingTextQueued, RoomSummary, SpaceChildSummary,
-    StoredSession as CoreStoredSession, TimelineText,
+    Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, SpaceChildSummary,
+    StoredSession as CoreStoredSession,
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
@@ -206,24 +208,24 @@ fn base_events() -> Vec<Event> {
             room_summary("!beta:example", "Beta", true),
             room_summary("!alpha:example", "Alpha", false),
         ]),
-        Event::TimelineText(timeline_text(
+        text_event(
             "!alpha:example",
             "@alice:example",
             1_700_000_000_000,
             "alpha first",
-        )),
-        Event::TimelineText(timeline_text(
+        ),
+        text_event(
             "!beta:example",
             "@bob:example",
             1_700_000_060_000,
             "beta first",
-        )),
-        Event::TimelineText(timeline_text(
+        ),
+        text_event(
             "!beta:example",
             "@bob:example",
             1_700_000_120_000,
             "beta second",
-        )),
+        ),
     ]
 }
 
@@ -234,36 +236,112 @@ fn replacement_events() -> Vec<Event> {
             room_summary("!gamma:example", "Gamma", false),
             room_summary("!delta:example", "Delta", false),
         ]),
-        Event::TimelineText(timeline_text(
+        text_event(
             "!gamma:example",
             "@alice:example",
             1_700_000_000_000,
             "gamma only",
-        )),
-        Event::TimelineText(timeline_text(
+        ),
+        text_event(
             "!delta:example",
             "@bob:example",
             1_700_000_060_000,
             "delta first",
-        )),
-        Event::TimelineText(timeline_text(
+        ),
+        text_event(
             "!delta:example",
             "@bob:example",
             1_700_000_120_000,
             "delta second",
-        )),
+        ),
     ]
 }
 
-fn timeline_text(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> TimelineText {
-    TimelineText {
+fn generated_event_id(room_id: &str, body: &str) -> String {
+    format!("${room_id}:{}", body.replace(' ', "_"))
+}
+
+fn text_event(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> Event {
+    Event::RoomActivity(CoreRoomActivity {
         room_id: room_id.to_owned(),
-        event_id: format!("${room_id}:{}", body.replace(' ', "_")),
-        transaction_id: None,
-        sender: sender.to_owned(),
+        activity_id: format!("event:{}", generated_event_id(room_id, body)),
         timestamp_ms,
-        body: body.to_owned(),
-    }
+        kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
+            event_id: Some(generated_event_id(room_id, body)),
+            transaction_id: None,
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: CoreRoomMessageSendState::Sent,
+        }),
+    })
+}
+
+fn text_event_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> Event {
+    Event::RoomActivity(CoreRoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
+            event_id: Some(event_id.to_owned()),
+            transaction_id: None,
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: CoreRoomMessageSendState::Sent,
+        }),
+    })
+}
+
+fn pending_message_event(
+    room_id: &str,
+    transaction_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> Event {
+    Event::RoomActivity(CoreRoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("txn:{transaction_id}"),
+        timestamp_ms,
+        kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
+            event_id: None,
+            transaction_id: Some(transaction_id.to_owned()),
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: CoreRoomMessageSendState::Pending,
+        }),
+    })
+}
+
+fn message_sent_update_event(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
+    Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        transaction_id: transaction_id.to_owned(),
+        kind: RoomActivityUpdateKind::MessageSent {
+            event_id: event_id.to_owned(),
+        },
+    })
+}
+
+fn message_failed_update_event(
+    room_id: &str,
+    transaction_id: &str,
+    message: &str,
+    recoverable: bool,
+) -> Event {
+    Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        transaction_id: transaction_id.to_owned(),
+        kind: RoomActivityUpdateKind::MessageFailed {
+            message: message.to_owned(),
+            recoverable,
+        },
+    })
 }
 
 fn timeline_line(
@@ -274,9 +352,9 @@ fn timeline_line(
 ) -> RoomMessageActivityLine {
     RoomMessageActivityLine {
         room_id: room_id.to_owned(),
-        activity_id: format!("event:${room_id}:{}", body.replace(' ', "_")),
+        activity_id: format!("event:{}", generated_event_id(room_id, body)),
         timestamp_ms,
-        event_id: Some(format!("${room_id}:{}", body.replace(' ', "_"))),
+        event_id: Some(generated_event_id(room_id, body)),
         transaction_id: None,
         sender: sender.to_owned(),
         body: body.to_owned(),
@@ -306,10 +384,10 @@ fn timeline_line_with_event_id(
 fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
-        activity_id: format!("event:${room_id}:{}", body.replace(' ', "_")),
+        activity_id: format!("event:{}", generated_event_id(room_id, body)),
         timestamp_ms,
         kind: RoomActivityKind::Message(RoomMessageActivity {
-            event_id: Some(format!("${room_id}:{}", body.replace(' ', "_"))),
+            event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
             sender: sender.to_owned(),
             body: body.to_owned(),
@@ -339,13 +417,66 @@ fn text_entry_with_event_id(
     }
 }
 
-fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> RoomActivity {
+fn pending_entry(
+    room_id: &str,
+    transaction_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
-        activity_id: format!("state:${room_id}:topic:{}", topic.replace(' ', "_")),
+        activity_id: format!("txn:{transaction_id}"),
+        timestamp_ms,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: None,
+            transaction_id: Some(transaction_id.to_owned()),
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: RoomMessageSendState::Pending,
+        }),
+    }
+}
+
+fn failed_entry(
+    room_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    transaction_id: &str,
+    body: &str,
+    message: &str,
+    recoverable: bool,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("txn:{transaction_id}"),
+        timestamp_ms,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: None,
+            transaction_id: Some(transaction_id.to_owned()),
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            send_state: RoomMessageSendState::Failed {
+                message: message.to_owned(),
+                recoverable,
+            },
+        }),
+    }
+}
+
+fn topic_entry_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    topic: &str,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("state:{event_id}"),
         timestamp_ms,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
-            event_id: format!("${room_id}:topic:{}", topic.replace(' ', "_")),
+            event_id: event_id.to_owned(),
             sender: sender.to_owned(),
             state_key: String::new(),
             content: RoomStateNoticeContent::Topic {
@@ -355,8 +486,9 @@ fn topic_entry(room_id: &str, sender: &str, timestamp_ms: u64, topic: &str) -> R
     }
 }
 
-fn member_entry(
+fn member_entry_with_event_id(
     room_id: &str,
+    event_id: &str,
     sender: &str,
     timestamp_ms: u64,
     state_key: &str,
@@ -365,10 +497,10 @@ fn member_entry(
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
-        activity_id: format!("state:${room_id}:{state_key}:{membership}"),
+        activity_id: format!("state:{event_id}"),
         timestamp_ms,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
-            event_id: format!("${room_id}:{state_key}:{membership}"),
+            event_id: event_id.to_owned(),
             sender: sender.to_owned(),
             state_key: state_key.to_owned(),
             content: RoomStateNoticeContent::Member {
@@ -651,19 +783,14 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
-        Event::OutgoingTextQueued(OutgoingTextQueued {
-            room_id: "!ops:example".to_owned(),
-            transaction_id: "txn-1".to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            body: "hello".to_owned(),
-        }),
-        Event::OutgoingTextFailed(OutgoingTextFailed {
-            room_id: "!ops:example".to_owned(),
-            transaction_id: "txn-1".to_owned(),
-            message: "send failed".to_owned(),
-            recoverable: true,
-        }),
+        pending_message_event(
+            "!ops:example",
+            "txn-1",
+            "@alice:example",
+            1_700_000_000_000,
+            "hello",
+        ),
+        message_failed_update_event("!ops:example", "txn-1", "send failed", true),
         Event::Error(mmatrix_core::CoreErrorEvent {
             operation: mmatrix_core::Operation::SendText,
             message: "send failed".to_owned(),
@@ -679,21 +806,15 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
 
     assert_eq!(
         app.room_activity(Some("!ops:example"))?,
-        vec![RoomActivity {
-            room_id: "!ops:example".to_owned(),
-            activity_id: "txn:txn-1".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            kind: RoomActivityKind::Message(RoomMessageActivity {
-                event_id: None,
-                transaction_id: Some("txn-1".to_owned()),
-                sender: "@alice:example".to_owned(),
-                body: "hello".to_owned(),
-                send_state: RoomMessageSendState::Failed {
-                    message: "send failed".to_owned(),
-                    recoverable: true,
-                },
-            }),
-        }]
+        vec![failed_entry(
+            "!ops:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "txn-1",
+            "hello",
+            "send failed",
+            true,
+        )]
     );
 
     let ui_state = app.dump_ui_state()?;
@@ -703,6 +824,65 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
     ));
 
     let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_reconciles_remote_echo_after_message_sent_update()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
+        pending_message_event(
+            "!ops:example",
+            "txn-1",
+            "@alice:example",
+            1_700_000_000_000,
+            "hello",
+        ),
+        text_event_with_event_id(
+            "!ops:example",
+            "$event:example.org",
+            "@alice:example",
+            1_700_000_000_100,
+            "hello",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![message_sent_update_event(
+        "!ops:example",
+        "txn-1",
+        "$event:example.org",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![RoomActivity {
+            room_id: "!ops:example".to_owned(),
+            activity_id: "event:$event:example.org".to_owned(),
+            timestamp_ms: 1_700_000_000_100,
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                body: "hello".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
+        }]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
@@ -724,7 +904,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 9);
+    assert_eq!(version.protocol_version, 11);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -869,12 +1049,12 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
             },
             room_summary("!room:example", "Room", true),
         ]),
-        Event::TimelineText(timeline_text(
+        text_event(
             "!room:example",
             "@alice:example",
             1_700_000_000_000,
             "hello",
-        )),
+        ),
     ])?;
 
     let args = [
@@ -1103,14 +1283,16 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     assert_eq!(
         app.room_activity(Some("!ops:example"))?,
         vec![
-            topic_entry(
+            topic_entry_with_event_id(
                 "!ops:example",
+                "$ops-topic-1",
                 "@alice:example",
                 1_700_000_000_000,
                 "incident review",
             ),
-            member_entry(
+            member_entry_with_event_id(
                 "!ops:example",
+                "$ops-member-1",
                 "@carol:example",
                 1_700_000_060_000,
                 "@carol:example",
@@ -1173,12 +1355,12 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     let mut events = base_events();
     for index in 0..80 {
         let body = format!("scroll row {index:02}");
-        events.push(Event::TimelineText(timeline_text(
+        events.push(text_event(
             "!beta:example",
             "@bob:example",
             1_700_001_000_000 + index * 60_000,
             &body,
-        )));
+        ));
     }
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -1283,12 +1465,12 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
-    events.push(Event::TimelineText(timeline_text(
+    events.push(text_event(
         "!beta:example",
         "@bob:example",
         1_700_001_000_000,
         "multiline row 00 line a\nmultiline row 00 line b",
-    )));
+    ));
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
@@ -1332,12 +1514,12 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
-    events.push(Event::TimelineText(timeline_text(
+    events.push(text_event(
         "!beta:example",
         "@bob:example",
         1_700_001_000_000,
         "trailing blank line a\n",
-    )));
+    ));
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
@@ -1757,6 +1939,91 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     assert_navigation_not_contains(&ui_state.navigation, "waiting for confirmation");
     assert_navigation_not_contains(&ui_state.navigation, "flow-verify-123");
     assert_navigation_not_contains(&ui_state.navigation, "message send failed");
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
+    let fixture_path = fixture_state_path("mixed-room-activity.json");
+    attached.load_events_from_file(&fixture_path)?;
+    attached.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        attached.list_rooms()?,
+        vec![listed_room("!mixed:example", "Mixed", true)]
+    );
+    assert_eq!(
+        attached.dump_model()?.selected_room.as_deref(),
+        Some("!mixed:example")
+    );
+    assert_eq!(
+        attached.room_activity(None)?,
+        vec![
+            text_entry_with_event_id(
+                "!mixed:example",
+                "$mixed-1",
+                "@alice:example",
+                1_700_000_000_000,
+                "synced hello",
+            ),
+            topic_entry_with_event_id(
+                "!mixed:example",
+                "$mixed-topic-1",
+                "@alice:example",
+                1_700_000_060_000,
+                "mixed room topic",
+            ),
+            member_entry_with_event_id(
+                "!mixed:example",
+                "$mixed-join-1",
+                "@bob:example",
+                1_700_000_120_000,
+                "@bob:example",
+                "join",
+                Some("bob"),
+            ),
+            member_entry_with_event_id(
+                "!mixed:example",
+                "$mixed-leave-1",
+                "@carol:example",
+                1_700_000_180_000,
+                "@carol:example",
+                "leave",
+                None,
+            ),
+            pending_entry(
+                "!mixed:example",
+                "txn-pending-1",
+                "@alice:example",
+                1_700_000_240_000,
+                "pending local echo",
+            ),
+            failed_entry(
+                "!mixed:example",
+                "@alice:example",
+                1_700_000_300_000,
+                "txn-failed-1",
+                "failed local echo",
+                "send failed",
+                true,
+            ),
+        ]
+    );
 
     let _ = fs::remove_file(&state_path);
     Ok(())
@@ -2277,12 +2544,12 @@ fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
             room_summary("!shared-one:example", "Shared", false),
             room_summary("!shared-two:example", "Shared", false),
         ]),
-        Event::TimelineText(timeline_text(
+        text_event(
             "!beta:example",
             "@bob:example",
             1_700_000_060_000,
             "beta first",
-        )),
+        ),
     ];
 
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
@@ -2381,6 +2648,81 @@ fn automation_driver_slash_clear_clears_only_active_room_timeline()
             .contains("cleared window: !beta:example")
     );
     assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
+        text_event_with_event_id(
+            "!ops:example",
+            "$ops-sent-1",
+            "@alice:example",
+            1_700_000_000_000,
+            "already sent",
+        ),
+        pending_message_event(
+            "!ops:example",
+            "txn-1",
+            "@alice:example",
+            1_700_000_060_000,
+            "hello",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!ops:example")?;
+
+    app.set_compose_text("/clear")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![pending_entry(
+            "!ops:example",
+            "txn-1",
+            "@alice:example",
+            1_700_000_060_000,
+            "hello",
+        )]
+    );
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![message_sent_update_event(
+        "!ops:example",
+        "txn-1",
+        "$event:example.org",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![RoomActivity {
+            room_id: "!ops:example".to_owned(),
+            activity_id: "event:$event:example.org".to_owned(),
+            timestamp_ms: 1_700_000_060_000,
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                body: "hello".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
+        }]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

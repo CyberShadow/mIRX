@@ -89,7 +89,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 );
             }
             Event::SyncedRooms(_) => saw_rooms = true,
-            Event::TimelineText(_) | Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
             Event::Error(err) => panic!(
                 "live login failed during {:?}: {}",
                 err.operation, err.message
@@ -132,7 +132,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                     "expected non-empty session update access token"
                 );
             }
-            Event::TimelineText(_) | Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
             Event::Error(err) => panic!(
                 "live start sync failed during {:?}: {}",
                 err.operation, err.message
@@ -175,7 +175,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                     "expected non-empty session update access token"
                 );
             }
-            Event::TimelineText(_) | Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
             other => panic!("unexpected duplicate start sync event: {other:?}"),
         }
     }
@@ -230,7 +230,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                     "expected non-empty session update access token"
                 );
             }
-            Event::TimelineText(_) | Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
             Event::Error(err) => panic!(
                 "live post-login command failed during {:?}: {}",
                 err.operation, err.message
@@ -271,7 +271,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                     "expected non-empty session update access token"
                 );
             }
-            Event::TimelineText(_) | Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) => {}
             Event::Error(err) => {
                 panic!(
                     "live shutdown failed during {:?}: {}",

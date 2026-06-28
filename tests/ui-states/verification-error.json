@@ -19,43 +19,71 @@
     ]
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!support:example",
-      "event_id": "$support-1",
-      "transaction_id": null,
-      "sender": "@support:example",
+      "activity_id": "event:$support-1",
       "timestamp_ms": 1700000000000,
-      "body": "support queue is empty"
+      "kind": {
+        "type": "message",
+        "event_id": "$support-1",
+        "transaction_id": null,
+        "sender": "@support:example",
+        "body": "support queue is empty",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!verify:example",
-      "event_id": "$verify-1",
-      "transaction_id": null,
-      "sender": "@alice:example",
+      "activity_id": "event:$verify-1",
       "timestamp_ms": 1700000060000,
-      "body": "verification requested by @alice:example"
+      "kind": {
+        "type": "message",
+        "event_id": "$verify-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "verification requested by @alice:example",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!verify:example",
-      "event_id": "$verify-2",
-      "transaction_id": null,
-      "sender": "@alice:example",
+      "activity_id": "event:$verify-2",
       "timestamp_ms": 1700000120000,
-      "body": "sas emoji ready"
+      "kind": {
+        "type": "message",
+        "event_id": "$verify-2",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "sas emoji ready",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!verify:example",
-      "event_id": "$verify-3",
-      "transaction_id": null,
-      "sender": "@alice:example",
+      "activity_id": "event:$verify-3",
       "timestamp_ms": 1700000180000,
-      "body": "waiting for confirmation"
+      "kind": {
+        "type": "message",
+        "event_id": "$verify-3",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "waiting for confirmation",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {

@@ -69,33 +69,54 @@
     ]
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!ops:example",
-      "event_id": "$ops-space-1",
-      "transaction_id": null,
-      "sender": "@alice:example",
+      "activity_id": "event:$ops-space-1",
       "timestamp_ms": 1700000000000,
-      "body": "ops workspace is ready"
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-space-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "body": "ops workspace is ready",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!shared:example",
-      "event_id": "$shared-space-1",
-      "transaction_id": null,
-      "sender": "@bob:example",
+      "activity_id": "event:$shared-space-1",
       "timestamp_ms": 1700000060000,
-      "body": "shared room has updates"
+      "kind": {
+        "type": "message",
+        "event_id": "$shared-space-1",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "body": "shared room has updates",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   },
   {
-    "TimelineText": {
+    "RoomActivity": {
       "room_id": "!random:example",
-      "event_id": "$random-space-1",
-      "transaction_id": null,
-      "sender": "@carol:example",
+      "activity_id": "event:$random-space-1",
       "timestamp_ms": 1700000120000,
-      "body": "random room has updates"
+      "kind": {
+        "type": "message",
+        "event_id": "$random-space-1",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "body": "random room has updates",
+        "send_state": {
+          "state": "sent"
+        }
+      }
     }
   }
 ]

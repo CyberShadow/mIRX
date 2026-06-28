@@ -17,11 +17,9 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
-    OutgoingTextFailed, OutgoingTextQueued, OutgoingTextSent, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessageSendState, RoomStateContent, RoomStateEntry, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, SendTextRequest, StoredSession, TimelineText,
-    VerificationRequest, start,
+    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeContent,
+    RoomSummary, SendTextRequest, StoredSession, VerificationRequest, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -192,7 +190,7 @@ struct UiModel {
     rooms: Vec<RoomSummary>,
     selected_room: Option<String>,
     room_views: BTreeMap<String, RoomViewModel>,
-    last_timeline: Option<LastTimelineText>,
+    last_activity: Option<LastMessageActivity>,
     last_verification: Option<VerificationRequest>,
     last_error: Option<CoreErrorEvent>,
 }
@@ -204,7 +202,7 @@ struct RoomViewModel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct LastTimelineText {
+struct LastMessageActivity {
     room_id: String,
     event_id: Option<String>,
     transaction_id: Option<String>,
@@ -430,11 +428,11 @@ impl RoomViewModel {
     }
 }
 
-fn last_timeline_from_activity(activity: &RoomActivity) -> Option<LastTimelineText> {
+fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessageActivity> {
     let RoomActivityKind::Message(message) = &activity.kind else {
         return None;
     };
-    Some(LastTimelineText {
+    Some(LastMessageActivity {
         room_id: activity.room_id.clone(),
         event_id: message.event_id.clone(),
         transaction_id: message.transaction_id.clone(),
@@ -445,114 +443,30 @@ fn last_timeline_from_activity(activity: &RoomActivity) -> Option<LastTimelineTe
     })
 }
 
-fn update_last_timeline_from_activity_update(
-    last_timeline: &mut LastTimelineText,
+fn update_last_activity_from_room_activity_update(
+    last_activity: &mut LastMessageActivity,
     update: &RoomActivityUpdate,
 ) {
-    if last_timeline.room_id != update.room_id
-        || last_timeline.transaction_id.as_deref() != Some(update.transaction_id.as_str())
+    if last_activity.room_id != update.room_id
+        || last_activity.transaction_id.as_deref() != Some(update.transaction_id.as_str())
     {
         return;
     }
 
     match &update.kind {
         RoomActivityUpdateKind::MessageSent { event_id } => {
-            last_timeline.event_id = Some(event_id.clone());
-            last_timeline.send_state = RoomMessageSendState::Sent;
+            last_activity.event_id = Some(event_id.clone());
+            last_activity.send_state = RoomMessageSendState::Sent;
         }
         RoomActivityUpdateKind::MessageFailed {
             message,
             recoverable,
         } => {
-            last_timeline.send_state = RoomMessageSendState::Failed {
+            last_activity.send_state = RoomMessageSendState::Failed {
                 message: message.clone(),
                 recoverable: *recoverable,
             };
         }
-    }
-}
-
-fn room_activity_from_timeline_text(timeline: TimelineText) -> RoomActivity {
-    let activity_id = format!("event:{}", timeline.event_id);
-    RoomActivity {
-        room_id: timeline.room_id,
-        activity_id,
-        timestamp_ms: timeline.timestamp_ms,
-        kind: RoomActivityKind::Message(RoomMessageActivity {
-            event_id: Some(timeline.event_id),
-            transaction_id: timeline.transaction_id,
-            sender: timeline.sender,
-            body: timeline.body,
-            send_state: RoomMessageSendState::Sent,
-        }),
-    }
-}
-
-fn room_activity_from_outgoing_queued(queued: OutgoingTextQueued) -> RoomActivity {
-    RoomActivity {
-        room_id: queued.room_id,
-        activity_id: format!("txn:{}", queued.transaction_id),
-        timestamp_ms: queued.timestamp_ms,
-        kind: RoomActivityKind::Message(RoomMessageActivity {
-            event_id: None,
-            transaction_id: Some(queued.transaction_id),
-            sender: queued.sender,
-            body: queued.body,
-            send_state: RoomMessageSendState::Pending,
-        }),
-    }
-}
-
-fn room_activity_update_from_outgoing_sent(sent: OutgoingTextSent) -> RoomActivityUpdate {
-    RoomActivityUpdate {
-        room_id: sent.room_id,
-        transaction_id: sent.transaction_id,
-        kind: RoomActivityUpdateKind::MessageSent {
-            event_id: sent.event_id,
-        },
-    }
-}
-
-fn room_activity_update_from_outgoing_failed(failed: OutgoingTextFailed) -> RoomActivityUpdate {
-    RoomActivityUpdate {
-        room_id: failed.room_id,
-        transaction_id: failed.transaction_id,
-        kind: RoomActivityUpdateKind::MessageFailed {
-            message: failed.message,
-            recoverable: failed.recoverable,
-        },
-    }
-}
-
-fn room_activity_from_room_state(room_state: RoomStateEntry) -> RoomActivity {
-    let event_id = match &room_state.content {
-        RoomStateContent::Topic(topic) => format!(
-            "legacy-state:topic:{}:{}:{}:{}",
-            room_state.timestamp_ms, room_state.sender, room_state.state_key, topic.topic
-        ),
-        RoomStateContent::Member(member) => format!(
-            "legacy-state:member:{}:{}:{}:{}",
-            room_state.timestamp_ms, room_state.sender, room_state.state_key, member.membership
-        ),
-    };
-    RoomActivity {
-        room_id: room_state.room_id,
-        activity_id: format!("state:{event_id}"),
-        timestamp_ms: room_state.timestamp_ms,
-        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
-            event_id,
-            sender: room_state.sender,
-            state_key: room_state.state_key,
-            content: match room_state.content {
-                RoomStateContent::Topic(topic) => {
-                    RoomStateNoticeContent::Topic { topic: topic.topic }
-                }
-                RoomStateContent::Member(member) => RoomStateNoticeContent::Member {
-                    membership: member.membership,
-                    displayname: member.displayname,
-                },
-            },
-        }),
     }
 }
 
@@ -578,15 +492,15 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
     }
     state.model.status = format!("timeline update from {}", activity.room_id);
     let room_id = activity.room_id.clone();
-    let last_timeline = last_timeline_from_activity(&activity);
+    let last_activity = last_activity_from_room_activity(&activity);
     state
         .model
         .room_views
         .entry(room_id)
         .or_default()
         .apply_activity(activity);
-    if let Some(last_timeline) = last_timeline {
-        state.model.last_timeline = Some(last_timeline);
+    if let Some(last_activity) = last_activity {
+        state.model.last_activity = Some(last_activity);
     }
 }
 
@@ -613,8 +527,8 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             .or_default()
             .mark_message_failed(update.clone()),
     }
-    if let Some(last_timeline) = state.model.last_timeline.as_mut() {
-        update_last_timeline_from_activity_update(last_timeline, &update);
+    if let Some(last_activity) = state.model.last_activity.as_mut() {
+        update_last_activity_from_room_activity_update(last_activity, &update);
     }
 }
 
@@ -2429,24 +2343,6 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
-        Event::TimelineText(timeline) => {
-            apply_room_activity_event(state, room_activity_from_timeline_text(timeline));
-        }
-        Event::OutgoingTextQueued(queued) => {
-            apply_room_activity_event(state, room_activity_from_outgoing_queued(queued));
-        }
-        Event::OutgoingTextSent(sent) => {
-            apply_room_activity_update_event(state, room_activity_update_from_outgoing_sent(sent));
-        }
-        Event::OutgoingTextFailed(failed) => {
-            apply_room_activity_update_event(
-                state,
-                room_activity_update_from_outgoing_failed(failed),
-            );
-        }
-        Event::RoomState(room_state) => {
-            apply_room_activity_event(state, room_activity_from_room_state(room_state));
-        }
         Event::VerificationRequest(request) => {
             state.model.status = format!("verification request from {}", request.user_id);
             state.model.last_verification = Some(request);
@@ -2460,7 +2356,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.rooms.clear();
             state.model.selected_room = None;
             state.model.room_views.clear();
-            state.model.last_timeline = None;
+            state.model.last_activity = None;
             state.model.last_verification = None;
             state.model.last_error = None;
             state.room_activity.clear();
@@ -3637,6 +3533,26 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 },
             )
         }
+        ParsedCommand::AppendSyntheticEvents { id, args } => {
+            apply_events_and_refresh(hwnd, args.events).map_err(|message| {
+                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+            })?;
+            let rooms = state_ref(hwnd).model.rooms.len();
+            let timeline_events = state_ref(hwnd)
+                .model
+                .room_views
+                .values()
+                .map(|room_view| room_view.activities.len())
+                .sum();
+            serialize_success_json(
+                &id,
+                LoadEventsResponse {
+                    loaded: true,
+                    rooms,
+                    timeline_events,
+                },
+            )
+        }
         ParsedCommand::Login { id, args } => {
             submit_login(
                 state_mut(hwnd),
@@ -3703,6 +3619,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SetComposeText { id, .. }
         | ParsedCommand::SendComposeKey { id, .. }
         | ParsedCommand::SelectNavigationPath { id, .. } => id,
+        ParsedCommand::AppendSyntheticEvents { id, .. } => id,
     }
 }
 
@@ -4319,29 +4236,41 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 space_children: Vec::new(),
             },
         ]),
-        Event::TimelineText(TimelineText {
+        Event::RoomActivity(RoomActivity {
             room_id: "!one:example".to_owned(),
-            event_id: "$one-first".to_owned(),
-            transaction_id: None,
-            sender: "@alice:example".to_owned(),
+            activity_id: "event:$one-first".to_owned(),
             timestamp_ms: 1_700_000_000_000,
-            body: "first line".to_owned(),
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$one-first".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                body: "first line".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
         }),
-        Event::TimelineText(TimelineText {
+        Event::RoomActivity(RoomActivity {
             room_id: "!one:example".to_owned(),
-            event_id: "$one-second".to_owned(),
-            transaction_id: None,
-            sender: "@alice:example".to_owned(),
+            activity_id: "event:$one-second".to_owned(),
             timestamp_ms: 1_700_000_060_000,
-            body: "second line".to_owned(),
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$one-second".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                body: "second line".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
         }),
-        Event::TimelineText(TimelineText {
+        Event::RoomActivity(RoomActivity {
             room_id: "!two:example".to_owned(),
-            event_id: "$two-third".to_owned(),
-            transaction_id: None,
-            sender: "@bob:example".to_owned(),
+            activity_id: "event:$two-third".to_owned(),
             timestamp_ms: 1_700_000_120_000,
-            body: "third line".to_owned(),
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$two-third".to_owned()),
+                transaction_id: None,
+                sender: "@bob:example".to_owned(),
+                body: "third line".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
         }),
     ];
     let load_response = send_automation_request(
@@ -5000,9 +4929,9 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
         lifecycle_state: model.lifecycle_state,
         rooms: model.rooms.iter().map(dump_room_from_summary).collect(),
         last_activity: model
-            .last_timeline
+            .last_activity
             .as_ref()
-            .map(dump_room_message_activity_line_from_last_timeline),
+            .map(dump_room_message_activity_line_from_last_activity),
         last_verification: model
             .last_verification
             .as_ref()
@@ -5016,28 +4945,28 @@ fn dump_room_activity_entry_from_room_entry(activity: &RoomActivity) -> DumpRoom
     dump_room_activity_from_activity(activity)
 }
 
-fn dump_room_message_activity_line_from_last_timeline(
-    timeline: &LastTimelineText,
+fn dump_room_message_activity_line_from_last_activity(
+    activity: &LastMessageActivity,
 ) -> DumpRoomMessageActivityLine {
     DumpRoomMessageActivityLine {
-        room_id: timeline.room_id.clone(),
-        activity_id: timeline
+        room_id: activity.room_id.clone(),
+        activity_id: activity
             .event_id
             .as_ref()
             .map(|event_id| format!("event:{event_id}"))
             .or_else(|| {
-                timeline
+                activity
                     .transaction_id
                     .as_ref()
                     .map(|transaction_id| format!("txn:{transaction_id}"))
             })
-            .expect("last timeline message must have an event id or transaction id"),
-        timestamp_ms: timeline.timestamp_ms,
-        event_id: timeline.event_id.clone(),
-        transaction_id: timeline.transaction_id.clone(),
-        sender: timeline.sender.clone(),
-        body: timeline.body.clone(),
-        send_state: dump_room_message_send_state_from_core(&timeline.send_state),
+            .expect("last activity message must have an event id or transaction id"),
+        timestamp_ms: activity.timestamp_ms,
+        event_id: activity.event_id.clone(),
+        transaction_id: activity.transaction_id.clone(),
+        sender: activity.sender.clone(),
+        body: activity.body.clone(),
+        send_state: dump_room_message_send_state_from_core(&activity.send_state),
     }
 }
 
@@ -5209,23 +5138,6 @@ mod tests {
         ))
     }
 
-    fn legacy_timeline(
-        room_id: &str,
-        event_id: &str,
-        transaction_id: Option<&str>,
-        body: &str,
-        timestamp_ms: u64,
-    ) -> Event {
-        Event::TimelineText(TimelineText {
-            room_id: room_id.to_owned(),
-            event_id: event_id.to_owned(),
-            transaction_id: transaction_id.map(str::to_owned),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms,
-            body: body.to_owned(),
-        })
-    }
-
     fn pending_message_activity(room_id: &str, transaction_id: &str, body: &str) -> RoomActivity {
         RoomActivity {
             room_id: room_id.to_owned(),
@@ -5245,16 +5157,6 @@ mod tests {
         Event::RoomActivity(pending_message_activity(room_id, transaction_id, body))
     }
 
-    fn legacy_outgoing_queued(room_id: &str, transaction_id: &str, body: &str) -> Event {
-        Event::OutgoingTextQueued(OutgoingTextQueued {
-            room_id: room_id.to_owned(),
-            transaction_id: transaction_id.to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_000_000,
-            body: body.to_owned(),
-        })
-    }
-
     fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
         Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id: room_id.to_owned(),
@@ -5262,14 +5164,6 @@ mod tests {
             kind: RoomActivityUpdateKind::MessageSent {
                 event_id: event_id.to_owned(),
             },
-        })
-    }
-
-    fn legacy_outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
-        Event::OutgoingTextSent(OutgoingTextSent {
-            room_id: room_id.to_owned(),
-            transaction_id: transaction_id.to_owned(),
-            event_id: event_id.to_owned(),
         })
     }
 
@@ -5281,20 +5175,6 @@ mod tests {
                 message: message.to_owned(),
                 recoverable: true,
             },
-        })
-    }
-
-    fn legacy_outgoing_failed(
-        room_id: &str,
-        transaction_id: &str,
-        message: &str,
-        recoverable: bool,
-    ) -> Event {
-        Event::OutgoingTextFailed(OutgoingTextFailed {
-            room_id: room_id.to_owned(),
-            transaction_id: transaction_id.to_owned(),
-            message: message.to_owned(),
-            recoverable,
         })
     }
 
@@ -5330,30 +5210,6 @@ mod tests {
         ))
     }
 
-    fn failed_message_activity_with_recoverable(
-        room_id: &str,
-        transaction_id: &str,
-        body: &str,
-        message: &str,
-        recoverable: bool,
-    ) -> RoomActivity {
-        RoomActivity {
-            room_id: room_id.to_owned(),
-            activity_id: format!("txn:{transaction_id}"),
-            timestamp_ms: 1_700_000_000_000,
-            kind: RoomActivityKind::Message(RoomMessageActivity {
-                event_id: None,
-                transaction_id: Some(transaction_id.to_owned()),
-                sender: "@alice:example".to_owned(),
-                body: body.to_owned(),
-                send_state: RoomMessageSendState::Failed {
-                    message: message.to_owned(),
-                    recoverable,
-                },
-            }),
-        }
-    }
-
     fn topic_state(room_id: &str, topic: &str) -> Event {
         Event::RoomActivity(RoomActivity {
             room_id: room_id.to_owned(),
@@ -5366,19 +5222,6 @@ mod tests {
                 content: RoomStateNoticeContent::Topic {
                     topic: topic.to_owned(),
                 },
-            }),
-        })
-    }
-
-    fn legacy_topic_state(room_id: &str, topic: &str) -> Event {
-        Event::RoomState(RoomStateEntry {
-            room_id: room_id.to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_060_000,
-            event_kind: mmatrix_core::RoomStateEventKind::Topic,
-            state_key: String::new(),
-            content: RoomStateContent::Topic(mmatrix_core::RoomTopicState {
-                topic: topic.to_owned(),
             }),
         })
     }
@@ -5401,25 +5244,6 @@ mod tests {
                     membership: membership.to_owned(),
                     displayname: display_name.map(str::to_owned),
                 },
-            }),
-        })
-    }
-
-    fn legacy_member_state(
-        room_id: &str,
-        state_key: &str,
-        membership: &str,
-        display_name: Option<&str>,
-    ) -> Event {
-        Event::RoomState(RoomStateEntry {
-            room_id: room_id.to_owned(),
-            sender: "@alice:example".to_owned(),
-            timestamp_ms: 1_700_000_120_000,
-            event_kind: mmatrix_core::RoomStateEventKind::Member,
-            state_key: state_key.to_owned(),
-            content: RoomStateContent::Member(mmatrix_core::RoomMemberState {
-                membership: membership.to_owned(),
-                displayname: display_name.map(str::to_owned),
             }),
         })
     }
@@ -5608,8 +5432,8 @@ mod tests {
             )])
         );
         assert_eq!(
-            state.model.last_timeline,
-            Some(LastTimelineText {
+            state.model.last_activity,
+            Some(LastMessageActivity {
                 room_id: "!two:example".to_owned(),
                 event_id: Some("$!two:example:third".to_owned()),
                 transaction_id: None,
@@ -5645,8 +5469,8 @@ mod tests {
             )])
         );
         assert_eq!(
-            state.model.last_timeline,
-            Some(LastTimelineText {
+            state.model.last_activity,
+            Some(LastMessageActivity {
                 room_id: "!ops:example".to_owned(),
                 event_id: None,
                 transaction_id: Some("txn-1".to_owned()),
@@ -5696,8 +5520,8 @@ mod tests {
             )])
         );
         assert_eq!(
-            state.model.last_timeline,
-            Some(LastTimelineText {
+            state.model.last_activity,
+            Some(LastMessageActivity {
                 room_id: "!ops:example".to_owned(),
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
@@ -5862,92 +5686,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_outgoing_events_reconcile_transaction_id_first_without_duplicate_rows() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!ops:example", "Ops", false)];
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_queued("!ops:example", "txn-1", "hello"),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_timeline(
-                "!ops:example",
-                "$event:example.org",
-                Some("txn-1"),
-                "hello",
-                1_700_000_000_100,
-            ),
-        )
-        .unwrap();
-
-        assert_eq!(
-            state
-                .model
-                .room_views
-                .get("!ops:example")
-                .map(|view| &view.activities),
-            Some(&vec![sent_message_activity(
-                "!ops:example",
-                "$event:example.org",
-                Some("txn-1"),
-                "hello",
-                1_700_000_000_100,
-            )])
-        );
-    }
-
-    #[test]
-    fn legacy_synced_message_before_sent_update_removes_duplicate_by_event_id_fallback() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!ops:example", "Ops", false)];
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_queued("!ops:example", "txn-1", "hello"),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_timeline(
-                "!ops:example",
-                "$event:example.org",
-                None,
-                "hello",
-                1_700_000_000_100,
-            ),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            state
-                .model
-                .room_views
-                .get("!ops:example")
-                .map(|view| &view.activities),
-            Some(&vec![sent_message_activity(
-                "!ops:example",
-                "$event:example.org",
-                Some("txn-1"),
-                "hello",
-                1_700_000_000_100,
-            )])
-        );
-    }
-
-    #[test]
     fn failed_message_update_keeps_visible_failed_row_and_error_details() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -5977,8 +5715,8 @@ mod tests {
             )])
         );
         assert_eq!(
-            state.model.last_timeline,
-            Some(LastTimelineText {
+            state.model.last_activity,
+            Some(LastMessageActivity {
                 room_id: "!ops:example".to_owned(),
                 event_id: None,
                 transaction_id: Some("txn-1".to_owned()),
@@ -6034,70 +5772,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_outgoing_events_render_pending_then_failed_with_details() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!ops:example", "Ops", false)];
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_queued("!ops:example", "txn-1", "hello"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
-            vec![
-                "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello (sending)".to_owned(),
-            ]
-        );
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_failed("!ops:example", "txn-1", "send failed", false),
-        )
-        .unwrap();
-
-        assert_eq!(
-            state
-                .model
-                .room_views
-                .get("!ops:example")
-                .map(|view| &view.activities),
-            Some(&vec![failed_message_activity_with_recoverable(
-                "!ops:example",
-                "txn-1",
-                "hello",
-                "send failed",
-                false,
-            )])
-        );
-        assert_eq!(
-            state.model.last_timeline,
-            Some(LastTimelineText {
-                room_id: "!ops:example".to_owned(),
-                event_id: None,
-                transaction_id: Some("txn-1".to_owned()),
-                sender: "@alice:example".to_owned(),
-                timestamp_ms: 1_700_000_000_000,
-                body: "hello".to_owned(),
-                send_state: RoomMessageSendState::Failed {
-                    message: "send failed".to_owned(),
-                    recoverable: false,
-                },
-            })
-        );
-        assert_eq!(state.model.status, "timeline update from !ops:example");
-        assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
-            vec![
-                "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello (failed)".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
     fn clear_room_timeline_preserves_pending_room_activity_for_sent_update() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -6132,70 +5806,6 @@ mod tests {
         apply_core_event(
             &mut state,
             outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            state
-                .model
-                .room_views
-                .get("!ops:example")
-                .map(|view| &view.activities),
-            Some(&vec![sent_message_activity(
-                "!ops:example",
-                "$event:example.org",
-                Some("txn-1"),
-                "hello",
-                1_700_000_000_000,
-            )])
-        );
-    }
-
-    #[test]
-    fn legacy_outgoing_sent_after_clear_reconciles_preserved_pending_row() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!ops:example", "Ops", false)];
-
-        apply_core_event(
-            &mut state,
-            legacy_timeline(
-                "!ops:example",
-                "$first:example.org",
-                None,
-                "first",
-                1_700_000_000_000,
-            ),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_queued("!ops:example", "txn-1", "hello"),
-        )
-        .unwrap();
-
-        state
-            .model
-            .room_views
-            .get_mut("!ops:example")
-            .expect("room view must exist after timeline update")
-            .clear_visible_entries();
-
-        assert_eq!(
-            state
-                .model
-                .room_views
-                .get("!ops:example")
-                .map(|view| &view.activities),
-            Some(&vec![pending_message_activity(
-                "!ops:example",
-                "txn-1",
-                "hello"
-            )])
-        );
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
         )
         .unwrap();
 
@@ -6359,57 +5969,6 @@ mod tests {
         apply_core_event(
             &mut state,
             member_state("!ops:example", "@erin:example", "ban", Some("erin")),
-        )
-        .unwrap();
-
-        assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
-            vec![
-                "Room: Ops [e2ee] (!ops:example)".to_owned(),
-                "Topic: incident review".to_owned(),
-                "* [22:14] @alice:example set topic: incident review".to_owned(),
-                "[22:13] @alice:example: <body>".to_owned(),
-                "* [22:15] carol joined".to_owned(),
-                "* [22:15] @dave:example left".to_owned(),
-                "* [22:15] @erin:example membership: ban".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn legacy_timeline_and_room_state_events_render_full_room_activity_set() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!ops:example", "Ops", true)];
-
-        apply_core_event(
-            &mut state,
-            legacy_topic_state("!ops:example", "incident review"),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_timeline(
-                "!ops:example",
-                "$event:example.org",
-                None,
-                "<body>",
-                1_700_000_000_000,
-            ),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_member_state("!ops:example", "@carol:example", "join", Some("carol")),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_member_state("!ops:example", "@dave:example", "leave", None),
-        )
-        .unwrap();
-        apply_core_event(
-            &mut state,
-            legacy_member_state("!ops:example", "@erin:example", "ban", Some("erin")),
         )
         .unwrap();
 
@@ -6648,7 +6207,7 @@ mod tests {
                 )],
             },
         );
-        state.model.last_timeline = Some(LastTimelineText {
+        state.model.last_activity = Some(LastMessageActivity {
             room_id: "!room:example".to_owned(),
             event_id: Some("$!room:example:hello".to_owned()),
             transaction_id: None,
@@ -6683,7 +6242,7 @@ mod tests {
         assert!(state.model.rooms.is_empty());
         assert_eq!(state.model.selected_room, None);
         assert!(state.model.room_views.is_empty());
-        assert_eq!(state.model.last_timeline, None);
+        assert_eq!(state.model.last_activity, None);
         assert_eq!(state.model.last_verification, None);
         assert_eq!(state.model.last_error, None);
         assert_eq!(state.active_view, ViewId::Status);
@@ -6814,34 +6373,6 @@ mod tests {
         )
         .unwrap();
 
-        assert!(state.room_activity.contains("!inactive:example"));
-    }
-
-    #[test]
-    fn legacy_inactive_outgoing_updates_only_mark_room_activity_after_failure() {
-        let mut state = test_state();
-        state.model.rooms = vec![
-            room("!active:example", "Active", false),
-            room("!inactive:example", "Inactive", false),
-        ];
-        state.active_view = ViewId::Room("!active:example".to_owned());
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_queued("!inactive:example", "txn-1", "draft"),
-        )
-        .unwrap();
-
-        assert_eq!(state.model.status, "timeline update from !inactive:example");
-        assert!(!state.room_activity.contains("!inactive:example"));
-
-        apply_core_event(
-            &mut state,
-            legacy_outgoing_failed("!inactive:example", "txn-1", "send failed", true),
-        )
-        .unwrap();
-
-        assert_eq!(state.model.status, "timeline update from !inactive:example");
         assert!(state.room_activity.contains("!inactive:example"));
     }
 

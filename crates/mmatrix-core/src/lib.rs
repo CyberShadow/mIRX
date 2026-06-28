@@ -6,12 +6,10 @@ pub const APP_NAME: &str = "mmatrix";
 pub const FOUNDATION_PHASE: &str = "bootstrap";
 
 pub use api::{
-    Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, OutgoingTextFailed,
-    OutgoingTextQueued, OutgoingTextSent, RestoreSessionRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMemberState, RoomMessageActivity,
-    RoomMessageSendState, RoomStateContent, RoomStateEntry, RoomStateEventKind,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTopicState, SendTextRequest,
-    SpaceChildSummary, StoredSession, TimelineText, VerificationRequest,
+    Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RestoreSessionRequest,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, SendTextRequest, SpaceChildSummary, StoredSession, VerificationRequest,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

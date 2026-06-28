@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 10;
+pub(crate) const PROTOCOL_VERSION: u32 = 11;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -31,6 +31,7 @@ pub(crate) const COMMAND_ID_SET_COMPOSE_TEXT: u32 = 18;
 pub(crate) const COMMAND_ID_SEND_COMPOSE_KEY: u32 = 19;
 pub(crate) const COMMAND_ID_SELECT_NAVIGATION_PATH: u32 = 20;
 pub(crate) const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
+pub(crate) const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -55,6 +56,7 @@ pub(crate) enum CommandKind {
     SendComposeKey,
     SelectNavigationPath,
     DumpSelectedNavigationPath,
+    AppendSyntheticEvents,
 }
 
 impl CommandKind {
@@ -81,6 +83,7 @@ impl CommandKind {
             COMMAND_ID_SEND_COMPOSE_KEY => Some(Self::SendComposeKey),
             COMMAND_ID_SELECT_NAVIGATION_PATH => Some(Self::SelectNavigationPath),
             COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH => Some(Self::DumpSelectedNavigationPath),
+            COMMAND_ID_APPEND_SYNTHETIC_EVENTS => Some(Self::AppendSyntheticEvents),
             _ => None,
         }
     }
@@ -162,6 +165,10 @@ pub(crate) enum ParsedCommand {
     DumpSelectedNavigationPath {
         id: String,
     },
+    AppendSyntheticEvents {
+        id: String,
+        args: LoadEventsArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -188,6 +195,7 @@ impl ParsedCommand {
             Self::SendComposeKey { .. } => CommandKind::SendComposeKey,
             Self::SelectNavigationPath { .. } => CommandKind::SelectNavigationPath,
             Self::DumpSelectedNavigationPath { .. } => CommandKind::DumpSelectedNavigationPath,
+            Self::AppendSyntheticEvents { .. } => CommandKind::AppendSyntheticEvents,
         }
     }
 }
@@ -943,6 +951,10 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::DumpSelectedNavigationPath { id: envelope.id })
         }
+        CommandKind::AppendSyntheticEvents => Ok(ParsedCommand::AppendSyntheticEvents {
+            id: envelope.id.clone(),
+            args: parse_args_required::<LoadEventsArgs>(&envelope.id, envelope.args)?,
+        }),
     }
 }
 
@@ -1000,25 +1012,24 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 mod tests {
     use mmatrix_core::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
-        RoomMessageSendState, RoomSummary, SpaceChildSummary, StoredSession, TimelineText,
-        VerificationRequest,
+        RoomMessageSendState, RoomSummary, SpaceChildSummary, StoredSession, VerificationRequest,
     };
     use serde_json::{Value, json};
 
     use super::{
-        AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL,
-        COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH,
-        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING,
-        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
-        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
-        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
-        DumpRoomActivityResponse, DumpRoomMessageActivity, DumpRoomMessageSendState,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
-        NavigationNode, NavigationPathSegment, NoArgs, ParsedCommand, PongResponse,
+        AcceptedResponse, COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_DUMP_COMPOSE_TEXT,
+        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
+        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION,
+        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
+        COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RESTORE_SAVED_SESSION,
+        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMessageActivity,
+        DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, NoArgs, ParsedCommand, PongResponse,
         ResponseEnvelope, RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs,
         SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
         SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
@@ -1122,11 +1133,15 @@ mod tests {
             Some(CommandKind::DumpSelectedNavigationPath)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_APPEND_SYNTHETIC_EVENTS),
+            Some(CommandKind::AppendSyntheticEvents)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH + 1),
+            CommandKind::from_id(COMMAND_ID_APPEND_SYNTHETIC_EVENTS + 1),
             None
         );
     }
@@ -1211,7 +1226,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"TimelineText":{"room_id":"!room:example","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","timestamp_ms":1700000000000,"body":"hello"}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -1226,13 +1241,17 @@ mod tests {
                             is_space: false,
                             space_children: Vec::new(),
                         }]),
-                        Event::TimelineText(TimelineText {
+                        Event::RoomActivity(RoomActivity {
                             room_id: "!room:example".to_owned(),
-                            event_id: "$event:example".to_owned(),
-                            transaction_id: None,
-                            sender: "@alice:example".to_owned(),
+                            activity_id: "event:$event:example".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
-                            body: "hello".to_owned(),
+                            kind: RoomActivityKind::Message(RoomMessageActivity {
+                                event_id: Some("$event:example".to_owned()),
+                                transaction_id: None,
+                                sender: "@alice:example".to_owned(),
+                                body: "hello".to_owned(),
+                                send_state: RoomMessageSendState::Sent,
+                            }),
                         }),
                     ],
                 },
@@ -1408,6 +1427,25 @@ mod tests {
             .unwrap(),
             ParsedCommand::DumpSelectedNavigationPath {
                 id: "selected-nav".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
+                br#"{"id":"append","args":{"events":[{"RoomActivityUpdate":{"room_id":"!room:example","transaction_id":"txn-1","kind":{"type":"message_sent","event_id":"$event:example"}}}]}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::AppendSyntheticEvents {
+                id: "append".to_owned(),
+                args: LoadEventsArgs {
+                    events: vec![Event::RoomActivityUpdate(mmatrix_core::RoomActivityUpdate {
+                        room_id: "!room:example".to_owned(),
+                        transaction_id: "txn-1".to_owned(),
+                        kind: mmatrix_core::RoomActivityUpdateKind::MessageSent {
+                            event_id: "$event:example".to_owned(),
+                        },
+                    })],
+                },
             }
         );
     }
@@ -1736,7 +1774,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":10,
+                    "protocol_version":11,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
