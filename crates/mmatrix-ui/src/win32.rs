@@ -5815,7 +5815,7 @@ mod tests {
     }
 
     #[test]
-    fn synced_message_before_sent_update_remains_idempotent() {
+    fn synced_message_before_sent_update_removes_duplicate_by_event_id_fallback() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
 
@@ -5829,7 +5829,7 @@ mod tests {
             timeline_with_transaction_id(
                 "!ops:example",
                 "$event:example.org",
-                Some("txn-1"),
+                None,
                 "hello",
                 1_700_000_000_100,
             ),
@@ -5898,6 +5898,14 @@ mod tests {
                 "hello",
                 1_700_000_000_100,
             )])
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| view.activities.len()),
+            Some(1)
         );
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
@@ -6843,7 +6851,12 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            outgoing_failed("!inactive:example", "txn-1", "send failed"),
+            outgoing_queued("!inactive:example", "txn-2", "retry"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_failed("!inactive:example", "txn-2", "send failed"),
         )
         .unwrap();
         assert!(state.room_activity.contains("!inactive:example"));
