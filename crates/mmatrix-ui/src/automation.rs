@@ -717,6 +717,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
         Operation::SendText => "send_text",
+        Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
     }
