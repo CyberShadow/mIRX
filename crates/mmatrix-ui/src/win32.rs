@@ -19,7 +19,8 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
     RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendTextRequest, StoredSession, VerificationRequest, start,
+    RoomSummary, RoomTyping, SendTextRequest, StoredSession, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -79,8 +80,8 @@ use crate::{
         SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
         SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleResponse,
         dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_verification_from_request, failure_response,
-        parse_command_request, success_response,
+        dump_room_message_send_state_from_core, dump_verification_from_state_event,
+        failure_response, parse_command_request, success_response,
     },
 };
 
@@ -191,7 +192,7 @@ struct UiModel {
     selected_room: Option<String>,
     room_views: BTreeMap<String, RoomViewModel>,
     last_activity: Option<LastMessageActivity>,
-    last_verification: Option<VerificationRequest>,
+    last_verification: Option<VerificationStateEvent>,
     last_error: Option<CoreErrorEvent>,
 }
 
@@ -709,6 +710,7 @@ enum LocalSlashCommand<'a> {
     Status,
     Window { target: &'a str },
     Clear,
+    Verify { action: VerificationAction },
     Invalid { feedback: String },
 }
 
@@ -716,6 +718,14 @@ enum LocalSlashCommand<'a> {
 enum WindowTargetError {
     Unknown,
     Ambiguous,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VerificationAction {
+    Accept,
+    Cancel,
+    Confirm,
+    Reject,
 }
 
 struct WindowState {
@@ -739,6 +749,8 @@ struct WindowState {
     compose_history: ComposeHistory,
     edit_window_proc: WNDPROC,
     model: UiModel,
+    #[cfg(test)]
+    recorded_commands: Vec<Command>,
 }
 
 struct CoreBridge {
@@ -2412,8 +2424,13 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::VerificationRequest(request) => {
-            state.model.status = format!("verification request from {}", request.user_id);
-            state.model.last_verification = Some(request);
+            let event = verification_state_event_from_request(request);
+            state.model.status = verification_status_message(&event);
+            state.model.last_verification = Some(event);
+        }
+        Event::VerificationState(event) => {
+            state.model.status = verification_status_message(&event);
+            state.model.last_verification = Some(event);
         }
         Event::LoggedOut => {
             delete_saved_session()?;
@@ -2536,11 +2553,35 @@ fn format_timestamp_hhmm_utc(timestamp_ms: u64) -> String {
 fn render_status_lines(model: &UiModel) -> Vec<String> {
     let mut lines = vec![format!("status: {}", model.status)];
 
-    if let Some(request) = &model.last_verification {
+    if let Some(event) = &model.last_verification {
         lines.push(String::new());
         lines.push("verification".to_owned());
-        lines.push(format!("flow_id: {}", request.flow_id));
-        lines.push(format!("from_user: {}", request.user_id));
+        lines.push(format!("state: {}", verification_state_label(&event.state)));
+        lines.push(format!("flow_id: {}", event.flow_id));
+        lines.push(format!("from_user: {}", event.user_id));
+        match &event.state {
+            VerificationState::SasReady { emojis, decimals } => {
+                lines.push(format!("emoji: {}", format_verification_emojis(emojis)));
+                lines.push(format!(
+                    "decimals: {}-{}-{}",
+                    decimals.first, decimals.second, decimals.third
+                ));
+            }
+            VerificationState::Done => {
+                lines.push("result: verified".to_owned());
+            }
+            VerificationState::Cancelled { reason, code, .. } => {
+                lines.push(format!("reason: {reason}"));
+                lines.push(format!("code: {code}"));
+            }
+            VerificationState::Requested
+            | VerificationState::Accepted
+            | VerificationState::Ready
+            | VerificationState::Confirmed => {}
+        }
+        if let Some(actions) = verification_actions_text(&event.state) {
+            lines.push(format!("actions: {actions}"));
+        }
     }
 
     if let Some(error) = &model.last_error {
@@ -2556,11 +2597,13 @@ fn render_status_lines(model: &UiModel) -> Vec<String> {
 fn frame_status_text(model: &UiModel) -> String {
     let mut text = model.status.clone();
 
-    if let Some(request) = &model.last_verification {
+    if let Some(event) = &model.last_verification {
         text.push_str(" | verification: ");
-        text.push_str(&request.flow_id);
+        text.push_str(verification_state_label(&event.state));
+        text.push(' ');
+        text.push_str(&event.flow_id);
         text.push_str(" from ");
-        text.push_str(&request.user_id);
+        text.push_str(&event.user_id);
     }
 
     if let Some(error) = &model.last_error {
@@ -4655,6 +4698,23 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "clear" => LocalSlashCommand::Invalid {
             feedback: "usage: /clear".to_owned(),
         },
+        "verify" => match argument.to_ascii_lowercase().as_str() {
+            "accept" => LocalSlashCommand::Verify {
+                action: VerificationAction::Accept,
+            },
+            "cancel" => LocalSlashCommand::Verify {
+                action: VerificationAction::Cancel,
+            },
+            "confirm" => LocalSlashCommand::Verify {
+                action: VerificationAction::Confirm,
+            },
+            "reject" => LocalSlashCommand::Verify {
+                action: VerificationAction::Reject,
+            },
+            _ => LocalSlashCommand::Invalid {
+                feedback: "usage: /verify accept|cancel|confirm|reject".to_owned(),
+            },
+        },
         _ => LocalSlashCommand::Invalid {
             feedback: format!("unknown command: {}", &input[..command_end]),
         },
@@ -4750,6 +4810,22 @@ unsafe fn execute_local_slash_command(
                 set_local_command_status(hwnd, "nothing to clear in status view".to_owned())
             }
         },
+        LocalSlashCommand::Verify { action } => {
+            let state = state_mut(hwnd);
+            match action {
+                VerificationAction::Accept => submit_accept_verification(state)?,
+                VerificationAction::Cancel => submit_cancel_verification(state)?,
+                VerificationAction::Confirm => submit_confirm_verification_sas(state)?,
+                VerificationAction::Reject => submit_reject_verification_sas(state)?,
+            }
+            set_local_command_status(
+                hwnd,
+                format!(
+                    "verification {} submitted",
+                    verification_action_label(action)
+                ),
+            )
+        }
         LocalSlashCommand::Invalid { feedback } => set_local_command_status(hwnd, feedback),
     }
 }
@@ -5020,10 +5096,126 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
         last_verification: model
             .last_verification
             .as_ref()
-            .map(dump_verification_from_request),
+            .map(dump_verification_from_state_event),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }
+}
+
+fn verification_state_event_from_request(request: VerificationRequest) -> VerificationStateEvent {
+    VerificationStateEvent {
+        flow_id: request.flow_id,
+        user_id: request.user_id,
+        state: VerificationState::Requested,
+    }
+}
+
+fn verification_state_label(state: &VerificationState) -> &'static str {
+    match state {
+        VerificationState::Requested => "requested",
+        VerificationState::Accepted => "accepted",
+        VerificationState::Ready => "ready",
+        VerificationState::SasReady { .. } => "sas ready",
+        VerificationState::Confirmed => "confirmed",
+        VerificationState::Done => "done",
+        VerificationState::Cancelled { .. } => "cancelled",
+    }
+}
+
+fn verification_status_message(event: &VerificationStateEvent) -> String {
+    match &event.state {
+        VerificationState::Requested => format!("verification requested by {}", event.user_id),
+        VerificationState::Accepted => format!("verification accepted with {}", event.user_id),
+        VerificationState::Ready => format!("verification ready with {}", event.user_id),
+        VerificationState::SasReady { .. } => {
+            format!("verification sas ready with {}", event.user_id)
+        }
+        VerificationState::Confirmed => format!("verification confirmed with {}", event.user_id),
+        VerificationState::Done => format!("verification done with {}", event.user_id),
+        VerificationState::Cancelled { .. } => {
+            format!("verification cancelled with {}", event.user_id)
+        }
+    }
+}
+
+fn format_verification_emojis(emojis: &[VerificationEmoji]) -> String {
+    emojis
+        .iter()
+        .map(|emoji| format!("{} {}", emoji.symbol, emoji.description))
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn verification_actions_text(state: &VerificationState) -> Option<&'static str> {
+    match state {
+        VerificationState::Requested | VerificationState::Accepted | VerificationState::Ready => {
+            Some("/verify accept, /verify cancel")
+        }
+        VerificationState::SasReady { .. } => {
+            Some("/verify confirm, /verify reject, /verify cancel")
+        }
+        VerificationState::Confirmed => Some("/verify cancel"),
+        VerificationState::Done | VerificationState::Cancelled { .. } => None,
+    }
+}
+
+fn verification_action_label(action: VerificationAction) -> &'static str {
+    match action {
+        VerificationAction::Accept => "accept",
+        VerificationAction::Cancel => "cancel",
+        VerificationAction::Confirm => "confirm",
+        VerificationAction::Reject => "reject",
+    }
+}
+
+fn current_verification_flow_id(model: &UiModel) -> Result<VerificationFlowId, String> {
+    let event = model
+        .last_verification
+        .as_ref()
+        .ok_or_else(|| "no verification flow available".to_owned())?;
+    Ok(VerificationFlowId {
+        flow_id: event.flow_id.clone(),
+        user_id: event.user_id.clone(),
+    })
+}
+
+fn submit_verification_command(
+    state: &mut WindowState,
+    command: Command,
+    action_name: &'static str,
+) -> Result<(), String> {
+    {
+        let sender = state
+            .command_sender
+            .as_ref()
+            .ok_or_else(|| "core command sender is not available".to_owned())?;
+        sender.send(command.clone()).map_err(|err| {
+            format!("failed to enqueue {action_name} verification command: {err}")
+        })?;
+    }
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    Ok(())
+}
+
+fn submit_accept_verification(state: &mut WindowState) -> Result<(), String> {
+    let flow = current_verification_flow_id(&state.model)?;
+    submit_verification_command(state, Command::AcceptVerification(flow), "accept")
+}
+
+fn submit_cancel_verification(state: &mut WindowState) -> Result<(), String> {
+    let flow = current_verification_flow_id(&state.model)?;
+    submit_verification_command(state, Command::CancelVerification(flow), "cancel")
+}
+
+fn submit_confirm_verification_sas(state: &mut WindowState) -> Result<(), String> {
+    let flow = current_verification_flow_id(&state.model)?;
+    submit_verification_command(state, Command::ConfirmVerificationSas(flow), "confirm")
+}
+
+fn submit_reject_verification_sas(state: &mut WindowState) -> Result<(), String> {
+    let flow = current_verification_flow_id(&state.model)?;
+    submit_verification_command(state, Command::RejectVerificationSas(flow), "reject")
 }
 
 fn dump_room_activity_entry_from_room_entry(activity: &RoomActivity) -> DumpRoomActivity {
@@ -5082,6 +5274,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
         Operation::SendText => "send text",
+        Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
     }
@@ -5450,6 +5643,8 @@ mod tests {
             compose_history: ComposeHistory::default(),
             edit_window_proc: None,
             model: initial_model(),
+            #[cfg(test)]
+            recorded_commands: Vec::new(),
         }
     }
 
@@ -6198,12 +6393,58 @@ mod tests {
     }
 
     #[test]
-    fn render_status_lines_include_verification_and_error_details() {
+    fn verification_request_event_stores_requested_state_and_renders_actions() {
         let mut state = test_state();
-        state.model.status = "verification request from @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationRequest {
+
+        apply_core_event(
+            &mut state,
+            Event::VerificationRequest(VerificationRequest {
+                flow_id: "flow-verify-123".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.model.last_verification,
+            Some(VerificationStateEvent {
+                flow_id: "flow-verify-123".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                state: VerificationState::Requested,
+            })
+        );
+
+        let status_text = render_view_text(&render_status_lines(&state.model));
+        assert!(status_text.contains("state: requested"));
+        assert!(status_text.contains("flow_id: flow-verify-123"));
+        assert!(status_text.contains("from_user: @alice:example"));
+        assert!(status_text.contains("actions: /verify accept, /verify cancel"));
+    }
+
+    #[test]
+    fn verification_sas_ready_renders_emoji_decimals_and_error_details() {
+        let mut state = test_state();
+        state.model.status = "verification sas ready with @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationStateEvent {
             flow_id: "flow-verify-123".to_owned(),
             user_id: "@alice:example".to_owned(),
+            state: VerificationState::SasReady {
+                emojis: vec![
+                    VerificationEmoji {
+                        symbol: "🐶".to_owned(),
+                        description: "dog".to_owned(),
+                    },
+                    VerificationEmoji {
+                        symbol: "🔥".to_owned(),
+                        description: "fire".to_owned(),
+                    },
+                ],
+                decimals: mmatrix_core::VerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
         });
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendText,
@@ -6211,7 +6452,10 @@ mod tests {
         });
 
         let status_text = render_view_text(&render_status_lines(&state.model));
-        assert!(status_text.contains("flow_id: flow-verify-123"));
+        assert!(status_text.contains("state: sas ready"));
+        assert!(status_text.contains("emoji: 🐶 dog | 🔥 fire"));
+        assert!(status_text.contains("decimals: 1234-5678-9012"));
+        assert!(status_text.contains("actions: /verify confirm, /verify reject, /verify cancel"));
         assert!(status_text.contains("operation: send text"));
         assert!(status_text.contains("message: message send failed"));
     }
@@ -6262,17 +6506,18 @@ mod tests {
     }
 
     #[test]
-    fn frame_status_text_appends_verification_details() {
+    fn frame_status_text_includes_flow_user_and_compact_state() {
         let mut state = test_state();
-        state.model.status = "verification request from @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationRequest {
+        state.model.status = "verification accepted with @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationStateEvent {
             flow_id: "flow-verify-123".to_owned(),
             user_id: "@alice:example".to_owned(),
+            state: VerificationState::Accepted,
         });
 
         assert_eq!(
             frame_status_text(&state.model),
-            "verification request from @alice:example | verification: flow-verify-123 from @alice:example"
+            "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example"
         );
     }
 
@@ -6294,10 +6539,11 @@ mod tests {
     #[test]
     fn frame_status_text_appends_verification_before_error_when_both_exist() {
         let mut state = test_state();
-        state.model.status = "verification request from @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationRequest {
+        state.model.status = "verification accepted with @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationStateEvent {
             flow_id: "flow-verify-123".to_owned(),
             user_id: "@alice:example".to_owned(),
+            state: VerificationState::Accepted,
         });
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendText,
@@ -6306,8 +6552,49 @@ mod tests {
 
         assert_eq!(
             frame_status_text(&state.model),
-            "verification request from @alice:example | verification: flow-verify-123 from @alice:example | error: send text: message send failed"
+            "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example | error: send text: message send failed"
         );
+    }
+
+    #[test]
+    fn verification_done_renders_terminal_text_without_actions() {
+        let mut state = test_state();
+        state.model.status = "verification done with @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationStateEvent {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::Done,
+        });
+
+        let status_text = render_view_text(&render_status_lines(&state.model));
+        assert!(status_text.contains("state: done"));
+        assert!(status_text.contains("result: verified"));
+        assert!(!status_text.contains("/verify confirm"));
+        assert!(!status_text.contains("/verify reject"));
+        assert!(!status_text.contains("/verify cancel"));
+    }
+
+    #[test]
+    fn verification_cancelled_renders_reason_code_without_actions() {
+        let mut state = test_state();
+        state.model.status = "verification cancelled with @alice:example".to_owned();
+        state.model.last_verification = Some(VerificationStateEvent {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::Cancelled {
+                reason: "timed out".to_owned(),
+                code: "m.timeout".to_owned(),
+                cancelled_by_us: false,
+            },
+        });
+
+        let status_text = render_view_text(&render_status_lines(&state.model));
+        assert!(status_text.contains("state: cancelled"));
+        assert!(status_text.contains("reason: timed out"));
+        assert!(status_text.contains("code: m.timeout"));
+        assert!(!status_text.contains("/verify confirm"));
+        assert!(!status_text.contains("/verify reject"));
+        assert!(!status_text.contains("/verify cancel"));
     }
 
     #[test]
@@ -6467,9 +6754,10 @@ mod tests {
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         });
-        state.model.last_verification = Some(VerificationRequest {
+        state.model.last_verification = Some(VerificationStateEvent {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),
+            state: VerificationState::Requested,
         });
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendText,
@@ -6767,8 +7055,32 @@ mod tests {
     }
 
     #[test]
-    fn parse_slash_command_rejects_unknown_and_usage_errors() {
+    fn parse_slash_command_accepts_verify_forms_and_rejects_bad_forms() {
         assert_eq!(parse_slash_command("/StAtUs"), LocalSlashCommand::Status);
+        assert_eq!(
+            parse_slash_command("/verify accept"),
+            LocalSlashCommand::Verify {
+                action: VerificationAction::Accept,
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/verify cancel"),
+            LocalSlashCommand::Verify {
+                action: VerificationAction::Cancel,
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/verify confirm"),
+            LocalSlashCommand::Verify {
+                action: VerificationAction::Confirm,
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/verify reject"),
+            LocalSlashCommand::Verify {
+                action: VerificationAction::Reject,
+            }
+        );
         assert_eq!(
             parse_slash_command("/wat now"),
             LocalSlashCommand::Invalid {
@@ -6791,6 +7103,18 @@ mod tests {
             parse_slash_command("/clear now"),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /clear".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/verify"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /verify accept|cancel|confirm|reject".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/verify maybe"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /verify accept|cancel|confirm|reject".to_owned(),
             }
         );
     }
@@ -6922,6 +7246,85 @@ mod tests {
             Err("no room selected".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
+    }
+
+    #[test]
+    fn submit_verification_helpers_enqueue_typed_commands_for_current_flow() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification = Some(VerificationStateEvent {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::SasReady {
+                emojis: vec![VerificationEmoji {
+                    symbol: "🐶".to_owned(),
+                    description: "dog".to_owned(),
+                }],
+                decimals: mmatrix_core::VerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
+        });
+        let last_verification = state.model.last_verification.clone();
+
+        submit_accept_verification(&mut state).unwrap();
+        submit_cancel_verification(&mut state).unwrap();
+        submit_confirm_verification_sas(&mut state).unwrap();
+        submit_reject_verification_sas(&mut state).unwrap();
+
+        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::AcceptVerification(VerificationFlowId {
+                    flow_id: "flow-verify-123".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::CancelVerification(VerificationFlowId {
+                    flow_id: "flow-verify-123".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::ConfirmVerificationSas(VerificationFlowId {
+                    flow_id: "flow-verify-123".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::RejectVerificationSas(VerificationFlowId {
+                    flow_id: "flow-verify-123".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+            ]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_verification_helpers_require_current_flow() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_accept_verification(&mut state),
+            Err("no verification flow available".to_owned())
+        );
+        assert_eq!(
+            submit_cancel_verification(&mut state),
+            Err("no verification flow available".to_owned())
+        );
+        assert_eq!(
+            submit_confirm_verification_sas(&mut state),
+            Err("no verification flow available".to_owned())
+        );
+        assert_eq!(
+            submit_reject_verification_sas(&mut state),
+            Err("no verification flow available".to_owned())
+        );
     }
 
     #[test]

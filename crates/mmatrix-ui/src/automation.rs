@@ -3,7 +3,7 @@
 use mmatrix_core::{
     CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
     RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    StoredSession, VerificationRequest,
+    StoredSession, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -701,6 +701,7 @@ pub(crate) enum DumpRoomStateNoticeContent {
 pub(crate) struct DumpVerification {
     pub(crate) flow_id: String,
     pub(crate) user_id: String,
+    pub(crate) state: VerificationState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -842,10 +843,13 @@ pub(crate) fn dump_room_state_notice_content_from_core(
     }
 }
 
-pub(crate) fn dump_verification_from_request(request: &VerificationRequest) -> DumpVerification {
+pub(crate) fn dump_verification_from_state_event(
+    event: &VerificationStateEvent,
+) -> DumpVerification {
     DumpVerification {
-        flow_id: request.flow_id.clone(),
-        user_id: request.user_id.clone(),
+        flow_id: event.flow_id.clone(),
+        user_id: event.user_id.clone(),
+        state: event.state.clone(),
     }
 }
 
@@ -1014,6 +1018,7 @@ mod tests {
     use mmatrix_core::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
         RoomMessageSendState, RoomSummary, SpaceChildSummary, StoredSession, VerificationRequest,
+        VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -2295,14 +2300,38 @@ mod tests {
             .is_err()
         );
         assert_eq!(
-            super::dump_verification_from_request(&VerificationRequest {
+            super::dump_verification_from_state_event(&VerificationStateEvent {
                 flow_id: "flow".to_owned(),
                 user_id: "@alice:example".to_owned(),
+                state: VerificationState::Requested,
             }),
             super::DumpVerification {
                 flow_id: "flow".to_owned(),
                 user_id: "@alice:example".to_owned(),
+                state: VerificationState::Requested,
             }
+        );
+        assert_eq!(
+            serde_json::to_value(super::DumpVerification {
+                flow_id: "flow".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                state: VerificationState::Cancelled {
+                    reason: "timed out".to_owned(),
+                    code: "m.timeout".to_owned(),
+                    cancelled_by_us: false,
+                },
+            })
+            .unwrap(),
+            json!({
+                "flow_id":"flow",
+                "user_id":"@alice:example",
+                "state":{
+                    "state":"cancelled",
+                    "reason":"timed out",
+                    "code":"m.timeout",
+                    "cancelled_by_us":false
+                }
+            })
         );
         assert_eq!(
             super::dump_error_from_core(&CoreErrorEvent {
