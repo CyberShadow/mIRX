@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{self, Receiver};
@@ -10,19 +11,30 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RestoreSessionRequest,
+    VerificationFlowId,
 };
 use crate::matrix::{self, MatrixCoreError};
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
+pub(crate) type WorkerSender = UnboundedSender<WorkerMessage>;
+
+#[derive(Debug)]
+pub(crate) enum WorkerMessage {
+    Command(Command),
+    EnsureVerificationRequestWatcher(VerificationFlowId),
+    EnsureSasWatcher(VerificationFlowId),
+}
 
 #[derive(Debug, Clone)]
 pub struct CommandSender {
-    sender: UnboundedSender<Command>,
+    sender: WorkerSender,
 }
 
 impl CommandSender {
     pub fn send(&self, command: Command) -> Result<(), SendCommandError> {
-        self.sender.send(command).map_err(|_| SendCommandError)
+        self.sender
+            .send(WorkerMessage::Command(command))
+            .map_err(|_| SendCommandError)
     }
 }
 
@@ -100,13 +112,15 @@ enum WorkerState {
         sync_task: Option<TokioJoinHandle<()>>,
         session_update_task: TokioJoinHandle<()>,
         send_queue_update_task: TokioJoinHandle<()>,
+        verification_tasks: HashMap<(String, String), TokioJoinHandle<()>>,
     },
 }
 
 pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
-    let (command_tx, command_rx) = unbounded_channel();
+    let (worker_tx, worker_rx) = unbounded_channel();
     let (event_tx, event_rx) = mpsc::channel();
     let (startup_tx, startup_rx) = mpsc::channel();
+    let worker_thread_tx = worker_tx.clone();
 
     let worker = thread::Builder::new()
         .name("mmatrix-core".to_owned())
@@ -124,13 +138,16 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
             }
 
             let local = LocalSet::new();
-            local.block_on(&runtime, run_worker(config, command_rx, event_tx));
+            local.block_on(
+                &runtime,
+                run_worker(config, worker_rx, worker_thread_tx, event_tx),
+            );
         })
         .map_err(StartError::ThreadSpawn)?;
 
     match startup_rx.recv() {
         Ok(Ok(())) => Ok(CoreHandle {
-            command_sender: CommandSender { sender: command_tx },
+            command_sender: CommandSender { sender: worker_tx },
             events: event_rx,
             worker,
         }),
@@ -147,15 +164,16 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
 
 async fn run_worker(
     config: CoreConfig,
-    mut command_rx: UnboundedReceiver<Command>,
+    mut worker_rx: UnboundedReceiver<WorkerMessage>,
+    worker_tx: WorkerSender,
     event_tx: EventSender,
 ) {
     emit_event(&event_tx, Event::Started);
 
     let mut state = WorkerState::NoClient;
 
-    while let Some(command) = command_rx.recv().await {
-        if handle_command(command, &config, &event_tx, &mut state).await {
+    while let Some(message) = worker_rx.recv().await {
+        if handle_worker_message(message, &config, &event_tx, &worker_tx, &mut state).await {
             break;
         }
     }
@@ -164,27 +182,53 @@ async fn run_worker(
     emit_event(&event_tx, Event::Stopped);
 }
 
-async fn handle_command(
-    command: Command,
+async fn handle_worker_message(
+    message: WorkerMessage,
     config: &CoreConfig,
     event_tx: &EventSender,
+    worker_tx: &WorkerSender,
     state: &mut WorkerState,
 ) -> bool {
-    match command {
-        Command::Login(request) => handle_login(config, event_tx, state, request).await,
-        Command::RestoreSession(request) => {
-            handle_restore_session(config, event_tx, state, request).await
+    match message {
+        WorkerMessage::Command(command) => match command {
+            Command::Login(request) => {
+                handle_login(config, event_tx, worker_tx, state, request).await
+            }
+            Command::RestoreSession(request) => {
+                handle_restore_session(config, event_tx, worker_tx, state, request).await
+            }
+            Command::StartSync => handle_start_sync(event_tx, state),
+            Command::SendText(request) => handle_send_text(event_tx, state, request).await,
+            Command::AcceptVerification(flow) => {
+                handle_accept_verification(event_tx, worker_tx, state, flow).await
+            }
+            Command::CancelVerification(flow) => {
+                handle_cancel_verification(event_tx, state, flow).await
+            }
+            Command::ConfirmVerificationSas(flow) => {
+                handle_confirm_verification_sas(event_tx, state, flow).await
+            }
+            Command::RejectVerificationSas(flow) => {
+                handle_reject_verification_sas(event_tx, state, flow).await
+            }
+            Command::Logout => handle_logout(event_tx, state).await,
+            Command::Shutdown => true,
+        },
+        WorkerMessage::EnsureVerificationRequestWatcher(flow) => {
+            ensure_verification_request_watcher(event_tx, worker_tx, state, &flow).await;
+            false
         }
-        Command::StartSync => handle_start_sync(event_tx, state),
-        Command::SendText(request) => handle_send_text(event_tx, state, request).await,
-        Command::Logout => handle_logout(event_tx, state).await,
-        Command::Shutdown => true,
+        WorkerMessage::EnsureSasWatcher(flow) => {
+            ensure_sas_watcher(event_tx, state, &flow).await;
+            false
+        }
     }
 }
 
 async fn handle_login(
     config: &CoreConfig,
     event_tx: &EventSender,
+    worker_tx: &WorkerSender,
     state: &mut WorkerState,
     request: LoginRequest,
 ) -> bool {
@@ -205,7 +249,7 @@ async fn handle_login(
         }
     };
 
-    matrix::register_event_handlers(&client, event_tx.clone());
+    matrix::register_event_handlers(&client, event_tx.clone(), worker_tx.clone());
 
     let session = match matrix::login(&client, &request).await {
         Ok(session) => session,
@@ -232,6 +276,7 @@ async fn handle_login(
         sync_task: None,
         session_update_task,
         send_queue_update_task,
+        verification_tasks: HashMap::new(),
     };
     emit_event(event_tx, Event::LoggedIn { session });
 
@@ -246,6 +291,7 @@ async fn handle_login(
 async fn handle_restore_session(
     config: &CoreConfig,
     event_tx: &EventSender,
+    worker_tx: &WorkerSender,
     state: &mut WorkerState,
     request: RestoreSessionRequest,
 ) -> bool {
@@ -266,7 +312,7 @@ async fn handle_restore_session(
         }
     };
 
-    matrix::register_event_handlers(&client, event_tx.clone());
+    matrix::register_event_handlers(&client, event_tx.clone(), worker_tx.clone());
 
     let current_user_id = request.session.user_id.clone();
 
@@ -289,6 +335,7 @@ async fn handle_restore_session(
         sync_task: None,
         session_update_task,
         send_queue_update_task,
+        verification_tasks: HashMap::new(),
     };
     emit_event(event_tx, Event::RestoredSession);
 
@@ -351,12 +398,109 @@ async fn handle_send_text(
     false
 }
 
+async fn handle_accept_verification(
+    event_tx: &EventSender,
+    worker_tx: &WorkerSender,
+    state: &mut WorkerState,
+    flow: VerificationFlowId,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::Verification,
+            "verification requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::accept_verification(client, &flow).await {
+        Ok(event) => {
+            emit_event(event_tx, Event::VerificationState(event));
+            ensure_verification_request_watcher(event_tx, worker_tx, state, &flow).await;
+            ensure_sas_watcher(event_tx, state, &flow).await;
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::Verification, err),
+    }
+
+    false
+}
+
+async fn handle_cancel_verification(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    flow: VerificationFlowId,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::Verification,
+            "verification requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::cancel_verification(client, &flow).await {
+        Ok(event) => emit_event(event_tx, Event::VerificationState(event)),
+        Err(err) => emit_matrix_error(event_tx, Operation::Verification, err),
+    }
+
+    false
+}
+
+async fn handle_confirm_verification_sas(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    flow: VerificationFlowId,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::Verification,
+            "verification requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::confirm_verification_sas(client, &flow).await {
+        Ok(event) => {
+            emit_event(event_tx, Event::VerificationState(event));
+            ensure_sas_watcher(event_tx, state, &flow).await;
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::Verification, err),
+    }
+
+    false
+}
+
+async fn handle_reject_verification_sas(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    flow: VerificationFlowId,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::Verification,
+            "verification requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::reject_verification_sas(client, &flow).await {
+        Ok(event) => emit_event(event_tx, Event::VerificationState(event)),
+        Err(err) => emit_matrix_error(event_tx, Operation::Verification, err),
+    }
+
+    false
+}
+
 async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool {
     let WorkerState::Ready {
         client,
         sync_task,
         session_update_task,
         send_queue_update_task,
+        verification_tasks,
     } = state
     else {
         emit_invalid_state(
@@ -370,6 +514,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     abort_sync_task(sync_task);
     session_update_task.abort();
     send_queue_update_task.abort();
+    abort_verification_tasks(verification_tasks);
 
     if let Err(err) = matrix::logout(client.clone()).await {
         emit_matrix_error(event_tx, Operation::Logout, err);
@@ -386,12 +531,14 @@ fn shutdown_state(state: &mut WorkerState) {
         sync_task,
         session_update_task,
         send_queue_update_task,
+        verification_tasks,
         ..
     } = state
     {
         abort_sync_task(sync_task);
         session_update_task.abort();
         send_queue_update_task.abort();
+        abort_verification_tasks(verification_tasks);
     }
 
     *state = WorkerState::NoClient;
@@ -401,6 +548,105 @@ fn abort_sync_task(sync_task: &mut Option<TokioJoinHandle<()>>) {
     if let Some(task) = sync_task.take() {
         task.abort();
     }
+}
+
+fn abort_verification_tasks(
+    verification_tasks: &mut HashMap<(String, String), TokioJoinHandle<()>>,
+) {
+    for (_, task) in verification_tasks.drain() {
+        task.abort();
+    }
+}
+
+async fn ensure_verification_request_watcher(
+    event_tx: &EventSender,
+    worker_tx: &WorkerSender,
+    state: &mut WorkerState,
+    flow: &VerificationFlowId,
+) {
+    let WorkerState::Ready {
+        client,
+        verification_tasks,
+        ..
+    } = state
+    else {
+        return;
+    };
+
+    let key = verification_task_key(flow);
+    if task_is_running(verification_tasks, &key) {
+        return;
+    }
+
+    let Ok(request) = matrix::lookup_verification_request(client, flow).await else {
+        return;
+    };
+
+    let task = tokio::task::spawn_local(matrix::watch_verification_request(
+        request,
+        flow.clone(),
+        event_tx.clone(),
+        worker_tx.clone(),
+    ));
+    verification_tasks.insert(key, task);
+}
+
+async fn ensure_sas_watcher(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    flow: &VerificationFlowId,
+) {
+    let WorkerState::Ready {
+        client,
+        verification_tasks,
+        ..
+    } = state
+    else {
+        return;
+    };
+
+    let key = verification_task_key(flow);
+    if let Some(task) = verification_tasks.get(&key)
+        && task.is_finished()
+    {
+        verification_tasks.remove(&key);
+    }
+
+    let Ok(sas) = matrix::lookup_sas_verification(client, flow).await else {
+        return;
+    };
+
+    if let Some(task) = verification_tasks.remove(&key)
+        && !task.is_finished()
+    {
+        task.abort();
+    }
+
+    let task = tokio::task::spawn_local(matrix::watch_sas_verification(
+        sas,
+        flow.clone(),
+        event_tx.clone(),
+    ));
+    verification_tasks.insert(key, task);
+}
+
+fn verification_task_key(flow: &VerificationFlowId) -> (String, String) {
+    (flow.user_id.clone(), flow.flow_id.clone())
+}
+
+fn task_is_running(
+    verification_tasks: &mut HashMap<(String, String), TokioJoinHandle<()>>,
+    key: &(String, String),
+) -> bool {
+    if verification_tasks
+        .get(key)
+        .is_some_and(|existing_task| !existing_task.is_finished())
+    {
+        return true;
+    }
+
+    verification_tasks.remove(key);
+    false
 }
 
 pub(crate) fn emit_event(event_tx: &EventSender, event: Event) {
@@ -429,10 +675,11 @@ fn emit_matrix_error(event_tx: &EventSender, operation: Operation, err: MatrixCo
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use super::{EventSender, WorkerState, handle_start_sync};
+    use super::{EventSender, WorkerState, handle_start_sync, shutdown_state};
     use crate::api::{Event, Operation};
 
     #[test]
@@ -456,6 +703,7 @@ mod tests {
                 sync_task: Some(existing_task),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                verification_tasks: HashMap::new(),
             };
 
             assert!(!handle_start_sync(&event_tx as &EventSender, &mut state));
@@ -484,6 +732,39 @@ mod tests {
                 session_update_task.abort();
                 send_queue_update_task.abort();
             }
+        });
+    }
+
+    #[test]
+    fn shutdown_state_aborts_verification_watchers() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(&runtime, async {
+            let client = matrix_sdk::Client::builder()
+                .homeserver_url("http://localhost")
+                .build()
+                .await
+                .expect("build matrix client");
+            let verification_task = tokio::task::spawn_local(std::future::pending::<()>());
+            let mut state = WorkerState::Ready {
+                client,
+                sync_task: None,
+                session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
+                verification_tasks: HashMap::from([(
+                    ("@alice:example.org".to_owned(), "txn-123".to_owned()),
+                    verification_task,
+                )]),
+            };
+
+            shutdown_state(&mut state);
+            tokio::task::yield_now().await;
+
+            assert!(matches!(state, WorkerState::NoClient));
         });
     }
 }

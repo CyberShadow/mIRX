@@ -4,7 +4,8 @@ use mmatrix_core::{
     Command, CoreConfig, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
-    SpaceChildSummary, StoredSession, start,
+    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -16,6 +17,59 @@ fn test_config() -> (TempDir, CoreConfig) {
     };
 
     (temp_dir, config)
+}
+
+fn verification_flow_id() -> VerificationFlowId {
+    VerificationFlowId {
+        flow_id: "txn-123".to_owned(),
+        user_id: "@alice:example.org".to_owned(),
+    }
+}
+
+fn assert_invalid_verification_command(command: Command) {
+    let (_temp_dir, config) = test_config();
+    let handle = start(config).expect("start core");
+
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("started event"),
+        Event::Started
+    );
+
+    handle
+        .command_sender()
+        .send(command)
+        .expect("send verification command");
+
+    match handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("verification error")
+    {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::Verification);
+            assert_eq!(
+                err.message,
+                "verification requires an authenticated session"
+            );
+        }
+        other => panic!("expected verification error, got {other:?}"),
+    }
+
+    handle
+        .command_sender()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stopped event"),
+        Event::Stopped
+    );
+    handle.join().expect("join worker");
 }
 
 #[test]
@@ -114,6 +168,26 @@ fn invalid_command_ordering_emits_typed_error_events() {
         Event::Stopped
     );
     handle.join().expect("join worker");
+}
+
+#[test]
+fn accept_verification_before_login_emits_verification_error() {
+    assert_invalid_verification_command(Command::AcceptVerification(verification_flow_id()));
+}
+
+#[test]
+fn cancel_verification_before_login_emits_verification_error() {
+    assert_invalid_verification_command(Command::CancelVerification(verification_flow_id()));
+}
+
+#[test]
+fn confirm_verification_sas_before_login_emits_verification_error() {
+    assert_invalid_verification_command(Command::ConfirmVerificationSas(verification_flow_id()));
+}
+
+#[test]
+fn reject_verification_sas_before_login_emits_verification_error() {
+    assert_invalid_verification_command(Command::RejectVerificationSas(verification_flow_id()));
 }
 
 #[test]
@@ -533,6 +607,86 @@ fn room_typing_event_round_trips_through_serde() {
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize room typing event");
     assert_eq!(restored, event);
+}
+
+#[test]
+fn verification_request_event_preserves_existing_passive_wire_shape() {
+    let event = Event::VerificationRequest(VerificationRequest {
+        flow_id: "txn-123".to_owned(),
+        user_id: "@alice:example.org".to_owned(),
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize verification request");
+    assert_eq!(
+        json,
+        r#"{"VerificationRequest":{"flow_id":"txn-123","user_id":"@alice:example.org"}}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize verification request");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn verification_state_event_serializes_with_tagged_state_payload() {
+    let event = Event::VerificationState(VerificationStateEvent {
+        flow_id: "txn-123".to_owned(),
+        user_id: "@alice:example.org".to_owned(),
+        state: VerificationState::SasReady {
+            emojis: vec![VerificationEmoji {
+                symbol: "🐶".to_owned(),
+                description: "Dog".to_owned(),
+            }],
+            decimals: VerificationDecimals {
+                first: 1234,
+                second: 5678,
+                third: 9012,
+            },
+        },
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize verification state");
+    assert_eq!(
+        json,
+        r#"{"VerificationState":{"flow_id":"txn-123","user_id":"@alice:example.org","state":{"state":"sas_ready","emojis":[{"symbol":"🐶","description":"Dog"}],"decimals":{"first":1234,"second":5678,"third":9012}}}}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize verification state");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn verification_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<VerificationFlowId>(
+            r#"{"flow_id":"txn-123","user_id":"@alice:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "verification flow id must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<VerificationStateEvent>(
+            r#"{"flow_id":"txn-123","user_id":"@alice:example.org","state":{"state":"requested"},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "verification state event must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<VerificationEmoji>(
+            r#"{"symbol":"🐶","description":"Dog","unexpected":"value"}"#
+        )
+        .is_err(),
+        "verification emoji must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<VerificationDecimals>(
+            r#"{"first":1234,"second":5678,"third":9012,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "verification decimals must reject unknown fields"
+    );
 }
 
 #[test]

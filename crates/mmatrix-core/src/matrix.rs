@@ -2,17 +2,27 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
+use futures_util::StreamExt;
 use matrix_sdk::{
     Client, LoopCtrl, Room, SessionChange, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::SyncOrStrippedState,
-    encryption::{BackupDownloadStrategy, EncryptionSettings},
+    encryption::{
+        BackupDownloadStrategy, EncryptionSettings,
+        verification::{
+            CancelInfo, Emoji as MatrixEmoji, EmojiShortAuthString, SasState,
+            SasVerification as MatrixSasVerification,
+            VerificationRequest as MatrixVerificationRequest, VerificationRequestState,
+        },
+    },
     ruma::{
         MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
-            key::verification::request::ToDeviceKeyVerificationRequestEventContent,
+            key::verification::{
+                VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
+            },
             room::{
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
@@ -31,9 +41,10 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
-    SpaceChildSummary, StoredSession, VerificationRequest,
+    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
-use crate::runtime::{EventSender, emit_event};
+use crate::runtime::{EventSender, WorkerMessage, WorkerSender, emit_event};
 
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {
@@ -204,7 +215,11 @@ async fn summarize_space_children(
         .collect())
 }
 
-pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
+pub(crate) fn register_event_handlers(
+    client: &Client,
+    events: EventSender,
+    worker_tx: WorkerSender,
+) {
     let timeline_events = events.clone();
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
@@ -263,14 +278,22 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     });
 
     let verification_events = events.clone();
+    let verification_worker_tx = worker_tx.clone();
     client.add_event_handler(
         move |event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>| {
             let events = verification_events.clone();
+            let worker_tx = verification_worker_tx.clone();
             async move {
+                let flow = verification_flow_id_from_to_device(&event);
                 emit_event(
                     &events,
                     Event::VerificationRequest(verification_request_from_to_device(&event)),
                 );
+                emit_event(
+                    &events,
+                    Event::VerificationState(verification_requested_state_event(flow.clone())),
+                );
+                let _ = worker_tx.send(WorkerMessage::EnsureVerificationRequestWatcher(flow));
             }
         },
     );
@@ -359,6 +382,379 @@ fn verification_request_from_to_device(
     VerificationRequest {
         flow_id: event.content.transaction_id.to_string(),
         user_id: event.sender.to_string(),
+    }
+}
+
+fn verification_flow_id_from_to_device(
+    event: &ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>,
+) -> VerificationFlowId {
+    VerificationFlowId {
+        flow_id: event.content.transaction_id.to_string(),
+        user_id: event.sender.to_string(),
+    }
+}
+
+fn verification_requested_state_event(flow: VerificationFlowId) -> VerificationStateEvent {
+    verification_state_event(&flow, VerificationState::Requested)
+}
+
+fn verification_state_event(
+    flow: &VerificationFlowId,
+    state: VerificationState,
+) -> VerificationStateEvent {
+    VerificationStateEvent {
+        flow_id: flow.flow_id.clone(),
+        user_id: flow.user_id.clone(),
+        state,
+    }
+}
+
+pub(crate) fn parse_verification_user_id(user_id: &str) -> Result<OwnedUserId, MatrixCoreError> {
+    OwnedUserId::try_from(user_id.to_owned())
+        .map_err(|err| MatrixCoreError::new(format!("invalid verification user id: {err}")))
+}
+
+pub(crate) async fn lookup_verification_request(
+    client: &Client,
+    flow: &VerificationFlowId,
+) -> Result<MatrixVerificationRequest, MatrixCoreError> {
+    let user_id = parse_verification_user_id(&flow.user_id)?;
+    client
+        .encryption()
+        .get_verification_request(&user_id, &flow.flow_id)
+        .await
+        .ok_or_else(|| {
+            MatrixCoreError::new(format!(
+                "verification request not found for user {} and flow {}",
+                flow.user_id, flow.flow_id
+            ))
+        })
+}
+
+pub(crate) async fn lookup_sas_verification(
+    client: &Client,
+    flow: &VerificationFlowId,
+) -> Result<MatrixSasVerification, MatrixCoreError> {
+    let user_id = parse_verification_user_id(&flow.user_id)?;
+    client
+        .encryption()
+        .get_verification(&user_id, &flow.flow_id)
+        .await
+        .and_then(|verification| verification.sas())
+        .ok_or_else(|| {
+            MatrixCoreError::new(format!(
+                "SAS verification not found for user {} and flow {}",
+                flow.user_id, flow.flow_id
+            ))
+        })
+}
+
+pub(crate) async fn accept_verification(
+    client: &Client,
+    flow: &VerificationFlowId,
+) -> Result<VerificationStateEvent, MatrixCoreError> {
+    let request = lookup_verification_request(client, flow).await?;
+    request
+        .accept_with_methods(vec![VerificationMethod::SasV1])
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to accept verification: {err}")))?;
+
+    match request.state() {
+        VerificationRequestState::Ready { .. } => {
+            request.start_sas().await.map_err(|err| {
+                MatrixCoreError::new(format!("failed to start SAS verification: {err}"))
+            })?;
+            Ok(verification_state_event(flow, VerificationState::Ready))
+        }
+        VerificationRequestState::Done => {
+            Ok(verification_state_event(flow, VerificationState::Done))
+        }
+        VerificationRequestState::Cancelled(cancel_info) => {
+            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        VerificationRequestState::Created { .. }
+        | VerificationRequestState::Requested { .. }
+        | VerificationRequestState::Transitioned { .. } => {
+            Ok(verification_state_event(flow, VerificationState::Accepted))
+        }
+    }
+}
+
+pub(crate) async fn cancel_verification(
+    client: &Client,
+    flow: &VerificationFlowId,
+) -> Result<VerificationStateEvent, MatrixCoreError> {
+    if let Ok(sas) = lookup_sas_verification(client, flow).await {
+        sas.cancel().await.map_err(|err| {
+            MatrixCoreError::new(format!("failed to cancel SAS verification: {err}"))
+        })?;
+        return cancelled_sas_state_event(flow, &sas);
+    }
+
+    let request = lookup_verification_request(client, flow).await?;
+    request.cancel().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to cancel verification request: {err}"))
+    })?;
+    cancelled_request_state_event(flow, &request)
+}
+
+pub(crate) async fn confirm_verification_sas(
+    client: &Client,
+    flow: &VerificationFlowId,
+) -> Result<VerificationStateEvent, MatrixCoreError> {
+    let sas = lookup_sas_verification(client, flow).await?;
+    sas.confirm().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to confirm SAS verification: {err}"))
+    })?;
+
+    match sas.state() {
+        SasState::Done { .. } => Ok(verification_state_event(flow, VerificationState::Done)),
+        SasState::Cancelled(cancel_info) => {
+            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        _ => Ok(verification_state_event(flow, VerificationState::Confirmed)),
+    }
+}
+
+pub(crate) async fn reject_verification_sas(
+    client: &Client,
+    flow: &VerificationFlowId,
+) -> Result<VerificationStateEvent, MatrixCoreError> {
+    let sas = lookup_sas_verification(client, flow).await?;
+    sas.mismatch()
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to reject SAS verification: {err}")))?;
+    cancelled_sas_state_event(flow, &sas)
+}
+
+pub(crate) async fn watch_verification_request(
+    request: MatrixVerificationRequest,
+    flow: VerificationFlowId,
+    events: EventSender,
+    worker_tx: WorkerSender,
+) {
+    if let Some(event) = map_request_state(&flow, request.state())
+        && event.state != VerificationState::Requested
+    {
+        emit_event(&events, Event::VerificationState(event));
+    }
+
+    if hand_off_request_state(&request, &flow, &events, &worker_tx, request.state()).await {
+        return;
+    }
+
+    let mut changes = request.changes();
+    while let Some(state) = changes.next().await {
+        if let Some(event) = map_request_state(&flow, state.clone()) {
+            emit_event(&events, Event::VerificationState(event));
+        }
+
+        if hand_off_request_state(&request, &flow, &events, &worker_tx, state).await {
+            return;
+        }
+    }
+}
+
+pub(crate) async fn watch_sas_verification(
+    sas: MatrixSasVerification,
+    flow: VerificationFlowId,
+    events: EventSender,
+) {
+    if let Some(event) = map_sas_verification(&flow, &sas) {
+        emit_event(&events, Event::VerificationState(event.clone()));
+        if matches!(
+            event.state,
+            VerificationState::Done | VerificationState::Cancelled { .. }
+        ) {
+            return;
+        }
+    }
+
+    let mut changes = sas.changes();
+    while let Some(state) = changes.next().await {
+        if let Some(event) = map_sas_state(&flow, state) {
+            let terminal = matches!(
+                event.state,
+                VerificationState::Done | VerificationState::Cancelled { .. }
+            );
+            emit_event(&events, Event::VerificationState(event));
+            if terminal {
+                return;
+            }
+        }
+    }
+}
+
+async fn hand_off_request_state(
+    request: &MatrixVerificationRequest,
+    flow: &VerificationFlowId,
+    events: &EventSender,
+    worker_tx: &WorkerSender,
+    state: VerificationRequestState,
+) -> bool {
+    match state {
+        VerificationRequestState::Ready { .. } => {
+            if let Err(err) = request.start_sas().await {
+                emit_event(
+                    events,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::Verification,
+                        message: format!("failed to start SAS verification: {err}"),
+                    }),
+                );
+            }
+            let _ = worker_tx.send(WorkerMessage::EnsureSasWatcher(flow.clone()));
+            true
+        }
+        VerificationRequestState::Transitioned { verification } => {
+            if verification.sas().is_some() {
+                let _ = worker_tx.send(WorkerMessage::EnsureSasWatcher(flow.clone()));
+                return true;
+            }
+            false
+        }
+        VerificationRequestState::Done | VerificationRequestState::Cancelled(_) => true,
+        VerificationRequestState::Created { .. } | VerificationRequestState::Requested { .. } => {
+            false
+        }
+    }
+}
+
+fn cancelled_request_state_event(
+    flow: &VerificationFlowId,
+    request: &MatrixVerificationRequest,
+) -> Result<VerificationStateEvent, MatrixCoreError> {
+    match request.state() {
+        VerificationRequestState::Cancelled(cancel_info) => {
+            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        _ => request
+            .cancel_info()
+            .map(|cancel_info| verification_state_event(flow, map_cancel_info(cancel_info)))
+            .ok_or_else(|| {
+                MatrixCoreError::new(
+                    "verification request missing cancelled state after cancellation",
+                )
+            }),
+    }
+}
+
+fn cancelled_sas_state_event(
+    flow: &VerificationFlowId,
+    sas: &MatrixSasVerification,
+) -> Result<VerificationStateEvent, MatrixCoreError> {
+    match sas.state() {
+        SasState::Cancelled(cancel_info) => {
+            Ok(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        _ => sas
+            .cancel_info()
+            .map(|cancel_info| verification_state_event(flow, map_cancel_info(cancel_info)))
+            .ok_or_else(|| {
+                MatrixCoreError::new("SAS verification missing cancelled state after cancellation")
+            }),
+    }
+}
+
+fn map_request_state(
+    flow: &VerificationFlowId,
+    state: VerificationRequestState,
+) -> Option<VerificationStateEvent> {
+    match state {
+        VerificationRequestState::Requested { .. } => {
+            Some(verification_requested_state_event(flow.clone()))
+        }
+        VerificationRequestState::Ready { .. } => {
+            Some(verification_state_event(flow, VerificationState::Ready))
+        }
+        VerificationRequestState::Done => {
+            Some(verification_state_event(flow, VerificationState::Done))
+        }
+        VerificationRequestState::Cancelled(cancel_info) => {
+            Some(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        VerificationRequestState::Created { .. }
+        | VerificationRequestState::Transitioned { .. } => None,
+    }
+}
+
+fn map_sas_verification(
+    flow: &VerificationFlowId,
+    sas: &MatrixSasVerification,
+) -> Option<VerificationStateEvent> {
+    if sas.can_be_presented() {
+        let decimals = sas.decimals().map(map_decimals)?;
+        let emojis = sas.emoji().map(map_emoji_array).unwrap_or_default();
+        return Some(verification_state_event(
+            flow,
+            VerificationState::SasReady { emojis, decimals },
+        ));
+    }
+
+    match sas.state() {
+        SasState::Confirmed => Some(verification_state_event(flow, VerificationState::Confirmed)),
+        SasState::Done { .. } => Some(verification_state_event(flow, VerificationState::Done)),
+        SasState::Cancelled(cancel_info) => {
+            Some(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        _ => None,
+    }
+}
+
+fn map_sas_state(flow: &VerificationFlowId, state: SasState) -> Option<VerificationStateEvent> {
+    match state {
+        SasState::KeysExchanged { emojis, decimals } => Some(verification_state_event(
+            flow,
+            VerificationState::SasReady {
+                emojis: emojis.map(map_emoji_short_auth_string).unwrap_or_default(),
+                decimals: map_decimals(decimals),
+            },
+        )),
+        SasState::Confirmed => Some(verification_state_event(flow, VerificationState::Confirmed)),
+        SasState::Done { .. } => Some(verification_state_event(flow, VerificationState::Done)),
+        SasState::Cancelled(cancel_info) => {
+            Some(verification_state_event(flow, map_cancel_info(cancel_info)))
+        }
+        SasState::Created { .. } | SasState::Started { .. } | SasState::Accepted { .. } => None,
+    }
+}
+
+fn map_cancel_info(cancel_info: CancelInfo) -> VerificationState {
+    cancelled_state(
+        cancel_info.reason(),
+        cancel_info.cancel_code().as_str(),
+        cancel_info.cancelled_by_us(),
+    )
+}
+
+fn cancelled_state(reason: &str, code: &str, cancelled_by_us: bool) -> VerificationState {
+    VerificationState::Cancelled {
+        reason: reason.to_owned(),
+        code: code.to_owned(),
+        cancelled_by_us,
+    }
+}
+
+fn map_emoji_short_auth_string(emojis: EmojiShortAuthString) -> Vec<VerificationEmoji> {
+    emojis.emojis.into_iter().map(map_emoji).collect()
+}
+
+fn map_emoji_array(emojis: [MatrixEmoji; 7]) -> Vec<VerificationEmoji> {
+    emojis.into_iter().map(map_emoji).collect()
+}
+
+fn map_emoji(emoji: MatrixEmoji) -> VerificationEmoji {
+    VerificationEmoji {
+        symbol: emoji.symbol.to_owned(),
+        description: emoji.description.to_owned(),
+    }
+}
+
+fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals {
+    VerificationDecimals {
+        first,
+        second,
+        third,
     }
 }
 
@@ -680,17 +1076,21 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
+        cancelled_state, map_decimals, map_emoji_array, map_emoji_short_auth_string,
         map_local_message_activity, map_send_queue_update, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_typing_from_sync_typing,
-        text_body_from_serialized_event, verification_request_from_to_device,
+        text_body_from_serialized_event, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTyping, VerificationRequest,
+        RoomStateNoticeContent, RoomTyping, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
+        encryption::verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
         ruma::{
             MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
             events::{
@@ -718,6 +1118,72 @@ mod tests {
 
     fn event_id() -> OwnedEventId {
         OwnedEventId::try_from("$event:example.org").expect("valid event id")
+    }
+
+    fn matrix_emojis() -> [MatrixEmoji; 7] {
+        [
+            MatrixEmoji {
+                symbol: "🐶",
+                description: "Dog",
+            },
+            MatrixEmoji {
+                symbol: "🐱",
+                description: "Cat",
+            },
+            MatrixEmoji {
+                symbol: "🦁",
+                description: "Lion",
+            },
+            MatrixEmoji {
+                symbol: "🐎",
+                description: "Horse",
+            },
+            MatrixEmoji {
+                symbol: "🦄",
+                description: "Unicorn",
+            },
+            MatrixEmoji {
+                symbol: "🐷",
+                description: "Pig",
+            },
+            MatrixEmoji {
+                symbol: "🐘",
+                description: "Elephant",
+            },
+        ]
+    }
+
+    fn expected_verification_emojis() -> Vec<VerificationEmoji> {
+        vec![
+            VerificationEmoji {
+                symbol: "🐶".to_owned(),
+                description: "Dog".to_owned(),
+            },
+            VerificationEmoji {
+                symbol: "🐱".to_owned(),
+                description: "Cat".to_owned(),
+            },
+            VerificationEmoji {
+                symbol: "🦁".to_owned(),
+                description: "Lion".to_owned(),
+            },
+            VerificationEmoji {
+                symbol: "🐎".to_owned(),
+                description: "Horse".to_owned(),
+            },
+            VerificationEmoji {
+                symbol: "🦄".to_owned(),
+                description: "Unicorn".to_owned(),
+            },
+            VerificationEmoji {
+                symbol: "🐷".to_owned(),
+                description: "Pig".to_owned(),
+            },
+            VerificationEmoji {
+                symbol: "🐘".to_owned(),
+                description: "Elephant".to_owned(),
+            },
+        ]
     }
 
     #[test]
@@ -882,6 +1348,76 @@ mod tests {
             VerificationRequest {
                 flow_id: "txn-123".to_owned(),
                 user_id: "@alice:example.org".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn to_device_verification_request_mapping_derives_requested_state() {
+        let event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent> =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.key.verification.request",
+                "sender": "@alice:example.org",
+                "content": {
+                    "from_device": "ALICEDEVICE",
+                    "transaction_id": "txn-123",
+                    "methods": ["m.sas.v1"],
+                    "timestamp": 1700000000003u64
+                }
+            }))
+            .expect("deserialize to-device verification request");
+
+        assert_eq!(
+            verification_requested_state_event(verification_flow_id_from_to_device(&event)),
+            VerificationStateEvent {
+                flow_id: "txn-123".to_owned(),
+                user_id: "@alice:example.org".to_owned(),
+                state: VerificationState::Requested,
+            }
+        );
+    }
+
+    #[test]
+    fn decimal_mapping_preserves_each_value() {
+        assert_eq!(
+            map_decimals((1234, 5678, 9012)),
+            VerificationDecimals {
+                first: 1234,
+                second: 5678,
+                third: 9012,
+            }
+        );
+    }
+
+    #[test]
+    fn emoji_short_auth_string_mapping_preserves_symbols_and_descriptions() {
+        let sas = EmojiShortAuthString {
+            indices: [0, 1, 2, 3, 4, 5, 6],
+            emojis: matrix_emojis(),
+        };
+
+        assert_eq!(
+            map_emoji_short_auth_string(sas),
+            expected_verification_emojis()
+        );
+    }
+
+    #[test]
+    fn emoji_array_mapping_preserves_symbols_and_descriptions() {
+        assert_eq!(
+            map_emoji_array(matrix_emojis()),
+            expected_verification_emojis()
+        );
+    }
+
+    #[test]
+    fn cancelled_state_preserves_reason_code_and_origin() {
+        assert_eq!(
+            cancelled_state("The user cancelled the verification.", "m.user", true),
+            VerificationState::Cancelled {
+                reason: "The user cancelled the verification.".to_owned(),
+                code: "m.user".to_owned(),
+                cancelled_by_us: true,
             }
         );
     }

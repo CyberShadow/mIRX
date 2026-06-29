@@ -2034,6 +2034,7 @@ name = "mmatrix-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "futures-util",
  "matrix-sdk",
  "serde",
  "serde_json",

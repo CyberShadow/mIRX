@@ -10,7 +10,8 @@ pub use api::{
     RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomSummary, RoomTyping, SendTextRequest, SpaceChildSummary, StoredSession,
-    VerificationRequest,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

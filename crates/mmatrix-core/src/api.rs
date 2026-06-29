@@ -12,6 +12,10 @@ pub enum Command {
     RestoreSession(RestoreSessionRequest),
     StartSync,
     SendText(SendTextRequest),
+    AcceptVerification(VerificationFlowId),
+    CancelVerification(VerificationFlowId),
+    ConfirmVerificationSas(VerificationFlowId),
+    RejectVerificationSas(VerificationFlowId),
     Logout,
     Shutdown,
 }
@@ -149,6 +153,55 @@ pub struct VerificationRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct VerificationFlowId {
+    pub flow_id: String,
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationStateEvent {
+    pub flow_id: String,
+    pub user_id: String,
+    pub state: VerificationState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum VerificationState {
+    Requested,
+    Accepted,
+    Ready,
+    SasReady {
+        emojis: Vec<VerificationEmoji>,
+        decimals: VerificationDecimals,
+    },
+    Confirmed,
+    Done,
+    Cancelled {
+        reason: String,
+        code: String,
+        cancelled_by_us: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationEmoji {
+    pub symbol: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationDecimals {
+    pub first: u16,
+    pub second: u16,
+    pub third: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CoreErrorEvent {
     pub operation: Operation,
     pub message: String,
@@ -161,6 +214,7 @@ pub enum Operation {
     SessionUpdate,
     StartSync,
     SendText,
+    Verification,
     Logout,
     Shutdown,
 }
@@ -177,6 +231,7 @@ pub enum Event {
     RoomActivityUpdate(RoomActivityUpdate),
     RoomTyping(RoomTyping),
     VerificationRequest(VerificationRequest),
+    VerificationState(VerificationStateEvent),
     LoggedOut,
     Stopped,
     Error(CoreErrorEvent),
