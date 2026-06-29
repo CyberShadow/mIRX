@@ -166,7 +166,7 @@ pub struct VerificationStateEvent {
     pub state: VerificationState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum VerificationState {
     Requested,
@@ -183,6 +183,53 @@ pub enum VerificationState {
         code: String,
         cancelled_by_us: bool,
     },
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+enum VerificationStateSerde {
+    Requested {},
+    Accepted {},
+    Ready {},
+    SasReady {
+        emojis: Vec<VerificationEmoji>,
+        decimals: VerificationDecimals,
+    },
+    Confirmed {},
+    Done {},
+    Cancelled {
+        reason: String,
+        code: String,
+        cancelled_by_us: bool,
+    },
+}
+
+impl<'de> serde::Deserialize<'de> for VerificationState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let state = VerificationStateSerde::deserialize(deserializer)?;
+        Ok(match state {
+            VerificationStateSerde::Requested {} => Self::Requested,
+            VerificationStateSerde::Accepted {} => Self::Accepted,
+            VerificationStateSerde::Ready {} => Self::Ready,
+            VerificationStateSerde::SasReady { emojis, decimals } => {
+                Self::SasReady { emojis, decimals }
+            }
+            VerificationStateSerde::Confirmed {} => Self::Confirmed,
+            VerificationStateSerde::Done {} => Self::Done,
+            VerificationStateSerde::Cancelled {
+                reason,
+                code,
+                cancelled_by_us,
+            } => Self::Cancelled {
+                reason,
+                code,
+                cancelled_by_us,
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

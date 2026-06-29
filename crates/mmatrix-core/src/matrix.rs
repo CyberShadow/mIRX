@@ -44,7 +44,7 @@ use crate::api::{
     SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
-use crate::runtime::{EventSender, WorkerMessage, WorkerSender, emit_event};
+use crate::runtime::{EventSender, emit_event};
 
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {
@@ -215,11 +215,7 @@ async fn summarize_space_children(
         .collect())
 }
 
-pub(crate) fn register_event_handlers(
-    client: &Client,
-    events: EventSender,
-    worker_tx: WorkerSender,
-) {
+pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     let timeline_events = events.clone();
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
@@ -278,11 +274,9 @@ pub(crate) fn register_event_handlers(
     });
 
     let verification_events = events.clone();
-    let verification_worker_tx = worker_tx.clone();
     client.add_event_handler(
         move |event: ToDeviceEvent<ToDeviceKeyVerificationRequestEventContent>| {
             let events = verification_events.clone();
-            let worker_tx = verification_worker_tx.clone();
             async move {
                 let flow = verification_flow_id_from_to_device(&event);
                 emit_event(
@@ -293,7 +287,6 @@ pub(crate) fn register_event_handlers(
                     &events,
                     Event::VerificationState(verification_requested_state_event(flow.clone())),
                 );
-                let _ = worker_tx.send(WorkerMessage::EnsureVerificationRequestWatcher(flow));
             }
         },
     );
@@ -531,7 +524,6 @@ pub(crate) async fn watch_verification_request(
     request: MatrixVerificationRequest,
     flow: VerificationFlowId,
     events: EventSender,
-    worker_tx: WorkerSender,
 ) {
     if let Some(event) = map_request_state(&flow, request.state())
         && event.state != VerificationState::Requested
@@ -539,7 +531,7 @@ pub(crate) async fn watch_verification_request(
         emit_event(&events, Event::VerificationState(event));
     }
 
-    if hand_off_request_state(&request, &flow, &events, &worker_tx, request.state()).await {
+    if hand_off_request_state(&request, &flow, &events, request.state()).await {
         return;
     }
 
@@ -549,7 +541,7 @@ pub(crate) async fn watch_verification_request(
             emit_event(&events, Event::VerificationState(event));
         }
 
-        if hand_off_request_state(&request, &flow, &events, &worker_tx, state).await {
+        if hand_off_request_state(&request, &flow, &events, state).await {
             return;
         }
     }
@@ -589,26 +581,48 @@ async fn hand_off_request_state(
     request: &MatrixVerificationRequest,
     flow: &VerificationFlowId,
     events: &EventSender,
-    worker_tx: &WorkerSender,
     state: VerificationRequestState,
 ) -> bool {
     match state {
         VerificationRequestState::Ready { .. } => {
-            if let Err(err) = request.start_sas().await {
-                emit_event(
-                    events,
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::Verification,
-                        message: format!("failed to start SAS verification: {err}"),
-                    }),
-                );
+            match request.start_sas().await {
+                Ok(Some(sas)) => {
+                    if let Some(event) = map_sas_verification(flow, &sas) {
+                        emit_event(events, Event::VerificationState(event.clone()));
+                        if matches!(
+                            event.state,
+                            VerificationState::Done | VerificationState::Cancelled { .. }
+                        ) {
+                            return true;
+                        }
+                    }
+                    watch_sas_verification(sas, flow.clone(), events.clone()).await;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    emit_event(
+                        events,
+                        Event::Error(CoreErrorEvent {
+                            operation: Operation::Verification,
+                            message: format!("failed to start SAS verification: {err}"),
+                        }),
+                    );
+                }
             }
-            let _ = worker_tx.send(WorkerMessage::EnsureSasWatcher(flow.clone()));
             true
         }
         VerificationRequestState::Transitioned { verification } => {
-            if verification.sas().is_some() {
-                let _ = worker_tx.send(WorkerMessage::EnsureSasWatcher(flow.clone()));
+            if let Some(sas) = verification.sas() {
+                if let Some(event) = map_sas_verification(flow, &sas) {
+                    emit_event(events, Event::VerificationState(event.clone()));
+                    if matches!(
+                        event.state,
+                        VerificationState::Done | VerificationState::Cancelled { .. }
+                    ) {
+                        return true;
+                    }
+                }
+                watch_sas_verification(sas, flow.clone(), events.clone()).await;
                 return true;
             }
             false

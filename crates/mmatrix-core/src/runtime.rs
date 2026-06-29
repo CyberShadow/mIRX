@@ -16,25 +16,15 @@ use crate::api::{
 use crate::matrix::{self, MatrixCoreError};
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
-pub(crate) type WorkerSender = UnboundedSender<WorkerMessage>;
-
-#[derive(Debug)]
-pub(crate) enum WorkerMessage {
-    Command(Command),
-    EnsureVerificationRequestWatcher(VerificationFlowId),
-    EnsureSasWatcher(VerificationFlowId),
-}
 
 #[derive(Debug, Clone)]
 pub struct CommandSender {
-    sender: WorkerSender,
+    sender: UnboundedSender<Command>,
 }
 
 impl CommandSender {
     pub fn send(&self, command: Command) -> Result<(), SendCommandError> {
-        self.sender
-            .send(WorkerMessage::Command(command))
-            .map_err(|_| SendCommandError)
+        self.sender.send(command).map_err(|_| SendCommandError)
     }
 }
 
@@ -117,10 +107,9 @@ enum WorkerState {
 }
 
 pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
-    let (worker_tx, worker_rx) = unbounded_channel();
+    let (command_tx, command_rx) = unbounded_channel();
     let (event_tx, event_rx) = mpsc::channel();
     let (startup_tx, startup_rx) = mpsc::channel();
-    let worker_thread_tx = worker_tx.clone();
 
     let worker = thread::Builder::new()
         .name("mmatrix-core".to_owned())
@@ -138,16 +127,13 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
             }
 
             let local = LocalSet::new();
-            local.block_on(
-                &runtime,
-                run_worker(config, worker_rx, worker_thread_tx, event_tx),
-            );
+            local.block_on(&runtime, run_worker(config, command_rx, event_tx));
         })
         .map_err(StartError::ThreadSpawn)?;
 
     match startup_rx.recv() {
         Ok(Ok(())) => Ok(CoreHandle {
-            command_sender: CommandSender { sender: worker_tx },
+            command_sender: CommandSender { sender: command_tx },
             events: event_rx,
             worker,
         }),
@@ -164,16 +150,15 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
 
 async fn run_worker(
     config: CoreConfig,
-    mut worker_rx: UnboundedReceiver<WorkerMessage>,
-    worker_tx: WorkerSender,
+    mut command_rx: UnboundedReceiver<Command>,
     event_tx: EventSender,
 ) {
     emit_event(&event_tx, Event::Started);
 
     let mut state = WorkerState::NoClient;
 
-    while let Some(message) = worker_rx.recv().await {
-        if handle_worker_message(message, &config, &event_tx, &worker_tx, &mut state).await {
+    while let Some(command) = command_rx.recv().await {
+        if handle_command(command, &config, &event_tx, &mut state).await {
             break;
         }
     }
@@ -182,53 +167,39 @@ async fn run_worker(
     emit_event(&event_tx, Event::Stopped);
 }
 
-async fn handle_worker_message(
-    message: WorkerMessage,
+async fn handle_command(
+    command: Command,
     config: &CoreConfig,
     event_tx: &EventSender,
-    worker_tx: &WorkerSender,
     state: &mut WorkerState,
 ) -> bool {
-    match message {
-        WorkerMessage::Command(command) => match command {
-            Command::Login(request) => {
-                handle_login(config, event_tx, worker_tx, state, request).await
-            }
-            Command::RestoreSession(request) => {
-                handle_restore_session(config, event_tx, worker_tx, state, request).await
-            }
-            Command::StartSync => handle_start_sync(event_tx, state),
-            Command::SendText(request) => handle_send_text(event_tx, state, request).await,
-            Command::AcceptVerification(flow) => {
-                handle_accept_verification(event_tx, worker_tx, state, flow).await
-            }
-            Command::CancelVerification(flow) => {
-                handle_cancel_verification(event_tx, state, flow).await
-            }
-            Command::ConfirmVerificationSas(flow) => {
-                handle_confirm_verification_sas(event_tx, state, flow).await
-            }
-            Command::RejectVerificationSas(flow) => {
-                handle_reject_verification_sas(event_tx, state, flow).await
-            }
-            Command::Logout => handle_logout(event_tx, state).await,
-            Command::Shutdown => true,
-        },
-        WorkerMessage::EnsureVerificationRequestWatcher(flow) => {
-            ensure_verification_request_watcher(event_tx, worker_tx, state, &flow).await;
-            false
+    match command {
+        Command::Login(request) => handle_login(config, event_tx, state, request).await,
+        Command::RestoreSession(request) => {
+            handle_restore_session(config, event_tx, state, request).await
         }
-        WorkerMessage::EnsureSasWatcher(flow) => {
-            ensure_sas_watcher(event_tx, state, &flow).await;
-            false
+        Command::StartSync => handle_start_sync(event_tx, state),
+        Command::SendText(request) => handle_send_text(event_tx, state, request).await,
+        Command::AcceptVerification(flow) => {
+            handle_accept_verification(event_tx, state, flow).await
         }
+        Command::CancelVerification(flow) => {
+            handle_cancel_verification(event_tx, state, flow).await
+        }
+        Command::ConfirmVerificationSas(flow) => {
+            handle_confirm_verification_sas(event_tx, state, flow).await
+        }
+        Command::RejectVerificationSas(flow) => {
+            handle_reject_verification_sas(event_tx, state, flow).await
+        }
+        Command::Logout => handle_logout(event_tx, state).await,
+        Command::Shutdown => true,
     }
 }
 
 async fn handle_login(
     config: &CoreConfig,
     event_tx: &EventSender,
-    worker_tx: &WorkerSender,
     state: &mut WorkerState,
     request: LoginRequest,
 ) -> bool {
@@ -249,7 +220,7 @@ async fn handle_login(
         }
     };
 
-    matrix::register_event_handlers(&client, event_tx.clone(), worker_tx.clone());
+    matrix::register_event_handlers(&client, event_tx.clone());
 
     let session = match matrix::login(&client, &request).await {
         Ok(session) => session,
@@ -291,7 +262,6 @@ async fn handle_login(
 async fn handle_restore_session(
     config: &CoreConfig,
     event_tx: &EventSender,
-    worker_tx: &WorkerSender,
     state: &mut WorkerState,
     request: RestoreSessionRequest,
 ) -> bool {
@@ -312,7 +282,7 @@ async fn handle_restore_session(
         }
     };
 
-    matrix::register_event_handlers(&client, event_tx.clone(), worker_tx.clone());
+    matrix::register_event_handlers(&client, event_tx.clone());
 
     let current_user_id = request.session.user_id.clone();
 
@@ -400,7 +370,6 @@ async fn handle_send_text(
 
 async fn handle_accept_verification(
     event_tx: &EventSender,
-    worker_tx: &WorkerSender,
     state: &mut WorkerState,
     flow: VerificationFlowId,
 ) -> bool {
@@ -416,8 +385,7 @@ async fn handle_accept_verification(
     match matrix::accept_verification(client, &flow).await {
         Ok(event) => {
             emit_event(event_tx, Event::VerificationState(event));
-            ensure_verification_request_watcher(event_tx, worker_tx, state, &flow).await;
-            ensure_sas_watcher(event_tx, state, &flow).await;
+            ensure_verification_watcher(event_tx, state, &flow).await;
         }
         Err(err) => emit_matrix_error(event_tx, Operation::Verification, err),
     }
@@ -464,7 +432,7 @@ async fn handle_confirm_verification_sas(
     match matrix::confirm_verification_sas(client, &flow).await {
         Ok(event) => {
             emit_event(event_tx, Event::VerificationState(event));
-            ensure_sas_watcher(event_tx, state, &flow).await;
+            ensure_verification_watcher(event_tx, state, &flow).await;
         }
         Err(err) => emit_matrix_error(event_tx, Operation::Verification, err),
     }
@@ -558,9 +526,8 @@ fn abort_verification_tasks(
     }
 }
 
-async fn ensure_verification_request_watcher(
+async fn ensure_verification_watcher(
     event_tx: &EventSender,
-    worker_tx: &WorkerSender,
     state: &mut WorkerState,
     flow: &VerificationFlowId,
 ) {
@@ -578,55 +545,23 @@ async fn ensure_verification_request_watcher(
         return;
     }
 
-    let Ok(request) = matrix::lookup_verification_request(client, flow).await else {
-        return;
+    let task = if let Ok(request) = matrix::lookup_verification_request(client, flow).await {
+        tokio::task::spawn_local(matrix::watch_verification_request(
+            request,
+            flow.clone(),
+            event_tx.clone(),
+        ))
+    } else {
+        let Ok(sas) = matrix::lookup_sas_verification(client, flow).await else {
+            return;
+        };
+        tokio::task::spawn_local(matrix::watch_sas_verification(
+            sas,
+            flow.clone(),
+            event_tx.clone(),
+        ))
     };
 
-    let task = tokio::task::spawn_local(matrix::watch_verification_request(
-        request,
-        flow.clone(),
-        event_tx.clone(),
-        worker_tx.clone(),
-    ));
-    verification_tasks.insert(key, task);
-}
-
-async fn ensure_sas_watcher(
-    event_tx: &EventSender,
-    state: &mut WorkerState,
-    flow: &VerificationFlowId,
-) {
-    let WorkerState::Ready {
-        client,
-        verification_tasks,
-        ..
-    } = state
-    else {
-        return;
-    };
-
-    let key = verification_task_key(flow);
-    if let Some(task) = verification_tasks.get(&key)
-        && task.is_finished()
-    {
-        verification_tasks.remove(&key);
-    }
-
-    let Ok(sas) = matrix::lookup_sas_verification(client, flow).await else {
-        return;
-    };
-
-    if let Some(task) = verification_tasks.remove(&key)
-        && !task.is_finished()
-    {
-        task.abort();
-    }
-
-    let task = tokio::task::spawn_local(matrix::watch_sas_verification(
-        sas,
-        flow.clone(),
-        event_tx.clone(),
-    ));
     verification_tasks.insert(key, task);
 }
 
@@ -679,7 +614,10 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use super::{EventSender, WorkerState, handle_start_sync, shutdown_state};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    use super::{EventSender, WorkerState, handle_start_sync, run_worker, shutdown_state};
+    use crate::api::CoreConfig;
     use crate::api::{Event, Operation};
 
     #[test]
@@ -765,6 +703,40 @@ mod tests {
             tokio::task::yield_now().await;
 
             assert!(matches!(state, WorkerState::NoClient));
+        });
+    }
+
+    #[test]
+    fn worker_stops_when_command_channel_closes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let local = tokio::task::LocalSet::new();
+
+        local.block_on(&runtime, async {
+            let (command_tx, command_rx) = unbounded_channel();
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let config = CoreConfig {
+                profile_dir: std::env::temp_dir().join("mmatrix-core-runtime-test"),
+                store_passphrase: "test-store-passphrase".to_owned(),
+            };
+
+            drop(command_tx);
+            run_worker(config, command_rx, event_tx).await;
+
+            assert_eq!(
+                event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("started event"),
+                Event::Started
+            );
+            assert_eq!(
+                event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("stopped event"),
+                Event::Stopped
+            );
         });
     }
 }

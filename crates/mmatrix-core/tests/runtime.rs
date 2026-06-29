@@ -665,11 +665,25 @@ fn verification_dtos_reject_unknown_fields() {
     );
 
     assert!(
+        serde_json::from_str::<VerificationState>(r#"{"state":"requested","unexpected":"value"}"#)
+            .is_err(),
+        "verification state must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<VerificationStateEvent>(
+            r#"{"flow_id":"txn-123","user_id":"@alice:example.org","state":{"state":"requested","unexpected":"value"}}"#
+        )
+        .is_err(),
+        "verification state event must reject unknown nested state fields"
+    );
+
+    assert!(
         serde_json::from_str::<VerificationStateEvent>(
             r#"{"flow_id":"txn-123","user_id":"@alice:example.org","state":{"state":"requested"},"unexpected":"value"}"#
         )
         .is_err(),
-        "verification state event must reject unknown fields"
+        "verification state event must reject top-level unknown fields"
     );
 
     assert!(
