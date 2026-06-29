@@ -7,7 +7,8 @@ use mmatrix_testkit::{
     NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomActivity, RoomActivityKind,
     RoomMessageActivity, RoomMessageActivityLine, RoomMessageSendState, RoomStateNoticeActivity,
     RoomStateNoticeContent, SpaceChild, StatusBarState, StoredSession, SwitchbarItem,
-    SwitchbarState, TestkitError, UiError, UiState, Verification, ViewIdentity,
+    SwitchbarState, TestkitError, UiError, UiState, Verification, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -121,6 +122,23 @@ fn data_models_round_trip_through_json() {
         last_verification: Some(Verification {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),
+            state: VerificationState::SasReady {
+                emojis: vec![
+                    VerificationEmoji {
+                        symbol: "🐶".to_owned(),
+                        description: "dog".to_owned(),
+                    },
+                    VerificationEmoji {
+                        symbol: "🔥".to_owned(),
+                        description: "fire".to_owned(),
+                    },
+                ],
+                decimals: VerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
         }),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
@@ -900,6 +918,64 @@ fn data_models_reject_unknown_fields() {
         }"#
         )
         .is_err()
+    );
+}
+
+#[test]
+fn model_last_verification_round_trips_typed_state_json() {
+    let model = serde_json::from_value::<Model>(serde_json::json!({
+        "status":"verification sas ready with @alice:example",
+        "lifecycle_state":"ready",
+        "rooms":[],
+        "last_activity":null,
+        "last_verification":{
+            "flow_id":"flow-verify-123",
+            "user_id":"@alice:example",
+            "state":{
+                "state":"cancelled",
+                "reason":"timed out",
+                "code":"m.timeout",
+                "cancelled_by_us":false
+            }
+        },
+        "last_error":null,
+        "selected_room":null
+    }))
+    .expect("deserialize typed verification model");
+
+    assert_eq!(
+        model.last_verification,
+        Some(Verification {
+            flow_id: "flow-verify-123".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::Cancelled {
+                reason: "timed out".to_owned(),
+                code: "m.timeout".to_owned(),
+                cancelled_by_us: false,
+            },
+        })
+    );
+
+    assert_eq!(
+        serde_json::to_value(&model).expect("serialize typed verification model"),
+        serde_json::json!({
+            "status":"verification sas ready with @alice:example",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "last_verification":{
+                "flow_id":"flow-verify-123",
+                "user_id":"@alice:example",
+                "state":{
+                    "state":"cancelled",
+                    "reason":"timed out",
+                    "code":"m.timeout",
+                    "cancelled_by_us":false
+                }
+            },
+            "last_error":null,
+            "selected_room":null
+        })
     );
 }
 

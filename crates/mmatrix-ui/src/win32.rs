@@ -815,6 +815,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         compose_history: ComposeHistory::default(),
         edit_window_proc: None,
         model: initial_model(),
+        #[cfg(test)]
+        recorded_commands: Vec::new(),
     });
 
     let hwnd = create_main_window(instance, state)?;
@@ -4812,19 +4814,22 @@ unsafe fn execute_local_slash_command(
         },
         LocalSlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
-            match action {
-                VerificationAction::Accept => submit_accept_verification(state)?,
-                VerificationAction::Cancel => submit_cancel_verification(state)?,
-                VerificationAction::Confirm => submit_confirm_verification_sas(state)?,
-                VerificationAction::Reject => submit_reject_verification_sas(state)?,
-            }
-            set_local_command_status(
-                hwnd,
-                format!(
-                    "verification {} submitted",
-                    verification_action_label(action)
+            let result = match action {
+                VerificationAction::Accept => submit_accept_verification(state),
+                VerificationAction::Cancel => submit_cancel_verification(state),
+                VerificationAction::Confirm => submit_confirm_verification_sas(state),
+                VerificationAction::Reject => submit_reject_verification_sas(state),
+            };
+            match result {
+                Ok(()) => set_local_command_status(
+                    hwnd,
+                    format!(
+                        "verification {} submitted",
+                        verification_action_label(action)
+                    ),
                 ),
-            )
+                Err(message) => set_local_command_status(hwnd, message),
+            }
         }
         LocalSlashCommand::Invalid { feedback } => set_local_command_status(hwnd, feedback),
     }
