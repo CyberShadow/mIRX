@@ -2498,6 +2498,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
+        Event::E2eeStatus(_) | Event::E2eeRecoverySucceeded(_) => {}
         Event::VerificationRequest(request) => {
             let event = verification_state_event_from_request(request);
             state.model.status = verification_status_message(&event);
