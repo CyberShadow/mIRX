@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CoreConfig, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
+    Command, CoreConfig, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
+    StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -128,6 +129,13 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .expect("send message");
     handle
         .command_sender()
+        .send(Command::MarkRoomRead(MarkRoomReadRequest {
+            room_id: "!room:example.org".to_owned(),
+            event_id: "$event:example.org".to_owned(),
+        }))
+        .expect("send mark room read");
+    handle
+        .command_sender()
         .send(Command::Logout)
         .expect("send logout");
 
@@ -139,6 +147,10 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .events()
         .recv_timeout(Duration::from_secs(2))
         .expect("send message error");
+    let mark_room_read_error = handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("mark room read error");
     let logout_error = handle
         .events()
         .recv_timeout(Duration::from_secs(2))
@@ -151,6 +163,13 @@ fn invalid_command_ordering_emits_typed_error_events() {
     match send_message_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::SendMessage),
         other => panic!("expected send message error, got {other:?}"),
+    }
+    match mark_room_read_error {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::MarkRoomRead);
+            assert_eq!(err.message, "mark room read requires an authenticated session");
+        }
+        other => panic!("expected mark room read error, got {other:?}"),
     }
     match logout_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::Logout),
@@ -297,6 +316,24 @@ fn stored_session_rejects_unknown_fields() {
         .is_err(),
         "stored session must reject unknown fields"
     );
+}
+
+#[test]
+fn mark_room_read_request_round_trips_through_serde() {
+    let request = MarkRoomReadRequest {
+        room_id: "!room:example.org".to_owned(),
+        event_id: "$event:example.org".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize mark room read request");
+    assert_eq!(
+        json,
+        r#"{"room_id":"!room:example.org","event_id":"$event:example.org"}"#
+    );
+
+    let restored: MarkRoomReadRequest =
+        serde_json::from_str(&json).expect("deserialize mark room read request");
+    assert_eq!(restored, request);
 }
 
 #[test]
@@ -727,6 +764,14 @@ fn verification_dtos_reject_unknown_fields() {
 
 #[test]
 fn room_activity_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<MarkRoomReadRequest>(
+            r#"{"room_id":"!ops:example.org","event_id":"$event:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "mark room read request must reject unknown fields"
+    );
+
     assert!(
         serde_json::from_str::<RoomActivity>(
             r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"sent"}},"unexpected":"value"}"#

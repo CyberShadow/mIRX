@@ -16,8 +16,9 @@ use matrix_sdk::{
             VerificationRequest as MatrixVerificationRequest, VerificationRequestState,
         },
     },
+    room::Receipts,
     ruma::{
-        MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId,
+        EventId, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId, RoomId,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
             key::verification::{
@@ -38,9 +39,10 @@ use matrix_sdk::{
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
     SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji,
     VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
@@ -1091,6 +1093,33 @@ pub(crate) async fn send_message(
         .send(AnyMessageLikeEventContent::RoomMessage(content))
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn mark_room_read(
+    client: &Client,
+    request: &MarkRoomReadRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let event_id = <&EventId>::try_from(request.event_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
+        .to_owned();
+
+    let room = client
+        .joined_rooms()
+        .into_iter()
+        .find(|room| room.room_id().as_str() == room_id.as_str())
+        .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))?;
+
+    room.send_multiple_receipts(
+        Receipts::new()
+            .fully_read_marker(event_id.clone())
+            .public_read_receipt(event_id),
+    )
+    .await
+    .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix read receipts: {err}")))?;
 
     Ok(())
 }

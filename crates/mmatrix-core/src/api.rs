@@ -12,6 +12,7 @@ pub enum Command {
     RestoreSession(RestoreSessionRequest),
     StartSync,
     SendMessage(SendMessageRequest),
+    MarkRoomRead(MarkRoomReadRequest),
     AcceptVerification(VerificationFlowId),
     CancelVerification(VerificationFlowId),
     ConfirmVerificationSas(VerificationFlowId),
@@ -48,6 +49,13 @@ pub struct SendMessageRequest {
     pub room_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarkRoomReadRequest {
+    pub room_id: String,
+    pub event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -271,6 +279,7 @@ pub enum Operation {
     SessionUpdate,
     StartSync,
     SendMessage,
+    MarkRoomRead,
     Verification,
     Logout,
     Shutdown,

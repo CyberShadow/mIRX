@@ -720,6 +720,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
         Operation::SendMessage => "send_text",
+        Operation::MarkRoomRead => "mark_room_read",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
@@ -2365,6 +2366,16 @@ mod tests {
             }),
             super::DumpError {
                 operation: "send_text".to_owned(),
+                message: "failed".to_owned(),
+            }
+        );
+        assert_eq!(
+            super::dump_error_from_core(&CoreErrorEvent {
+                operation: Operation::MarkRoomRead,
+                message: "failed".to_owned(),
+            }),
+            super::DumpError {
+                operation: "mark_room_read".to_owned(),
                 message: "failed".to_owned(),
             }
         );

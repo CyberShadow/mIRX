@@ -16,12 +16,12 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
-    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, StoredSession,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest,
+    MarkRoomReadRequest, Operation, RestoreSessionRequest, RoomActivity, RoomActivityKind,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeContent, RoomSummary,
+    RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -522,12 +522,29 @@ fn room_activity_update_marks_inactive_room(update: &RoomActivityUpdate) -> bool
     matches!(&update.kind, RoomActivityUpdateKind::MessageFailed { .. })
 }
 
+fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
+    match &activity.kind {
+        RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event_id),
+            send_state,
+            ..
+        }) if !matches!(send_state, RoomMessageSendState::Pending) => Some(event_id.as_str()),
+        RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
+        _ => None,
+    }
+}
+
 fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
     if room_activity_marks_inactive_room(&activity)
         && state.active_view != ViewId::Room(activity.room_id.clone())
         && actionable_room_by_id(&state.model.rooms, &activity.room_id).is_some()
     {
         state.room_activity.insert(activity.room_id.clone());
+        if let Some(event_id) = read_target_for_room_activity(&activity) {
+            state
+                .room_activity_read_targets
+                .insert(activity.room_id.clone(), event_id.to_owned());
+        }
     }
     state.model.status = format!("timeline update from {}", activity.room_id);
     let room_id = activity.room_id.clone();
@@ -756,6 +773,7 @@ struct WindowState {
     active_view: ViewId,
     switchbar_views: Vec<ViewId>,
     room_activity: BTreeSet<String>,
+    room_activity_read_targets: BTreeMap<String, String>,
     compose_history: ComposeHistory,
     edit_window_proc: WNDPROC,
     model: UiModel,
@@ -822,6 +840,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         active_view: ViewId::Status,
         switchbar_views: Vec::new(),
         room_activity: BTreeSet::new(),
+        room_activity_read_targets: BTreeMap::new(),
         compose_history: ComposeHistory::default(),
         edit_window_proc: None,
         model: initial_model(),
@@ -2425,6 +2444,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state
                 .room_activity
                 .retain(|room_id| actionable_room_by_id(&rooms, room_id).is_some());
+            let tracked_room_activity = state.room_activity.clone();
+            state
+                .room_activity_read_targets
+                .retain(|room_id, _| tracked_room_activity.contains(room_id));
             for (room_id, room_view) in &mut state.model.room_views {
                 if actionable_room_by_id(&rooms, room_id).is_none() {
                     room_view.typing_user_ids.clear();
@@ -2457,6 +2480,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.last_verification = None;
             state.model.last_error = None;
             state.room_activity.clear();
+            state.room_activity_read_targets.clear();
         }
         Event::Stopped => {
             state.model.status = "core stopped".to_owned();
@@ -3006,7 +3030,7 @@ unsafe fn activate_view(
             {
                 let state = state_mut(hwnd);
                 select_room(state, room_id)?;
-                cleared_room_activity = state.room_activity.remove(room_id);
+                cleared_room_activity = handle_room_activation(state, room_id)?;
             }
             ensure_room_view(hwnd, room_id)?
         }
@@ -4546,6 +4570,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.current_session_homeserver_url = None;
         state.switchbar_views.clear();
         state.room_activity.clear();
+        state.room_activity_read_targets.clear();
         state.model = initial_model();
     }
 
@@ -5270,6 +5295,45 @@ fn submit_verification_command(
     Ok(())
 }
 
+fn submit_mark_room_read(
+    state: &mut WindowState,
+    room_id: &str,
+    event_id: String,
+) -> Result<(), String> {
+    let command = Command::MarkRoomRead(MarkRoomReadRequest {
+        room_id: room_id.to_owned(),
+        event_id,
+    });
+    let Some(sender) = state.command_sender.as_ref() else {
+        return Ok(());
+    };
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue mark room read command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    Ok(())
+}
+
+fn clear_room_activity_marker(state: &mut WindowState, room_id: &str) -> (bool, Option<String>) {
+    let read_target = state.room_activity_read_targets.remove(room_id);
+    let cleared_room_activity = state.room_activity.remove(room_id);
+    let read_target = if cleared_room_activity {
+        read_target
+    } else {
+        None
+    };
+    (cleared_room_activity, read_target)
+}
+
+fn handle_room_activation(state: &mut WindowState, room_id: &str) -> Result<bool, String> {
+    let (cleared_room_activity, read_target) = clear_room_activity_marker(state, room_id);
+    if let Some(event_id) = read_target {
+        submit_mark_room_read(state, room_id, event_id)?;
+    }
+    Ok(cleared_room_activity)
+}
+
 fn submit_accept_verification(state: &mut WindowState) -> Result<(), String> {
     let flow = current_verification_flow_id(&state.model)?;
     submit_verification_command(state, Command::AcceptVerification(flow), "accept")
@@ -5347,6 +5411,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
         Operation::SendMessage => "send text",
+        Operation::MarkRoomRead => "mark room read",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
@@ -5799,6 +5864,7 @@ mod tests {
             active_view: ViewId::Status,
             switchbar_views: Vec::new(),
             room_activity: BTreeSet::new(),
+            room_activity_read_targets: BTreeMap::new(),
             compose_history: ComposeHistory::default(),
             edit_window_proc: None,
             model: initial_model(),
@@ -7158,6 +7224,84 @@ mod tests {
     }
 
     #[test]
+    fn inactive_event_backed_messages_record_room_activity_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(&mut state, timeline("!inactive:example", "hello")).unwrap();
+
+        assert!(state.room_activity.contains("!inactive:example"));
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!inactive:example")
+                .map(String::as_str),
+            Some("$!inactive:example:hello")
+        );
+    }
+
+    #[test]
+    fn inactive_state_notices_record_room_activity_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            topic_state("!inactive:example", "incident review"),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.contains("!inactive:example"));
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!inactive:example")
+                .map(String::as_str),
+            Some("$topic:!inactive:example:incident review")
+        );
+    }
+
+    #[test]
+    fn pending_eventless_and_failed_send_activity_do_not_replace_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(&mut state, timeline("!inactive:example", "hello")).unwrap();
+        let original_target = state
+            .room_activity_read_targets
+            .get("!inactive:example")
+            .cloned();
+
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!inactive:example", "txn-1", "draft"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_failed("!inactive:example", "txn-1", "send failed"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.room_activity_read_targets.get("!inactive:example"),
+            original_target.as_ref()
+        );
+    }
+
+    #[test]
     fn active_room_events_do_not_mark_room_activity() {
         let mut state = test_state();
         state.model.rooms = vec![room("!room:example", "Room", false)];
@@ -7186,6 +7330,36 @@ mod tests {
     }
 
     #[test]
+    fn synced_rooms_prune_room_activity_read_targets() {
+        let mut state = test_state();
+        state.room_activity.insert("!keep:example".to_owned());
+        state.room_activity.insert("!stale:example".to_owned());
+        state.room_activity_read_targets.insert(
+            "!keep:example".to_owned(),
+            "$keep:example".to_owned(),
+        );
+        state.room_activity_read_targets.insert(
+            "!stale:example".to_owned(),
+            "$stale:example".to_owned(),
+        );
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![room("!keep:example", "Keep", false)]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!keep:example")
+                .map(String::as_str),
+            Some("$keep:example")
+        );
+        assert!(!state.room_activity_read_targets.contains_key("!stale:example"));
+    }
+
+    #[test]
     fn synced_rooms_prune_space_room_activity() {
         let mut state = test_state();
         state.room_activity.insert("!keep:example".to_owned());
@@ -7205,6 +7379,56 @@ mod tests {
     }
 
     #[test]
+    fn synced_rooms_prune_space_room_activity_read_targets() {
+        let mut state = test_state();
+        state.room_activity.insert("!keep:example".to_owned());
+        state.room_activity.insert("!space:example".to_owned());
+        state.room_activity_read_targets.insert(
+            "!keep:example".to_owned(),
+            "$keep:example".to_owned(),
+        );
+        state.room_activity_read_targets.insert(
+            "!space:example".to_owned(),
+            "$space:example".to_owned(),
+        );
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                room("!keep:example", "Keep", false),
+                space("!space:example", "Space"),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!keep:example")
+                .map(String::as_str),
+            Some("$keep:example")
+        );
+        assert!(!state.room_activity_read_targets.contains_key("!space:example"));
+    }
+
+    #[test]
+    fn logged_out_clears_room_activity_read_targets() {
+        let mut state = test_state();
+        state.room_activity.insert("!room:example".to_owned());
+        state.room_activity_read_targets.insert(
+            "!room:example".to_owned(),
+            "$event:example".to_owned(),
+        );
+
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut)
+                .expect("logged out event must apply successfully");
+        });
+
+        assert!(state.room_activity_read_targets.is_empty());
+    }
+
+    #[test]
     fn logged_out_clears_room_activity() {
         let mut state = test_state();
         state.room_activity.insert("!room:example".to_owned());
@@ -7215,6 +7439,78 @@ mod tests {
         });
 
         assert!(state.room_activity.is_empty());
+    }
+
+    #[test]
+    fn room_activation_with_read_target_enqueues_mark_room_read() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.room_activity.insert("!room:example".to_owned());
+        state.room_activity_read_targets.insert(
+            "!room:example".to_owned(),
+            "$event:example".to_owned(),
+        );
+
+        assert_eq!(handle_room_activation(&mut state, "!room:example"), Ok(true));
+        assert!(!state.room_activity.contains("!room:example"));
+        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::MarkRoomRead(MarkRoomReadRequest {
+                room_id: "!room:example".to_owned(),
+                event_id: "$event:example".to_owned(),
+            })]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn room_activation_without_room_activity_discards_stale_read_target_without_command() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.room_activity_read_targets.insert(
+            "!room:example".to_owned(),
+            "$event:example".to_owned(),
+        );
+
+        assert_eq!(handle_room_activation(&mut state, "!room:example"), Ok(false));
+        assert!(!state.room_activity.contains("!room:example"));
+        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(state.recorded_commands.is_empty());
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn room_activation_without_read_target_clears_room_activity_without_command() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.room_activity.insert("!room:example".to_owned());
+
+        assert_eq!(handle_room_activation(&mut state, "!room:example"), Ok(true));
+        assert!(!state.room_activity.contains("!room:example"));
+        assert!(state.recorded_commands.is_empty());
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
     }
 
     #[test]

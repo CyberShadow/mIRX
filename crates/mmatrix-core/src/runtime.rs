@@ -10,8 +10,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
-    Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RestoreSessionRequest,
-    VerificationFlowId,
+    Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation,
+    RestoreSessionRequest, VerificationFlowId,
 };
 use crate::matrix::{self, MatrixCoreError};
 
@@ -180,6 +180,7 @@ async fn handle_command(
         }
         Command::StartSync => handle_start_sync(event_tx, state),
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
+        Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
         Command::AcceptVerification(flow) => {
             handle_accept_verification(event_tx, state, flow).await
         }
@@ -363,6 +364,27 @@ async fn handle_send_message(
 
     if let Err(err) = matrix::send_message(client, request).await {
         emit_matrix_error(event_tx, Operation::SendMessage, err);
+    }
+
+    false
+}
+
+async fn handle_mark_room_read(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: MarkRoomReadRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::MarkRoomRead,
+            "mark room read requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::mark_room_read(client, &request).await {
+        emit_matrix_error(event_tx, Operation::MarkRoomRead, err);
     }
 
     false
