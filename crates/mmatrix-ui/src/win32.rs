@@ -20,8 +20,8 @@ use mmatrix_core::{
     MarkRoomReadRequest, Operation, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, StoredSession, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    SendMessageRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -7394,7 +7394,11 @@ mod tests {
         .unwrap();
 
         assert!(!state.room_activity.contains("!room:example"));
-        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!room:example")
+        );
         assert!(state.recorded_commands.is_empty());
     }
 
@@ -7418,7 +7422,11 @@ mod tests {
         .unwrap();
 
         assert!(!state.room_activity.contains("!room:example"));
-        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!room:example")
+        );
         assert!(state.recorded_commands.is_empty());
     }
 
@@ -7442,7 +7450,11 @@ mod tests {
         .unwrap();
 
         assert!(!state.room_activity.contains("!room:example"));
-        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!room:example")
+        );
     }
 
     #[test]
@@ -7461,7 +7473,11 @@ mod tests {
         .unwrap();
 
         assert!(state.room_activity.contains("!room:example"));
-        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!room:example")
+        );
     }
 
     #[test]
