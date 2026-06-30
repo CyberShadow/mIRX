@@ -2,8 +2,8 @@
 
 use mmatrix_core::{
     CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
-    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    StoredSession, VerificationState, VerificationStateEvent,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, StoredSession, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -637,6 +637,7 @@ pub(crate) struct DumpRoomMessageActivityLine {
     pub(crate) event_id: Option<String>,
     pub(crate) transaction_id: Option<String>,
     pub(crate) sender: String,
+    pub(crate) presentation: RoomMessagePresentationKind,
     pub(crate) body: String,
     pub(crate) send_state: DumpRoomMessageSendState,
 }
@@ -663,6 +664,7 @@ pub(crate) struct DumpRoomMessageActivity {
     pub(crate) event_id: Option<String>,
     pub(crate) transaction_id: Option<String>,
     pub(crate) sender: String,
+    pub(crate) presentation: RoomMessagePresentationKind,
     pub(crate) body: String,
     pub(crate) send_state: DumpRoomMessageSendState,
 }
@@ -771,6 +773,7 @@ pub(crate) fn dump_room_message_activity_line_from_activity(
         event_id: message.event_id.clone(),
         transaction_id: message.transaction_id.clone(),
         sender: message.sender.clone(),
+        presentation: message.presentation,
         body: message.body.clone(),
         send_state: dump_room_message_send_state_from_core(&message.send_state),
     })
@@ -794,6 +797,7 @@ pub(crate) fn dump_room_message_activity_from_core(
         event_id: message.event_id.clone(),
         transaction_id: message.transaction_id.clone(),
         sender: message.sender.clone(),
+        presentation: message.presentation,
         body: message.body.clone(),
         send_state: dump_room_message_send_state_from_core(&message.send_state),
     }
@@ -1017,8 +1021,8 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 mod tests {
     use mmatrix_core::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
-        RoomMessageSendState, RoomSummary, SpaceChildSummary, StoredSession, VerificationRequest,
-        VerificationState, VerificationStateEvent,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomSummary, SpaceChildSummary,
+        StoredSession, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1033,14 +1037,15 @@ mod tests {
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMessageActivity,
-        DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, NoArgs, ParsedCommand, PongResponse,
-        ResponseEnvelope, RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
-        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1889,6 +1894,7 @@ mod tests {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: Some("txn-1".to_owned()),
                                 sender: "@alice:example".to_owned(),
+                                presentation: RoomMessagePresentationKind::Text,
                                 body: "hello".to_owned(),
                                 send_state: DumpRoomMessageSendState::Failed {
                                     message: "send failed".to_owned(),
@@ -1928,6 +1934,7 @@ mod tests {
                                 "event_id":"$event:example",
                                 "transaction_id":"txn-1",
                                 "sender":"@alice:example",
+                                "presentation":"text",
                                 "body":"hello",
                                 "send_state":{"state":"failed","message":"send failed","recoverable":true}
                             }
@@ -2233,10 +2240,25 @@ mod tests {
                     event_id: Some("$event:example".to_owned()),
                     transaction_id: Some("txn-1".to_owned()),
                     sender: "@alice:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: DumpRoomMessageSendState::Sent,
                 }),
             }
+        );
+        assert_eq!(
+            super::dump_room_message_activity_line_from_activity(&activity),
+            Some(DumpRoomMessageActivityLine {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$event:example".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                event_id: Some("$event:example".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello".to_owned(),
+                send_state: DumpRoomMessageSendState::Sent,
+            })
         );
         assert!(
             serde_json::from_value::<DumpRoomActivity>(json!({
@@ -2248,6 +2270,7 @@ mod tests {
                     "event_id":"$event:example",
                     "transaction_id":"txn-1",
                     "sender":"@alice:example",
+                    "presentation":"text",
                     "body":"hello",
                     "send_state":{"state":"sent"}
                 },
