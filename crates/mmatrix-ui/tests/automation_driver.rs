@@ -17,7 +17,8 @@ use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
     RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine,
     RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
-    StoredSession, SwitchbarItem, TestkitError, UiError, UiState, Verification, ViewIdentity,
+    StoredSession, SwitchbarItem, TestkitError, UiError, UiState, Verification, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -1947,6 +1948,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         Some(Verification {
             flow_id: "flow-verify-123".to_owned(),
             user_id: "@alice:example".to_owned(),
+            state: VerificationState::Requested,
         })
     );
     assert_eq!(
