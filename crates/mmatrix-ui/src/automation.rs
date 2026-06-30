@@ -1069,13 +1069,11 @@ fn parse_recover_e2ee_args(
             "invalid recover_e2ee args: expected object",
         ));
     };
-    if let Some(unexpected) = args.keys().find(|key| key.as_str() != "recovery_secret") {
+    if args.keys().any(|key| key.as_str() != "recovery_secret") {
         return Err(failure_response(
             Some(id.to_owned()),
             "invalid_args",
-            format!(
-                "invalid recover_e2ee args: unknown field `{unexpected}`, expected `recovery_secret`"
-            ),
+            "invalid recover_e2ee args: unexpected field; expected only `recovery_secret`",
         ));
     }
     let recovery_secret = args.get("recovery_secret").ok_or_else(|| {
@@ -1981,11 +1979,9 @@ mod tests {
         assert_eq!(value["id"], json!("recover"));
         assert_eq!(value["ok"], json!(false));
         assert_eq!(value["err"]["code"], json!("invalid_args"));
-        assert!(
-            value["err"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("unknown field `unexpected`")
+        assert_eq!(
+            value["err"]["message"],
+            json!("invalid recover_e2ee args: unexpected field; expected only `recovery_secret`")
         );
     }
 
@@ -2006,6 +2002,32 @@ mod tests {
         assert_eq!(
             value["err"]["message"],
             json!("invalid recover_e2ee args: expected object")
+        );
+        assert!(
+            !value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("sample recovery secret")
+        );
+    }
+
+    #[test]
+    fn recover_e2ee_unknown_field_name_does_not_echo_secret() {
+        let error = parse_command_request(
+            COMMAND_ID_RECOVER_E2EE,
+            br#"{"id":"recover","args":{"sample recovery secret":true}}"#,
+        )
+        .expect_err("unexpected field must fail");
+        let debug = format!("{error:?}");
+        let value = serde_json::to_value(error).unwrap();
+
+        assert!(!debug.contains("sample recovery secret"));
+        assert_eq!(value["id"], json!("recover"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert_eq!(
+            value["err"]["message"],
+            json!("invalid recover_e2ee args: unexpected field; expected only `recovery_secret`")
         );
         assert!(
             !value["err"]["message"]
