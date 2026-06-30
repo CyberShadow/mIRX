@@ -11,7 +11,7 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation,
-    RestoreSessionRequest, VerificationFlowId,
+    RestoreSessionRequest, RoomReadState, RoomSummary, VerificationFlowId,
 };
 use crate::matrix::{self, MatrixCoreError};
 
@@ -242,27 +242,22 @@ async fn handle_login(
         session.user_id.clone(),
         event_tx.clone(),
     );
-    let room_read_state_update_task =
-        match matrix::start_room_read_state_update_task(client.clone(), event_tx.clone()) {
-            Ok(task) => task,
-            Err(err) => {
-                emit_event(
-                    event_tx,
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::RoomReadState,
-                        message: format!(
-                            "failed to subscribe Matrix event cache for room read-state updates: {err}"
-                        ),
-                    }),
-                );
-                tokio::task::spawn_local(async {})
-            }
-        };
     let rooms = matrix::initial_room_sync(&client).await;
     let room_read_states = rooms
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
+    emit_event(event_tx, Event::LoggedIn { session });
+    match rooms {
+        Ok(rooms) => emit_initial_synced_rooms_and_read_states(
+            event_tx,
+            rooms,
+            room_read_states.expect("read states exist after successful sync"),
+        ),
+        Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
+    }
+    let room_read_state_update_task =
+        start_room_read_state_update_task_or_placeholder(&client, event_tx);
 
     *state = WorkerState::Ready {
         client,
@@ -272,17 +267,6 @@ async fn handle_login(
         room_read_state_update_task,
         verification_tasks: HashMap::new(),
     };
-    emit_event(event_tx, Event::LoggedIn { session });
-
-    match rooms {
-        Ok(rooms) => {
-            emit_event(event_tx, Event::SyncedRooms(rooms));
-            for read_state in room_read_states.expect("read states exist after successful sync") {
-                emit_event(event_tx, Event::RoomReadState(read_state));
-            }
-        }
-        Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
-    }
 
     false
 }
@@ -326,27 +310,22 @@ async fn handle_restore_session(
     let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
     let send_queue_update_task =
         matrix::start_send_queue_update_task(client.clone(), current_user_id, event_tx.clone());
-    let room_read_state_update_task =
-        match matrix::start_room_read_state_update_task(client.clone(), event_tx.clone()) {
-            Ok(task) => task,
-            Err(err) => {
-                emit_event(
-                    event_tx,
-                    Event::Error(CoreErrorEvent {
-                        operation: Operation::RoomReadState,
-                        message: format!(
-                            "failed to subscribe Matrix event cache for room read-state updates: {err}"
-                        ),
-                    }),
-                );
-                tokio::task::spawn_local(async {})
-            }
-        };
     let rooms = matrix::initial_room_sync(&client).await;
     let room_read_states = rooms
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
+    emit_event(event_tx, Event::RestoredSession);
+    match rooms {
+        Ok(rooms) => emit_initial_synced_rooms_and_read_states(
+            event_tx,
+            rooms,
+            room_read_states.expect("read states exist after successful sync"),
+        ),
+        Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
+    }
+    let room_read_state_update_task =
+        start_room_read_state_update_task_or_placeholder(&client, event_tx);
 
     *state = WorkerState::Ready {
         client,
@@ -356,17 +335,6 @@ async fn handle_restore_session(
         room_read_state_update_task,
         verification_tasks: HashMap::new(),
     };
-    emit_event(event_tx, Event::RestoredSession);
-
-    match rooms {
-        Ok(rooms) => {
-            emit_event(event_tx, Event::SyncedRooms(rooms));
-            for read_state in room_read_states.expect("read states exist after successful sync") {
-                emit_event(event_tx, Event::RoomReadState(read_state));
-            }
-        }
-        Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
-    }
 
     false
 }
@@ -663,6 +631,38 @@ fn task_is_running(
     false
 }
 
+fn emit_initial_synced_rooms_and_read_states(
+    event_tx: &EventSender,
+    rooms: Vec<RoomSummary>,
+    room_read_states: Vec<RoomReadState>,
+) {
+    emit_event(event_tx, Event::SyncedRooms(rooms));
+    for read_state in room_read_states {
+        emit_event(event_tx, Event::RoomReadState(read_state));
+    }
+}
+
+fn start_room_read_state_update_task_or_placeholder(
+    client: &Client,
+    event_tx: &EventSender,
+) -> TokioJoinHandle<()> {
+    match matrix::start_room_read_state_update_task(client.clone(), event_tx.clone()) {
+        Ok(task) => task,
+        Err(err) => {
+            emit_event(
+                event_tx,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::RoomReadState,
+                    message: format!(
+                        "failed to subscribe Matrix event cache for room read-state updates: {err}"
+                    ),
+                }),
+            );
+            tokio::task::spawn_local(async {})
+        }
+    }
+}
+
 pub(crate) fn emit_event(event_tx: &EventSender, event: Event) {
     let _ = event_tx.send(event);
 }
@@ -690,14 +690,43 @@ fn emit_matrix_error(event_tx: &EventSender, operation: Operation, err: MatrixCo
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::mpsc;
+    use std::sync::mpsc::{self, TryRecvError};
     use std::time::Duration;
 
     use tokio::sync::mpsc::unbounded_channel;
 
-    use super::{EventSender, WorkerState, handle_start_sync, run_worker, shutdown_state};
+    use super::{
+        EventSender, WorkerState, emit_initial_synced_rooms_and_read_states, handle_start_sync,
+        run_worker, shutdown_state,
+    };
     use crate::api::CoreConfig;
-    use crate::api::{Event, Operation};
+    use crate::api::{Event, Operation, RoomReadState, RoomSummary};
+
+    fn room_summary(room_id: &str, display_name: &str) -> RoomSummary {
+        RoomSummary {
+            room_id: room_id.to_owned(),
+            display_name: display_name.to_owned(),
+            encrypted: true,
+            is_space: false,
+            space_children: Vec::new(),
+        }
+    }
+
+    fn room_read_state(
+        room_id: &str,
+        latest_active_event_id: &str,
+        fully_read_event_id: &str,
+    ) -> RoomReadState {
+        RoomReadState {
+            room_id: room_id.to_owned(),
+            latest_active_event_id: Some(latest_active_event_id.to_owned()),
+            fully_read_event_id: Some(fully_read_event_id.to_owned()),
+            marked_unread: true,
+            num_unread: 2,
+            num_notifications: 1,
+            num_mentions: 0,
+        }
+    }
 
     #[test]
     fn duplicate_start_sync_emits_typed_error_event() {
@@ -753,6 +782,53 @@ mod tests {
                 send_queue_update_task.abort();
             }
         });
+    }
+
+    #[test]
+    fn initial_room_read_states_follow_synced_rooms() {
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let rooms = vec![
+            room_summary("!ops:example.org", "Ops"),
+            room_summary("!eng:example.org", "Eng"),
+        ];
+        let read_states = vec![
+            room_read_state(
+                "!ops:example.org",
+                "$latest-ops:example.org",
+                "$fully-read-ops:example.org",
+            ),
+            room_read_state(
+                "!eng:example.org",
+                "$latest-eng:example.org",
+                "$fully-read-eng:example.org",
+            ),
+        ];
+
+        emit_initial_synced_rooms_and_read_states(
+            &event_tx as &EventSender,
+            rooms.clone(),
+            read_states.clone(),
+        );
+
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("synced rooms event"),
+            Event::SyncedRooms(rooms)
+        );
+        for read_state in read_states {
+            assert_eq!(
+                event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("room read state event"),
+                Event::RoomReadState(read_state)
+            );
+        }
+        assert_eq!(
+            event_rx.try_recv(),
+            Err(TryRecvError::Empty),
+            "initial snapshot must only emit synced rooms followed by room read states"
+        );
     }
 
     #[test]
