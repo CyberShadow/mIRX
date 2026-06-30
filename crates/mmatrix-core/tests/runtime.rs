@@ -167,7 +167,10 @@ fn invalid_command_ordering_emits_typed_error_events() {
     match mark_room_read_error {
         Event::Error(err) => {
             assert_eq!(err.operation, Operation::MarkRoomRead);
-            assert_eq!(err.message, "mark room read requires an authenticated session");
+            assert_eq!(
+                err.message,
+                "mark room read requires an authenticated session"
+            );
         }
         other => panic!("expected mark room read error, got {other:?}"),
     }

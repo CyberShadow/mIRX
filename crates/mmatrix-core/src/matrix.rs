@@ -39,12 +39,12 @@ use matrix_sdk::{
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation,
-    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
+    StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 

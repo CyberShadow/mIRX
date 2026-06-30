@@ -18,10 +18,10 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest,
     MarkRoomReadRequest, Operation, RestoreSessionRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeContent, RoomSummary,
-    RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -7334,14 +7334,12 @@ mod tests {
         let mut state = test_state();
         state.room_activity.insert("!keep:example".to_owned());
         state.room_activity.insert("!stale:example".to_owned());
-        state.room_activity_read_targets.insert(
-            "!keep:example".to_owned(),
-            "$keep:example".to_owned(),
-        );
-        state.room_activity_read_targets.insert(
-            "!stale:example".to_owned(),
-            "$stale:example".to_owned(),
-        );
+        state
+            .room_activity_read_targets
+            .insert("!keep:example".to_owned(), "$keep:example".to_owned());
+        state
+            .room_activity_read_targets
+            .insert("!stale:example".to_owned(), "$stale:example".to_owned());
 
         apply_core_event(
             &mut state,
@@ -7356,7 +7354,11 @@ mod tests {
                 .map(String::as_str),
             Some("$keep:example")
         );
-        assert!(!state.room_activity_read_targets.contains_key("!stale:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!stale:example")
+        );
     }
 
     #[test]
@@ -7383,14 +7385,12 @@ mod tests {
         let mut state = test_state();
         state.room_activity.insert("!keep:example".to_owned());
         state.room_activity.insert("!space:example".to_owned());
-        state.room_activity_read_targets.insert(
-            "!keep:example".to_owned(),
-            "$keep:example".to_owned(),
-        );
-        state.room_activity_read_targets.insert(
-            "!space:example".to_owned(),
-            "$space:example".to_owned(),
-        );
+        state
+            .room_activity_read_targets
+            .insert("!keep:example".to_owned(), "$keep:example".to_owned());
+        state
+            .room_activity_read_targets
+            .insert("!space:example".to_owned(), "$space:example".to_owned());
 
         apply_core_event(
             &mut state,
@@ -7408,17 +7408,20 @@ mod tests {
                 .map(String::as_str),
             Some("$keep:example")
         );
-        assert!(!state.room_activity_read_targets.contains_key("!space:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!space:example")
+        );
     }
 
     #[test]
     fn logged_out_clears_room_activity_read_targets() {
         let mut state = test_state();
         state.room_activity.insert("!room:example".to_owned());
-        state.room_activity_read_targets.insert(
-            "!room:example".to_owned(),
-            "$event:example".to_owned(),
-        );
+        state
+            .room_activity_read_targets
+            .insert("!room:example".to_owned(), "$event:example".to_owned());
 
         with_local_app_data(|_| {
             apply_core_event(&mut state, Event::LoggedOut)
@@ -7448,14 +7451,20 @@ mod tests {
         state.command_sender = Some(handle.command_sender().clone());
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.room_activity.insert("!room:example".to_owned());
-        state.room_activity_read_targets.insert(
-            "!room:example".to_owned(),
-            "$event:example".to_owned(),
-        );
+        state
+            .room_activity_read_targets
+            .insert("!room:example".to_owned(), "$event:example".to_owned());
 
-        assert_eq!(handle_room_activation(&mut state, "!room:example"), Ok(true));
+        assert_eq!(
+            handle_room_activation(&mut state, "!room:example"),
+            Ok(true)
+        );
         assert!(!state.room_activity.contains("!room:example"));
-        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!room:example")
+        );
         assert_eq!(
             state.recorded_commands,
             vec![Command::MarkRoomRead(MarkRoomReadRequest {
@@ -7477,14 +7486,20 @@ mod tests {
         let handle = start_test_core();
         state.command_sender = Some(handle.command_sender().clone());
         state.model.rooms = vec![room("!room:example", "Room", false)];
-        state.room_activity_read_targets.insert(
-            "!room:example".to_owned(),
-            "$event:example".to_owned(),
-        );
+        state
+            .room_activity_read_targets
+            .insert("!room:example".to_owned(), "$event:example".to_owned());
 
-        assert_eq!(handle_room_activation(&mut state, "!room:example"), Ok(false));
+        assert_eq!(
+            handle_room_activation(&mut state, "!room:example"),
+            Ok(false)
+        );
         assert!(!state.room_activity.contains("!room:example"));
-        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key("!room:example")
+        );
         assert!(state.recorded_commands.is_empty());
 
         handle
@@ -7502,7 +7517,10 @@ mod tests {
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.room_activity.insert("!room:example".to_owned());
 
-        assert_eq!(handle_room_activation(&mut state, "!room:example"), Ok(true));
+        assert_eq!(
+            handle_room_activation(&mut state, "!room:example"),
+            Ok(true)
+        );
         assert!(!state.room_activity.contains("!room:example"));
         assert!(state.recorded_commands.is_empty());
 
