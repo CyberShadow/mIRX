@@ -85,15 +85,51 @@
   {
     "RoomActivity": {
       "room_id": "!mixed:example",
-      "activity_id": "txn:txn-pending-1",
+      "activity_id": "event:$mixed-notice-1",
       "timestamp_ms": 1700000240000,
+      "kind": {
+        "type": "message",
+        "event_id": "$mixed-notice-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "notice",
+        "body": "maintenance window",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "event:$mixed-emote-1",
+      "timestamp_ms": 1700000300000,
+      "kind": {
+        "type": "message",
+        "event_id": "$mixed-emote-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "emote",
+        "body": "waves",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mixed:example",
+      "activity_id": "txn:txn-pending-1",
+      "timestamp_ms": 1700000360000,
       "kind": {
         "type": "message",
         "event_id": null,
         "transaction_id": "txn-pending-1",
         "sender": "@alice:example",
-        "presentation": "text",
-        "body": "pending local echo",
+        "presentation": "emote",
+        "body": "pending wave",
         "send_state": {
           "state": "pending"
         }
@@ -104,14 +140,14 @@
     "RoomActivity": {
       "room_id": "!mixed:example",
       "activity_id": "txn:txn-failed-1",
-      "timestamp_ms": 1700000300000,
+      "timestamp_ms": 1700000420000,
       "kind": {
         "type": "message",
         "event_id": null,
         "transaction_id": "txn-failed-1",
         "sender": "@alice:example",
-        "presentation": "text",
-        "body": "failed local echo",
+        "presentation": "emote",
+        "body": "failed wave",
         "send_state": {
           "state": "pending"
         }

@@ -311,20 +311,26 @@ impl RoomViewModel {
                 activity.activity_id,
                 activity.timestamp_ms,
                 message.sender,
+                message.presentation,
                 message.body,
             ))
         });
         let new_activity_id = duplicate_event
             .as_ref()
-            .map(|(activity_id, _, _, _)| activity_id.clone())
+            .map(|(activity_id, _, _, _, _)| activity_id.clone())
             .unwrap_or_else(|| format!("event:{event_id}"));
         let synced_timestamp_ms = duplicate_event
             .as_ref()
-            .map(|(_, timestamp_ms, _, _)| *timestamp_ms);
+            .map(|(_, timestamp_ms, _, _, _)| *timestamp_ms);
         let synced_sender = duplicate_event
             .as_ref()
-            .map(|(_, _, sender, _)| sender.clone());
-        let synced_body = duplicate_event.as_ref().map(|(_, _, _, body)| body.clone());
+            .map(|(_, _, sender, _, _)| sender.clone());
+        let synced_presentation = duplicate_event
+            .as_ref()
+            .map(|(_, _, _, presentation, _)| *presentation);
+        let synced_body = duplicate_event
+            .as_ref()
+            .map(|(_, _, _, _, body)| body.clone());
 
         let activity = self
             .activities
@@ -341,6 +347,9 @@ impl RoomViewModel {
         message.event_id = Some(event_id.clone());
         if let Some(synced_sender) = synced_sender {
             message.sender = synced_sender;
+        }
+        if let Some(synced_presentation) = synced_presentation {
+            message.presentation = synced_presentation;
         }
         if let Some(synced_body) = synced_body {
             message.body = synced_body;
@@ -500,33 +509,6 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
     })
 }
 
-fn update_last_activity_from_room_activity_update(
-    last_activity: &mut LastMessageActivity,
-    update: &RoomActivityUpdate,
-) {
-    if last_activity.room_id != update.room_id
-        || last_activity.transaction_id.as_deref() != Some(update.transaction_id.as_str())
-    {
-        return;
-    }
-
-    match &update.kind {
-        RoomActivityUpdateKind::MessageSent { event_id } => {
-            last_activity.event_id = Some(event_id.clone());
-            last_activity.send_state = RoomMessageSendState::Sent;
-        }
-        RoomActivityUpdateKind::MessageFailed {
-            message,
-            recoverable,
-        } => {
-            last_activity.send_state = RoomMessageSendState::Failed {
-                message: message.clone(),
-                recoverable: *recoverable,
-            };
-        }
-    }
-}
-
 fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
     match &activity.kind {
         RoomActivityKind::Message(RoomMessageActivity { send_state, .. }) => {
@@ -570,22 +552,37 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
     }
     state.model.status = format!("timeline update from {}", update.room_id);
     let room_id = update.room_id.clone();
+    let transaction_id = update.transaction_id.clone();
+    let refresh_last_activity = state
+        .model
+        .last_activity
+        .as_ref()
+        .is_some_and(|last_activity| {
+            last_activity.room_id == room_id
+                && last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
+        });
     match &update.kind {
         RoomActivityUpdateKind::MessageSent { .. } => state
             .model
             .room_views
-            .entry(room_id)
+            .entry(room_id.clone())
             .or_default()
             .mark_message_sent(update.clone()),
         RoomActivityUpdateKind::MessageFailed { .. } => state
             .model
             .room_views
-            .entry(room_id)
+            .entry(room_id.clone())
             .or_default()
             .mark_message_failed(update.clone()),
     }
-    if let Some(last_activity) = state.model.last_activity.as_mut() {
-        update_last_activity_from_room_activity_update(last_activity, &update);
+    if refresh_last_activity
+        && let Some(updated_activity) = state.model.room_views.get(&room_id).and_then(|room_view| {
+            room_view
+                .find_message_activity_index(Some(transaction_id.as_str()), None)
+                .and_then(|index| room_view.activities.get(index))
+        })
+    {
+        state.model.last_activity = last_activity_from_room_activity(updated_activity);
     }
 }
 
@@ -704,7 +701,10 @@ enum ComposeHistoryDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ComposeSubmission<'a> {
-    Text { body: Cow<'a, str> },
+    Message {
+        presentation: RoomMessagePresentationKind,
+        body: Cow<'a, str>,
+    },
     LocalCommand(LocalSlashCommand<'a>),
 }
 
@@ -2497,17 +2497,32 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
         for activity in &room_view.activities {
             match &activity.kind {
                 RoomActivityKind::Message(message) => {
+                    let base = match message.presentation {
+                        RoomMessagePresentationKind::Text => format!(
+                            "[{}] {}: {}",
+                            format_timestamp_hhmm_utc(activity.timestamp_ms),
+                            message.sender,
+                            message.body
+                        ),
+                        RoomMessagePresentationKind::Notice => format!(
+                            "[{}] -{}- {}",
+                            format_timestamp_hhmm_utc(activity.timestamp_ms),
+                            message.sender,
+                            message.body
+                        ),
+                        RoomMessagePresentationKind::Emote => format!(
+                            "* [{}] {} {}",
+                            format_timestamp_hhmm_utc(activity.timestamp_ms),
+                            message.sender,
+                            message.body
+                        ),
+                    };
                     let suffix = match &message.send_state {
                         RoomMessageSendState::Pending => " (sending)",
                         RoomMessageSendState::Sent => "",
                         RoomMessageSendState::Failed { .. } => " (failed)",
                     };
-                    lines.push(format!(
-                        "[{}] {}: {}{suffix}",
-                        format_timestamp_hhmm_utc(activity.timestamp_ms),
-                        message.sender,
-                        message.body
-                    ));
+                    lines.push(format!("{base}{suffix}"));
                 }
                 RoomActivityKind::StateNotice(notice) => match &notice.content {
                     RoomStateNoticeContent::Topic { topic } => lines.push(format!(
@@ -4614,8 +4629,14 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
     }
 
     match parse_compose_submission(&input) {
-        ComposeSubmission::Text { body } => {
-            submit_compose_with_history_entry(state_mut(hwnd), body.into_owned(), input, None)?;
+        ComposeSubmission::Message { presentation, body } => {
+            submit_compose_with_history_entry(
+                state_mut(hwnd),
+                presentation,
+                body.into_owned(),
+                input,
+                None,
+            )?;
         }
         ComposeSubmission::LocalCommand(command) => {
             execute_local_slash_command(hwnd, command)?;
@@ -4665,7 +4686,12 @@ unsafe fn submit_compose_from_control(
 ) -> Result<String, String> {
     let edit = compose_edit(hwnd)?;
     let body = read_window_text(edit);
-    let room_id = submit_compose(state_mut(hwnd), body, explicit_room_id)?;
+    let room_id = submit_compose(
+        state_mut(hwnd),
+        RoomMessagePresentationKind::Text,
+        body,
+        explicit_room_id,
+    )?;
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
     Ok(room_id)
@@ -4673,14 +4699,34 @@ unsafe fn submit_compose_from_control(
 
 fn parse_compose_submission(input: &str) -> ComposeSubmission<'_> {
     if !input.starts_with('/') {
-        return ComposeSubmission::Text {
+        return ComposeSubmission::Message {
+            presentation: RoomMessagePresentationKind::Text,
             body: Cow::Borrowed(input),
         };
     }
 
     if input.starts_with("//") {
-        return ComposeSubmission::Text {
+        return ComposeSubmission::Message {
+            presentation: RoomMessagePresentationKind::Text,
             body: Cow::Owned(input[1..].to_owned()),
+        };
+    }
+
+    let command_end = input
+        .bytes()
+        .position(|byte| byte.is_ascii_whitespace())
+        .unwrap_or(input.len());
+    let command_name = &input[1..command_end];
+    if command_name.eq_ignore_ascii_case("me") {
+        let action = input[command_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
+        if action.is_empty() {
+            return ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
+                feedback: "usage: /me <action>".to_owned(),
+            });
+        }
+        return ComposeSubmission::Message {
+            presentation: RoomMessagePresentationKind::Emote,
+            body: Cow::Borrowed(action),
         };
     }
 
@@ -4733,15 +4779,17 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
 
 fn submit_compose(
     state: &mut WindowState,
+    presentation: RoomMessagePresentationKind,
     body: String,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
     let history_entry = body.clone();
-    submit_compose_with_history_entry(state, body, history_entry, explicit_room_id)
+    submit_compose_with_history_entry(state, presentation, body, history_entry, explicit_room_id)
 }
 
 fn submit_compose_with_history_entry(
     state: &mut WindowState,
+    presentation: RoomMessagePresentationKind,
     body: String,
     history_entry: String,
     explicit_room_id: Option<&str>,
@@ -4768,13 +4816,16 @@ fn submit_compose_with_history_entry(
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
     let send_body = body.clone();
+    let command = Command::SendMessage(SendMessageRequest {
+        room_id: room_id.clone(),
+        presentation,
+        body: send_body,
+    });
     sender
-        .send(Command::SendMessage(SendMessageRequest {
-            room_id: room_id.clone(),
-            presentation: RoomMessagePresentationKind::Text,
-            body: send_body,
-        }))
-        .map_err(|err| format!("failed to enqueue send text command: {err}"))?;
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
     state.compose_history.record_submission(history_entry);
 
     Ok(room_id)
@@ -5385,10 +5436,11 @@ mod tests {
         }
     }
 
-    fn sent_message_activity(
+    fn sent_message_activity_with_presentation(
         room_id: &str,
         event_id: &str,
         transaction_id: Option<&str>,
+        presentation: RoomMessagePresentationKind,
         body: &str,
         timestamp_ms: u64,
     ) -> RoomActivity {
@@ -5400,11 +5452,28 @@ mod tests {
                 event_id: Some(event_id.to_owned()),
                 transaction_id: transaction_id.map(str::to_owned),
                 sender: "@alice:example".to_owned(),
-                presentation: RoomMessagePresentationKind::Text,
+                presentation,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
         }
+    }
+
+    fn sent_message_activity(
+        room_id: &str,
+        event_id: &str,
+        transaction_id: Option<&str>,
+        body: &str,
+        timestamp_ms: u64,
+    ) -> RoomActivity {
+        sent_message_activity_with_presentation(
+            room_id,
+            event_id,
+            transaction_id,
+            RoomMessagePresentationKind::Text,
+            body,
+            timestamp_ms,
+        )
     }
 
     fn timeline(room_id: &str, body: &str) -> Event {
@@ -5418,6 +5487,24 @@ mod tests {
         ))
     }
 
+    fn timeline_with_transaction_id_with_presentation(
+        room_id: &str,
+        event_id: &str,
+        transaction_id: Option<&str>,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+        timestamp_ms: u64,
+    ) -> Event {
+        Event::RoomActivity(sent_message_activity_with_presentation(
+            room_id,
+            event_id,
+            transaction_id,
+            presentation,
+            body,
+            timestamp_ms,
+        ))
+    }
+
     fn timeline_with_transaction_id(
         room_id: &str,
         event_id: &str,
@@ -5425,16 +5512,22 @@ mod tests {
         body: &str,
         timestamp_ms: u64,
     ) -> Event {
-        Event::RoomActivity(sent_message_activity(
+        timeline_with_transaction_id_with_presentation(
             room_id,
             event_id,
             transaction_id,
+            RoomMessagePresentationKind::Text,
             body,
             timestamp_ms,
-        ))
+        )
     }
 
-    fn pending_message_activity(room_id: &str, transaction_id: &str, body: &str) -> RoomActivity {
+    fn pending_message_activity_with_presentation(
+        room_id: &str,
+        transaction_id: &str,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+    ) -> RoomActivity {
         RoomActivity {
             room_id: room_id.to_owned(),
             activity_id: format!("txn:{transaction_id}"),
@@ -5443,15 +5536,38 @@ mod tests {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
                 sender: "@alice:example".to_owned(),
-                presentation: RoomMessagePresentationKind::Text,
+                presentation,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Pending,
             }),
         }
     }
 
+    fn pending_message_activity(room_id: &str, transaction_id: &str, body: &str) -> RoomActivity {
+        pending_message_activity_with_presentation(
+            room_id,
+            transaction_id,
+            RoomMessagePresentationKind::Text,
+            body,
+        )
+    }
+
     fn outgoing_queued(room_id: &str, transaction_id: &str, body: &str) -> Event {
         Event::RoomActivity(pending_message_activity(room_id, transaction_id, body))
+    }
+
+    fn outgoing_queued_with_presentation(
+        room_id: &str,
+        transaction_id: &str,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+    ) -> Event {
+        Event::RoomActivity(pending_message_activity_with_presentation(
+            room_id,
+            transaction_id,
+            presentation,
+            body,
+        ))
     }
 
     fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
@@ -5475,9 +5591,10 @@ mod tests {
         })
     }
 
-    fn failed_message_activity(
+    fn failed_message_activity_with_presentation(
         room_id: &str,
         transaction_id: &str,
+        presentation: RoomMessagePresentationKind,
         body: &str,
         message: &str,
     ) -> RoomActivity {
@@ -5489,7 +5606,7 @@ mod tests {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
                 sender: "@alice:example".to_owned(),
-                presentation: RoomMessagePresentationKind::Text,
+                presentation,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Failed {
                     message: message.to_owned(),
@@ -5499,13 +5616,45 @@ mod tests {
         }
     }
 
-    fn failed_message(room_id: &str, transaction_id: &str, body: &str, message: &str) -> Event {
-        Event::RoomActivity(failed_message_activity(
+    fn failed_message_activity(
+        room_id: &str,
+        transaction_id: &str,
+        body: &str,
+        message: &str,
+    ) -> RoomActivity {
+        failed_message_activity_with_presentation(
             room_id,
             transaction_id,
+            RoomMessagePresentationKind::Text,
+            body,
+            message,
+        )
+    }
+
+    fn failed_message_with_presentation(
+        room_id: &str,
+        transaction_id: &str,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+        message: &str,
+    ) -> Event {
+        Event::RoomActivity(failed_message_activity_with_presentation(
+            room_id,
+            transaction_id,
+            presentation,
             body,
             message,
         ))
+    }
+
+    fn failed_message(room_id: &str, transaction_id: &str, body: &str, message: &str) -> Event {
+        failed_message_with_presentation(
+            room_id,
+            transaction_id,
+            RoomMessagePresentationKind::Text,
+            body,
+            message,
+        )
     }
 
     fn topic_state(room_id: &str, topic: &str) -> Event {
@@ -5788,7 +5937,12 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            outgoing_queued("!ops:example", "txn-1", "hello"),
+            outgoing_queued_with_presentation(
+                "!ops:example",
+                "txn-1",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+            ),
         )
         .unwrap();
 
@@ -5798,10 +5952,11 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .map(|view| &view.activities),
-            Some(&vec![pending_message_activity(
+            Some(&vec![pending_message_activity_with_presentation(
                 "!ops:example",
                 "txn-1",
-                "hello"
+                RoomMessagePresentationKind::Emote,
+                "waves"
             )])
         );
         assert_eq!(
@@ -5812,8 +5967,8 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
-                presentation: RoomMessagePresentationKind::Text,
-                body: "hello".to_owned(),
+                presentation: RoomMessagePresentationKind::Emote,
+                body: "waves".to_owned(),
                 send_state: RoomMessageSendState::Pending,
             })
         );
@@ -5821,7 +5976,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello (sending)".to_owned(),
+                "* [22:13] @alice:example waves (sending)".to_owned(),
             ]
         );
     }
@@ -5885,7 +6040,12 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            outgoing_queued("!ops:example", "txn-1", "hello"),
+            outgoing_queued_with_presentation(
+                "!ops:example",
+                "txn-1",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+            ),
         )
         .unwrap();
         apply_core_event(
@@ -5895,11 +6055,12 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            timeline_with_transaction_id(
+            timeline_with_transaction_id_with_presentation(
                 "!ops:example",
                 "$event:example.org",
                 Some("txn-1"),
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 1_700_000_000_100,
             ),
         )
@@ -5911,11 +6072,12 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .map(|view| &view.activities),
-            Some(&vec![sent_message_activity(
+            Some(&vec![sent_message_activity_with_presentation(
                 "!ops:example",
                 "$event:example.org",
                 Some("txn-1"),
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 1_700_000_000_100,
             )])
         );
@@ -5928,16 +6090,22 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            outgoing_queued("!ops:example", "txn-1", "hello"),
+            outgoing_queued_with_presentation(
+                "!ops:example",
+                "txn-1",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+            ),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            timeline_with_transaction_id(
+            timeline_with_transaction_id_with_presentation(
                 "!ops:example",
                 "$event:example.org",
                 None,
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 1_700_000_000_100,
             ),
         )
@@ -5960,8 +6128,21 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "* [22:13] @alice:example waves".to_owned(),
             ]
+        );
+        assert_eq!(
+            state.model.last_activity,
+            Some(LastMessageActivity {
+                room_id: "!ops:example".to_owned(),
+                event_id: Some("$event:example.org".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                presentation: RoomMessagePresentationKind::Emote,
+                body: "waves".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
         );
     }
 
@@ -5972,16 +6153,22 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            outgoing_queued("!ops:example", "txn-1", "hello"),
+            outgoing_queued_with_presentation(
+                "!ops:example",
+                "txn-1",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+            ),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            timeline_with_transaction_id(
+            timeline_with_transaction_id_with_presentation(
                 "!ops:example",
                 "$event:example.org",
                 None,
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 1_700_000_000_100,
             ),
         )
@@ -5998,11 +6185,12 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .map(|view| &view.activities),
-            Some(&vec![sent_message_activity(
+            Some(&vec![sent_message_activity_with_presentation(
                 "!ops:example",
                 "$event:example.org",
                 Some("txn-1"),
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 1_700_000_000_100,
             )])
         );
@@ -6018,7 +6206,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "* [22:13] @alice:example waves".to_owned(),
             ]
         );
     }
@@ -6030,7 +6218,12 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            outgoing_queued("!ops:example", "txn-1", "hello"),
+            outgoing_queued_with_presentation(
+                "!ops:example",
+                "txn-1",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+            ),
         )
         .unwrap();
         apply_core_event(
@@ -6045,10 +6238,11 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .map(|view| &view.activities),
-            Some(&vec![failed_message_activity(
+            Some(&vec![failed_message_activity_with_presentation(
                 "!ops:example",
                 "txn-1",
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 "send failed",
             )])
         );
@@ -6060,8 +6254,8 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
-                presentation: RoomMessagePresentationKind::Text,
-                body: "hello".to_owned(),
+                presentation: RoomMessagePresentationKind::Emote,
+                body: "waves".to_owned(),
                 send_state: RoomMessageSendState::Failed {
                     message: "send failed".to_owned(),
                     recoverable: true,
@@ -6072,7 +6266,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello (failed)".to_owned(),
+                "* [22:13] @alice:example waves (failed)".to_owned(),
             ]
         );
     }
@@ -6084,7 +6278,13 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            failed_message("!ops:example", "txn-1", "hello", "send failed"),
+            failed_message_with_presentation(
+                "!ops:example",
+                "txn-1",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+                "send failed",
+            ),
         )
         .unwrap();
 
@@ -6094,10 +6294,11 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .map(|view| &view.activities),
-            Some(&vec![failed_message_activity(
+            Some(&vec![failed_message_activity_with_presentation(
                 "!ops:example",
                 "txn-1",
-                "hello",
+                RoomMessagePresentationKind::Emote,
+                "waves",
                 "send failed",
             )])
         );
@@ -6105,7 +6306,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello (failed)".to_owned(),
+                "* [22:13] @alice:example waves (failed)".to_owned(),
             ]
         );
     }
@@ -6280,7 +6481,7 @@ mod tests {
     }
 
     #[test]
-    fn render_room_lines_include_header_topic_text_and_room_activities() {
+    fn render_room_lines_include_text_notice_emote_and_state_activities() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", true)];
         apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
@@ -6293,11 +6494,35 @@ mod tests {
             &mut state,
             timeline_with_transaction_id(
                 "!ops:example",
-                "$event:example.org",
+                "$event-text:example.org",
                 None,
                 "<body>",
                 1_700_000_000_000,
             ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(sent_message_activity_with_presentation(
+                "!ops:example",
+                "$event-notice:example.org",
+                None,
+                RoomMessagePresentationKind::Notice,
+                "maintenance window",
+                1_700_000_030_000,
+            )),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(sent_message_activity_with_presentation(
+                "!ops:example",
+                "$event-emote:example.org",
+                None,
+                RoomMessagePresentationKind::Emote,
+                "waves",
+                1_700_000_090_000,
+            )),
         )
         .unwrap();
         apply_core_event(
@@ -6324,6 +6549,8 @@ mod tests {
                 "* @alice:example.org, @bob:example.org are typing".to_owned(),
                 "* [22:14] @alice:example set topic: incident review".to_owned(),
                 "[22:13] @alice:example: <body>".to_owned(),
+                "[22:13] -@alice:example- maintenance window".to_owned(),
+                "* [22:15] @alice:example waves".to_owned(),
                 "* [22:15] carol joined".to_owned(),
                 "* [22:15] @dave:example left".to_owned(),
                 "* [22:15] @erin:example membership: ban".to_owned(),
@@ -7046,22 +7273,58 @@ mod tests {
     }
 
     #[test]
-    fn parse_compose_submission_distinguishes_text_literal_slash_and_commands() {
+    fn parse_compose_submission_distinguishes_text_emote_literal_slash_and_commands() {
         assert_eq!(
             parse_compose_submission("hello"),
-            ComposeSubmission::Text {
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
                 body: Cow::Borrowed("hello"),
             }
         );
         assert_eq!(
+            parse_compose_submission("/me waves"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Emote,
+                body: Cow::Borrowed("waves"),
+            }
+        );
+        assert_eq!(
+            parse_compose_submission("/ME    waves"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Emote,
+                body: Cow::Borrowed("waves"),
+            }
+        );
+        assert_eq!(
+            parse_compose_submission("/me"),
+            ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
+                feedback: "usage: /me <action>".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse_compose_submission("/me    "),
+            ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
+                feedback: "usage: /me <action>".to_owned(),
+            })
+        );
+        assert_eq!(
+            parse_compose_submission("//me waves"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/me waves".to_owned()),
+            }
+        );
+        assert_eq!(
             parse_compose_submission("//status"),
-            ComposeSubmission::Text {
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
                 body: Cow::Owned("/status".to_owned()),
             }
         );
         assert_eq!(
             parse_compose_submission("///status"),
-            ComposeSubmission::Text {
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
                 body: Cow::Owned("//status".to_owned()),
             }
         );
@@ -7188,25 +7451,48 @@ mod tests {
     }
 
     #[test]
-    fn submit_compose_uses_explicit_or_selected_room() {
+    fn submit_compose_enqueues_text_and_emote_messages_with_exact_requests() {
         let mut state = test_state();
         let handle = start_test_core();
         state.command_sender = Some(handle.command_sender().clone());
-        state.model.rooms = vec![
-            room("!selected:example", "Selected", false),
-            room("!explicit:example", "Explicit", false),
-        ];
+        state.model.rooms = vec![room("!selected:example", "Selected", false)];
         state.model.selected_room = Some("!selected:example".to_owned());
 
-        let selected_room_id = submit_compose(&mut state, "hello".to_owned(), None).unwrap();
+        let selected_room_id = submit_compose(
+            &mut state,
+            RoomMessagePresentationKind::Text,
+            "hello".to_owned(),
+            None,
+        )
+        .unwrap();
         assert_eq!(selected_room_id, "!selected:example");
-
-        let explicit_room_id =
-            submit_compose(&mut state, "hi".to_owned(), Some("!explicit:example")).unwrap();
-        assert_eq!(explicit_room_id, "!explicit:example");
+        let emote_room_id = submit_compose_with_history_entry(
+            &mut state,
+            RoomMessagePresentationKind::Emote,
+            "waves".to_owned(),
+            "/me waves".to_owned(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(emote_room_id, "!selected:example");
         assert_eq!(
             state.compose_history.entries,
-            vec!["hello".to_owned(), "hi".to_owned()]
+            vec!["hello".to_owned(), "/me waves".to_owned()]
+        );
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::SendMessage(SendMessageRequest {
+                    room_id: "!selected:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello".to_owned(),
+                }),
+                Command::SendMessage(SendMessageRequest {
+                    room_id: "!selected:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "waves".to_owned(),
+                }),
+            ]
         );
 
         handle
@@ -7226,6 +7512,7 @@ mod tests {
 
         let room_id = submit_compose_with_history_entry(
             &mut state,
+            RoomMessagePresentationKind::Text,
             "/status".to_owned(),
             "//status".to_owned(),
             None,
@@ -7233,6 +7520,14 @@ mod tests {
         .unwrap();
         assert_eq!(room_id, "!beta:example");
         assert_eq!(state.compose_history.entries, vec!["//status".to_owned()]);
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SendMessage(SendMessageRequest {
+                room_id: "!beta:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "/status".to_owned(),
+            })]
+        );
 
         handle
             .command_sender()
@@ -7242,7 +7537,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_compose_rejects_empty_body_unknown_room_and_missing_selection() {
+    fn submit_compose_rejects_text_and_emote_for_empty_body_invalid_room_and_missing_selection() {
         let mut state = test_state();
         state.model.rooms = vec![
             room("!room:example", "Room", false),
@@ -7250,25 +7545,46 @@ mod tests {
         ];
 
         assert_eq!(
-            submit_compose(&mut state, String::new(), Some("!room:example")),
+            submit_compose(
+                &mut state,
+                RoomMessagePresentationKind::Text,
+                String::new(),
+                Some("!room:example"),
+            ),
             Err("message body must not be empty".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
         assert_eq!(
-            submit_compose(&mut state, "hello".to_owned(), Some("!missing:example")),
+            submit_compose(
+                &mut state,
+                RoomMessagePresentationKind::Emote,
+                "waves".to_owned(),
+                Some("!missing:example"),
+            ),
             Err("unknown room id: !missing:example".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
         assert_eq!(
-            submit_compose(&mut state, "hello".to_owned(), Some("!space:example")),
+            submit_compose(
+                &mut state,
+                RoomMessagePresentationKind::Emote,
+                "waves".to_owned(),
+                Some("!space:example"),
+            ),
             Err("unknown room id: !space:example".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
         assert_eq!(
-            submit_compose(&mut state, "hello".to_owned(), None),
+            submit_compose(
+                &mut state,
+                RoomMessagePresentationKind::Emote,
+                "waves".to_owned(),
+                None,
+            ),
             Err("no room selected".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
+        assert!(state.recorded_commands.is_empty());
     }
 
     #[test]
@@ -7376,7 +7692,12 @@ mod tests {
         state.model.selected_room = Some("!room:example".to_owned());
 
         assert_eq!(
-            submit_compose(&mut state, "hello".to_owned(), None),
+            submit_compose(
+                &mut state,
+                RoomMessagePresentationKind::Text,
+                "hello".to_owned(),
+                None,
+            ),
             Err("core command sender is not available".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
