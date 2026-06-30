@@ -204,7 +204,9 @@ pub(crate) async fn summarize_e2ee_status(
                 ))
             })?)
         }
-        BackupServerStatusMode::Cached => backups.exists_on_server().await.ok(),
+        // In matrix-sdk 0.18, exists_on_server() can fall through to a network fetch when the
+        // in-memory cache is empty, so watcher-driven cached summaries must not call it.
+        BackupServerStatusMode::Cached => None,
     };
 
     Ok(E2eeStatus {
