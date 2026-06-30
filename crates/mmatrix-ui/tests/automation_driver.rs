@@ -2618,11 +2618,11 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
-    assert_eq!(initial_state.mdi.active, ViewIdentity::Status);
-    assert_active_switchbar_item(&initial_state, &ViewIdentity::Status);
-    assert_eq!(app.dump_model()?.selected_room, None);
-    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
+    assert_eq!(initial_state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&initial_state, &room_identity("!beta:example"));
+    assert_eq!(app.dump_model()?.selected_room.as_deref(), Some("!beta:example"));
     assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
 
     app.select_room("!alpha:example")?;
     let activated_state = app.dump_ui_state()?;

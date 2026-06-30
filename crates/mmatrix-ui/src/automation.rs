@@ -1571,6 +1571,31 @@ mod tests {
     }
 
     #[test]
+    fn load_command_parses_room_read_state_events() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_LOAD_SYNTHETIC_STATE,
+                br#"{"id":"load","args":{"events":[{"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}}]}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::LoadSyntheticState {
+                id: "load".to_owned(),
+                args: LoadEventsArgs {
+                    events: vec![Event::RoomReadState(RoomReadState {
+                        room_id: "!ops:example".to_owned(),
+                        latest_active_event_id: Some("$latest:example".to_owned()),
+                        fully_read_event_id: Some("$fully-read:example".to_owned()),
+                        marked_unread: true,
+                        num_unread: 7,
+                        num_notifications: 3,
+                        num_mentions: 1,
+                    })],
+                },
+            }
+        );
+    }
+
+    #[test]
     fn load_command_rejects_unknown_fields_inside_event_payloads() {
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,

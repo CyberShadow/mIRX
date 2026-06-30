@@ -3,15 +3,15 @@
   {
     "SyncedRooms": [
       {
-        "room_id": "!alpha:example",
-        "display_name": "Alpha",
+        "room_id": "!beta:example",
+        "display_name": "Beta",
         "encrypted": false,
         "is_space": false,
         "space_children": []
       },
       {
-        "room_id": "!beta:example",
-        "display_name": "Beta",
+        "room_id": "!alpha:example",
+        "display_name": "Alpha",
         "encrypted": false,
         "is_space": false,
         "space_children": []
