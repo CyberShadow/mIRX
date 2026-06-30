@@ -996,7 +996,7 @@ pub(crate) fn parse_command_request(
         }),
         CommandKind::RecoverE2ee => Ok(ParsedCommand::RecoverE2ee {
             id: envelope.id.clone(),
-            args: parse_args_required::<RecoverE2eeArgs>(&envelope.id, envelope.args)?,
+            args: parse_recover_e2ee_args(&envelope.id, envelope.args)?,
         }),
     }
 }
@@ -1049,6 +1049,52 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
         }),
         None => Ok(T::default()),
     }
+}
+
+fn parse_recover_e2ee_args(
+    id: &str,
+    args: Option<Value>,
+) -> Result<RecoverE2eeArgs, FailureEnvelope> {
+    let args = args.ok_or_else(|| {
+        failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "missing args object for recover_e2ee command",
+        )
+    })?;
+    let Value::Object(args) = args else {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid recover_e2ee args: expected object",
+        ));
+    };
+    if let Some(unexpected) = args.keys().find(|key| key.as_str() != "recovery_secret") {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            format!(
+                "invalid recover_e2ee args: unknown field `{unexpected}`, expected `recovery_secret`"
+            ),
+        ));
+    }
+    let recovery_secret = args.get("recovery_secret").ok_or_else(|| {
+        failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid recover_e2ee args: missing field `recovery_secret`",
+        )
+    })?;
+    let Value::String(recovery_secret) = recovery_secret else {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid recover_e2ee args: `recovery_secret` must be a string",
+        ));
+    };
+    Ok(RecoverE2eeArgs {
+        recovery_secret: recovery_secret.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -1940,6 +1986,32 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("unknown field `unexpected`")
+        );
+    }
+
+    #[test]
+    fn recover_e2ee_shape_errors_do_not_echo_secret() {
+        let error = parse_command_request(
+            COMMAND_ID_RECOVER_E2EE,
+            br#"{"id":"recover","args":"sample recovery secret"}"#,
+        )
+        .expect_err("non-object args must fail");
+        let debug = format!("{error:?}");
+        let value = serde_json::to_value(error).unwrap();
+
+        assert!(!debug.contains("sample recovery secret"));
+        assert_eq!(value["id"], json!("recover"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert_eq!(
+            value["err"]["message"],
+            json!("invalid recover_e2ee args: expected object")
+        );
+        assert!(
+            !value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("sample recovery secret")
         );
     }
 
