@@ -159,7 +159,9 @@ configure_case_expectations() {
   room_expect_args=()
   room_view_expect_args=()
   status_view_expect_args=()
+  status_view_forbid_args=()
   status_bar_expect_args=()
+  status_bar_forbid_args=()
   switchbar_item_expect_args=()
   switchbar_no_item_expect_args=()
   switchbar_activity_expect_args=()
@@ -320,6 +322,100 @@ configure_case_expectations() {
         --expect-no-navigation-text 'message send failed'
       )
       ;;
+    e2ee-recovery-needed)
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view 'e2ee'
+        --expect-status-view 'recovery: incomplete'
+        --expect-status-view 'backup: enabled'
+        --expect-status-view 'backup_enabled_local: false'
+        --expect-status-view 'backup_exists_on_server: true'
+        --expect-status-view 'cross_signing: incomplete'
+        --expect-status-view 'actions: Account > Recover E2EE..., /e2ee refresh'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'recovery_secret'
+        --expect-no-status-view 'passphrase='
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'e2ee: recovery incomplete, backup enabled'
+      )
+      status_bar_forbid_args=(
+        --expect-no-status-bar 'recovery_secret'
+        --expect-no-status-bar 'passphrase='
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
+    e2ee-recovery-enabled)
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view 'e2ee'
+        --expect-status-view 'recovery: enabled'
+        --expect-status-view 'backup: enabled'
+        --expect-status-view 'backup_enabled_local: true'
+        --expect-status-view 'backup_exists_on_server: true'
+        --expect-status-view 'cross_signing: complete'
+        --expect-status-view 'actions: Account > Recover E2EE..., /e2ee refresh'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'recovery_secret'
+        --expect-no-status-view 'passphrase='
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'e2ee: recovery enabled, backup enabled'
+      )
+      status_bar_forbid_args=(
+        --expect-no-status-bar 'recovery_secret'
+        --expect-no-status-bar 'passphrase='
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
+    e2ee-recovery-error)
+      expect_error='recover_e2ee: failed to recover E2EE secrets'
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view 'e2ee'
+        --expect-status-view 'recovery: incomplete'
+        --expect-status-view 'backup: enabled'
+        --expect-status-view 'backup_enabled_local: false'
+        --expect-status-view 'backup_exists_on_server: true'
+        --expect-status-view 'cross_signing: incomplete'
+        --expect-status-view 'actions: Account > Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'operation: e2ee recovery'
+        --expect-status-view 'failed to recover E2EE secrets: invalid recovery key or passphrase'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'recovery_secret'
+        --expect-no-status-view 'passphrase='
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'e2ee: recovery incomplete, backup enabled'
+        --expect-status-bar 'error: e2ee recovery: failed to recover E2EE secrets'
+      )
+      status_bar_forbid_args=(
+        --expect-no-status-bar 'recovery_secret'
+        --expect-no-status-bar 'passphrase='
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
     mixed-room-activity)
       expect_selected='!mixed:example'
       expect_active_view='room:!mixed:example'
@@ -423,24 +519,20 @@ run_case() {
   local driver_status=0
   local driver_args=()
 
-  if [[ ! -f "$baseline_png" ]]; then
-    echo "missing UI snapshot baseline: $baseline_png" >&2
-    return 1
-  fi
-
   configure_case_expectations "$case_name"
   cleanup_app
   state_path_win=$(unix_to_wine_path "$state_path")
   driver_args=(
     --find-timeout-ms 30000
     --wait-idle-ms 5000
-    --expect-selected "$expect_selected"
     --expect-active-view "$expect_active_view"
     "${room_expect_args[@]}"
     "${room_activity_expect_args[@]}"
     "${room_view_expect_args[@]}"
     "${status_view_expect_args[@]}"
+    "${status_view_forbid_args[@]}"
     "${status_bar_expect_args[@]}"
+    "${status_bar_forbid_args[@]}"
     "${switchbar_item_expect_args[@]}"
     "${switchbar_no_item_expect_args[@]}"
     "${switchbar_activity_expect_args[@]}"
@@ -449,6 +541,9 @@ run_case() {
     "${navigation_forbid_args[@]}"
   )
 
+  if [[ -n "${expect_selected:-}" ]]; then
+    driver_args+=(--expect-selected "$expect_selected")
+  fi
   if [[ -n "${expect_error:-}" ]]; then
     driver_args+=(--expect-error "$expect_error")
   fi
@@ -481,6 +576,14 @@ run_case() {
 
   import -window root "$generated_png"
   echo "PNG $generated_png"
+
+  if [[ ! -f "$baseline_png" ]]; then
+    keep_tmpdir=1
+    echo "missing UI snapshot baseline: $baseline_png" >&2
+    echo "generated: $generated_png" >&2
+    cleanup_app
+    return 1
+  fi
 
   compare_snapshot_pngs "$baseline_png" "$generated_png" "$diff_png"
 

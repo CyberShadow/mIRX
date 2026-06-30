@@ -1,0 +1,19 @@
+[
+  "Started",
+  {
+    "E2eeStatus": {
+      "recovery": "incomplete",
+      "backup": {
+        "state": "enabled",
+        "enabled_locally": false,
+        "exists_on_server": true
+      },
+      "cross_signing": {
+        "has_master": false,
+        "has_self_signing": false,
+        "has_user_signing": false,
+        "complete": false
+      }
+    }
+  }
+]

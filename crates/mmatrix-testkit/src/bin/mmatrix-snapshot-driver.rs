@@ -30,7 +30,9 @@ mod windows_main {
         expect_active_view: Option<ViewIdentity>,
         expect_room_views: Vec<ViewTextExpectation>,
         expect_status_views: Vec<String>,
+        expect_no_status_views: Vec<String>,
         expect_status_bars: Vec<String>,
+        expect_no_status_bars: Vec<String>,
         expect_switchbar_items: Vec<SwitchbarItemExpectation>,
         expect_no_switchbar_items: Vec<ViewIdentity>,
         expect_switchbar_active: Option<ViewIdentity>,
@@ -60,7 +62,9 @@ mod windows_main {
             self.expect_active_view.is_some()
                 || !self.expect_room_views.is_empty()
                 || !self.expect_status_views.is_empty()
+                || !self.expect_no_status_views.is_empty()
                 || !self.expect_status_bars.is_empty()
+                || !self.expect_no_status_bars.is_empty()
                 || !self.expect_switchbar_items.is_empty()
                 || !self.expect_no_switchbar_items.is_empty()
                 || self.expect_switchbar_active.is_some()
@@ -212,7 +216,7 @@ mod windows_main {
                 );
             }
 
-            if !config.expect_status_views.is_empty() {
+            if !config.expect_status_views.is_empty() || !config.expect_no_status_views.is_empty() {
                 let status_view = find_view(&ui_state, &ViewIdentity::Status).ok_or_else(|| {
                     "status view assertion failed: missing status view".to_owned()
                 })?;
@@ -225,6 +229,15 @@ mod windows_main {
                     }
                     println!("PASS status view contains {:?}", substring);
                 }
+                for substring in &config.expect_no_status_views {
+                    if view_contains(status_view, substring) {
+                        return Err(format!(
+                            "status view assertion failed: status unexpectedly contained {:?}",
+                            substring
+                        ));
+                    }
+                    println!("PASS status view excludes {:?}", substring);
+                }
             }
 
             for substring in &config.expect_status_bars {
@@ -235,6 +248,16 @@ mod windows_main {
                     ));
                 }
                 println!("PASS status bar contains {:?}", substring);
+            }
+
+            for substring in &config.expect_no_status_bars {
+                if ui_state.status_bar.text.contains(substring) {
+                    return Err(format!(
+                        "status bar assertion failed: unexpected substring {:?} in {:?}",
+                        substring, ui_state.status_bar.text
+                    ));
+                }
+                println!("PASS status bar excludes {:?}", substring);
             }
 
             for expectation in &config.expect_switchbar_items {
@@ -458,11 +481,25 @@ mod windows_main {
                             .ok_or_else(|| "missing value for --expect-status-view".to_owned())?,
                     );
                 }
+                "--expect-no-status-view" => {
+                    config.expect_no_status_views.push(
+                        args.next().ok_or_else(|| {
+                            "missing value for --expect-no-status-view".to_owned()
+                        })?,
+                    );
+                }
                 "--expect-status-bar" => {
                     config.expect_status_bars.push(
                         args.next()
                             .ok_or_else(|| "missing value for --expect-status-bar".to_owned())?,
                     );
+                }
+                "--expect-no-status-bar" => {
+                    config
+                        .expect_no_status_bars
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-no-status-bar".to_owned()
+                        })?);
                 }
                 "--expect-switchbar-item" => {
                     let value = args
@@ -561,7 +598,9 @@ mod windows_main {
             "  --expect-active-view <status|room:<room_id>>",
             "  --expect-room-view <room_id>::<substring>",
             "  --expect-status-view <substring>",
+            "  --expect-no-status-view <substring>",
             "  --expect-status-bar <substring>",
+            "  --expect-no-status-bar <substring>",
             "  --expect-switchbar-item <identity>::<title-substring>",
             "  --expect-no-switchbar-item <status|room:<room_id>>",
             "  --expect-switchbar-active <status|room:<room_id>>",
