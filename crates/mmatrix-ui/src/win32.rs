@@ -4462,6 +4462,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                             "event_id":"$one-first",
                             "transaction_id":null,
                             "sender":"@alice:example",
+                            "presentation":"text",
                             "body":"first line",
                             "send_state":{"state":"sent"}
                         }
@@ -4475,6 +4476,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                             "event_id":"$one-second",
                             "transaction_id":null,
                             "sender":"@alice:example",
+                            "presentation":"text",
                             "body":"second line",
                             "send_state":{"state":"sent"}
                         }
