@@ -2,11 +2,14 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mmatrix_core::{Event as CoreEvent, RoomReadState};
+use mmatrix_core::{
+    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
+    Event as CoreEvent, RoomReadState,
+};
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
-    NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomActivity, RoomActivityKind,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
+    RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
     StatusBarState, StoredSession, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState,
     Verification, VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
@@ -18,6 +21,23 @@ fn stored_session() -> StoredSession {
         device_id: "DEVICE".to_owned(),
         access_token: "secret-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
+    }
+}
+
+fn sample_e2ee_status() -> E2eeStatus {
+    E2eeStatus {
+        recovery: E2eeRecoveryState::Incomplete,
+        backup: E2eeBackupStatus {
+            state: E2eeBackupState::Enabled,
+            enabled_locally: true,
+            exists_on_server: Some(true),
+        },
+        cross_signing: Some(E2eeCrossSigningStatus {
+            has_master: true,
+            has_self_signing: true,
+            has_user_signing: false,
+            complete: false,
+        }),
     }
 }
 
@@ -121,6 +141,7 @@ fn data_models_round_trip_through_json() {
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
+        e2ee_status: Some(sample_e2ee_status()),
         last_verification: Some(Verification {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),
@@ -149,7 +170,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 11,
+        protocol_version: 13,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -750,6 +771,7 @@ fn model_last_activity_round_trips_through_json() {
             body: "latest".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
+        e2ee_status: None,
         last_verification: None,
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
@@ -774,6 +796,7 @@ fn model_last_activity_round_trips_through_json() {
                     "state": "sent"
                 }
             },
+            "e2ee_status": null,
             "last_verification": null,
             "last_error": null,
             "selected_room": "!room:example"
@@ -795,6 +818,7 @@ fn data_models_reject_unknown_fields() {
             "lifecycle_state":"ready",
             "rooms":[],
             "last_activity":null,
+            "e2ee_status":null,
             "last_verification":null,
             "last_error":null,
             "selected_room":null,
@@ -806,7 +830,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":11,
+            "protocol_version":13,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -1170,6 +1194,7 @@ fn model_last_verification_round_trips_typed_state_json() {
         "lifecycle_state":"ready",
         "rooms":[],
         "last_activity":null,
+        "e2ee_status":null,
         "last_verification":{
             "flow_id":"flow-verify-123",
             "user_id":"@alice:example",
@@ -1205,6 +1230,7 @@ fn model_last_verification_round_trips_typed_state_json() {
             "lifecycle_state":"ready",
             "rooms":[],
             "last_activity":null,
+            "e2ee_status":null,
             "last_verification":{
                 "flow_id":"flow-verify-123",
                 "user_id":"@alice:example",
@@ -1219,6 +1245,114 @@ fn model_last_verification_round_trips_typed_state_json() {
             "selected_room":null
         })
     );
+}
+
+#[test]
+fn model_e2ee_status_round_trips_typed_state_json() {
+    let model = serde_json::from_value::<Model>(serde_json::json!({
+        "status":"e2ee status updated",
+        "lifecycle_state":"ready",
+        "rooms":[],
+        "last_activity":null,
+        "e2ee_status":{
+            "recovery":"incomplete",
+            "backup":{
+                "state":"enabled",
+                "enabled_locally":true,
+                "exists_on_server":true
+            },
+            "cross_signing":{
+                "has_master":true,
+                "has_self_signing":true,
+                "has_user_signing":false,
+                "complete":false
+            }
+        },
+        "last_verification":null,
+        "last_error":null,
+        "selected_room":null
+    }))
+    .expect("deserialize typed e2ee model");
+
+    assert_eq!(model.e2ee_status, Some(sample_e2ee_status()));
+
+    assert_eq!(
+        serde_json::to_value(&model).expect("serialize typed e2ee model"),
+        serde_json::json!({
+            "status":"e2ee status updated",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":{
+                "recovery":"incomplete",
+                "backup":{
+                    "state":"enabled",
+                    "enabled_locally":true,
+                    "exists_on_server":true
+                },
+                "cross_signing":{
+                    "has_master":true,
+                    "has_self_signing":true,
+                    "has_user_signing":false,
+                    "complete":false
+                }
+            },
+            "last_verification":null,
+            "last_error":null,
+            "selected_room":null
+        })
+    );
+}
+
+#[test]
+fn model_e2ee_status_rejects_unknown_nested_fields() {
+    for json in [
+        serde_json::json!({
+            "status":"e2ee status updated",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":{
+                "recovery":"incomplete",
+                "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
+                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
+                "unexpected":true
+            },
+            "last_verification":null,
+            "last_error":null,
+            "selected_room":null
+        }),
+        serde_json::json!({
+            "status":"e2ee status updated",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":{
+                "recovery":"incomplete",
+                "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":true},
+                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false}
+            },
+            "last_verification":null,
+            "last_error":null,
+            "selected_room":null
+        }),
+        serde_json::json!({
+            "status":"e2ee status updated",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":{
+                "recovery":"incomplete",
+                "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
+                "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true}
+            },
+            "last_verification":null,
+            "last_error":null,
+            "selected_room":null
+        }),
+    ] {
+        assert!(serde_json::from_value::<Model>(json).is_err());
+    }
 }
 
 #[test]
@@ -1350,6 +1484,43 @@ fn login_args_defaults_device_display_name_when_omitted() {
     );
 }
 
+#[test]
+fn recover_e2ee_args_round_trip_and_redact_debug() {
+    let args = RecoverE2eeArgs {
+        recovery_secret: "sample recovery secret".to_owned(),
+    };
+    assert_eq!(
+        serde_json::to_value(&args).expect("serialize recover args"),
+        serde_json::json!({
+            "recovery_secret":"sample recovery secret"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<RecoverE2eeArgs>(serde_json::json!({
+            "recovery_secret":"sample recovery secret"
+        }))
+        .expect("deserialize recover args"),
+        args
+    );
+
+    let debug = format!("{args:?}");
+    assert!(!debug.contains("sample recovery secret"));
+    assert!(debug.contains("<redacted>"));
+}
+
+#[test]
+fn recover_e2ee_args_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<RecoverE2eeArgs>(
+            r#"{
+            "recovery_secret":"sample recovery secret",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+}
+
 #[cfg(not(windows))]
 #[test]
 fn non_windows_platform_reports_unsupported_driver() {
@@ -1412,6 +1583,7 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
     unsupported(app.restore_saved_session());
     unsupported(app.start_sync());
     unsupported(app.logout());
+    unsupported(app.recover_e2ee("sample recovery secret"));
     unsupported(app.wait_for_lifecycle_state("ready", Duration::from_millis(1)));
     unsupported(app.wait_for_min_rooms(1, Duration::from_millis(1)));
     assert_eq!(app.pid(), 0);

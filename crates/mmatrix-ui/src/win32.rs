@@ -4182,6 +4182,15 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 .map_err(|message| failure_response(Some(id.clone()), "logout_failed", message))?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::RecoverE2ee { id, args } => {
+            submit_recover_e2ee(state_mut(hwnd), args.recovery_secret).map_err(|message| {
+                failure_response(Some(id.clone()), "recover_e2ee_failed", message)
+            })?;
+            refresh_status_bar(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "recover_e2ee_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
     }
 }
 
@@ -4207,8 +4216,9 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::DumpComposeText { id }
         | ParsedCommand::SetComposeText { id, .. }
         | ParsedCommand::SendComposeKey { id, .. }
-        | ParsedCommand::SelectNavigationPath { id, .. } => id,
-        ParsedCommand::AppendSyntheticEvents { id, .. } => id,
+        | ParsedCommand::SelectNavigationPath { id, .. }
+        | ParsedCommand::AppendSyntheticEvents { id, .. }
+        | ParsedCommand::RecoverE2ee { id, .. } => id,
     }
 }
 
@@ -5685,6 +5695,7 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
             .last_activity
             .as_ref()
             .map(dump_room_message_activity_line_from_last_activity),
+        e2ee_status: model.last_e2ee_status.clone(),
         last_verification: model
             .last_verification
             .as_ref()

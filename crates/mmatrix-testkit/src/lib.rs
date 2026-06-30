@@ -5,6 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use mmatrix_core::E2eeStatus;
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -58,6 +59,8 @@ const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
 #[cfg(windows)]
 const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
 #[cfg(windows)]
+const COMMAND_ID_RECOVER_E2EE: u32 = 23;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -109,6 +112,20 @@ pub struct RestoreSessionArgs {
     pub session: StoredSession,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoverE2eeArgs {
+    pub recovery_secret: String,
+}
+
+impl fmt::Debug for RecoverE2eeArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecoverE2eeArgs")
+            .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
+}
+
 fn default_device_display_name() -> String {
     "mmatrix-ui".to_owned()
 }
@@ -120,6 +137,7 @@ pub struct Model {
     pub lifecycle_state: String,
     pub rooms: Vec<Room>,
     pub last_activity: Option<RoomMessageActivityLine>,
+    pub e2ee_status: Option<E2eeStatus>,
     pub last_verification: Option<Verification>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
@@ -714,6 +732,12 @@ impl MmatrixApp {
         self.inner.logout()
     }
 
+    pub fn recover_e2ee(&self, recovery_secret: &str) -> Result<(), TestkitError> {
+        self.inner.recover_e2ee(RecoverE2eeArgs {
+            recovery_secret: recovery_secret.to_owned(),
+        })
+    }
+
     pub fn load_events(&self, events_json: &str) -> Result<(), TestkitError> {
         self.inner.load_events(events_json)
     }
@@ -1129,6 +1153,12 @@ mod imp {
         }
 
         pub(crate) fn logout(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn recover_e2ee(&self, _args: RecoverE2eeArgs) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1560,6 +1590,17 @@ mod imp {
             } else {
                 Err(TestkitError::InvalidResponse(
                     "LOGOUT was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn recover_e2ee(&self, args: RecoverE2eeArgs) -> Result<(), TestkitError> {
+            let response: AcceptedResponse = self.send_command(COMMAND_ID_RECOVER_E2EE, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "RECOVER_E2EE was not accepted".to_owned(),
                 ))
             }
         }

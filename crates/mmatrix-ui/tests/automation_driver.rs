@@ -8,6 +8,7 @@ use std::ptr::copy_nonoverlapping;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
+    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
@@ -229,6 +230,23 @@ fn base_events() -> Vec<Event> {
             "beta second",
         ),
     ]
+}
+
+fn sample_e2ee_status() -> E2eeStatus {
+    E2eeStatus {
+        recovery: E2eeRecoveryState::Incomplete,
+        backup: E2eeBackupStatus {
+            state: E2eeBackupState::Enabled,
+            enabled_locally: true,
+            exists_on_server: Some(true),
+        },
+        cross_signing: Some(E2eeCrossSigningStatus {
+            has_master: true,
+            has_self_signing: true,
+            has_user_signing: false,
+            complete: false,
+        }),
+    }
 }
 
 fn replacement_events() -> Vec<Event> {
@@ -1078,7 +1096,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 12);
+    assert_eq!(version.protocol_version, 13);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -1426,6 +1444,83 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
 
     let _ = fs::remove_file(&state_path);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::E2eeStatus(sample_e2ee_status()),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room, None);
+    assert_eq!(model.e2ee_status, Some(sample_e2ee_status()));
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert_active_switchbar_item(&ui_state, &ViewIdentity::Status);
+    let status_view = find_view(&ui_state, &ViewIdentity::Status);
+    assert!(status_view.active);
+    assert!(view_contains(status_view, "recovery: incomplete"));
+    assert!(view_contains(status_view, "backup: enabled"));
+    assert!(view_contains(status_view, "backup_enabled_local: true"));
+    assert!(view_contains(status_view, "backup_exists_on_server: true"));
+    assert!(view_contains(status_view, "cross_signing: incomplete"));
+    assert!(view_contains(
+        status_view,
+        "actions: Account > Recover E2EE..., /e2ee refresh",
+    ));
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("e2ee: recovery incomplete, backup enabled")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.recover_e2ee("sample recovery secret")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_status_view()?;
+    app.wait_idle(Duration::from_secs(2))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.last_error,
+        Some(UiError {
+            operation: "recover_e2ee".to_owned(),
+            message: "E2EE recovery requires an authenticated session".to_owned(),
+        })
+    );
+    assert!(!model.status.contains("sample recovery secret"));
+    assert!(!serde_json::to_string(&model)?.contains("sample recovery secret"));
+
+    let ui_state = app.dump_ui_state()?;
+    let status_view = find_view(&ui_state, &ViewIdentity::Status);
+    assert!(!view_contains(status_view, "sample recovery secret"));
+    assert!(!ui_state.status_bar.text.contains("sample recovery secret"));
+    assert_eq!(app.compose_text()?, "");
+
     Ok(())
 }
 

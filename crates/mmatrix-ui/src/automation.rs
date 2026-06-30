@@ -1,15 +1,18 @@
 #![allow(dead_code)]
 
+use std::fmt;
+
 use mmatrix_core::{
-    CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, StoredSession, VerificationState, VerificationStateEvent,
+    CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, StoredSession, VerificationState,
+    VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 12;
+pub(crate) const PROTOCOL_VERSION: u32 = 13;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -32,6 +35,7 @@ pub(crate) const COMMAND_ID_SEND_COMPOSE_KEY: u32 = 19;
 pub(crate) const COMMAND_ID_SELECT_NAVIGATION_PATH: u32 = 20;
 pub(crate) const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
 pub(crate) const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
+pub(crate) const COMMAND_ID_RECOVER_E2EE: u32 = 23;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -57,6 +61,7 @@ pub(crate) enum CommandKind {
     SelectNavigationPath,
     DumpSelectedNavigationPath,
     AppendSyntheticEvents,
+    RecoverE2ee,
 }
 
 impl CommandKind {
@@ -84,6 +89,7 @@ impl CommandKind {
             COMMAND_ID_SELECT_NAVIGATION_PATH => Some(Self::SelectNavigationPath),
             COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH => Some(Self::DumpSelectedNavigationPath),
             COMMAND_ID_APPEND_SYNTHETIC_EVENTS => Some(Self::AppendSyntheticEvents),
+            COMMAND_ID_RECOVER_E2EE => Some(Self::RecoverE2ee),
             _ => None,
         }
     }
@@ -169,6 +175,10 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: LoadEventsArgs,
     },
+    RecoverE2ee {
+        id: String,
+        args: RecoverE2eeArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -196,6 +206,7 @@ impl ParsedCommand {
             Self::SelectNavigationPath { .. } => CommandKind::SelectNavigationPath,
             Self::DumpSelectedNavigationPath { .. } => CommandKind::DumpSelectedNavigationPath,
             Self::AppendSyntheticEvents { .. } => CommandKind::AppendSyntheticEvents,
+            Self::RecoverE2ee { .. } => CommandKind::RecoverE2ee,
         }
     }
 }
@@ -282,6 +293,20 @@ pub(crate) struct LoginArgs {
 pub(crate) struct RestoreSessionArgs {
     pub(crate) homeserver_url: String,
     pub(crate) session: StoredSession,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RecoverE2eeArgs {
+    pub(crate) recovery_secret: String,
+}
+
+impl fmt::Debug for RecoverE2eeArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecoverE2eeArgs")
+            .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -605,6 +630,7 @@ pub(crate) struct DumpModel {
     pub(crate) lifecycle_state: LifecycleState,
     pub(crate) rooms: Vec<DumpRoom>,
     pub(crate) last_activity: Option<DumpRoomMessageActivityLine>,
+    pub(crate) e2ee_status: Option<E2eeStatus>,
     pub(crate) last_verification: Option<DumpVerification>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
@@ -968,6 +994,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<LoadEventsArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::RecoverE2ee => Ok(ParsedCommand::RecoverE2ee {
+            id: envelope.id.clone(),
+            args: parse_args_required::<RecoverE2eeArgs>(&envelope.id, envelope.args)?,
+        }),
     }
 }
 
@@ -1024,9 +1054,10 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 #[cfg(test)]
 mod tests {
     use mmatrix_core::{
-        CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomSummary,
-        SpaceChildSummary, StoredSession, VerificationRequest, VerificationState,
+        CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+        E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+        RoomSummary, SpaceChildSummary, StoredSession, VerificationRequest, VerificationState,
         VerificationStateEvent,
     };
     use serde_json::{Value, json};
@@ -1036,16 +1067,17 @@ mod tests {
         COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION,
         COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
-        COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RESTORE_SAVED_SESSION,
-        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
-        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
-        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, ParsedCommand, PongResponse, ResponseEnvelope, RestoreSessionArgs,
+        COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
+        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
+        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
+        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
+        DumpRoomActivityResponse, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
+        DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
+        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
         SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
         SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
@@ -1060,6 +1092,28 @@ mod tests {
             access_token: "secret-token".to_owned(),
             refresh_token: Some("refresh-token".to_owned()),
         }
+    }
+
+    fn sample_e2ee_status() -> E2eeStatus {
+        E2eeStatus {
+            recovery: E2eeRecoveryState::Incomplete,
+            backup: E2eeBackupStatus {
+                state: E2eeBackupState::Enabled,
+                enabled_locally: true,
+                exists_on_server: Some(true),
+            },
+            cross_signing: Some(E2eeCrossSigningStatus {
+                has_master: true,
+                has_self_signing: true,
+                has_user_signing: false,
+                complete: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn protocol_version_is_13() {
+        assert_eq!(PROTOCOL_VERSION, 13);
     }
 
     #[test]
@@ -1153,13 +1207,14 @@ mod tests {
             Some(CommandKind::AppendSyntheticEvents)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_RECOVER_E2EE),
+            Some(CommandKind::RecoverE2ee)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
-        assert_eq!(
-            CommandKind::from_id(COMMAND_ID_APPEND_SYNTHETIC_EVENTS + 1),
-            None
-        );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_RECOVER_E2EE + 1), None);
     }
 
     #[test]
@@ -1483,6 +1538,19 @@ mod tests {
                         num_notifications: 3,
                         num_mentions: 1,
                     })],
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_RECOVER_E2EE,
+                br#"{"id":"recover","args":{"recovery_secret":"correct horse battery staple"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::RecoverE2ee {
+                id: "recover".to_owned(),
+                args: RecoverE2eeArgs {
+                    recovery_secret: "correct horse battery staple".to_owned(),
                 },
             }
         );
@@ -1857,6 +1925,38 @@ mod tests {
     }
 
     #[test]
+    fn recover_e2ee_rejects_unknown_fields() {
+        let error = parse_command_request(
+            COMMAND_ID_RECOVER_E2EE,
+            br#"{"id":"recover","args":{"recovery_secret":"secret","unexpected":true}}"#,
+        )
+        .expect_err("unknown fields must fail");
+        let value = serde_json::to_value(error).unwrap();
+        assert_eq!(value["id"], json!("recover"));
+        assert_eq!(value["ok"], json!(false));
+        assert_eq!(value["err"]["code"], json!("invalid_args"));
+        assert!(
+            value["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+    }
+
+    #[test]
+    fn recover_e2ee_debug_redacts_secret() {
+        let command = ParsedCommand::RecoverE2ee {
+            id: "recover".to_owned(),
+            args: RecoverE2eeArgs {
+                recovery_secret: "sample recovery secret".to_owned(),
+            },
+        };
+        let debug = format!("{command:?}");
+        assert!(!debug.contains("sample recovery secret"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
     fn response_dtos_match_documented_shapes() {
         assert_eq!(
             serde_json::to_value(success_response("version", GetVersionResponse::current()))
@@ -1865,7 +1965,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":12,
+                    "protocol_version":13,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -1906,6 +2006,7 @@ mod tests {
                         space_children: Vec::new(),
                     }],
                     last_activity: None,
+                    e2ee_status: Some(sample_e2ee_status()),
                     last_verification: None,
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
@@ -1920,6 +2021,20 @@ mod tests {
                     "lifecycle_state":"ready",
                     "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}],
                     "last_activity":null,
+                    "e2ee_status":{
+                        "recovery":"incomplete",
+                        "backup":{
+                            "state":"enabled",
+                            "enabled_locally":true,
+                            "exists_on_server":true
+                        },
+                        "cross_signing":{
+                            "has_master":true,
+                            "has_self_signing":true,
+                            "has_user_signing":false,
+                            "complete":false
+                        }
+                    },
                     "last_verification":null,
                     "last_error":null,
                     "selected_room":"!room:example"
@@ -2254,6 +2369,70 @@ mod tests {
                 "json":{"active":{"kind":"status"}}
             })
         );
+    }
+
+    #[test]
+    fn dump_model_round_trips_e2ee_status_and_rejects_nested_unknown_fields() {
+        let model = DumpModel {
+            status: "ready".to_owned(),
+            lifecycle_state: LifecycleState::Ready,
+            rooms: Vec::new(),
+            last_activity: None,
+            e2ee_status: Some(sample_e2ee_status()),
+            last_verification: None,
+            last_error: None,
+            selected_room: None,
+        };
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(serde_json::from_value::<DumpModel>(json).unwrap(), model);
+
+        for invalid_json in [
+            json!({
+                "status":"ready",
+                "lifecycle_state":"ready",
+                "rooms":[],
+                "last_activity":null,
+                "e2ee_status":{
+                    "recovery":"incomplete",
+                    "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
+                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false},
+                    "unexpected":true
+                },
+                "last_verification":null,
+                "last_error":null,
+                "selected_room":null
+            }),
+            json!({
+                "status":"ready",
+                "lifecycle_state":"ready",
+                "rooms":[],
+                "last_activity":null,
+                "e2ee_status":{
+                    "recovery":"incomplete",
+                    "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":true},
+                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false}
+                },
+                "last_verification":null,
+                "last_error":null,
+                "selected_room":null
+            }),
+            json!({
+                "status":"ready",
+                "lifecycle_state":"ready",
+                "rooms":[],
+                "last_activity":null,
+                "e2ee_status":{
+                    "recovery":"incomplete",
+                    "backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},
+                    "cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false,"unexpected":true}
+                },
+                "last_verification":null,
+                "last_error":null,
+                "selected_room":null
+            }),
+        ] {
+            assert!(serde_json::from_value::<DumpModel>(invalid_json).is_err());
+        }
     }
 
     #[test]
