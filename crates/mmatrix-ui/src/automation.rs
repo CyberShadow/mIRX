@@ -717,7 +717,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RestoreSession => "restore_session",
         Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
-        Operation::SendText => "send_text",
+        Operation::SendMessage => "send_text",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
@@ -1255,6 +1255,7 @@ mod tests {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: None,
                                 sender: "@alice:example".to_owned(),
+                                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
                                 body: "hello".to_owned(),
                                 send_state: RoomMessageSendState::Sent,
                             }),
@@ -1514,7 +1515,7 @@ mod tests {
                 user_id: "@alice:example".to_owned(),
             }),
             Event::Error(CoreErrorEvent {
-                operation: Operation::SendText,
+                operation: Operation::SendMessage,
                 message: "send failed".to_owned(),
             }),
         ];
@@ -2217,6 +2218,7 @@ mod tests {
                 event_id: Some("$event:example".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
+                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -2335,7 +2337,7 @@ mod tests {
         );
         assert_eq!(
             super::dump_error_from_core(&CoreErrorEvent {
-                operation: Operation::SendText,
+                operation: Operation::SendMessage,
                 message: "failed".to_owned(),
             }),
             super::DumpError {

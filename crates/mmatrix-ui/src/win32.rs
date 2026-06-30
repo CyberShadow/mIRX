@@ -18,9 +18,10 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest, Operation,
     RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendTextRequest, StoredSession, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, StoredSession,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -4374,6 +4375,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 event_id: Some("$one-first".to_owned()),
                 transaction_id: None,
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: "first line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -4386,6 +4388,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 event_id: Some("$one-second".to_owned()),
                 transaction_id: None,
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: "second line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -4398,6 +4401,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 event_id: Some("$two-third".to_owned()),
                 transaction_id: None,
                 sender: "@bob:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: "third line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -4761,8 +4765,9 @@ fn submit_compose_with_history_entry(
         .ok_or_else(|| "core command sender is not available".to_owned())?;
     let send_body = body.clone();
     sender
-        .send(Command::SendText(SendTextRequest {
+        .send(Command::SendMessage(SendMessageRequest {
             room_id: room_id.clone(),
+            presentation: RoomMessagePresentationKind::Text,
             body: send_body,
         }))
         .map_err(|err| format!("failed to enqueue send text command: {err}"))?;
@@ -5278,7 +5283,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::RestoreSession => "restore session",
         Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
-        Operation::SendText => "send text",
+        Operation::SendMessage => "send text",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
@@ -5390,6 +5395,7 @@ mod tests {
                 event_id: Some(event_id.to_owned()),
                 transaction_id: transaction_id.map(str::to_owned),
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -5432,6 +5438,7 @@ mod tests {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Pending,
             }),
@@ -5477,6 +5484,7 @@ mod tests {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Failed {
                     message: message.to_owned(),
@@ -6452,7 +6460,7 @@ mod tests {
             },
         });
         state.model.last_error = Some(CoreErrorEvent {
-            operation: Operation::SendText,
+            operation: Operation::SendMessage,
             message: "message send failed".to_owned(),
         });
 
@@ -6531,7 +6539,7 @@ mod tests {
         let mut state = test_state();
         state.model.status = "error during send text".to_owned();
         state.model.last_error = Some(CoreErrorEvent {
-            operation: Operation::SendText,
+            operation: Operation::SendMessage,
             message: "message send failed".to_owned(),
         });
 
@@ -6551,7 +6559,7 @@ mod tests {
             state: VerificationState::Accepted,
         });
         state.model.last_error = Some(CoreErrorEvent {
-            operation: Operation::SendText,
+            operation: Operation::SendMessage,
             message: "message send failed".to_owned(),
         });
 
@@ -6765,7 +6773,7 @@ mod tests {
             state: VerificationState::Requested,
         });
         state.model.last_error = Some(CoreErrorEvent {
-            operation: Operation::SendText,
+            operation: Operation::SendMessage,
             message: "failed".to_owned(),
         });
         state.views.insert(ViewId::Status, tracked_view(10));

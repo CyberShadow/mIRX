@@ -296,11 +296,8 @@ fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
 ) -> Option<RoomActivity> {
-    let Some((presentation, body)) =
-        room_message_presentation_and_body_from_message_type(&event.content.msgtype)
-    else {
-        return None;
-    };
+    let (presentation, body) =
+        room_message_presentation_and_body_from_message_type(&event.content.msgtype)?;
 
     Some(RoomActivity {
         room_id: room_id.to_owned(),
