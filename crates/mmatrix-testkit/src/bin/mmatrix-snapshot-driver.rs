@@ -20,6 +20,7 @@ mod windows_main {
 
     #[derive(Default)]
     struct Config {
+        find_timeout: Duration,
         wait_idle: Duration,
         expect_selected: Option<String>,
         expect_rooms: Vec<String>,
@@ -72,7 +73,7 @@ mod windows_main {
 
     pub(crate) fn run() -> Result<(), String> {
         let config = parse_args(env::args().skip(1))?;
-        let app = MmatrixApp::find(DEFAULT_FIND_TIMEOUT).map_err(|error| {
+        let app = MmatrixApp::find(config.find_timeout).map_err(|error| {
             format!("failed to attach to mmatrix-ui automation window: {error}")
         })?;
         app.wait_idle(config.wait_idle)
@@ -366,6 +367,7 @@ mod windows_main {
 
     fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
         let mut config = Config {
+            find_timeout: DEFAULT_FIND_TIMEOUT,
             wait_idle: DEFAULT_WAIT_IDLE,
             ..Config::default()
         };
@@ -373,6 +375,15 @@ mod windows_main {
 
         while let Some(flag) = args.next() {
             match flag.as_str() {
+                "--find-timeout-ms" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --find-timeout-ms".to_owned())?;
+                    let millis = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid --find-timeout-ms value: {value}"))?;
+                    config.find_timeout = Duration::from_millis(millis);
+                }
                 "--wait-idle-ms" => {
                     let value = args
                         .next()
@@ -540,6 +551,7 @@ mod windows_main {
     fn usage() -> String {
         [
             "usage: mmatrix-snapshot-driver [options]",
+            "  --find-timeout-ms <ms>",
             "  --wait-idle-ms <ms>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",

@@ -407,6 +407,7 @@ run_case() {
   cleanup_app
   state_path_win=$(unix_to_wine_path "$state_path")
   driver_args=(
+    --find-timeout-ms 30000
     --wait-idle-ms 5000
     --expect-selected "$expect_selected"
     --expect-active-view "$expect_active_view"
