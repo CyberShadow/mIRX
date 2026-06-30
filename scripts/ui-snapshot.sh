@@ -383,6 +383,27 @@ configure_case_expectations() {
         --expect-no-navigation-text 'are typing'
       )
       ;;
+    read-state-ingestion)
+      expect_selected='!beta:example'
+      expect_active_view='room:!beta:example'
+      room_expect_args=(
+        --expect-room '!beta:example'
+        --expect-room '!alpha:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+        --expect-switchbar-item 'room:!alpha:example::Alpha'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!alpha:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!beta:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!beta:example'
+      ;;
     *)
       die "no expectations configured for snapshot case: $case_name"
       ;;
