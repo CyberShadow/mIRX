@@ -5081,8 +5081,11 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
             )?;
         }
         ComposeSubmission::LocalCommand(command) => {
+            let history_entry = local_command_history_entry(&input, &command);
             execute_local_slash_command(hwnd, command)?;
-            state_mut(hwnd).compose_history.record_submission(input);
+            if let Some(entry) = history_entry {
+                state_mut(hwnd).compose_history.record_submission(entry);
+            }
         }
     }
 
@@ -5225,6 +5228,26 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
             feedback: format!("unknown command: {}", &input[..command_end]),
         },
     }
+}
+
+fn local_command_history_entry(input: &str, command: &LocalSlashCommand<'_>) -> Option<String> {
+    if matches!(command, LocalSlashCommand::Invalid { .. }) && is_e2ee_command_input(input) {
+        return None;
+    }
+
+    Some(input.to_owned())
+}
+
+fn is_e2ee_command_input(input: &str) -> bool {
+    if !input.starts_with('/') {
+        return false;
+    }
+
+    let command_end = input
+        .bytes()
+        .position(|byte| byte.is_ascii_whitespace())
+        .unwrap_or(input.len());
+    input[1..command_end].eq_ignore_ascii_case("e2ee")
 }
 
 fn submit_compose(
@@ -8429,6 +8452,41 @@ mod tests {
             ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
                 feedback: "unknown command: /".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn invalid_e2ee_recover_form_is_not_recorded_or_recalled_in_compose_history() {
+        let mut state = test_state();
+        let input = "/e2ee recover secret phrase".to_owned();
+        let ComposeSubmission::LocalCommand(command) = parse_compose_submission(&input) else {
+            panic!("expected local command submission");
+        };
+
+        let history_entry = local_command_history_entry(&input, &command);
+        assert_eq!(history_entry, None);
+        if let Some(entry) = history_entry {
+            state.compose_history.record_submission(entry);
+        }
+
+        state
+            .compose_history
+            .record_submission("safe draft".to_owned());
+
+        assert!(
+            !state
+                .compose_history
+                .entries
+                .iter()
+                .any(|entry| entry.contains("secret"))
+        );
+        assert_eq!(
+            state.compose_history.previous("later draft".to_owned()),
+            Some("safe draft")
+        );
+        assert_eq!(
+            state.compose_history.previous("ignored".to_owned()),
+            Some("safe draft")
         );
     }
 
