@@ -152,6 +152,7 @@ pub struct RoomMessageActivityLine {
     pub event_id: Option<String>,
     pub transaction_id: Option<String>,
     pub sender: String,
+    pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub send_state: RoomMessageSendState,
 }
@@ -172,12 +173,21 @@ pub enum RoomActivityKind {
     StateNotice(RoomStateNoticeActivity),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMessagePresentationKind {
+    Text,
+    Notice,
+    Emote,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomMessageActivity {
     pub event_id: Option<String>,
     pub transaction_id: Option<String>,
     pub sender: String,
+    pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub send_state: RoomMessageSendState,
 }

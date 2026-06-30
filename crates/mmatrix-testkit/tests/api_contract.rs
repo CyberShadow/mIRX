@@ -5,10 +5,10 @@ use std::time::Duration;
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomActivity, RoomActivityKind,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, SpaceChild, StatusBarState, StoredSession, SwitchbarItem,
-    SwitchbarState, TestkitError, UiError, UiState, Verification, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
+    StatusBarState, StoredSession, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState,
+    Verification, VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -116,6 +116,7 @@ fn data_models_round_trip_through_json() {
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
@@ -331,6 +332,7 @@ fn room_activity_sent_message_round_trips_through_json() {
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
@@ -347,6 +349,7 @@ fn room_activity_sent_message_round_trips_through_json() {
                 "event_id": "$event:example",
                 "transaction_id": "txn-1",
                 "sender": "@alice:example",
+                "presentation": "text",
                 "body": "hello",
                 "send_state": {
                     "state": "sent"
@@ -371,6 +374,7 @@ fn room_activity_pending_message_round_trips_through_json() {
             event_id: None,
             transaction_id: Some("txn-2".to_owned()),
             sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "queued".to_owned(),
             send_state: RoomMessageSendState::Pending,
         }),
@@ -387,6 +391,7 @@ fn room_activity_pending_message_round_trips_through_json() {
                 "event_id": null,
                 "transaction_id": "txn-2",
                 "sender": "@alice:example",
+                "presentation": "text",
                 "body": "queued",
                 "send_state": {
                     "state": "pending"
@@ -411,6 +416,7 @@ fn room_activity_failed_message_round_trips_through_json() {
             event_id: None,
             transaction_id: Some("txn-3".to_owned()),
             sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "retry me".to_owned(),
             send_state: RoomMessageSendState::Failed {
                 message: "send failed".to_owned(),
@@ -430,6 +436,7 @@ fn room_activity_failed_message_round_trips_through_json() {
                 "event_id": null,
                 "transaction_id": "txn-3",
                 "sender": "@alice:example",
+                "presentation": "text",
                 "body": "retry me",
                 "send_state": {
                     "state": "failed",
@@ -442,6 +449,92 @@ fn room_activity_failed_message_round_trips_through_json() {
     assert_eq!(
         serde_json::from_value::<RoomActivity>(serde_json::to_value(&activity).unwrap())
             .expect("deserialize failed message activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_notice_message_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-notice".to_owned(),
+        timestamp_ms: 1_700_000_150_000,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some("$notice:example".to_owned()),
+            transaction_id: None,
+            sender: "@ops:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Notice,
+            body: "maintenance window".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "activity-notice",
+        "timestamp_ms": 1700000150000u64,
+        "kind": {
+            "type": "message",
+            "event_id": "$notice:example",
+            "transaction_id": null,
+            "sender": "@ops:example",
+            "presentation": "notice",
+            "body": "maintenance window",
+            "send_state": {
+                "state": "sent"
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize notice message activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize notice message activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_emote_message_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-emote".to_owned(),
+        timestamp_ms: 1_700_000_165_000,
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some("$emote:example".to_owned()),
+            transaction_id: Some("txn-emote".to_owned()),
+            sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Emote,
+            body: "waves".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "activity-emote",
+        "timestamp_ms": 1700000165000u64,
+        "kind": {
+            "type": "message",
+            "event_id": "$emote:example",
+            "transaction_id": "txn-emote",
+            "sender": "@alice:example",
+            "presentation": "emote",
+            "body": "waves",
+            "send_state": {
+                "state": "sent"
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize emote message activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize emote message activity"),
         activity
     );
 }
@@ -540,6 +633,7 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Notice,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Failed {
                 message: "send failed".to_owned(),
@@ -552,6 +646,10 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
     assert!(activity.contains("\"activity_id\":\"activity-1\""));
     assert!(activity.contains("\"event_id\":\"$event:example\""));
     assert!(activity.contains("\"transaction_id\":\"txn-1\""));
+    assert!(activity.contains("\"type\":\"message\""));
+    assert!(!activity.contains("\"type\":\"state_notice\""));
+    assert!(activity.contains("\"presentation\":\"notice\""));
+    assert!(!activity.contains("\"presentation\":\"text\""));
     assert!(activity.contains(
         "\"send_state\":{\"state\":\"failed\",\"message\":\"send failed\",\"recoverable\":true}"
     ));
@@ -570,6 +668,7 @@ fn model_last_activity_round_trips_through_json() {
             event_id: Some("$event:last:example".to_owned()),
             transaction_id: None,
             sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Emote,
             body: "latest".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
@@ -591,6 +690,7 @@ fn model_last_activity_round_trips_through_json() {
                 "event_id": "$event:last:example",
                 "transaction_id": null,
                 "sender": "@alice:example",
+                "presentation": "emote",
                 "body": "latest",
                 "send_state": {
                     "state": "sent"
@@ -680,6 +780,7 @@ fn data_models_reject_unknown_fields() {
             "event_id":"$event:example",
             "transaction_id":"txn-1",
             "sender":"@alice:example",
+            "presentation":"text",
             "body":"hello",
             "send_state":{"state":"sent"},
             "unexpected":true
@@ -698,6 +799,7 @@ fn data_models_reject_unknown_fields() {
                 "event_id":"$event:example",
                 "transaction_id":"txn-1",
                 "sender":"@alice:example",
+                "presentation":"text",
                 "body":"hello",
                 "send_state":{"state":"sent"}
             },
@@ -713,6 +815,7 @@ fn data_models_reject_unknown_fields() {
             "event_id":"$event:example",
             "transaction_id":"txn-1",
             "sender":"@alice:example",
+            "presentation":"text",
             "body":"hello",
             "send_state":{"state":"sent"},
             "unexpected":true
@@ -726,6 +829,7 @@ fn data_models_reject_unknown_fields() {
             "event_id":"$event:example",
             "transaction_id":"txn-1",
             "sender":"@alice:example",
+            "presentation":"text",
             "body":"hello",
             "send_state":{"state":"sent"},
             "unexpected":true
@@ -915,6 +1019,66 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "kind":"space",
             "room_id":"!space:example"
+        }"#
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn room_message_presentation_contracts_are_strict() {
+    assert!(
+        serde_json::from_str::<RoomMessageActivity>(
+            r#"{
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
+            "sender":"@alice:example",
+            "body":"hello",
+            "send_state":{"state":"sent"}
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMessageActivity>(
+            r#"{
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
+            "sender":"@alice:example",
+            "presentation":"status",
+            "body":"hello",
+            "send_state":{"state":"sent"}
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMessageActivityLine>(
+            r#"{
+            "room_id":"!room:example",
+            "activity_id":"activity-1",
+            "timestamp_ms":1700000000000,
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
+            "sender":"@alice:example",
+            "body":"hello",
+            "send_state":{"state":"sent"}
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMessageActivityLine>(
+            r#"{
+            "room_id":"!room:example",
+            "activity_id":"activity-1",
+            "timestamp_ms":1700000000000,
+            "event_id":"$event:example",
+            "transaction_id":"txn-1",
+            "sender":"@alice:example",
+            "presentation":"status",
+            "body":"hello",
+            "send_state":{"state":"sent"}
         }"#
         )
         .is_err()
