@@ -2620,7 +2620,10 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     let initial_state = app.dump_ui_state()?;
     assert_eq!(initial_state.mdi.active, room_identity("!beta:example"));
     assert_active_switchbar_item(&initial_state, &room_identity("!beta:example"));
-    assert_eq!(app.dump_model()?.selected_room.as_deref(), Some("!beta:example"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!beta:example")
+    );
     assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), false);
     assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
 

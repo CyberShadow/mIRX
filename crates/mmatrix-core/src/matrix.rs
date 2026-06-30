@@ -1239,18 +1239,18 @@ mod tests {
         cancelled_state, map_decimals, map_emoji_array, map_emoji_short_auth_string,
         map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
-        room_read_state_from_parts, room_read_update_is_relevant,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_message_event_content, room_typing_from_sync_typing,
+        room_activity_from_sync_topic, room_message_event_content, room_read_state_from_parts,
+        room_read_update_is_relevant, room_typing_from_sync_typing,
         verification_flow_id_from_to_device, verification_request_from_to_device,
         verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTyping, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+        RoomTyping, VerificationDecimals, VerificationEmoji, VerificationRequest,
+        VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
@@ -1670,7 +1670,10 @@ mod tests {
             RoomInfoNotableUpdateReasons::FULLY_READ,
             RoomInfoNotableUpdateReasons::UNREAD_MARKER,
         ] {
-            assert!(room_read_update_is_relevant(reasons), "{reasons:?} should be relevant");
+            assert!(
+                room_read_update_is_relevant(reasons),
+                "{reasons:?} should be relevant"
+            );
         }
     }
 

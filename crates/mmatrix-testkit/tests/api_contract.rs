@@ -694,7 +694,7 @@ fn room_read_state_event_rejects_unknown_fields_inside_payload() {
                 "num_mentions":1,
                 "unexpected":true
             }
-        }"#
+        }"#,
     )
     .unwrap_err();
 

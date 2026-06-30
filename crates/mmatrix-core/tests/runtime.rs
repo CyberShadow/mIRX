@@ -3,11 +3,10 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CoreConfig, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
+    StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -690,8 +689,7 @@ fn room_read_state_event_round_trips_through_serde() {
         r#"{"RoomReadState":{"room_id":"!ops:example.org","latest_active_event_id":"$latest:example.org","fully_read_event_id":"$fully-read:example.org","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}}"#
     );
 
-    let restored: Event =
-        serde_json::from_str(&json).expect("deserialize room read state event");
+    let restored: Event = serde_json::from_str(&json).expect("deserialize room read state event");
     assert_eq!(restored, event);
 }
 
