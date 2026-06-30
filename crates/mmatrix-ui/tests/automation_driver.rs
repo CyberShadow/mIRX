@@ -562,12 +562,11 @@ fn pending_entry(
     )
 }
 
-fn failed_entry_with_presentation(
+fn failed_entry(
     room_id: &str,
     sender: &str,
     timestamp_ms: u64,
     transaction_id: &str,
-    presentation: RoomMessagePresentationKind,
     body: &str,
     message: &str,
     recoverable: bool,
@@ -580,7 +579,7 @@ fn failed_entry_with_presentation(
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
             sender: sender.to_owned(),
-            presentation,
+            presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Failed {
                 message: message.to_owned(),
@@ -588,27 +587,6 @@ fn failed_entry_with_presentation(
             },
         }),
     }
-}
-
-fn failed_entry(
-    room_id: &str,
-    sender: &str,
-    timestamp_ms: u64,
-    transaction_id: &str,
-    body: &str,
-    message: &str,
-    recoverable: bool,
-) -> RoomActivity {
-    failed_entry_with_presentation(
-        room_id,
-        sender,
-        timestamp_ms,
-        transaction_id,
-        RoomMessagePresentationKind::Text,
-        body,
-        message,
-        recoverable,
-    )
 }
 
 fn topic_entry_with_event_id(
@@ -2227,16 +2205,22 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 RoomMessagePresentationKind::Emote,
                 "pending wave",
             ),
-            failed_entry_with_presentation(
-                "!mixed:example",
-                "@alice:example",
-                1_700_000_420_000,
-                "txn-failed-1",
-                RoomMessagePresentationKind::Emote,
-                "failed wave",
-                "send failed",
-                true,
-            ),
+            RoomActivity {
+                room_id: "!mixed:example".to_owned(),
+                activity_id: "txn:txn-failed-1".to_owned(),
+                timestamp_ms: 1_700_000_420_000,
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-failed-1".to_owned()),
+                    sender: "@alice:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "failed wave".to_owned(),
+                    send_state: RoomMessageSendState::Failed {
+                        message: "send failed".to_owned(),
+                        recoverable: true,
+                    },
+                }),
+            },
         ]
     );
 
@@ -2273,7 +2257,7 @@ fn automation_driver_renders_room_typing_only_for_selected_room_view()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
-    let state_path = write_state_file(&vec![
+    let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
             room_summary("!alpha:example", "Alpha", false),
@@ -2338,7 +2322,7 @@ fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_lis
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
-    let state_path = write_state_file(&vec![
+    let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
             room_summary("!alpha:example", "Alpha", false),
@@ -2455,7 +2439,7 @@ fn automation_driver_clears_room_typing_on_logged_out_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
-    let state_path = write_state_file(&vec![
+    let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
         text_event_with_event_id(

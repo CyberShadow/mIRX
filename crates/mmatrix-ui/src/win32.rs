@@ -557,9 +557,16 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
         .model
         .last_activity
         .as_ref()
-        .is_some_and(|last_activity| {
-            last_activity.room_id == room_id
-                && last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
+        .is_some_and(|last_activity| match &update.kind {
+            RoomActivityUpdateKind::MessageSent { event_id } => {
+                last_activity.room_id == room_id
+                    && (last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
+                        || last_activity.event_id.as_deref() == Some(event_id.as_str()))
+            }
+            RoomActivityUpdateKind::MessageFailed { .. } => {
+                last_activity.room_id == room_id
+                    && last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
+            }
         });
     match &update.kind {
         RoomActivityUpdateKind::MessageSent { .. } => state
@@ -5614,21 +5621,6 @@ mod tests {
                 },
             }),
         }
-    }
-
-    fn failed_message_activity(
-        room_id: &str,
-        transaction_id: &str,
-        body: &str,
-        message: &str,
-    ) -> RoomActivity {
-        failed_message_activity_with_presentation(
-            room_id,
-            transaction_id,
-            RoomMessagePresentationKind::Text,
-            body,
-            message,
-        )
     }
 
     fn failed_message_with_presentation(
