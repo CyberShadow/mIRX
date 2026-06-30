@@ -2184,10 +2184,10 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
             message_entry_with_event_id(
                 "!mixed:example",
                 "$mixed-notice-1",
-                "@alice:example",
+                "@system:example",
                 1_700_000_240_000,
                 RoomMessagePresentationKind::Notice,
-                "maintenance window",
+                "server maintenance",
             ),
             message_entry_with_event_id(
                 "!mixed:example",
@@ -2195,26 +2195,26 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 "@alice:example",
                 1_700_000_300_000,
                 RoomMessagePresentationKind::Emote,
-                "waves",
+                "waves hello",
             ),
             pending_entry_with_presentation(
                 "!mixed:example",
                 "txn-pending-1",
                 "@alice:example",
-                1_700_000_360_000,
+                1_700_000_240_000,
                 RoomMessagePresentationKind::Emote,
-                "pending wave",
+                "pending local echo",
             ),
             RoomActivity {
                 room_id: "!mixed:example".to_owned(),
                 activity_id: "txn:txn-failed-1".to_owned(),
-                timestamp_ms: 1_700_000_420_000,
+                timestamp_ms: 1_700_000_300_000,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-failed-1".to_owned()),
                     sender: "@alice:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
-                    body: "failed wave".to_owned(),
+                    body: "failed local echo".to_owned(),
                     send_state: RoomMessageSendState::Failed {
                         message: "send failed".to_owned(),
                         recoverable: true,
@@ -2236,16 +2236,19 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
     ));
     assert!(view_contains(
         mixed_view,
-        "[22:17] -@alice:example- maintenance window"
-    ));
-    assert!(view_contains(mixed_view, "* [22:18] @alice:example waves"));
-    assert!(view_contains(
-        mixed_view,
-        "* [22:19] @alice:example pending wave (sending)"
+        "[22:17] -@system:example- server maintenance"
     ));
     assert!(view_contains(
         mixed_view,
-        "* [22:20] @alice:example failed wave (failed)"
+        "* [22:18] @alice:example waves hello"
+    ));
+    assert!(view_contains(
+        mixed_view,
+        "* [22:17] @alice:example pending local echo (sending)"
+    ));
+    assert!(view_contains(
+        mixed_view,
+        "* [22:18] @alice:example failed local echo (failed)"
     ));
 
     let _ = fs::remove_file(&state_path);

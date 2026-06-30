@@ -91,9 +91,9 @@
         "type": "message",
         "event_id": "$mixed-notice-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": "@system:example",
         "presentation": "notice",
-        "body": "maintenance window",
+        "body": "server maintenance",
         "send_state": {
           "state": "sent"
         }
@@ -111,7 +111,7 @@
         "transaction_id": null,
         "sender": "@alice:example",
         "presentation": "emote",
-        "body": "waves",
+        "body": "waves hello",
         "send_state": {
           "state": "sent"
         }
@@ -122,14 +122,14 @@
     "RoomActivity": {
       "room_id": "!mixed:example",
       "activity_id": "txn:txn-pending-1",
-      "timestamp_ms": 1700000360000,
+      "timestamp_ms": 1700000240000,
       "kind": {
         "type": "message",
         "event_id": null,
         "transaction_id": "txn-pending-1",
         "sender": "@alice:example",
         "presentation": "emote",
-        "body": "pending wave",
+        "body": "pending local echo",
         "send_state": {
           "state": "pending"
         }
@@ -140,14 +140,14 @@
     "RoomActivity": {
       "room_id": "!mixed:example",
       "activity_id": "txn:txn-failed-1",
-      "timestamp_ms": 1700000420000,
+      "timestamp_ms": 1700000300000,
       "kind": {
         "type": "message",
         "event_id": null,
         "transaction_id": "txn-failed-1",
         "sender": "@alice:example",
         "presentation": "emote",
-        "body": "failed wave",
+        "body": "failed local echo",
         "send_state": {
           "state": "pending"
         }

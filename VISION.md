@@ -171,7 +171,8 @@ env-gated live automation coverage.
 ## v1 feature set
 
 Dense mIRC-style room/status shell · space/room/thread tree · room timeline
-(virtualized) · send/receive text · spaces · threads · **E2EE** (cross-signing,
+(virtualized) · send/receive typed room messages (`m.text`, `m.notice`,
+`m.emote`) · spaces · threads · **E2EE** (cross-signing,
 SAS verification, secret-storage recovery, key backup) · secure credential
 storage · token refresh persistence.
 

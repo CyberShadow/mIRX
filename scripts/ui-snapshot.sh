@@ -328,6 +328,8 @@ configure_case_expectations() {
       )
       room_activity_expect_args=(
         --expect-room-activity '!mixed:example::synced hello'
+        --expect-room-activity '!mixed:example::server maintenance'
+        --expect-room-activity '!mixed:example::waves hello'
         --expect-room-activity '!mixed:example::pending local echo'
         --expect-room-activity '!mixed:example::failed local echo'
         --expect-room-activity '!mixed:example::mixed room topic'
@@ -342,8 +344,10 @@ configure_case_expectations() {
         --expect-room-view '!mixed:example::* [22:14] @alice:example set topic: mixed room topic'
         --expect-room-view '!mixed:example::* [22:15] bob joined'
         --expect-room-view '!mixed:example::* [22:16] @carol:example left'
-        --expect-room-view '!mixed:example::[22:17] @alice:example: pending local echo (sending)'
-        --expect-room-view '!mixed:example::[22:18] @alice:example: failed local echo (failed)'
+        --expect-room-view '!mixed:example::[22:17] -@system:example- server maintenance'
+        --expect-room-view '!mixed:example::* [22:18] @alice:example waves hello'
+        --expect-room-view '!mixed:example::* [22:17] @alice:example pending local echo (sending)'
+        --expect-room-view '!mixed:example::* [22:18] @alice:example failed local echo (failed)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
