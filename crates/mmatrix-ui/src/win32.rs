@@ -16,12 +16,13 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest,
-    MarkRoomReadRequest, Operation, RestoreSessionRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, E2eeBackupState,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, LoginRequest,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
+    RoomSummary, RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -90,6 +91,7 @@ const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
 const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
+const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
 const FRAME_TITLE: &str = "mmatrix";
 const TREE_CLASS_NAME: &str = "SysTreeView32";
 const MDI_CLASS_NAME: &str = "MDICLIENT";
@@ -106,6 +108,7 @@ const MENU_ID_LOGIN: usize = 40001;
 const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
 const MENU_ID_START_SYNC: usize = 40003;
 const MENU_ID_LOGOUT: usize = 40004;
+const MENU_ID_RECOVER_E2EE: usize = 40005;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -114,6 +117,9 @@ const LOGIN_DIALOG_PASSWORD_ID: u16 = 5003;
 const LOGIN_DIALOG_DEVICE_ID: u16 = 5004;
 const LOGIN_DIALOG_OK_ID: usize = 5005;
 const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
+const RECOVER_E2EE_DIALOG_SECRET_ID: u16 = 5007;
+const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
+const RECOVER_E2EE_DIALOG_CANCEL_ID: usize = 5009;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
@@ -193,6 +199,7 @@ struct UiModel {
     selected_room: Option<String>,
     room_views: BTreeMap<String, RoomViewModel>,
     last_activity: Option<LastMessageActivity>,
+    last_e2ee_status: Option<E2eeStatus>,
     last_verification: Option<VerificationStateEvent>,
     last_error: Option<CoreErrorEvent>,
 }
@@ -688,6 +695,19 @@ struct LoginDialogState {
     cancel_button: HWND,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoverE2eeForm {
+    recovery_secret: String,
+}
+
+struct RecoverE2eeDialogState {
+    result: Arc<Mutex<Option<RecoverE2eeForm>>>,
+    recovery_secret_label: HWND,
+    recovery_secret_edit: HWND,
+    ok_button: HWND,
+    cancel_button: HWND,
+}
+
 struct AutomationState {
     response_name: String,
     response_mapping: HANDLE,
@@ -776,8 +796,16 @@ enum LocalSlashCommand<'a> {
     Status,
     Window { target: &'a str },
     Clear,
+    E2ee(E2eeSlashCommand),
     Verify { action: VerificationAction },
     Invalid { feedback: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum E2eeSlashCommand {
+    ShowStatus,
+    Refresh,
+    RecoverDialog,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -857,6 +885,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     register_mdi_child_class(instance)?;
     register_timeline_class(instance)?;
     register_login_dialog_class(instance)?;
+    register_recover_e2ee_dialog_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -1369,6 +1398,34 @@ fn register_login_dialog_class(instance: *mut c_void) -> Result<(), String> {
     Ok(())
 }
 
+fn register_recover_e2ee_dialog_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(RECOVER_E2EE_DIALOG_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(recover_e2ee_dialog_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error("RegisterClassExW recover e2ee dialog"));
+        }
+    }
+
+    Ok(())
+}
+
 fn create_main_window(instance: *mut c_void, state: Box<WindowState>) -> Result<HWND, String> {
     let class_name = wide_null(FRAME_CLASS_NAME);
     let title = wide_null(FRAME_TITLE);
@@ -1847,6 +1904,79 @@ unsafe extern "system" fn login_dialog_window_proc(
     }
 }
 
+unsafe extern "system" fn recover_e2ee_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            let create = &*(lparam as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            1
+        }
+        WM_CREATE => match create_recover_e2ee_dialog_controls(hwnd) {
+            Ok(()) => 0,
+            Err(message) => {
+                eprintln!("{message}");
+                -1
+            }
+        },
+        WM_COMMAND => {
+            let command_id = wparam & 0xffff;
+            match command_id {
+                RECOVER_E2EE_DIALOG_OK_ID => {
+                    let Some(state) = recover_e2ee_dialog_state(hwnd) else {
+                        return 0;
+                    };
+                    let recovery_secret = read_window_text(state.recovery_secret_edit);
+                    if recovery_secret.is_empty() {
+                        show_error_message(
+                            hwnd,
+                            "Recover E2EE",
+                            "recovery key or passphrase must not be empty",
+                        );
+                        return 0;
+                    }
+                    clear_recover_e2ee_dialog_secret(hwnd);
+                    *state
+                        .result
+                        .lock()
+                        .expect("recover e2ee dialog result mutex poisoned") =
+                        Some(RecoverE2eeForm { recovery_secret });
+                    DestroyWindow(hwnd);
+                    0
+                }
+                RECOVER_E2EE_DIALOG_CANCEL_ID => {
+                    clear_recover_e2ee_dialog_secret(hwnd);
+                    DestroyWindow(hwnd);
+                    0
+                }
+                _ => DefWindowProcW(hwnd, message, wparam, lparam),
+            }
+        }
+        WM_CLOSE => {
+            clear_recover_e2ee_dialog_secret(hwnd);
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_SIZE => {
+            layout_recover_e2ee_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoverE2eeDialogState;
+            if !state_ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(state_ptr));
+            }
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
     let state = state_mut(hwnd);
@@ -1972,6 +2102,12 @@ unsafe fn create_account_menu(hwnd: HWND) -> Result<(), String> {
         "Restore Saved Session",
     )?;
     append_menu_text(account_menu, MF_STRING, MENU_ID_START_SYNC, "Start Sync")?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_RECOVER_E2EE,
+        "Recover E2EE...",
+    )?;
     append_menu_text(account_menu, MF_STRING, MENU_ID_LOGOUT, "Logout")?;
 
     let frame_menu = CreateMenu();
@@ -2010,6 +2146,9 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
             .and_then(|_| refresh_status_bar(hwnd))
             .map(|_| Some(())),
         MENU_ID_START_SYNC => submit_start_sync(state_mut(hwnd)).map(|_| Some(())),
+        MENU_ID_RECOVER_E2EE => {
+            show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(()))
+        }
         MENU_ID_LOGOUT => submit_logout(state_mut(hwnd)).map(|_| Some(())),
         _ => return false,
     };
@@ -2050,6 +2189,15 @@ unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
         form.password,
         form.device_display_name,
     )?;
+    refresh_status_bar(hwnd)?;
+    Ok(true)
+}
+
+unsafe fn show_recover_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
+    let Some(form) = show_recover_e2ee_dialog(hwnd)? else {
+        return Ok(false);
+    };
+    submit_recover_e2ee(state_mut(hwnd), form.recovery_secret)?;
     refresh_status_bar(hwnd)?;
     Ok(true)
 }
@@ -2193,6 +2341,51 @@ unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
     )?;
 
     layout_login_dialog(hwnd);
+    Ok(())
+}
+
+unsafe fn create_recover_e2ee_dialog_controls(hwnd: HWND) -> Result<(), String> {
+    let instance = GetModuleHandleW(null());
+    let state = recover_e2ee_dialog_state_mut(hwnd).expect("recover e2ee dialog state must exist");
+
+    state.recovery_secret_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Recovery key or passphrase",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.recovery_secret_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
+        WS_EX_CLIENTEDGE,
+        RECOVER_E2EE_DIALOG_SECRET_ID,
+        instance,
+    )?;
+    state.ok_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "OK",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        0,
+        RECOVER_E2EE_DIALOG_OK_ID as u16,
+        instance,
+    )?;
+    state.cancel_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "Cancel",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+        0,
+        RECOVER_E2EE_DIALOG_CANCEL_ID as u16,
+        instance,
+    )?;
+
+    layout_recover_e2ee_dialog(hwnd);
     Ok(())
 }
 
@@ -2364,6 +2557,122 @@ unsafe fn show_login_dialog(owner: HWND) -> Result<Option<LoginForm>, String> {
         .clone())
 }
 
+unsafe fn layout_recover_e2ee_dialog(hwnd: HWND) {
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let label_x = 16;
+    let input_x = 16;
+    let input_width = (width - 32).max(0);
+    let label_width = input_width;
+    let label_height = 18;
+    let input_height = 24;
+    let spacing = 8;
+    let block_height = label_height + spacing + input_height + 12;
+    let button_width = 96;
+    let button_height = 28;
+
+    let Some(state) = recover_e2ee_dialog_state(hwnd) else {
+        return;
+    };
+
+    MoveWindow(
+        state.recovery_secret_label,
+        label_x,
+        16,
+        label_width,
+        label_height,
+        1,
+    );
+    MoveWindow(
+        state.recovery_secret_edit,
+        input_x,
+        16 + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+
+    let button_y = 16 + block_height;
+    let cancel_x = width - 16 - button_width;
+    let ok_x = cancel_x - 12 - button_width;
+    MoveWindow(
+        state.ok_button,
+        ok_x,
+        button_y,
+        button_width,
+        button_height,
+        1,
+    );
+    MoveWindow(
+        state.cancel_button,
+        cancel_x,
+        button_y,
+        button_width,
+        button_height,
+        1,
+    );
+}
+
+unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm>, String> {
+    let instance = GetModuleHandleW(null());
+    let result = Arc::new(Mutex::new(None));
+    let dialog_state = Box::new(RecoverE2eeDialogState {
+        result: Arc::clone(&result),
+        recovery_secret_label: null_mut(),
+        recovery_secret_edit: null_mut(),
+        ok_button: null_mut(),
+        cancel_button: null_mut(),
+    });
+    let dialog_state_ptr = Box::into_raw(dialog_state);
+    let class_name = wide_null(RECOVER_E2EE_DIALOG_CLASS_NAME);
+    let title = wide_null("Recover E2EE");
+    let dialog = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        420,
+        170,
+        owner,
+        null_mut(),
+        instance,
+        dialog_state_ptr.cast(),
+    );
+    if dialog.is_null() {
+        drop(Box::from_raw(dialog_state_ptr));
+        return Err(last_os_error("CreateWindowExW recover e2ee dialog"));
+    }
+
+    EnableWindow(owner, 0);
+    ShowWindow(dialog, SW_SHOW);
+
+    let mut message = MSG::default();
+    while IsWindow(dialog) != 0 {
+        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
+        if get_result <= 0 {
+            break;
+        }
+        let frame = frame_window_for(message.hwnd);
+        if !frame.is_null() {
+            let mdi_client = state_ref(frame).controls.mdi_client;
+            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
+                continue;
+            }
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    EnableWindow(owner, 1);
+    Ok(result
+        .lock()
+        .expect("recover e2ee dialog result mutex poisoned")
+        .clone())
+}
+
 unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
     let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const LoginDialogState;
     (!state.is_null()).then_some(&*state)
@@ -2372,6 +2681,22 @@ unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
 unsafe fn login_dialog_state_mut(hwnd: HWND) -> Option<&'static mut LoginDialogState> {
     let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LoginDialogState;
     (!state.is_null()).then_some(&mut *state)
+}
+
+unsafe fn recover_e2ee_dialog_state(hwnd: HWND) -> Option<&'static RecoverE2eeDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RecoverE2eeDialogState;
+    (!state.is_null()).then_some(&*state)
+}
+
+unsafe fn recover_e2ee_dialog_state_mut(hwnd: HWND) -> Option<&'static mut RecoverE2eeDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoverE2eeDialogState;
+    (!state.is_null()).then_some(&mut *state)
+}
+
+unsafe fn clear_recover_e2ee_dialog_secret(hwnd: HWND) {
+    if let Some(state) = recover_e2ee_dialog_state(hwnd) {
+        set_window_text(state.recovery_secret_edit, "");
+    }
 }
 
 unsafe fn layout_controls(hwnd: HWND) {
@@ -2498,7 +2823,13 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
-        Event::E2eeStatus(_) | Event::E2eeRecoverySucceeded(_) => {}
+        Event::E2eeStatus(status) => {
+            state.model.last_e2ee_status = Some(status);
+            state.model.status = "e2ee status updated".to_owned();
+        }
+        Event::E2eeRecoverySucceeded(_) => {
+            state.model.status = "e2ee recovery complete".to_owned();
+        }
         Event::VerificationRequest(request) => {
             let event = verification_state_event_from_request(request);
             state.model.status = verification_status_message(&event);
@@ -2518,6 +2849,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.selected_room = None;
             state.model.room_views.clear();
             state.model.last_activity = None;
+            state.model.last_e2ee_status = None;
             state.model.last_verification = None;
             state.model.last_error = None;
             state.room_activity.clear();
@@ -2676,6 +3008,36 @@ fn render_status_lines(model: &UiModel) -> Vec<String> {
         }
     }
 
+    if let Some(status) = &model.last_e2ee_status {
+        lines.push(String::new());
+        lines.push("e2ee".to_owned());
+        lines.push(format!(
+            "recovery: {}",
+            e2ee_recovery_state_label(status.recovery)
+        ));
+        lines.push(format!(
+            "backup: {}",
+            e2ee_backup_state_label(status.backup.state)
+        ));
+        lines.push(format!(
+            "backup_enabled_local: {}",
+            if status.backup.enabled_locally {
+                "true"
+            } else {
+                "false"
+            }
+        ));
+        lines.push(format!(
+            "backup_exists_on_server: {}",
+            e2ee_backup_exists_label(status.backup.exists_on_server)
+        ));
+        lines.push(format!(
+            "cross_signing: {}",
+            e2ee_cross_signing_label(status.cross_signing.as_ref())
+        ));
+        lines.push("actions: Account > Recover E2EE..., /e2ee refresh".to_owned());
+    }
+
     if let Some(error) = &model.last_error {
         lines.push(String::new());
         lines.push("error".to_owned());
@@ -2696,6 +3058,13 @@ fn frame_status_text(model: &UiModel) -> String {
         text.push_str(&event.flow_id);
         text.push_str(" from ");
         text.push_str(&event.user_id);
+    }
+
+    if let Some(status) = &model.last_e2ee_status {
+        text.push_str(" | e2ee: recovery ");
+        text.push_str(e2ee_recovery_state_label(status.recovery));
+        text.push_str(", backup ");
+        text.push_str(e2ee_backup_state_label(status.backup.state));
     }
 
     if let Some(error) = &model.last_error {
@@ -4827,6 +5196,14 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "clear" => LocalSlashCommand::Invalid {
             feedback: "usage: /clear".to_owned(),
         },
+        "e2ee" => match argument.to_ascii_lowercase().as_str() {
+            "" | "status" => LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus),
+            "refresh" => LocalSlashCommand::E2ee(E2eeSlashCommand::Refresh),
+            "recover" => LocalSlashCommand::E2ee(E2eeSlashCommand::RecoverDialog),
+            _ => LocalSlashCommand::Invalid {
+                feedback: "usage: /e2ee [status|refresh|recover]".to_owned(),
+            },
+        },
         "verify" => match argument.to_ascii_lowercase().as_str() {
             "accept" => LocalSlashCommand::Verify {
                 action: VerificationAction::Accept,
@@ -4944,6 +5321,41 @@ unsafe fn execute_local_slash_command(
             ViewId::Status => {
                 set_local_command_status(hwnd, "nothing to clear in status view".to_owned())
             }
+        },
+        LocalSlashCommand::E2ee(command) => match command {
+            E2eeSlashCommand::ShowStatus => {
+                activate_view(hwnd, &ViewId::Status, None)?;
+                set_local_command_status(hwnd, "e2ee status shown".to_owned())
+            }
+            E2eeSlashCommand::Refresh => {
+                let command = Command::RefreshE2eeStatus;
+                let result = {
+                    let state = state_mut(hwnd);
+                    let sender = match state.command_sender.as_ref() {
+                        Some(sender) => sender,
+                        None => {
+                            return set_local_command_status(
+                                hwnd,
+                                "core command sender is not available".to_owned(),
+                            );
+                        }
+                    };
+                    sender.send(command.clone()).map_err(|err| {
+                        format!("failed to enqueue refresh e2ee status command: {err}")
+                    })?;
+                    #[cfg(test)]
+                    state.recorded_commands.push(command);
+                    Ok::<(), String>(())
+                };
+                match result {
+                    Ok(()) => set_local_command_status(hwnd, "e2ee refresh submitted".to_owned()),
+                    Err(message) => set_local_command_status(hwnd, message),
+                }
+            }
+            E2eeSlashCommand::RecoverDialog => match show_recover_e2ee_menu_dialog(hwnd) {
+                Ok(_) => Ok(()),
+                Err(message) => set_local_command_status(hwnd, message),
+            },
         },
         LocalSlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
@@ -5127,6 +5539,25 @@ fn submit_logout(state: &mut WindowState) -> Result<(), String> {
         .map_err(|err| format!("failed to enqueue logout command: {err}"))
 }
 
+fn submit_recover_e2ee(state: &mut WindowState, recovery_secret: String) -> Result<(), String> {
+    if recovery_secret.is_empty() {
+        return Err("recovery key or passphrase must not be empty".to_owned());
+    }
+
+    let command = Command::RecoverE2ee(RecoverE2eeRequest { recovery_secret });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue recover e2ee command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    state.model.status = "e2ee recovery submitted".to_owned();
+    Ok(())
+}
+
 unsafe extern "system" fn edit_window_proc(
     hwnd: HWND,
     message: u32,
@@ -5257,6 +5688,43 @@ fn verification_state_label(state: &VerificationState) -> &'static str {
         VerificationState::Confirmed => "confirmed",
         VerificationState::Done => "done",
         VerificationState::Cancelled { .. } => "cancelled",
+    }
+}
+
+fn e2ee_recovery_state_label(state: E2eeRecoveryState) -> &'static str {
+    match state {
+        E2eeRecoveryState::Unknown => "unknown",
+        E2eeRecoveryState::Enabled => "enabled",
+        E2eeRecoveryState::Disabled => "disabled",
+        E2eeRecoveryState::Incomplete => "incomplete",
+    }
+}
+
+fn e2ee_backup_state_label(state: E2eeBackupState) -> &'static str {
+    match state {
+        E2eeBackupState::Unknown => "unknown",
+        E2eeBackupState::Creating => "creating",
+        E2eeBackupState::Enabling => "enabling",
+        E2eeBackupState::Resuming => "resuming",
+        E2eeBackupState::Enabled => "enabled",
+        E2eeBackupState::Downloading => "downloading",
+        E2eeBackupState::Disabling => "disabling",
+    }
+}
+
+fn e2ee_cross_signing_label(status: Option<&E2eeCrossSigningStatus>) -> &'static str {
+    match status {
+        Some(status) if status.complete => "complete",
+        Some(_) => "incomplete",
+        None => "unknown",
+    }
+}
+
+fn e2ee_backup_exists_label(exists_on_server: Option<bool>) -> &'static str {
+    match exists_on_server {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
     }
 }
 
@@ -5455,7 +5923,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::MarkRoomRead => "mark room read",
         Operation::RoomReadState => "room read state",
         Operation::E2eeStatus => "e2ee status",
-        Operation::RecoverE2ee => "recover E2EE",
+        Operation::RecoverE2ee => "e2ee recovery",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
@@ -5549,6 +6017,29 @@ mod tests {
             encrypted: false,
             is_space: true,
             space_children: Vec::new(),
+        }
+    }
+
+    fn e2ee_status(
+        recovery: E2eeRecoveryState,
+        backup_state: E2eeBackupState,
+        backup_enabled_local: bool,
+        backup_exists_on_server: Option<bool>,
+        cross_signing_complete: Option<bool>,
+    ) -> E2eeStatus {
+        E2eeStatus {
+            recovery,
+            backup: mmatrix_core::E2eeBackupStatus {
+                state: backup_state,
+                enabled_locally: backup_enabled_local,
+                exists_on_server: backup_exists_on_server,
+            },
+            cross_signing: cross_signing_complete.map(|complete| E2eeCrossSigningStatus {
+                has_master: true,
+                has_self_signing: complete,
+                has_user_signing: complete,
+                complete,
+            }),
         }
     }
 
@@ -6832,6 +7323,47 @@ mod tests {
     }
 
     #[test]
+    fn e2ee_status_event_updates_model_and_renders_status_section() {
+        let mut state = test_state();
+        let status = e2ee_status(
+            E2eeRecoveryState::Incomplete,
+            E2eeBackupState::Enabled,
+            false,
+            Some(true),
+            Some(false),
+        );
+
+        apply_core_event(&mut state, Event::E2eeStatus(status.clone())).unwrap();
+
+        assert_eq!(state.model.last_e2ee_status, Some(status));
+        assert_eq!(state.model.status, "e2ee status updated");
+
+        let status_text = render_view_text(&render_status_lines(&state.model));
+        assert!(status_text.contains("e2ee"));
+        assert!(status_text.contains("recovery: incomplete"));
+        assert!(status_text.contains("backup: enabled"));
+        assert!(status_text.contains("backup_enabled_local: false"));
+        assert!(status_text.contains("backup_exists_on_server: true"));
+        assert!(status_text.contains("cross_signing: incomplete"));
+        assert!(status_text.contains("actions: Account > Recover E2EE..., /e2ee refresh"));
+    }
+
+    #[test]
+    fn e2ee_recovery_succeeded_event_sets_status_message() {
+        let mut state = test_state();
+
+        apply_core_event(
+            &mut state,
+            Event::E2eeRecoverySucceeded(mmatrix_core::E2eeRecoverySucceeded {
+                operation: mmatrix_core::E2eeRecoveryOperation::Recover,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.status, "e2ee recovery complete");
+    }
+
+    #[test]
     fn normalize_timeline_text_converts_embedded_newlines_to_crlf() {
         let text = "[22:13] @bob:example: multiline row 00 line a\nmultiline row 00 line b";
         let (normalized, lines) = normalize_timeline_text(text);
@@ -6874,6 +7406,31 @@ mod tests {
         state.model.status = "authenticated".to_owned();
 
         assert_eq!(frame_status_text(&state.model), "authenticated");
+    }
+
+    #[test]
+    fn frame_status_text_appends_e2ee_suffix_only_after_status_event() {
+        let mut state = test_state();
+        state.model.status = "authenticated".to_owned();
+
+        assert_eq!(frame_status_text(&state.model), "authenticated");
+
+        apply_core_event(
+            &mut state,
+            Event::E2eeStatus(e2ee_status(
+                E2eeRecoveryState::Incomplete,
+                E2eeBackupState::Enabled,
+                true,
+                Some(true),
+                Some(true),
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(
+            frame_status_text(&state.model),
+            "e2ee status updated | e2ee: recovery incomplete, backup enabled"
+        );
     }
 
     #[test]
@@ -7126,6 +7683,13 @@ mod tests {
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         });
+        state.model.last_e2ee_status = Some(e2ee_status(
+            E2eeRecoveryState::Enabled,
+            E2eeBackupState::Enabled,
+            true,
+            Some(true),
+            Some(true),
+        ));
         state.model.last_verification = Some(VerificationStateEvent {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),
@@ -7154,6 +7718,7 @@ mod tests {
         assert_eq!(state.model.selected_room, None);
         assert!(state.model.room_views.is_empty());
         assert_eq!(state.model.last_activity, None);
+        assert_eq!(state.model.last_e2ee_status, None);
         assert_eq!(state.model.last_verification, None);
         assert_eq!(state.model.last_error, None);
         assert_eq!(state.active_view, ViewId::Status);
@@ -7164,6 +7729,25 @@ mod tests {
                 .views
                 .contains_key(&ViewId::Room("!room:example".to_owned()))
         );
+    }
+
+    #[test]
+    fn logged_out_clears_last_e2ee_status() {
+        let mut state = test_state();
+        state.model.last_e2ee_status = Some(e2ee_status(
+            E2eeRecoveryState::Incomplete,
+            E2eeBackupState::Enabled,
+            true,
+            Some(true),
+            Some(false),
+        ));
+
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut)
+                .expect("logged out event must apply successfully");
+        });
+
+        assert_eq!(state.model.last_e2ee_status, None);
     }
 
     #[test]
@@ -7852,6 +8436,22 @@ mod tests {
     fn parse_slash_command_accepts_verify_forms_and_rejects_bad_forms() {
         assert_eq!(parse_slash_command("/StAtUs"), LocalSlashCommand::Status);
         assert_eq!(
+            parse_slash_command("/e2ee"),
+            LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus)
+        );
+        assert_eq!(
+            parse_slash_command("/e2ee status"),
+            LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus)
+        );
+        assert_eq!(
+            parse_slash_command("/e2ee refresh"),
+            LocalSlashCommand::E2ee(E2eeSlashCommand::Refresh)
+        );
+        assert_eq!(
+            parse_slash_command("/e2ee recover"),
+            LocalSlashCommand::E2ee(E2eeSlashCommand::RecoverDialog)
+        );
+        assert_eq!(
             parse_slash_command("/verify accept"),
             LocalSlashCommand::Verify {
                 action: VerificationAction::Accept,
@@ -7899,6 +8499,19 @@ mod tests {
                 feedback: "usage: /clear".to_owned(),
             }
         );
+        let rejected = parse_slash_command("/e2ee recover secret");
+        assert_eq!(
+            rejected,
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /e2ee [status|refresh|recover]".to_owned(),
+            }
+        );
+        match rejected {
+            LocalSlashCommand::Invalid { feedback } => {
+                assert!(!feedback.contains("secret"));
+            }
+            other => panic!("expected invalid e2ee usage, got {other:?}"),
+        }
         assert_eq!(
             parse_slash_command("/verify"),
             LocalSlashCommand::Invalid {
@@ -8171,6 +8784,39 @@ mod tests {
         assert_eq!(
             submit_reject_verification_sas(&mut state),
             Err("no verification flow available".to_owned())
+        );
+    }
+
+    #[test]
+    fn submit_recover_e2ee_enqueues_typed_command_and_updates_status() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+
+        submit_recover_e2ee(&mut state, "secret phrase".to_owned()).unwrap();
+
+        assert_eq!(state.model.status, "e2ee recovery submitted");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RecoverE2ee(RecoverE2eeRequest {
+                recovery_secret: "secret phrase".to_owned(),
+            })]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_recover_e2ee_rejects_empty_secret() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_recover_e2ee(&mut state, String::new()),
+            Err("recovery key or passphrase must not be empty".to_owned())
         );
     }
 
