@@ -722,6 +722,8 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SendMessage => "send_text",
         Operation::MarkRoomRead => "mark_room_read",
         Operation::RoomReadState => "room_read_state",
+        Operation::E2eeStatus => "e2ee_status",
+        Operation::RecoverE2ee => "recover_e2ee",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",

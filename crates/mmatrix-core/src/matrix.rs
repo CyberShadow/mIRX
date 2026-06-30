@@ -10,6 +10,8 @@ use matrix_sdk::{
     deserialized_responses::SyncOrStrippedState,
     encryption::{
         BackupDownloadStrategy, EncryptionSettings,
+        backups::BackupState,
+        recovery::RecoveryState,
         verification::{
             CancelInfo, Emoji as MatrixEmoji, EmojiShortAuthString, SasState,
             SasVerification as MatrixSasVerification,
@@ -37,14 +39,16 @@ use matrix_sdk::{
     store::{RoomLoadSettings, SerializableEventContent},
 };
 use matrix_sdk_base::{RoomInfoNotableUpdateReasons, read_receipts::RoomReadReceipts};
+use matrix_sdk_crypto::CrossSigningStatus;
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+    E2eeRecoveryState, E2eeStatus, Event, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
+    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
@@ -69,6 +73,12 @@ impl Display for MatrixCoreError {
 }
 
 impl Error for MatrixCoreError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackupServerStatusMode {
+    Fetch,
+    Cached,
+}
 
 pub(crate) async fn build_client(
     config: &CoreConfig,
@@ -148,6 +158,83 @@ pub(crate) async fn initial_room_sync(
     summarize_joined_rooms(client).await
 }
 
+pub(crate) fn map_e2ee_recovery_state(state: RecoveryState) -> E2eeRecoveryState {
+    match state {
+        RecoveryState::Unknown => E2eeRecoveryState::Unknown,
+        RecoveryState::Enabled => E2eeRecoveryState::Enabled,
+        RecoveryState::Disabled => E2eeRecoveryState::Disabled,
+        RecoveryState::Incomplete => E2eeRecoveryState::Incomplete,
+    }
+}
+
+pub(crate) fn map_e2ee_backup_state(state: BackupState) -> E2eeBackupState {
+    match state {
+        BackupState::Unknown => E2eeBackupState::Unknown,
+        BackupState::Creating => E2eeBackupState::Creating,
+        BackupState::Enabling => E2eeBackupState::Enabling,
+        BackupState::Resuming => E2eeBackupState::Resuming,
+        BackupState::Enabled => E2eeBackupState::Enabled,
+        BackupState::Downloading => E2eeBackupState::Downloading,
+        BackupState::Disabling => E2eeBackupState::Disabling,
+    }
+}
+
+pub(crate) fn map_cross_signing_status(status: CrossSigningStatus) -> E2eeCrossSigningStatus {
+    E2eeCrossSigningStatus {
+        has_master: status.has_master,
+        has_self_signing: status.has_self_signing,
+        has_user_signing: status.has_user_signing,
+        complete: status.is_complete(),
+    }
+}
+
+pub(crate) async fn summarize_e2ee_status(
+    client: &Client,
+    server_status_mode: BackupServerStatusMode,
+) -> Result<E2eeStatus, MatrixCoreError> {
+    let encryption = client.encryption();
+    let recovery = encryption.recovery();
+    let backups = encryption.backups();
+
+    let exists_on_server = match server_status_mode {
+        BackupServerStatusMode::Fetch => {
+            Some(backups.fetch_exists_on_server().await.map_err(|err| {
+                MatrixCoreError::new(format!(
+                    "failed to fetch Matrix backup server status: {err}"
+                ))
+            })?)
+        }
+        BackupServerStatusMode::Cached => backups.exists_on_server().await.ok(),
+    };
+
+    Ok(E2eeStatus {
+        recovery: map_e2ee_recovery_state(recovery.state()),
+        backup: E2eeBackupStatus {
+            state: map_e2ee_backup_state(backups.state()),
+            enabled_locally: backups.are_enabled().await,
+            exists_on_server,
+        },
+        cross_signing: encryption
+            .cross_signing_status()
+            .await
+            .map(map_cross_signing_status),
+    })
+}
+
+pub(crate) async fn recover_e2ee(
+    client: &Client,
+    request: &RecoverE2eeRequest,
+) -> Result<E2eeStatus, MatrixCoreError> {
+    client
+        .encryption()
+        .recovery()
+        .recover_and_fix_backup(&request.recovery_secret)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to recover E2EE secrets: {err}")))?;
+
+    summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await
+}
+
 pub(crate) async fn summarize_joined_rooms(
     client: &Client,
 ) -> Result<Vec<RoomSummary>, MatrixCoreError> {
@@ -190,6 +277,57 @@ pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons
             | RoomInfoNotableUpdateReasons::FULLY_READ
             | RoomInfoNotableUpdateReasons::UNREAD_MARKER,
     )
+}
+
+pub(crate) fn start_e2ee_recovery_state_task(
+    client: Client,
+    events: EventSender,
+) -> JoinHandle<()> {
+    let mut states = client.encryption().recovery().state_stream();
+
+    tokio::task::spawn_local(async move {
+        while states.next().await.is_some() {
+            match summarize_e2ee_status(&client, BackupServerStatusMode::Cached).await {
+                Ok(status) => emit_event(&events, Event::E2eeStatus(status)),
+                Err(err) => emit_event(
+                    &events,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::E2eeStatus,
+                        message: err.to_string(),
+                    }),
+                ),
+            }
+        }
+    })
+}
+
+pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) -> JoinHandle<()> {
+    let mut states = client.encryption().backups().state_stream();
+
+    tokio::task::spawn_local(async move {
+        while let Some(state) = states.next().await {
+            match state {
+                Ok(_) => match summarize_e2ee_status(&client, BackupServerStatusMode::Cached).await
+                {
+                    Ok(status) => emit_event(&events, Event::E2eeStatus(status)),
+                    Err(err) => emit_event(
+                        &events,
+                        Event::Error(CoreErrorEvent {
+                            operation: Operation::E2eeStatus,
+                            message: err.to_string(),
+                        }),
+                    ),
+                },
+                Err(_) => emit_event(
+                    &events,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::E2eeStatus,
+                        message: "missed Matrix backup state update".to_owned(),
+                    }),
+                ),
+            }
+        }
+    })
 }
 
 pub(crate) fn room_read_state_from_room(room: &Room) -> RoomReadState {
@@ -1236,7 +1374,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        cancelled_state, map_decimals, map_emoji_array, map_emoji_short_auth_string,
+        cancelled_state, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
+        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string,
         map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
@@ -1246,14 +1385,18 @@ mod tests {
         verification_requested_state_event,
     };
     use crate::api::{
-        CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-        RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-        RoomTyping, VerificationDecimals, VerificationEmoji, VerificationRequest,
-        VerificationState, VerificationStateEvent,
+        CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
+        Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
-        encryption::verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
+        encryption::{
+            backups::BackupState,
+            recovery::RecoveryState,
+            verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
+        },
         ruma::{
             MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
             events::{
@@ -1274,6 +1417,7 @@ mod tests {
         RoomInfoNotableUpdateReasons,
         read_receipts::{LatestReadReceipt, RoomReadReceipts},
     };
+    use matrix_sdk_crypto::CrossSigningStatus;
 
     fn room_id() -> OwnedRoomId {
         OwnedRoomId::try_from("!room:example.org").expect("valid room id")
@@ -1359,6 +1503,67 @@ mod tests {
                 description: "Elephant".to_owned(),
             },
         ]
+    }
+
+    #[test]
+    fn e2ee_recovery_state_mapping_covers_all_sdk_variants() {
+        for (state, expected) in [
+            (RecoveryState::Unknown, E2eeRecoveryState::Unknown),
+            (RecoveryState::Enabled, E2eeRecoveryState::Enabled),
+            (RecoveryState::Disabled, E2eeRecoveryState::Disabled),
+            (RecoveryState::Incomplete, E2eeRecoveryState::Incomplete),
+        ] {
+            assert_eq!(map_e2ee_recovery_state(state), expected);
+        }
+    }
+
+    #[test]
+    fn e2ee_backup_state_mapping_covers_all_sdk_variants() {
+        for (state, expected) in [
+            (BackupState::Unknown, E2eeBackupState::Unknown),
+            (BackupState::Creating, E2eeBackupState::Creating),
+            (BackupState::Enabling, E2eeBackupState::Enabling),
+            (BackupState::Resuming, E2eeBackupState::Resuming),
+            (BackupState::Enabled, E2eeBackupState::Enabled),
+            (BackupState::Downloading, E2eeBackupState::Downloading),
+            (BackupState::Disabling, E2eeBackupState::Disabling),
+        ] {
+            assert_eq!(map_e2ee_backup_state(state), expected);
+        }
+    }
+
+    #[test]
+    fn cross_signing_status_mapping_copies_flags_and_completeness() {
+        for (status, expected) in [
+            (
+                CrossSigningStatus {
+                    has_master: true,
+                    has_self_signing: true,
+                    has_user_signing: true,
+                },
+                E2eeCrossSigningStatus {
+                    has_master: true,
+                    has_self_signing: true,
+                    has_user_signing: true,
+                    complete: true,
+                },
+            ),
+            (
+                CrossSigningStatus {
+                    has_master: true,
+                    has_self_signing: false,
+                    has_user_signing: true,
+                },
+                E2eeCrossSigningStatus {
+                    has_master: true,
+                    has_self_signing: false,
+                    has_user_signing: true,
+                    complete: false,
+                },
+            ),
+        ] {
+            assert_eq!(map_cross_signing_status(status), expected);
+        }
     }
 
     #[test]

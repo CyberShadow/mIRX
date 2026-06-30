@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CoreConfig, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
+    Command, CoreConfig, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+    E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
+    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
@@ -214,6 +216,99 @@ fn reject_verification_sas_before_login_emits_verification_error() {
 }
 
 #[test]
+fn refresh_e2ee_status_before_login_emits_status_error() {
+    let (_temp_dir, config) = test_config();
+    let handle = start(config).expect("start core");
+
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("started event"),
+        Event::Started
+    );
+
+    handle
+        .command_sender()
+        .send(Command::RefreshE2eeStatus)
+        .expect("send refresh e2ee status");
+
+    match handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("e2ee status error")
+    {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::E2eeStatus);
+            assert_eq!(err.message, "E2EE status requires an authenticated session");
+        }
+        other => panic!("expected e2ee status error, got {other:?}"),
+    }
+
+    handle
+        .command_sender()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stopped event"),
+        Event::Stopped
+    );
+    handle.join().expect("join worker");
+}
+
+#[test]
+fn recover_e2ee_before_login_emits_recovery_error() {
+    let (_temp_dir, config) = test_config();
+    let handle = start(config).expect("start core");
+
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("started event"),
+        Event::Started
+    );
+
+    handle
+        .command_sender()
+        .send(Command::RecoverE2ee(RecoverE2eeRequest {
+            recovery_secret: "test recovery secret".to_owned(),
+        }))
+        .expect("send recover e2ee");
+
+    match handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("e2ee recovery error")
+    {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::RecoverE2ee);
+            assert_eq!(
+                err.message,
+                "E2EE recovery requires an authenticated session"
+            );
+        }
+        other => panic!("expected e2ee recovery error, got {other:?}"),
+    }
+
+    handle
+        .command_sender()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stopped event"),
+        Event::Stopped
+    );
+    handle.join().expect("join worker");
+}
+
+#[test]
 fn login_store_initialization_failure_emits_typed_error_event() {
     let temp_dir = TempDir::new().expect("temporary profile directory");
     let profile_file = temp_dir.path().join("profile-file");
@@ -336,6 +431,20 @@ fn mark_room_read_request_round_trips_through_serde() {
 
     let restored: MarkRoomReadRequest =
         serde_json::from_str(&json).expect("deserialize mark room read request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn recover_e2ee_request_round_trips_through_serde() {
+    let request = RecoverE2eeRequest {
+        recovery_secret: "EsTl...secret".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize recover e2ee request");
+    assert_eq!(json, r#"{"recovery_secret":"EsTl...secret"}"#);
+
+    let restored: RecoverE2eeRequest =
+        serde_json::from_str(&json).expect("deserialize recover e2ee request");
     assert_eq!(restored, request);
 }
 
@@ -694,6 +803,46 @@ fn room_read_state_event_round_trips_through_serde() {
 }
 
 #[test]
+fn e2ee_status_event_round_trips_through_serde() {
+    let event = Event::E2eeStatus(E2eeStatus {
+        recovery: E2eeRecoveryState::Enabled,
+        backup: E2eeBackupStatus {
+            state: E2eeBackupState::Enabled,
+            enabled_locally: true,
+            exists_on_server: Some(true),
+        },
+        cross_signing: Some(E2eeCrossSigningStatus {
+            has_master: true,
+            has_self_signing: true,
+            has_user_signing: false,
+            complete: false,
+        }),
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize e2ee status event");
+    assert_eq!(
+        json,
+        r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":false,"complete":false}}}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize e2ee status event");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn e2ee_recovery_succeeded_event_round_trips_through_serde() {
+    let event = Event::E2eeRecoverySucceeded(E2eeRecoverySucceeded {
+        operation: E2eeRecoveryOperation::Recover,
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize e2ee recovery succeeded");
+    assert_eq!(json, r#"{"E2eeRecoverySucceeded":{"operation":"recover"}}"#);
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize e2ee recovery succeeded");
+    assert_eq!(restored, event);
+}
+
+#[test]
 fn verification_request_event_preserves_existing_passive_wire_shape() {
     let event = Event::VerificationRequest(VerificationRequest {
         flow_id: "txn-123".to_owned(),
@@ -784,6 +933,33 @@ fn verification_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "verification decimals must reject unknown fields"
+    );
+}
+
+#[test]
+fn e2ee_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<RecoverE2eeRequest>(
+            r#"{"recovery_secret":"EsTl...secret","unexpected":"value"}"#
+        )
+        .is_err(),
+        "recover e2ee request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true,"unexpected":"value"},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":true,"complete":true}}}"#
+        )
+        .is_err(),
+        "e2ee backup status must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"E2eeStatus":{"recovery":"enabled","backup":{"state":"enabled","enabled_locally":true,"exists_on_server":true},"cross_signing":{"has_master":true,"has_self_signing":true,"has_user_signing":true,"complete":true,"unexpected":"value"}}}"#
+        )
+        .is_err(),
+        "e2ee cross-signing status must reject unknown fields"
     );
 }
 

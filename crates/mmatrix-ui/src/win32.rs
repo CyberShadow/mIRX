@@ -5453,6 +5453,8 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SendMessage => "send text",
         Operation::MarkRoomRead => "mark room read",
         Operation::RoomReadState => "room read state",
+        Operation::E2eeStatus => "e2ee status",
+        Operation::RecoverE2ee => "recover E2EE",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",

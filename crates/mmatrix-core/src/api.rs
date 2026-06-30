@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::{fmt, fmt::Formatter};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreConfig {
@@ -13,6 +14,8 @@ pub enum Command {
     StartSync,
     SendMessage(SendMessageRequest),
     MarkRoomRead(MarkRoomReadRequest),
+    RefreshE2eeStatus,
+    RecoverE2ee(RecoverE2eeRequest),
     AcceptVerification(VerificationFlowId),
     CancelVerification(VerificationFlowId),
     ConfirmVerificationSas(VerificationFlowId),
@@ -56,6 +59,20 @@ pub struct SendMessageRequest {
 pub struct MarkRoomReadRequest {
     pub room_id: String,
     pub event_id: String,
+}
+
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoverE2eeRequest {
+    pub recovery_secret: String,
+}
+
+impl fmt::Debug for RecoverE2eeRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RecoverE2eeRequest")
+            .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -165,6 +182,64 @@ pub struct RoomReadState {
     pub num_unread: u64,
     pub num_notifications: u64,
     pub num_mentions: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct E2eeStatus {
+    pub recovery: E2eeRecoveryState,
+    pub backup: E2eeBackupStatus,
+    pub cross_signing: Option<E2eeCrossSigningStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eeRecoveryState {
+    Unknown,
+    Enabled,
+    Disabled,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct E2eeBackupStatus {
+    pub state: E2eeBackupState,
+    pub enabled_locally: bool,
+    pub exists_on_server: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eeBackupState {
+    Unknown,
+    Creating,
+    Enabling,
+    Resuming,
+    Enabled,
+    Downloading,
+    Disabling,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct E2eeCrossSigningStatus {
+    pub has_master: bool,
+    pub has_self_signing: bool,
+    pub has_user_signing: bool,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct E2eeRecoverySucceeded {
+    pub operation: E2eeRecoveryOperation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eeRecoveryOperation {
+    Recover,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -293,6 +368,8 @@ pub enum Operation {
     SendMessage,
     MarkRoomRead,
     RoomReadState,
+    E2eeStatus,
+    RecoverE2ee,
     Verification,
     Logout,
     Shutdown,
@@ -310,6 +387,8 @@ pub enum Event {
     RoomActivityUpdate(RoomActivityUpdate),
     RoomTyping(RoomTyping),
     RoomReadState(RoomReadState),
+    E2eeStatus(E2eeStatus),
+    E2eeRecoverySucceeded(E2eeRecoverySucceeded),
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),
     LoggedOut,

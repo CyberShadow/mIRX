@@ -12,6 +12,7 @@ blake3 = { version = "=1.8.5", default-features = false, features = ["prefer_int
 futures-util = "0.3"
 matrix-sdk = { version = "=0.18.0", features = ["bundled-sqlite"] }
 matrix-sdk-base = "=0.18.0"
+matrix-sdk-crypto = "=0.18.0"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 

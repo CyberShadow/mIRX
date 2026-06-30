@@ -124,7 +124,9 @@ fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
-            | Event::RoomReadState(_) => {}
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
             Event::Error(err) => panic!(
                 "live login failed during {:?}: {}",
                 err.operation, err.message
@@ -157,7 +159,9 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
-            | Event::RoomReadState(_) => {}
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
             Event::Error(err) => {
                 panic!(
                     "{context} failed during {:?}: {}",
@@ -194,7 +198,9 @@ fn live_shutdown_and_join(handle: CoreHandle) {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
-            | Event::RoomReadState(_) => {}
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
             Event::Error(err) => {
                 panic!(
                     "live shutdown failed during {:?}: {}",
@@ -311,7 +317,9 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
-            | Event::RoomReadState(_) => {}
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
             Event::Error(err) => panic!(
                 "live start sync failed during {:?}: {}",
                 err.operation, err.message
@@ -346,7 +354,9 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
-            | Event::RoomReadState(_) => {}
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
             other => panic!("unexpected duplicate start sync event: {other:?}"),
         }
     }

@@ -2037,6 +2037,7 @@ dependencies = [
  "futures-util",
  "matrix-sdk",
  "matrix-sdk-base",
+ "matrix-sdk-crypto",
  "serde",
  "serde_json",
  "tempfile",
