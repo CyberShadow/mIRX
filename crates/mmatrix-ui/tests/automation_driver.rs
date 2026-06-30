@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mmatrix_core::{
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
     StoredSession as CoreStoredSession,
 };
@@ -271,6 +272,7 @@ fn text_event(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> Eve
             event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
             sender: sender.to_owned(),
+            presentation: CoreRoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Sent,
         }),
@@ -292,6 +294,7 @@ fn text_event_with_event_id(
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
             sender: sender.to_owned(),
+            presentation: CoreRoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Sent,
         }),
@@ -313,6 +316,7 @@ fn pending_message_event(
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
             sender: sender.to_owned(),
+            presentation: CoreRoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Pending,
         }),
@@ -803,7 +807,7 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
         ),
         message_failed_update_event("!ops:example", "txn-1", "send failed", true),
         Event::Error(mmatrix_core::CoreErrorEvent {
-            operation: mmatrix_core::Operation::SendText,
+            operation: mmatrix_core::Operation::SendMessage,
             message: "send failed".to_owned(),
         }),
     ])?;

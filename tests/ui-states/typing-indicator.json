@@ -21,6 +21,7 @@
         "event_id": "$typing-context",
         "transaction_id": null,
         "sender": "@carol:example",
+        "presentation": "text",
         "body": "typing context",
         "send_state": {
           "state": "sent"

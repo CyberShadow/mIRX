@@ -28,6 +28,7 @@
         "event_id": "$support-1",
         "transaction_id": null,
         "sender": "@support:example",
+        "presentation": "text",
         "body": "support queue is empty",
         "send_state": {
           "state": "sent"
@@ -45,6 +46,7 @@
         "event_id": "$verify-1",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "verification requested by @alice:example",
         "send_state": {
           "state": "sent"
@@ -62,6 +64,7 @@
         "event_id": "$verify-2",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "sas emoji ready",
         "send_state": {
           "state": "sent"
@@ -79,6 +82,7 @@
         "event_id": "$verify-3",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "waiting for confirmation",
         "send_state": {
           "state": "sent"
@@ -94,7 +98,7 @@
   },
   {
     "Error": {
-      "operation": "SendText",
+      "operation": "SendMessage",
       "message": "message send failed for event $event123"
     }
   }

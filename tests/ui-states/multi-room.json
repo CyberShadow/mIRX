@@ -35,6 +35,7 @@
         "event_id": "$lobby-1",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "welcome to the lobby",
         "send_state": {
           "state": "sent"
@@ -52,6 +53,7 @@
         "event_id": "$lobby-2",
         "transaction_id": null,
         "sender": "@bob:example",
+        "presentation": "text",
         "body": "build is green",
         "send_state": {
           "state": "sent"
@@ -104,6 +106,7 @@
         "event_id": "$ops-1",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "ops topic: incident review",
         "send_state": {
           "state": "sent"
@@ -121,6 +124,7 @@
         "event_id": "$ops-2",
         "transaction_id": null,
         "sender": "@bob:example",
+        "presentation": "text",
         "body": "encryption enabled for ops",
         "send_state": {
           "state": "sent"
@@ -138,6 +142,7 @@
         "event_id": "$ops-3",
         "transaction_id": null,
         "sender": "@carol:example",
+        "presentation": "text",
         "body": "deploy window opens at 18:00 UTC",
         "send_state": {
           "state": "sent"
@@ -155,6 +160,7 @@
         "event_id": "$random-1",
         "transaction_id": null,
         "sender": "@dave:example",
+        "presentation": "text",
         "body": "random: lunch votes are in",
         "send_state": {
           "state": "sent"

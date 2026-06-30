@@ -21,6 +21,7 @@
         "event_id": "$mixed-1",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "synced hello",
         "send_state": {
           "state": "sent"
@@ -91,6 +92,7 @@
         "event_id": null,
         "transaction_id": "txn-pending-1",
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "pending local echo",
         "send_state": {
           "state": "pending"
@@ -108,6 +110,7 @@
         "event_id": null,
         "transaction_id": "txn-failed-1",
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "failed local echo",
         "send_state": {
           "state": "pending"

@@ -78,6 +78,7 @@
         "event_id": "$ops-space-1",
         "transaction_id": null,
         "sender": "@alice:example",
+        "presentation": "text",
         "body": "ops workspace is ready",
         "send_state": {
           "state": "sent"
@@ -95,6 +96,7 @@
         "event_id": "$shared-space-1",
         "transaction_id": null,
         "sender": "@bob:example",
+        "presentation": "text",
         "body": "shared room has updates",
         "send_state": {
           "state": "sent"
@@ -112,6 +114,7 @@
         "event_id": "$random-space-1",
         "transaction_id": null,
         "sender": "@carol:example",
+        "presentation": "text",
         "body": "random room has updates",
         "send_state": {
           "state": "sent"
