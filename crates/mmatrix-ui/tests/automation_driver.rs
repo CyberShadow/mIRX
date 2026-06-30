@@ -1879,7 +1879,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         app.dump_model()?.last_error,
         Some(UiError {
             operation: "send_text".to_owned(),
-            message: "send text requires an authenticated session".to_owned(),
+            message: "send message requires an authenticated session".to_owned(),
         })
     );
 
@@ -2736,7 +2736,7 @@ fn automation_driver_return_compose_key_submits_through_edit_control()
         app.dump_model()?.last_error,
         Some(UiError {
             operation: "send_text".to_owned(),
-            message: "send text requires an authenticated session".to_owned(),
+            message: "send message requires an authenticated session".to_owned(),
         })
     );
     assert_eq!(
@@ -2819,7 +2819,7 @@ fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn 
         app.dump_model()?.last_error,
         Some(UiError {
             operation: "send_text".to_owned(),
-            message: "send text requires an authenticated session".to_owned(),
+            message: "send message requires an authenticated session".to_owned(),
         })
     );
     let ui_state = app.dump_ui_state()?;
@@ -3161,7 +3161,7 @@ fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std
         !ui_state
             .status_bar
             .text
-            .contains("send text requires an authenticated session")
+            .contains("send message requires an authenticated session")
     );
     assert_eq!(app.dump_model()?.last_error, None);
 
@@ -3196,7 +3196,7 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
         app.dump_model()?.last_error,
         Some(UiError {
             operation: "send_text".to_owned(),
-            message: "send text requires an authenticated session".to_owned(),
+            message: "send message requires an authenticated session".to_owned(),
         })
     );
     assert_eq!(
