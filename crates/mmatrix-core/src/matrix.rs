@@ -48,8 +48,9 @@ use crate::api::{
     RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -486,24 +487,39 @@ fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
 ) -> Option<RoomActivity> {
-    let (presentation, body) =
-        room_message_presentation_and_body_from_message_type(&event.content.msgtype)?;
+    if let Some((presentation, body)) =
+        room_message_presentation_and_body_from_message_type(&event.content.msgtype)
+    {
+        return Some(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{}", event.event_id),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some(event.event_id.to_string()),
+                transaction_id: event
+                    .unsigned
+                    .transaction_id
+                    .as_ref()
+                    .map(ToString::to_string),
+                sender: event.sender.to_string(),
+                presentation,
+                body,
+                send_state: RoomMessageSendState::Sent,
+            }),
+        });
+    }
+
+    let (msgtype, body) = unsupported_room_message_body(&event.content.msgtype)?;
 
     Some(RoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
-        kind: RoomActivityKind::Message(RoomMessageActivity {
-            event_id: Some(event.event_id.to_string()),
-            transaction_id: event
-                .unsigned
-                .transaction_id
-                .as_ref()
-                .map(ToString::to_string),
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: event.event_id.to_string(),
             sender: event.sender.to_string(),
-            presentation,
-            body,
-            send_state: RoomMessageSendState::Sent,
+            msgtype: msgtype.to_owned(),
+            body: body.to_owned(),
         }),
     })
 }
@@ -517,6 +533,31 @@ fn room_message_presentation_and_body_from_message_type(
             Some((RoomMessagePresentationKind::Notice, notice.body.clone()))
         }
         MessageType::Emote(emote) => Some((RoomMessagePresentationKind::Emote, emote.body.clone())),
+        MessageType::Image(_)
+        | MessageType::Audio(_)
+        | MessageType::File(_)
+        | MessageType::Video(_)
+        | MessageType::Location(_)
+        | MessageType::VerificationRequest(_)
+        | MessageType::_Custom(_) => None,
+        // ruma marks MessageType as non_exhaustive, so a final fallback is required.
+        _ => None,
+    }
+}
+
+fn unsupported_room_message_body(message_type: &MessageType) -> Option<(&'static str, &str)> {
+    match message_type {
+        MessageType::Image(content) => Some(("m.image", content.body.as_str())),
+        MessageType::Audio(content) => Some(("m.audio", content.body.as_str())),
+        MessageType::File(content) => Some(("m.file", content.body.as_str())),
+        MessageType::Video(content) => Some(("m.video", content.body.as_str())),
+        MessageType::Text(_)
+        | MessageType::Notice(_)
+        | MessageType::Emote(_)
+        | MessageType::Location(_)
+        | MessageType::VerificationRequest(_)
+        | MessageType::_Custom(_) => None,
+        // ruma marks MessageType as non_exhaustive, so a final fallback is required.
         _ => None,
     }
 }
@@ -1390,8 +1431,9 @@ mod tests {
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::{
@@ -1668,12 +1710,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_sync_message_mapping_is_ignored() {
+    fn unsupported_sync_image_mapping_produces_placeholder() {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": {
                 "msgtype": "m.image",
-                "body": "ignored",
+                "body": "diagram.png",
                 "url": "mxc://example.org/image"
             },
             "event_id": "$event:example.org",
@@ -1681,6 +1723,130 @@ mod tests {
             "origin_server_ts": 1700000000000u64
         }))
         .expect("deserialize sync image event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$event:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                    event_id: "$event:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    msgtype: "m.image".to_owned(),
+                    body: "diagram.png".to_owned(),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_sync_audio_mapping_produces_placeholder() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.audio",
+                "body": "voice.ogg",
+                "url": "mxc://example.org/audio"
+            },
+            "event_id": "$audio:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000100u64
+        }))
+        .expect("deserialize sync audio event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$audio:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                    event_id: "$audio:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    msgtype: "m.audio".to_owned(),
+                    body: "voice.ogg".to_owned(),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_sync_file_mapping_produces_placeholder() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.file",
+                "body": "report.pdf",
+                "url": "mxc://example.org/file"
+            },
+            "event_id": "$file:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000200u64
+        }))
+        .expect("deserialize sync file event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$file:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_200,
+                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                    event_id: "$file:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    msgtype: "m.file".to_owned(),
+                    body: "report.pdf".to_owned(),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_sync_video_mapping_produces_placeholder() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.video",
+                "body": "demo.mp4",
+                "url": "mxc://example.org/video"
+            },
+            "event_id": "$video:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000300u64
+        }))
+        .expect("deserialize sync video event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$video:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_300,
+                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                    event_id: "$video:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    msgtype: "m.video".to_owned(),
+                    body: "demo.mp4".to_owned(),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn location_sync_message_mapping_remains_ignored() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.location",
+                "body": "geo:37.786971,-122.399677",
+                "geo_uri": "geo:37.786971,-122.399677"
+            },
+            "event_id": "$location:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000400u64
+        }))
+        .expect("deserialize sync location event");
 
         assert_eq!(
             room_activity_from_sync_message("!room:example.org", &event),

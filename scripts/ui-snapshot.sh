@@ -500,6 +500,42 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!beta:example'
       ;;
+    unsupported-message)
+      expect_selected='!alpha:example.org'
+      expect_active_view='room:!alpha:example.org'
+      room_expect_args=(
+        --expect-room '!alpha:example.org'
+        --expect-room '!media:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!media:example.org::unsupported_message'
+        --expect-room-activity '!media:example.org::m.image'
+        --expect-room-activity '!media:example.org::diagram.png'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent unsupported m.image: diagram.png'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !media:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!alpha:example.org::Alpha'
+        --expect-switchbar-item 'room:!media:example.org::* Media'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!media:example.org'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!alpha:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!alpha:example.org'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'diagram.png'
+      )
+      ;;
     *)
       die "no expectations configured for snapshot case: $case_name"
       ;;

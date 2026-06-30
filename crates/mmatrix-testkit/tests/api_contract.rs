@@ -12,7 +12,8 @@ use mmatrix_testkit::{
     RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
     StatusBarState, StoredSession, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState,
-    Verification, VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
+    UnsupportedRoomMessageActivity, Verification, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -646,6 +647,44 @@ fn room_activity_member_state_notice_round_trips_through_json() {
 }
 
 #[test]
+fn room_activity_unsupported_message_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$image1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "m.image".to_owned(),
+            body: "diagram.png".to_owned(),
+        }),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image1:example.org",
+        "timestamp_ms": 1710000000000u64,
+        "kind": {
+            "type": "unsupported_message",
+            "event_id": "$image1:example.org",
+            "sender": "@alice:example.org",
+            "msgtype": "m.image",
+            "body": "diagram.png"
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize unsupported message activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json)
+            .expect("deserialize unsupported message activity"),
+        activity
+    );
+}
+
+#[test]
 fn room_read_state_event_serializes_to_expected_json_shape() {
     let event = CoreEvent::RoomReadState(RoomReadState {
         room_id: "!ops:example".to_owned(),
@@ -752,6 +791,25 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
     assert!(activity.contains(
         "\"send_state\":{\"state\":\"failed\",\"message\":\"send failed\",\"recoverable\":true}"
     ));
+}
+
+#[test]
+fn room_activity_contains_matches_unsupported_message_fields() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$image1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "m.image".to_owned(),
+            body: "diagram.png".to_owned(),
+        }),
+    };
+
+    assert!(activity.contains("\"type\":\"unsupported_message\""));
+    assert!(activity.contains("\"msgtype\":\"m.image\""));
+    assert!(activity.contains("diagram.png"));
 }
 
 #[test]
@@ -940,11 +998,36 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
+        serde_json::from_str::<UnsupportedRoomMessageActivity>(
+            r#"{
+            "event_id":"$image1:example.org",
+            "sender":"@alice:example.org",
+            "msgtype":"m.image",
+            "body":"diagram.png",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
         serde_json::from_str::<RoomMessageSendState>(
             r#"{
             "state":"failed",
             "message":"send failed",
             "recoverable":true,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityKind>(
+            r#"{
+            "type":"unsupported_message",
+            "event_id":"$image1:example.org",
+            "sender":"@alice:example.org",
+            "msgtype":"m.image",
+            "body":"diagram.png",
             "unexpected":true
         }"#
         )

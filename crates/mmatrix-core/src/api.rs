@@ -106,6 +106,7 @@ pub struct RoomActivity {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityKind {
     Message(RoomMessageActivity),
+    UnsupportedMessage(UnsupportedRoomMessageActivity),
     StateNotice(RoomStateNoticeActivity),
 }
 
@@ -126,6 +127,15 @@ pub struct RoomMessageActivity {
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub send_state: RoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnsupportedRoomMessageActivity {
+    pub event_id: String,
+    pub sender: String,
+    pub msgtype: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

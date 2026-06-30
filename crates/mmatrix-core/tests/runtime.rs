@@ -7,8 +7,8 @@ use mmatrix_core::{
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -678,6 +678,17 @@ fn room_activity_events_round_trip_through_serde() {
             },
         }),
     });
+    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_003,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$image1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "m.image".to_owned(),
+            body: "diagram.png".to_owned(),
+        }),
+    });
     let sent_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         transaction_id: "txn-1".to_owned(),
@@ -699,6 +710,7 @@ fn room_activity_events_round_trip_through_serde() {
         pending_message_event,
         state_notice_event,
         member_notice_event,
+        unsupported_message_event,
         sent_update_event,
         failed_update_event,
     ] {
@@ -737,6 +749,17 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             },
         }),
     });
+    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_003,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$image1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "m.image".to_owned(),
+            body: "diagram.png".to_owned(),
+        }),
+    });
     let failed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         transaction_id: "txn-1".to_owned(),
@@ -753,6 +776,11 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
         r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":"@alice:example.org","state_key":"@carol:example.org","content":{"type":"member","membership":"join","displayname":"carol"}}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&unsupported_message_event)
+            .expect("serialize unsupported room activity"),
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"kind":{"type":"unsupported_message","event_id":"$image1:example.org","sender":"@alice:example.org","msgtype":"m.image","body":"diagram.png"}}}"#
     );
     assert_eq!(
         serde_json::to_string(&failed_update_event).expect("serialize failed room activity update"),
@@ -990,6 +1018,14 @@ fn room_activity_dtos_reject_unknown_fields() {
     );
 
     assert!(
+        serde_json::from_str::<UnsupportedRoomMessageActivity>(
+            r#"{"event_id":"$image1:example.org","sender":"@alice:example.org","msgtype":"m.image","body":"diagram.png","unexpected":"value"}"#
+        )
+        .is_err(),
+        "unsupported room message activity must reject unknown fields"
+    );
+
+    assert!(
         serde_json::from_str::<Event>(
             r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
         )
@@ -1027,6 +1063,14 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "room state notice content must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"kind":{"type":"unsupported_message","event_id":"$image1:example.org","sender":"@alice:example.org","msgtype":"m.image","body":"diagram.png","unexpected":"value"}}}"#
+        )
+        .is_err(),
+        "unsupported room activity kind must reject unknown fields"
     );
 
     assert!(

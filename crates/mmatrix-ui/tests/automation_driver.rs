@@ -19,8 +19,9 @@ use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
     RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine,
     RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, SpaceChild, StoredSession, SwitchbarItem, TestkitError, UiError,
-    UiState, Verification, VerificationState, ViewIdentity,
+    RoomStateNoticeContent, SpaceChild, StoredSession, SwitchbarItem, TestkitError,
+    UiError, UiState, UnsupportedRoomMessageActivity, Verification, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -650,6 +651,27 @@ fn member_entry_with_event_id(
                 membership: membership.to_owned(),
                 displayname: displayname.map(str::to_owned),
             },
+        }),
+    }
+}
+
+fn unsupported_entry_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    msgtype: &str,
+    body: &str,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: event_id.to_owned(),
+            sender: sender.to_owned(),
+            msgtype: msgtype.to_owned(),
+            body: body.to_owned(),
         }),
     }
 }
@@ -2731,6 +2753,58 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         Some("!alpha:example")
     );
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_activation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("unsupported-message.json");
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(initial_state.mdi.active, room_identity("!alpha:example.org"));
+    assert_active_switchbar_item(&initial_state, &room_identity("!alpha:example.org"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!alpha:example.org")
+    );
+    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example.org"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), true);
+    assert_eq!(
+        app.room_activity(Some("!media:example.org"))?,
+        vec![unsupported_entry_with_event_id(
+            "!media:example.org",
+            "$image1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "m.image",
+            "diagram.png",
+        )]
+    );
+    assert!(view_contains(
+        find_view(&initial_state, &room_identity("!media:example.org")),
+        "* [16:00] @alice:example.org sent unsupported m.image: diagram.png",
+    ));
+
+    app.select_room("!media:example.org")?;
+    let activated_state = app.dump_ui_state()?;
+    assert_eq!(activated_state.mdi.active, room_identity("!media:example.org"));
+    assert_active_switchbar_item(&activated_state, &room_identity("!media:example.org"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!media:example.org")
+    );
+    assert_switchbar_activity(&activated_state, &room_identity("!media:example.org"), false);
 
     Ok(())
 }

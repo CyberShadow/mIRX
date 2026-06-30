@@ -5,8 +5,8 @@ use std::fmt;
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, StoredSession, VerificationState,
-    VerificationStateEvent,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -681,6 +681,7 @@ pub(crate) struct DumpRoomActivity {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DumpRoomActivityKind {
     Message(DumpRoomMessageActivity),
+    UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     StateNotice(DumpRoomStateNoticeActivity),
 }
 
@@ -693,6 +694,15 @@ pub(crate) struct DumpRoomMessageActivity {
     pub(crate) presentation: RoomMessagePresentationKind,
     pub(crate) body: String,
     pub(crate) send_state: DumpRoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpUnsupportedRoomMessageActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) msgtype: String,
+    pub(crate) body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -814,6 +824,9 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::Message(message) => {
             DumpRoomActivityKind::Message(dump_room_message_activity_from_core(message))
         }
+        RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
+            dump_unsupported_room_message_activity_from_core(message),
+        ),
         RoomActivityKind::StateNotice(notice) => {
             DumpRoomActivityKind::StateNotice(dump_room_state_notice_activity_from_core(notice))
         }
@@ -846,6 +859,17 @@ pub(crate) fn dump_room_message_send_state_from_core(
             message: message.clone(),
             recoverable: *recoverable,
         },
+    }
+}
+
+pub(crate) fn dump_unsupported_room_message_activity_from_core(
+    message: &UnsupportedRoomMessageActivity,
+) -> DumpUnsupportedRoomMessageActivity {
+    DumpUnsupportedRoomMessageActivity {
+        event_id: message.event_id.clone(),
+        sender: message.sender.clone(),
+        msgtype: message.msgtype.clone(),
+        body: message.body.clone(),
     }
 }
 
@@ -1101,8 +1125,8 @@ mod tests {
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomSummary, SpaceChildSummary, StoredSession, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomSummary, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1119,6 +1143,7 @@ mod tests {
         DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
         DumpRoomActivityResponse, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
         DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpUnsupportedRoomMessageActivity,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
         MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
         PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
@@ -2611,6 +2636,53 @@ mod tests {
                 body: "hello".to_owned(),
                 send_state: DumpRoomMessageSendState::Sent,
             })
+        );
+        let unsupported_activity = RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$image1:example.org".to_owned(),
+            timestamp_ms: 1_710_000_000_000,
+            kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                event_id: "$image1:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                msgtype: "m.image".to_owned(),
+                body: "diagram.png".to_owned(),
+            }),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&unsupported_activity),
+            DumpRoomActivity {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$image1:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                kind: DumpRoomActivityKind::UnsupportedMessage(
+                    DumpUnsupportedRoomMessageActivity {
+                        event_id: "$image1:example.org".to_owned(),
+                        sender: "@alice:example.org".to_owned(),
+                        msgtype: "m.image".to_owned(),
+                        body: "diagram.png".to_owned(),
+                    }
+                ),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(super::dump_room_activity_from_activity(&unsupported_activity))
+                .expect("serialize unsupported dump room activity"),
+            json!({
+                "room_id":"!room:example",
+                "activity_id":"event:$image1:example.org",
+                "timestamp_ms":1710000000000u64,
+                "kind":{
+                    "type":"unsupported_message",
+                    "event_id":"$image1:example.org",
+                    "sender":"@alice:example.org",
+                    "msgtype":"m.image",
+                    "body":"diagram.png"
+                }
+            })
+        );
+        assert_eq!(
+            super::dump_room_message_activity_line_from_activity(&unsupported_activity),
+            None
         );
         assert!(
             serde_json::from_value::<DumpRoomActivity>(json!({

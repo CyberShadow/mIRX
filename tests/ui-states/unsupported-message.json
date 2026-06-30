@@ -1,0 +1,35 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!alpha:example.org",
+        "display_name": "Alpha",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      },
+      {
+        "room_id": "!media:example.org",
+        "display_name": "Media",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!media:example.org",
+      "activity_id": "event:$image1:example.org",
+      "timestamp_ms": 1710000000000,
+      "kind": {
+        "type": "unsupported_message",
+        "event_id": "$image1:example.org",
+        "sender": "@alice:example.org",
+        "msgtype": "m.image",
+        "body": "diagram.png"
+      }
+    }
+  }
+]
