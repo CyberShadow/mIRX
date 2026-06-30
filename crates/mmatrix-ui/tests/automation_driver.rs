@@ -17,9 +17,9 @@ use mmatrix_core::{
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
     RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
-    StoredSession, SwitchbarItem, TestkitError, UiError, UiState, Verification, VerificationState,
-    ViewIdentity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, SpaceChild, StoredSession, SwitchbarItem, TestkitError, UiError,
+    UiState, Verification, VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -372,6 +372,7 @@ fn timeline_line(
         event_id: Some(generated_event_id(room_id, body)),
         transaction_id: None,
         sender: sender.to_owned(),
+        presentation: RoomMessagePresentationKind::Text,
         body: body.to_owned(),
         send_state: RoomMessageSendState::Sent,
     }
@@ -391,6 +392,7 @@ fn timeline_line_with_event_id(
         event_id: Some(event_id.to_owned()),
         transaction_id: None,
         sender: sender.to_owned(),
+        presentation: RoomMessagePresentationKind::Text,
         body: body.to_owned(),
         send_state: RoomMessageSendState::Sent,
     }
@@ -405,6 +407,7 @@ fn text_entry(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> Roo
             event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
             sender: sender.to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
@@ -426,6 +429,7 @@ fn text_entry_with_event_id(
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
             sender: sender.to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
@@ -447,6 +451,7 @@ fn pending_entry(
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
             sender: sender.to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Pending,
         }),
@@ -470,6 +475,7 @@ fn failed_entry(
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
             sender: sender.to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Failed {
                 message: message.to_owned(),
@@ -890,6 +896,7 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -967,7 +974,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 11);
+    assert_eq!(version.protocol_version, 12);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3072,6 +3079,7 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),

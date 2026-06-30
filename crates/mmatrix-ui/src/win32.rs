@@ -211,6 +211,7 @@ struct LastMessageActivity {
     transaction_id: Option<String>,
     sender: String,
     timestamp_ms: u64,
+    presentation: RoomMessagePresentationKind,
     body: String,
     send_state: RoomMessageSendState,
 }
@@ -493,6 +494,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
         transaction_id: message.transaction_id.clone(),
         sender: message.sender.clone(),
         timestamp_ms: activity.timestamp_ms,
+        presentation: message.presentation,
         body: message.body.clone(),
         send_state: message.send_state.clone(),
     })
@@ -5252,6 +5254,7 @@ fn dump_room_message_activity_line_from_last_activity(
         event_id: activity.event_id.clone(),
         transaction_id: activity.transaction_id.clone(),
         sender: activity.sender.clone(),
+        presentation: activity.presentation,
         body: activity.body.clone(),
         send_state: dump_room_message_send_state_from_core(&activity.send_state),
     }
@@ -5769,6 +5772,7 @@ mod tests {
                 transaction_id: None,
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "third".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             })
@@ -5806,6 +5810,7 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Pending,
             })
@@ -5857,6 +5862,7 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             })
@@ -6052,6 +6058,7 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Failed {
                     message: "send failed".to_owned(),
@@ -6764,6 +6771,7 @@ mod tests {
             transaction_id: None,
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         });

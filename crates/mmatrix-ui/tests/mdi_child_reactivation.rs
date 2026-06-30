@@ -9,7 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
-    Event, RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageSendState, RoomSummary,
+    Event, RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomSummary,
 };
 use mmatrix_testkit::{LaunchOptions, MmatrixApp};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
@@ -93,6 +94,7 @@ fn sent_message_activity(
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
             sender: sender.to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
