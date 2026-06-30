@@ -1143,14 +1143,13 @@ mod tests {
         DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
         DumpRoomActivityResponse, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
         DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpUnsupportedRoomMessageActivity,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
-        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse,
+        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
+        SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
         parse_command_request, success_response,
     };
 
@@ -2665,8 +2664,10 @@ mod tests {
             }
         );
         assert_eq!(
-            serde_json::to_value(super::dump_room_activity_from_activity(&unsupported_activity))
-                .expect("serialize unsupported dump room activity"),
+            serde_json::to_value(super::dump_room_activity_from_activity(
+                &unsupported_activity
+            ))
+            .expect("serialize unsupported dump room activity"),
             json!({
                 "room_id":"!room:example",
                 "activity_id":"event:$image1:example.org",

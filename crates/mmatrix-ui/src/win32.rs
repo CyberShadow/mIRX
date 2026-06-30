@@ -21,9 +21,8 @@ use mmatrix_core::{
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendMessageRequest, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomSummary, RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -219,9 +218,9 @@ struct LastMessageActivity {
     transaction_id: Option<String>,
     sender: String,
     timestamp_ms: u64,
+    presentation: RoomMessagePresentationKind,
     body: String,
-    presentation: Option<RoomMessagePresentationKind>,
-    send_state: Option<RoomMessageSendState>,
+    send_state: RoomMessageSendState,
 }
 
 impl RoomViewModel {
@@ -510,9 +509,9 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             transaction_id: message.transaction_id.clone(),
             sender: message.sender.clone(),
             timestamp_ms: activity.timestamp_ms,
+            presentation: message.presentation,
             body: message.body.clone(),
-            presentation: Some(message.presentation),
-            send_state: Some(message.send_state.clone()),
+            send_state: message.send_state.clone(),
         }),
         RoomActivityKind::UnsupportedMessage(message) => Some(LastMessageActivity {
             room_id: activity.room_id.clone(),
@@ -520,9 +519,9 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             transaction_id: None,
             sender: message.sender.clone(),
             timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
             body: format!("[unsupported {}] {}", message.msgtype, message.body),
-            presentation: None,
-            send_state: None,
+            send_state: RoomMessageSendState::Sent,
         }),
         RoomActivityKind::StateNotice(_) => None,
     }
@@ -5715,7 +5714,7 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
         last_activity: model
             .last_activity
             .as_ref()
-            .and_then(dump_room_message_activity_line_from_last_activity),
+            .map(dump_room_message_activity_line_from_last_activity),
         e2ee_status: model.last_e2ee_status.clone(),
         last_verification: model
             .last_verification
@@ -5924,14 +5923,8 @@ fn dump_room_activity_entry_from_room_entry(activity: &RoomActivity) -> DumpRoom
 
 fn dump_room_message_activity_line_from_last_activity(
     activity: &LastMessageActivity,
-) -> Option<DumpRoomMessageActivityLine> {
-    let (presentation, send_state) = match (&activity.presentation, &activity.send_state) {
-        (Some(presentation), Some(send_state)) => (*presentation, send_state),
-        (None, None) => return None,
-        _ => panic!("last activity preview must keep presentation and send state aligned"),
-    };
-
-    Some(DumpRoomMessageActivityLine {
+) -> DumpRoomMessageActivityLine {
+    DumpRoomMessageActivityLine {
         room_id: activity.room_id.clone(),
         activity_id: activity
             .event_id
@@ -5948,10 +5941,10 @@ fn dump_room_message_activity_line_from_last_activity(
         event_id: activity.event_id.clone(),
         transaction_id: activity.transaction_id.clone(),
         sender: activity.sender.clone(),
-        presentation,
+        presentation: activity.presentation,
         body: activity.body.clone(),
-        send_state: dump_room_message_send_state_from_core(send_state),
-    })
+        send_state: dump_room_message_send_state_from_core(&activity.send_state),
+    }
 }
 
 fn resolve_timeline_room_id(
@@ -6380,12 +6373,14 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
-            kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-                event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
-                msgtype: msgtype.to_owned(),
-                body: body.to_owned(),
-            }),
+            kind: RoomActivityKind::UnsupportedMessage(
+                mmatrix_core::UnsupportedRoomMessageActivity {
+                    event_id: event_id.to_owned(),
+                    sender: sender.to_owned(),
+                    msgtype: msgtype.to_owned(),
+                    body: body.to_owned(),
+                },
+            ),
         }
     }
 
@@ -6636,9 +6631,9 @@ mod tests {
                 transaction_id: None,
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "third".to_owned(),
-                presentation: Some(RoomMessagePresentationKind::Text),
-                send_state: Some(RoomMessageSendState::Sent),
+                send_state: RoomMessageSendState::Sent,
             })
         );
     }
@@ -6680,9 +6675,9 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Emote,
                 body: "waves".to_owned(),
-                presentation: Some(RoomMessagePresentationKind::Emote),
-                send_state: Some(RoomMessageSendState::Pending),
+                send_state: RoomMessageSendState::Pending,
             })
         );
         assert_eq!(
@@ -6732,9 +6727,9 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
-                presentation: Some(RoomMessagePresentationKind::Text),
-                send_state: Some(RoomMessageSendState::Sent),
+                send_state: RoomMessageSendState::Sent,
             })
         );
         assert_eq!(
@@ -6852,9 +6847,9 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
+                presentation: RoomMessagePresentationKind::Emote,
                 body: "waves".to_owned(),
-                presentation: Some(RoomMessagePresentationKind::Emote),
-                send_state: Some(RoomMessageSendState::Sent),
+                send_state: RoomMessageSendState::Sent,
             })
         );
     }
@@ -6967,12 +6962,12 @@ mod tests {
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                presentation: RoomMessagePresentationKind::Emote,
                 body: "waves".to_owned(),
-                presentation: Some(RoomMessagePresentationKind::Emote),
-                send_state: Some(RoomMessageSendState::Failed {
+                send_state: RoomMessageSendState::Failed {
                     message: "send failed".to_owned(),
                     recoverable: true,
-                }),
+                },
             })
         );
         assert_eq!(
@@ -7849,9 +7844,9 @@ mod tests {
             transaction_id: None,
             sender: "@alice:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
-            presentation: Some(RoomMessagePresentationKind::Text),
-            send_state: Some(RoomMessageSendState::Sent),
+            send_state: RoomMessageSendState::Sent,
         });
         state.model.last_e2ee_status = Some(e2ee_status(
             E2eeRecoveryState::Enabled,
@@ -8182,9 +8177,9 @@ mod tests {
                 transaction_id: None,
                 sender: "@alice:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
                 body: "[unsupported m.image] diagram.png".to_owned(),
-                presentation: None,
-                send_state: None,
+                send_state: RoomMessageSendState::Sent,
             })
         );
     }
