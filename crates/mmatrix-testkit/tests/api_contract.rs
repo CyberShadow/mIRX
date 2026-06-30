@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use mmatrix_core::{Event as CoreEvent, RoomReadState};
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RestoreSessionArgs, RoomActivity, RoomActivityKind,
@@ -621,6 +622,83 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             .expect("deserialize member state-notice activity"),
         activity
     );
+}
+
+#[test]
+fn room_read_state_event_serializes_to_expected_json_shape() {
+    let event = CoreEvent::RoomReadState(RoomReadState {
+        room_id: "!ops:example".to_owned(),
+        latest_active_event_id: Some("$latest:example".to_owned()),
+        fully_read_event_id: Some("$fully-read:example".to_owned()),
+        marked_unread: true,
+        num_unread: 7,
+        num_notifications: 3,
+        num_mentions: 1,
+    });
+
+    assert_eq!(
+        serde_json::to_value(&event).expect("serialize room read state event"),
+        serde_json::json!({
+            "RoomReadState": {
+                "room_id": "!ops:example",
+                "latest_active_event_id": "$latest:example",
+                "fully_read_event_id": "$fully-read:example",
+                "marked_unread": true,
+                "num_unread": 7,
+                "num_notifications": 3,
+                "num_mentions": 1
+            }
+        })
+    );
+}
+
+#[test]
+fn room_read_state_event_deserializes_from_expected_json_shape() {
+    let json = serde_json::json!({
+        "RoomReadState": {
+            "room_id": "!ops:example",
+            "latest_active_event_id": "$latest:example",
+            "fully_read_event_id": "$fully-read:example",
+            "marked_unread": true,
+            "num_unread": 7,
+            "num_notifications": 3,
+            "num_mentions": 1
+        }
+    });
+
+    assert_eq!(
+        serde_json::from_value::<CoreEvent>(json).expect("deserialize room read state event"),
+        CoreEvent::RoomReadState(RoomReadState {
+            room_id: "!ops:example".to_owned(),
+            latest_active_event_id: Some("$latest:example".to_owned()),
+            fully_read_event_id: Some("$fully-read:example".to_owned()),
+            marked_unread: true,
+            num_unread: 7,
+            num_notifications: 3,
+            num_mentions: 1,
+        })
+    );
+}
+
+#[test]
+fn room_read_state_event_rejects_unknown_fields_inside_payload() {
+    let error = serde_json::from_str::<CoreEvent>(
+        r#"{
+            "RoomReadState":{
+                "room_id":"!ops:example",
+                "latest_active_event_id":"$latest:example",
+                "fully_read_event_id":"$fully-read:example",
+                "marked_unread":true,
+                "num_unread":7,
+                "num_notifications":3,
+                "num_mentions":1,
+                "unexpected":true
+            }
+        }"#
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `unexpected`"));
 }
 
 #[test]

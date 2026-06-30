@@ -1,0 +1,43 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!alpha:example",
+        "display_name": "Alpha",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      },
+      {
+        "room_id": "!beta:example",
+        "display_name": "Beta",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomReadState": {
+      "room_id": "!alpha:example",
+      "latest_active_event_id": null,
+      "fully_read_event_id": null,
+      "marked_unread": false,
+      "num_unread": 1,
+      "num_notifications": 0,
+      "num_mentions": 0
+    }
+  },
+  {
+    "RoomReadState": {
+      "room_id": "!beta:example",
+      "latest_active_event_id": null,
+      "fully_read_event_id": null,
+      "marked_unread": false,
+      "num_unread": 0,
+      "num_notifications": 0,
+      "num_mentions": 0
+    }
+  }
+]

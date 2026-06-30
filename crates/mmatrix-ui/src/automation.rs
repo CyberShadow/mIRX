@@ -1023,8 +1023,9 @@ fn parse_args_with_default<T: DeserializeOwned + Default>(
 mod tests {
     use mmatrix_core::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomSummary, SpaceChildSummary,
-        StoredSession, VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomSummary,
+        SpaceChildSummary, StoredSession, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1462,6 +1463,27 @@ mod tests {
                 },
             }
         );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
+                br#"{"id":"append","args":{"events":[{"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}}]}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::AppendSyntheticEvents {
+                id: "append".to_owned(),
+                args: LoadEventsArgs {
+                    events: vec![Event::RoomReadState(RoomReadState {
+                        room_id: "!ops:example".to_owned(),
+                        latest_active_event_id: Some("$latest:example".to_owned()),
+                        fully_read_event_id: Some("$fully-read:example".to_owned()),
+                        marked_unread: true,
+                        num_unread: 7,
+                        num_notifications: 3,
+                        num_mentions: 1,
+                    })],
+                },
+            }
+        );
     }
 
     #[test]
@@ -1521,6 +1543,15 @@ mod tests {
                 flow_id: "flow-1".to_owned(),
                 user_id: "@alice:example".to_owned(),
             }),
+            Event::RoomReadState(RoomReadState {
+                room_id: "!ops:example".to_owned(),
+                latest_active_event_id: Some("$latest:example".to_owned()),
+                fully_read_event_id: Some("$fully-read:example".to_owned()),
+                marked_unread: true,
+                num_unread: 7,
+                num_notifications: 3,
+                num_mentions: 1,
+            }),
             Event::Error(CoreErrorEvent {
                 operation: Operation::SendMessage,
                 message: "send failed".to_owned(),
@@ -1533,6 +1564,7 @@ mod tests {
                 "Started",
                 {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"space_children":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
+                {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","message":"send failed"}}
             ])
         );
@@ -1572,6 +1604,24 @@ mod tests {
                 "err":{
                     "code":"invalid_args",
                     "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `suggested`, `order`"
+                }
+            })
+        );
+
+        let error = parse_command_request(
+            COMMAND_ID_LOAD_SYNTHETIC_STATE,
+            br#"{"id":"load","args":{"events":[{"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1,"unexpected":true}}]}}"#,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({
+                "id":"load",
+                "ok":false,
+                "err":{
+                    "code":"invalid_args",
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `latest_active_event_id`, `fully_read_event_id`, `marked_unread`, `num_unread`, `num_notifications`, `num_mentions`"
                 }
             })
         );
