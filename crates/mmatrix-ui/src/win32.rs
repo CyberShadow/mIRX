@@ -19,9 +19,9 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, Event, LoginRequest,
     MarkRoomReadRequest, Operation, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, StoredSession, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -607,6 +607,45 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
         })
     {
         state.model.last_activity = last_activity_from_room_activity(updated_activity);
+    }
+}
+
+fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadState) {
+    let RoomReadState {
+        room_id,
+        latest_active_event_id,
+        fully_read_event_id,
+        marked_unread,
+        num_unread,
+        num_notifications,
+        num_mentions,
+    } = read_state;
+    if actionable_room_by_id(&state.model.rooms, &room_id).is_none() {
+        return;
+    }
+
+    let has_unread_state =
+        marked_unread || num_unread > 0 || num_notifications > 0 || num_mentions > 0;
+    let clear_read_target = !has_unread_state
+        || state
+            .room_activity_read_targets
+            .get(&room_id)
+            .is_some_and(|target| {
+                Some(target.as_str()) == latest_active_event_id.as_deref()
+                    || Some(target.as_str()) == fully_read_event_id.as_deref()
+            });
+    if clear_read_target {
+        state.room_activity_read_targets.remove(&room_id);
+    }
+
+    let room_is_active = matches!(
+        &state.active_view,
+        ViewId::Room(active_room_id) if active_room_id == &room_id
+    );
+    if has_unread_state && !room_is_active {
+        state.room_activity.insert(room_id);
+    } else {
+        state.room_activity.remove(&room_id);
     }
 }
 
@@ -2458,7 +2497,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
-        Event::RoomReadState(_) => {}
+        Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
         Event::VerificationRequest(request) => {
             let event = verification_state_event_from_request(request);
             state.model.status = verification_status_message(&event);
@@ -5665,6 +5704,26 @@ mod tests {
         })
     }
 
+    fn room_read_state(
+        room_id: &str,
+        latest_active_event_id: Option<&str>,
+        fully_read_event_id: Option<&str>,
+        marked_unread: bool,
+        num_unread: u64,
+        num_notifications: u64,
+        num_mentions: u64,
+    ) -> Event {
+        Event::RoomReadState(RoomReadState {
+            room_id: room_id.to_owned(),
+            latest_active_event_id: latest_active_event_id.map(str::to_owned),
+            fully_read_event_id: fully_read_event_id.map(str::to_owned),
+            marked_unread,
+            num_unread,
+            num_notifications,
+            num_mentions,
+        })
+    }
+
     fn failed_message_activity_with_presentation(
         room_id: &str,
         transaction_id: &str,
@@ -7313,6 +7372,128 @@ mod tests {
         apply_core_event(&mut state, topic_state("!room:example", "incident review")).unwrap();
 
         assert!(!state.room_activity.contains("!room:example"));
+    }
+
+    #[test]
+    fn server_read_state_clears_matching_activity_read_target_without_command() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!room:example", "Room", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+        state.room_activity.insert("!room:example".to_owned());
+        state
+            .room_activity_read_targets
+            .insert("!room:example".to_owned(), "$event".to_owned());
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!room:example", Some("$event"), None, false, 0, 0, 0),
+        )
+        .unwrap();
+
+        assert!(!state.room_activity.contains("!room:example"));
+        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn server_fully_read_marker_clears_matching_activity_read_target_without_command() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!room:example", "Room", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+        state.room_activity.insert("!room:example".to_owned());
+        state
+            .room_activity_read_targets
+            .insert("!room:example".to_owned(), "$event".to_owned());
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!room:example", None, Some("$event"), false, 0, 0, 0),
+        )
+        .unwrap();
+
+        assert!(!state.room_activity.contains("!room:example"));
+        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn server_zero_unread_state_clears_room_activity() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!room:example", "Room", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+        state.room_activity.insert("!room:example".to_owned());
+        state
+            .room_activity_read_targets
+            .insert("!room:example".to_owned(), "$event".to_owned());
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!room:example", None, None, false, 0, 0, 0),
+        )
+        .unwrap();
+
+        assert!(!state.room_activity.contains("!room:example"));
+        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+    }
+
+    #[test]
+    fn server_unread_state_marks_inactive_room_without_local_timeline_event() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!room:example", "Room", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!room:example", None, None, false, 1, 0, 0),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.contains("!room:example"));
+        assert!(!state.room_activity_read_targets.contains_key("!room:example"));
+    }
+
+    #[test]
+    fn server_unread_state_does_not_mark_active_room() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.active_view = ViewId::Room("!room:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!room:example", None, None, false, 1, 0, 0),
+        )
+        .unwrap();
+
+        assert!(!state.room_activity.contains("!room:example"));
+    }
+
+    #[test]
+    fn server_read_state_ignores_unknown_room() {
+        let mut state = test_state();
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!missing:example", None, None, false, 1, 0, 0),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.is_empty());
+        assert!(state.room_activity_read_targets.is_empty());
+        assert!(state.model.rooms.is_empty());
+        assert!(state.model.room_views.is_empty());
+        assert!(state.views.is_empty());
     }
 
     #[test]
