@@ -11,7 +11,7 @@ pub enum Command {
     Login(LoginRequest),
     RestoreSession(RestoreSessionRequest),
     StartSync,
-    SendText(SendTextRequest),
+    SendMessage(SendMessageRequest),
     AcceptVerification(VerificationFlowId),
     CancelVerification(VerificationFlowId),
     ConfirmVerificationSas(VerificationFlowId),
@@ -44,8 +44,9 @@ pub struct StoredSession {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SendTextRequest {
+pub struct SendMessageRequest {
     pub room_id: String,
+    pub presentation: RoomMessagePresentationKind,
     pub body: String,
 }
 
@@ -83,12 +84,21 @@ pub enum RoomActivityKind {
     StateNotice(RoomStateNoticeActivity),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMessagePresentationKind {
+    Text,
+    Notice,
+    Emote,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomMessageActivity {
     pub event_id: Option<String>,
     pub transaction_id: Option<String>,
     pub sender: String,
+    pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub send_state: RoomMessageSendState,
 }
@@ -260,7 +270,7 @@ pub enum Operation {
     RestoreSession,
     SessionUpdate,
     StartSync,
-    SendText,
+    SendMessage,
     Verification,
     Logout,
     Shutdown,

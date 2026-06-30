@@ -1,7 +1,10 @@
 use std::env;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{Command, CoreConfig, Event, LoginRequest, SendTextRequest, start};
+use mmatrix_core::{
+    Command, CoreConfig, Event, LoginRequest, RoomMessagePresentationKind, SendMessageRequest,
+    start,
+};
 use tempfile::TempDir;
 
 fn required_env(name: &str) -> Option<String> {
@@ -192,11 +195,12 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             .as_nanos();
         handle
             .command_sender()
-            .send(Command::SendText(SendTextRequest {
+            .send(Command::SendMessage(SendMessageRequest {
                 room_id,
+                presentation: RoomMessagePresentationKind::Text,
                 body: format!("mmatrix live test {nonce}"),
             }))
-            .expect("send text");
+            .expect("send message");
     }
 
     handle

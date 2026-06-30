@@ -179,7 +179,7 @@ async fn handle_command(
             handle_restore_session(config, event_tx, state, request).await
         }
         Command::StartSync => handle_start_sync(event_tx, state),
-        Command::SendText(request) => handle_send_text(event_tx, state, request).await,
+        Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::AcceptVerification(flow) => {
             handle_accept_verification(event_tx, state, flow).await
         }
@@ -347,22 +347,22 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
     false
 }
 
-async fn handle_send_text(
+async fn handle_send_message(
     event_tx: &EventSender,
     state: &mut WorkerState,
-    request: crate::api::SendTextRequest,
+    request: crate::api::SendMessageRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
         emit_invalid_state(
             event_tx,
-            Operation::SendText,
-            "send text requires an authenticated session",
+            Operation::SendMessage,
+            "send message requires an authenticated session",
         );
         return false;
     };
 
-    if let Err(err) = matrix::send_text(client, request).await {
-        emit_matrix_error(event_tx, Operation::SendText, err);
+    if let Err(err) = matrix::send_message(client, request).await {
+        emit_matrix_error(event_tx, Operation::SendMessage, err);
     }
 
     false

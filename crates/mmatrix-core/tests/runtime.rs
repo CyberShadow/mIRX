@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CoreConfig, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
-    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -120,11 +120,12 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .expect("send start sync");
     handle
         .command_sender()
-        .send(Command::SendText(SendTextRequest {
+        .send(Command::SendMessage(SendMessageRequest {
             room_id: "!room:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
         }))
-        .expect("send text");
+        .expect("send message");
     handle
         .command_sender()
         .send(Command::Logout)
@@ -134,10 +135,10 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .events()
         .recv_timeout(Duration::from_secs(2))
         .expect("start sync error");
-    let send_text_error = handle
+    let send_message_error = handle
         .events()
         .recv_timeout(Duration::from_secs(2))
-        .expect("send text error");
+        .expect("send message error");
     let logout_error = handle
         .events()
         .recv_timeout(Duration::from_secs(2))
@@ -147,9 +148,9 @@ fn invalid_command_ordering_emits_typed_error_events() {
         Event::Error(err) => assert_eq!(err.operation, Operation::StartSync),
         other => panic!("expected start sync error, got {other:?}"),
     }
-    match send_text_error {
-        Event::Error(err) => assert_eq!(err.operation, Operation::SendText),
-        other => panic!("expected send text error, got {other:?}"),
+    match send_message_error {
+        Event::Error(err) => assert_eq!(err.operation, Operation::SendMessage),
+        other => panic!("expected send message error, got {other:?}"),
     }
     match logout_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::Logout),
@@ -456,6 +457,24 @@ fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
 }
 
 #[test]
+fn room_message_presentations_round_trip_through_serde() {
+    for (presentation, json) in [
+        (RoomMessagePresentationKind::Text, r#""text""#),
+        (RoomMessagePresentationKind::Notice, r#""notice""#),
+        (RoomMessagePresentationKind::Emote, r#""emote""#),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&presentation).expect("serialize presentation"),
+            json
+        );
+
+        let restored: RoomMessagePresentationKind =
+            serde_json::from_str(json).expect("deserialize presentation");
+        assert_eq!(restored, presentation);
+    }
+}
+
+#[test]
 fn room_activity_events_round_trip_through_serde() {
     let message_event = Event::RoomActivity(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
@@ -465,6 +484,7 @@ fn room_activity_events_round_trip_through_serde() {
             event_id: Some("$event:example.org".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
@@ -477,6 +497,7 @@ fn room_activity_events_round_trip_through_serde() {
             event_id: None,
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Pending,
         }),
@@ -548,6 +569,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             event_id: None,
             transaction_id: Some("txn-1".to_owned()),
             sender: "@alice:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Pending,
         }),
@@ -577,7 +599,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","body":"hello","send_state":{"state":"pending"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"pending"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
@@ -707,7 +729,7 @@ fn verification_dtos_reject_unknown_fields() {
 fn room_activity_dtos_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<RoomActivity>(
-            r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","body":"hello","send_state":{"state":"sent"}},"unexpected":"value"}"#
+            r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"sent"}},"unexpected":"value"}"#
         )
         .is_err(),
         "room activity must reject unknown fields"
@@ -715,7 +737,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomMessageActivity>(
-            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","body":"hello","send_state":{"state":"sent"},"unexpected":"value"}"#
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"sent"},"unexpected":"value"}"#
         )
         .is_err(),
         "room message activity must reject unknown fields"
@@ -723,10 +745,26 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","body":"hello","send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
         )
         .is_err(),
         "failed message send state must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomMessageActivity>(
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","body":"hello","send_state":{"state":"sent"}}"#
+        )
+        .is_err(),
+        "room message activity must require presentation"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomMessageActivity>(
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":"@alice:example.org","presentation":"html","body":"hello","send_state":{"state":"sent"}}"#
+        )
+        .is_err(),
+        "room message activity must reject unknown presentation"
     );
 
     assert!(

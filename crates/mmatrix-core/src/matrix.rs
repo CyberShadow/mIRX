@@ -39,10 +39,10 @@ use tokio::task::JoinHandle;
 
 use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendTextRequest,
-    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -296,7 +296,9 @@ fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
 ) -> Option<RoomActivity> {
-    let MessageType::Text(text) = &event.content.msgtype else {
+    let Some((presentation, body)) =
+        room_message_presentation_and_body_from_message_type(&event.content.msgtype)
+    else {
         return None;
     };
 
@@ -312,10 +314,24 @@ fn room_activity_from_sync_message(
                 .as_ref()
                 .map(ToString::to_string),
             sender: event.sender.to_string(),
-            body: text.body.to_string(),
+            presentation,
+            body,
             send_state: RoomMessageSendState::Sent,
         }),
     })
+}
+
+fn room_message_presentation_and_body_from_message_type(
+    message_type: &MessageType,
+) -> Option<(RoomMessagePresentationKind, String)> {
+    match message_type {
+        MessageType::Text(text) => Some((RoomMessagePresentationKind::Text, text.body.clone())),
+        MessageType::Notice(notice) => {
+            Some((RoomMessagePresentationKind::Notice, notice.body.clone()))
+        }
+        MessageType::Emote(emote) => Some((RoomMessagePresentationKind::Emote, emote.body.clone())),
+        _ => None,
+    }
 }
 
 fn room_activity_from_sync_topic(
@@ -838,7 +854,7 @@ pub(crate) fn start_send_queue_update_task(
             Err(err) => emit_event(
                 &events,
                 Event::Error(CoreErrorEvent {
-                    operation: Operation::SendText,
+                    operation: Operation::SendMessage,
                     message: format!("failed to hydrate Matrix send queue local echoes: {err}"),
                 }),
             ),
@@ -855,7 +871,7 @@ pub(crate) fn start_send_queue_update_task(
                     Err(err) => emit_event(
                         &events,
                         Event::Error(CoreErrorEvent {
-                            operation: Operation::SendText,
+                            operation: Operation::SendMessage,
                             message: format!("failed to map Matrix send queue update: {err}"),
                         }),
                     ),
@@ -864,7 +880,7 @@ pub(crate) fn start_send_queue_update_task(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
                     &events,
                     Event::Error(CoreErrorEvent {
-                        operation: Operation::SendText,
+                        operation: Operation::SendMessage,
                         message: "missed Matrix send queue update".to_owned(),
                     }),
                 ),
@@ -909,7 +925,7 @@ fn map_send_queue_update(
                     },
                 }),
                 Event::Error(CoreErrorEvent {
-                    operation: Operation::SendText,
+                    operation: Operation::SendMessage,
                     message,
                 }),
             ])
@@ -998,7 +1014,7 @@ fn outgoing_events_from_local_echo_event(
             },
         }));
         events.push(Event::Error(CoreErrorEvent {
-            operation: Operation::SendText,
+            operation: Operation::SendMessage,
             message: send_error,
         }));
     }
@@ -1013,7 +1029,9 @@ fn map_local_message_activity(
     created_at: MilliSecondsSinceUnixEpoch,
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
-    let Some(body) = text_body_from_serialized_event(serialized_event)? else {
+    let Some((presentation, body)) =
+        message_presentation_and_body_from_serialized_event(serialized_event)?
+    else {
         return Ok(None);
     };
 
@@ -1025,31 +1043,42 @@ fn map_local_message_activity(
             event_id: None,
             transaction_id: Some(transaction_id),
             sender: current_user_id.to_owned(),
+            presentation,
             body,
             send_state: RoomMessageSendState::Pending,
         }),
     }))
 }
 
-fn text_body_from_serialized_event(
+fn message_presentation_and_body_from_serialized_event(
     serialized_event: &SerializableEventContent,
-) -> Result<Option<String>, MatrixCoreError> {
+) -> Result<Option<(RoomMessagePresentationKind, String)>, MatrixCoreError> {
     let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
         .deserialize()
         .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
     else {
         return Ok(None);
     };
-    let MessageType::Text(text) = content.msgtype else {
-        return Ok(None);
-    };
 
-    Ok(Some(text.body))
+    Ok(room_message_presentation_and_body_from_message_type(
+        &content.msgtype,
+    ))
 }
 
-pub(crate) async fn send_text(
+fn room_message_event_content(
+    presentation: RoomMessagePresentationKind,
+    body: String,
+) -> RoomMessageEventContent {
+    match presentation {
+        RoomMessagePresentationKind::Text => RoomMessageEventContent::text_plain(body),
+        RoomMessagePresentationKind::Notice => RoomMessageEventContent::notice_plain(body),
+        RoomMessagePresentationKind::Emote => RoomMessageEventContent::emote_plain(body),
+    }
+}
+
+pub(crate) async fn send_message(
     client: &Client,
-    request: SendTextRequest,
+    request: SendMessageRequest,
 ) -> Result<(), MatrixCoreError> {
     let room = client
         .joined_rooms()
@@ -1059,12 +1088,12 @@ pub(crate) async fn send_text(
             MatrixCoreError::new(format!("joined room not found: {}", request.room_id))
         })?;
 
-    let content = RoomMessageEventContent::text_plain(request.body);
+    let content = room_message_event_content(request.presentation, request.body);
 
     room.send_queue()
         .send(AnyMessageLikeEventContent::RoomMessage(content))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix text: {err}")))?;
+        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message: {err}")))?;
 
     Ok(())
 }
@@ -1091,17 +1120,19 @@ mod tests {
 
     use super::{
         cancelled_state, map_decimals, map_emoji_array, map_emoji_short_auth_string,
-        map_local_message_activity, map_send_queue_update, outgoing_events_from_local_echo_event,
+        map_local_message_activity, map_send_queue_update,
+        message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_typing_from_sync_typing,
-        text_body_from_serialized_event, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        room_activity_from_sync_topic, room_message_event_content, room_typing_from_sync_typing,
+        verification_flow_id_from_to_device, verification_request_from_to_device,
+        verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-        RoomActivityUpdateKind, RoomMessageActivity, RoomMessageSendState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTyping, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
+        RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
+        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
@@ -1227,6 +1258,7 @@ mod tests {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: Some("txn-1".to_owned()),
                     sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Sent,
                 }),
@@ -1235,7 +1267,7 @@ mod tests {
     }
 
     #[test]
-    fn non_text_sync_message_mapping_is_ignored() {
+    fn notice_sync_message_mapping_preserves_activity_fields() {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": {
@@ -1247,6 +1279,71 @@ mod tests {
             "origin_server_ts": 1700000000000u64
         }))
         .expect("deserialize sync notice event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$event:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$event:example.org".to_owned()),
+                    transaction_id: None,
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Notice,
+                    body: "heads up".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn emote_sync_message_mapping_preserves_activity_fields() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.emote",
+                "body": "waves"
+            },
+            "event_id": "$event:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000000u64
+        }))
+        .expect("deserialize sync emote event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$event:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$event:example.org".to_owned()),
+                    transaction_id: None,
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "waves".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn unsupported_sync_message_mapping_is_ignored() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.image",
+                "body": "ignored",
+                "url": "mxc://example.org/image"
+            },
+            "event_id": "$event:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000000u64
+        }))
+        .expect("deserialize sync image event");
 
         assert_eq!(
             room_activity_from_sync_message("!room:example.org", &event),
@@ -1464,6 +1561,7 @@ mod tests {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
                     sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Pending,
                 }),
@@ -1472,15 +1570,94 @@ mod tests {
     }
 
     #[test]
-    fn text_body_extraction_ignores_non_text_local_echoes() {
+    fn local_notice_queue_mapping_extracts_public_metadata() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
         let serialized_event =
             SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(
                 RoomMessageEventContent::notice_plain("heads up"),
             ))
             .expect("serialize notice event");
 
+        let activity = map_local_message_activity(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+        )
+        .expect("map local notice")
+        .expect("notice local echo");
+
         assert_eq!(
-            text_body_from_serialized_event(&serialized_event).expect("read local echo body"),
+            activity,
+            RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Notice,
+                    body: "heads up".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn local_emote_queue_mapping_extracts_public_metadata() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let serialized_event = SerializableEventContent::new(
+            &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::emote_plain("waves")),
+        )
+        .expect("serialize emote event");
+
+        let activity = map_local_message_activity(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+        )
+        .expect("map local emote")
+        .expect("emote local echo");
+
+        assert_eq!(
+            activity,
+            RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "waves".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn unsupported_local_echo_message_is_ignored() {
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(
+                serde_json::from_value(serde_json::json!({
+                    "msgtype": "m.image",
+                    "body": "ignored",
+                    "url": "mxc://example.org/image"
+                }))
+                .expect("deserialize image content"),
+            ))
+            .expect("serialize image event");
+
+        assert_eq!(
+            message_presentation_and_body_from_serialized_event(&serialized_event)
+                .expect("read local echo body"),
             None
         );
     }
@@ -1539,6 +1716,7 @@ mod tests {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
                     sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Pending,
                 }),
@@ -1575,6 +1753,7 @@ mod tests {
                         event_id: None,
                         transaction_id: Some("txn-1".to_owned()),
                         sender: "@alice:example.org".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
                         body: "hello".to_owned(),
                         send_state: RoomMessageSendState::Pending,
                     }),
@@ -1588,7 +1767,7 @@ mod tests {
                     },
                 }),
                 Event::Error(CoreErrorEvent {
-                    operation: Operation::SendText,
+                    operation: Operation::SendMessage,
                     message: "Other unrecoverable error: wedged".to_owned(),
                 }),
             ]
@@ -1624,10 +1803,33 @@ mod tests {
                     },
                 }),
                 Event::Error(CoreErrorEvent {
-                    operation: Operation::SendText,
+                    operation: Operation::SendMessage,
                     message: "send failed".to_owned(),
                 }),
             ]
         );
+    }
+
+    #[test]
+    fn room_message_event_content_serializes_expected_msgtypes() {
+        let text = serde_json::to_value(room_message_event_content(
+            RoomMessagePresentationKind::Text,
+            "hello".to_owned(),
+        ))
+        .expect("serialize text content");
+        let notice = serde_json::to_value(room_message_event_content(
+            RoomMessagePresentationKind::Notice,
+            "heads up".to_owned(),
+        ))
+        .expect("serialize notice content");
+        let emote = serde_json::to_value(room_message_event_content(
+            RoomMessagePresentationKind::Emote,
+            "waves".to_owned(),
+        ))
+        .expect("serialize emote content");
+
+        assert_eq!(text["msgtype"], "m.text");
+        assert_eq!(notice["msgtype"], "m.notice");
+        assert_eq!(emote["msgtype"], "m.emote");
     }
 }
