@@ -1,9 +1,22 @@
 use std::env;
+use std::error::Error;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use matrix_sdk::{
+    Client, Room,
+    config::SyncSettings,
+    ruma::{
+        OwnedEventId, RoomId,
+        api::client::config::get_room_account_data,
+        events::{
+            RoomAccountDataEventType, fully_read::FullyReadEventContent,
+            room::message::RoomMessageEventContent,
+        },
+    },
+};
 use mmatrix_core::{
-    Command, CoreConfig, Event, LoginRequest, RoomMessagePresentationKind, SendMessageRequest,
-    start,
+    Command, CoreConfig, CoreHandle, Event, LoginRequest, MarkRoomReadRequest,
+    RoomMessagePresentationKind, SendMessageRequest, StoredSession, start,
 };
 use tempfile::TempDir;
 
@@ -14,19 +27,45 @@ fn required_env(name: &str) -> Option<String> {
     }
 }
 
-#[test]
-fn live_matrix_login_and_shutdown_is_env_gated() {
-    let Some(homeserver_url) = required_env("MMATRIX_HS") else {
-        return;
-    };
-    let Some(username) = required_env("MMATRIX_USER") else {
-        return;
-    };
-    let Some(password) = required_env("MMATRIX_PASS") else {
-        return;
-    };
-    let room_id = required_env("MMATRIX_ROOM");
+struct LiveMatrixEnv {
+    homeserver_url: String,
+    username: String,
+    password: String,
+    room_id: String,
+}
 
+fn live_matrix_env_with_room() -> Option<LiveMatrixEnv> {
+    Some(LiveMatrixEnv {
+        homeserver_url: required_env("MMATRIX_HS")?,
+        username: required_env("MMATRIX_USER")?,
+        password: required_env("MMATRIX_PASS")?,
+        room_id: required_env("MMATRIX_ROOM")?,
+    })
+}
+
+fn assert_non_empty_session(session: &StoredSession, context: &str) {
+    assert!(
+        !session.user_id.is_empty(),
+        "expected non-empty {context} user id"
+    );
+    assert!(
+        !session.device_id.is_empty(),
+        "expected non-empty {context} device id"
+    );
+    assert!(
+        !session.access_token.is_empty(),
+        "expected non-empty {context} access token"
+    );
+}
+
+fn live_nonce() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time after unix epoch")
+        .as_nanos()
+}
+
+fn live_start_core() -> (TempDir, CoreHandle) {
     let temp_dir = TempDir::new().expect("temporary profile directory");
     let handle = start(CoreConfig {
         profile_dir: temp_dir.path().join("profile"),
@@ -42,16 +81,28 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
         Event::Started
     );
 
+    (temp_dir, handle)
+}
+
+fn live_send_login(
+    handle: &CoreHandle,
+    homeserver_url: String,
+    username: String,
+    password: String,
+    device_display_name: &str,
+) {
     handle
         .command_sender()
         .send(Command::Login(LoginRequest {
             homeserver_url,
             username,
             password,
-            device_display_name: "mmatrix live test".to_owned(),
+            device_display_name: device_display_name.to_owned(),
         }))
         .expect("send login");
+}
 
+fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
     let login_deadline = Instant::now() + Duration::from_secs(60);
     let mut saw_logged_in = false;
     let mut saw_rooms = false;
@@ -63,33 +114,11 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             .expect("login event")
         {
             Event::LoggedIn { session } => {
-                assert!(
-                    !session.user_id.is_empty(),
-                    "expected non-empty session user id"
-                );
-                assert!(
-                    !session.device_id.is_empty(),
-                    "expected non-empty session device id"
-                );
-                assert!(
-                    !session.access_token.is_empty(),
-                    "expected non-empty session access token"
-                );
+                assert_non_empty_session(&session, "session");
                 saw_logged_in = true;
             }
             Event::SessionUpdated { session } => {
-                assert!(
-                    !session.user_id.is_empty(),
-                    "expected non-empty session update user id"
-                );
-                assert!(
-                    !session.device_id.is_empty(),
-                    "expected non-empty session update device id"
-                );
-                assert!(
-                    !session.access_token.is_empty(),
-                    "expected non-empty session update access token"
-                );
+                assert_non_empty_session(&session, "session update");
             }
             Event::SyncedRooms(_) => saw_rooms = true,
             Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
@@ -103,6 +132,152 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
 
     assert!(saw_logged_in, "expected logged-in event");
     assert!(saw_rooms, "expected room sync event");
+}
+
+fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
+    let logout_deadline = Instant::now() + Duration::from_secs(30);
+    let mut saw_logged_out = false;
+
+    while Instant::now() < logout_deadline {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("logout event")
+        {
+            Event::LoggedOut => {
+                saw_logged_out = true;
+                break;
+            }
+            Event::SessionUpdated { session } => {
+                assert_non_empty_session(&session, "session update");
+            }
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::Error(err) => {
+                panic!(
+                    "{context} failed during {:?}: {}",
+                    err.operation, err.message
+                )
+            }
+            other => panic!("unexpected logout event: {other:?}"),
+        }
+    }
+
+    assert!(saw_logged_out, "timed out waiting for logged out event");
+}
+
+fn live_shutdown_and_join(handle: CoreHandle) {
+    handle
+        .command_sender()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+
+    let stop_deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < stop_deadline {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("shutdown event")
+        {
+            Event::Stopped => {
+                handle.join().expect("join worker");
+                return;
+            }
+            Event::SessionUpdated { session } => {
+                assert_non_empty_session(&session, "session update");
+            }
+            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::Error(err) => {
+                panic!(
+                    "live shutdown failed during {:?}: {}",
+                    err.operation, err.message
+                )
+            }
+            other => panic!("unexpected shutdown event: {other:?}"),
+        }
+    }
+
+    panic!("timed out waiting for stopped event");
+}
+
+async fn live_fixture_client_from_env_values(
+    hs: &str,
+    user: &str,
+    pass: &str,
+) -> Result<Client, Box<dyn Error + Send + Sync>> {
+    let client = Client::builder().homeserver_url(hs).build().await?;
+    client
+        .matrix_auth()
+        .login_username(user, pass)
+        .initial_device_display_name("mmatrix live fixture")
+        .send()
+        .await?;
+    Ok(client)
+}
+
+async fn live_room_from_env_value(client: &Client, room_id: &str) -> matrix_sdk::Result<Room> {
+    let room_id =
+        <&RoomId>::try_from(room_id).expect("MMATRIX_ROOM must be a valid Matrix room id");
+    client.sync_once(SyncSettings::default()).await?;
+    Ok(client
+        .get_room(room_id)
+        .expect("MMATRIX_ROOM must be visible to the fixture client after sync"))
+}
+
+async fn live_direct_text_message_event_id(
+    room: &Room,
+    body: String,
+) -> matrix_sdk::Result<OwnedEventId> {
+    Ok(room
+        .send(RoomMessageEventContent::text_plain(body))
+        .await?
+        .response
+        .event_id)
+}
+
+async fn live_get_fully_read_marker(
+    client: &Client,
+    room: &Room,
+) -> matrix_sdk::Result<OwnedEventId> {
+    let user_id = client
+        .user_id()
+        .expect("fixture client must have a user id after login")
+        .to_owned();
+    let response = client
+        .send(get_room_account_data::v3::Request::new(
+            user_id,
+            room.room_id().to_owned(),
+            RoomAccountDataEventType::FullyRead,
+        ))
+        .await?;
+    let content = response
+        .account_data
+        .deserialize_as_unchecked::<FullyReadEventContent>()
+        .expect("m.fully_read account data must deserialize as FullyReadEventContent");
+    Ok(content.event_id)
+}
+
+#[test]
+fn live_matrix_login_and_shutdown_is_env_gated() {
+    let Some(homeserver_url) = required_env("MMATRIX_HS") else {
+        return;
+    };
+    let Some(username) = required_env("MMATRIX_USER") else {
+        return;
+    };
+    let Some(password) = required_env("MMATRIX_PASS") else {
+        return;
+    };
+    let room_id = required_env("MMATRIX_ROOM");
+
+    let (_temp_dir, handle) = live_start_core();
+    live_send_login(
+        &handle,
+        homeserver_url,
+        username,
+        password,
+        "mmatrix live test",
+    );
+    wait_for_live_login_and_synced_rooms(&handle);
 
     handle
         .command_sender()
@@ -122,18 +297,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 break;
             }
             Event::SessionUpdated { session } => {
-                assert!(
-                    !session.user_id.is_empty(),
-                    "expected non-empty session update user id"
-                );
-                assert!(
-                    !session.device_id.is_empty(),
-                    "expected non-empty session update device id"
-                );
-                assert!(
-                    !session.access_token.is_empty(),
-                    "expected non-empty session update access token"
-                );
+                assert_non_empty_session(&session, "session update");
             }
             Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
             Event::Error(err) => panic!(
@@ -165,18 +329,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 break;
             }
             Event::SessionUpdated { session } => {
-                assert!(
-                    !session.user_id.is_empty(),
-                    "expected non-empty session update user id"
-                );
-                assert!(
-                    !session.device_id.is_empty(),
-                    "expected non-empty session update device id"
-                );
-                assert!(
-                    !session.access_token.is_empty(),
-                    "expected non-empty session update access token"
-                );
+                assert_non_empty_session(&session, "session update");
             }
             Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
             other => panic!("unexpected duplicate start sync event: {other:?}"),
@@ -189,10 +342,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
     );
 
     if let Some(room_id) = room_id {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time after unix epoch")
-            .as_nanos();
+        let nonce = live_nonce();
         handle
             .command_sender()
             .send(Command::SendMessage(SendMessageRequest {
@@ -208,83 +358,66 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
         .send(Command::Logout)
         .expect("send logout");
 
-    let logout_deadline = Instant::now() + Duration::from_secs(30);
-    let mut saw_logged_out = false;
-    while Instant::now() < logout_deadline {
-        match handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("logout event")
-        {
-            Event::LoggedOut => {
-                saw_logged_out = true;
-                break;
-            }
-            Event::SessionUpdated { session } => {
-                assert!(
-                    !session.user_id.is_empty(),
-                    "expected non-empty session update user id"
-                );
-                assert!(
-                    !session.device_id.is_empty(),
-                    "expected non-empty session update device id"
-                );
-                assert!(
-                    !session.access_token.is_empty(),
-                    "expected non-empty session update access token"
-                );
-            }
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
-            Event::Error(err) => panic!(
-                "live post-login command failed during {:?}: {}",
-                err.operation, err.message
-            ),
-            other => panic!("unexpected logout event: {other:?}"),
-        }
-    }
+    wait_for_live_logged_out(&handle, "live post-login command");
+    live_shutdown_and_join(handle);
+}
 
-    assert!(saw_logged_out, "timed out waiting for logged out event");
+#[test]
+fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
+    let Some(env) = live_matrix_env_with_room() else {
+        return;
+    };
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build live fixture runtime");
+
+    let (_temp_dir, handle) = live_start_core();
+    live_send_login(
+        &handle,
+        env.homeserver_url.clone(),
+        env.username.clone(),
+        env.password.clone(),
+        "mmatrix live read marker test",
+    );
+    wait_for_live_login_and_synced_rooms(&handle);
+
+    let fixture_client = runtime
+        .block_on(live_fixture_client_from_env_values(
+            &env.homeserver_url,
+            &env.username,
+            &env.password,
+        ))
+        .expect("create fixture client");
+    let room = runtime
+        .block_on(live_room_from_env_value(&fixture_client, &env.room_id))
+        .expect("resolve MMATRIX_ROOM into a joined room");
+    let event_id = runtime
+        .block_on(live_direct_text_message_event_id(
+            &room,
+            format!("mmatrix live read marker test {}", live_nonce()),
+        ))
+        .expect("send fixture direct text message");
 
     handle
         .command_sender()
-        .send(Command::Shutdown)
-        .expect("send shutdown");
+        .send(Command::MarkRoomRead(MarkRoomReadRequest {
+            room_id: env.room_id.clone(),
+            event_id: event_id.to_string(),
+        }))
+        .expect("send mark room read");
+    handle
+        .command_sender()
+        .send(Command::Logout)
+        .expect("send logout");
 
-    let stop_deadline = Instant::now() + Duration::from_secs(15);
-    while Instant::now() < stop_deadline {
-        match handle
-            .events()
-            .recv_timeout(Duration::from_secs(2))
-            .expect("shutdown event")
-        {
-            Event::Stopped => {
-                handle.join().expect("join worker");
-                return;
-            }
-            Event::SessionUpdated { session } => {
-                assert!(
-                    !session.user_id.is_empty(),
-                    "expected non-empty session update user id"
-                );
-                assert!(
-                    !session.device_id.is_empty(),
-                    "expected non-empty session update device id"
-                );
-                assert!(
-                    !session.access_token.is_empty(),
-                    "expected non-empty session update access token"
-                );
-            }
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
-            Event::Error(err) => {
-                panic!(
-                    "live shutdown failed during {:?}: {}",
-                    err.operation, err.message
-                )
-            }
-            other => panic!("unexpected shutdown event: {other:?}"),
-        }
-    }
+    wait_for_live_logged_out(&handle, "live mark room read");
 
-    panic!("timed out waiting for stopped event");
+    let fully_read_event_id = runtime
+        .block_on(live_get_fully_read_marker(&fixture_client, &room))
+        .expect("query m.fully_read room account data");
+    assert_eq!(fully_read_event_id, event_id);
+
+    live_shutdown_and_join(handle);
 }

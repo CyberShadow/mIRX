@@ -37,9 +37,14 @@ Live Matrix checks are opt-in and use:
 - `MMATRIX_PASS`
 - optional `MMATRIX_ROOM`
 
+Missing or empty `MMATRIX_HS`, `MMATRIX_USER`, or `MMATRIX_PASS` makes the live Matrix tests return early without network access.
+
 Supported live checks:
 
 ```sh
+MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... MMATRIX_ROOM=... \
+  nix develop -c cargo test -p mmatrix-core --test live_matrix
+
 MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... \
   nix develop -c cargo test -p mmatrix-core --test live_matrix
 
@@ -47,7 +52,7 @@ MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... MMATRIX_ROOM=... \
   nix develop -c cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver live_matrix_ui_session
 ```
 
-Omit `MMATRIX_ROOM` to verify login, restore, sync, and logout without send coverage.
+`MMATRIX_ROOM` is optional for the existing login, restore, sync, and logout coverage. It is required for send coverage and for the fully-read marker verification in `live_matrix`. `MMATRIX_ROOM` must be a room the account has already joined; the live test creates the event-backed message itself before issuing `MarkRoomRead`.
 
 The UI session file still lives at `%LOCALAPPDATA%\mmatrix\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mmatrix\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
 
