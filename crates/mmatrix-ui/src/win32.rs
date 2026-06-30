@@ -2458,6 +2458,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
+        Event::RoomReadState(_) => {}
         Event::VerificationRequest(request) => {
             let event = verification_state_event_from_request(request);
             state.model.status = verification_status_message(&event);
@@ -5412,6 +5413,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::StartSync => "start sync",
         Operation::SendMessage => "send text",
         Operation::MarkRoomRead => "mark room read",
+        Operation::RoomReadState => "room read state",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",

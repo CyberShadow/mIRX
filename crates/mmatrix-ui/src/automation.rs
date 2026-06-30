@@ -721,6 +721,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::StartSync => "start_sync",
         Operation::SendMessage => "send_text",
         Operation::MarkRoomRead => "mark_room_read",
+        Operation::RoomReadState => "room_read_state",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",

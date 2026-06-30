@@ -9,9 +9,10 @@ pub use api::{
     Command, CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation,
     RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SpaceChildSummary, StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

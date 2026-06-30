@@ -102,6 +102,7 @@ enum WorkerState {
         sync_task: Option<TokioJoinHandle<()>>,
         session_update_task: TokioJoinHandle<()>,
         send_queue_update_task: TokioJoinHandle<()>,
+        room_read_state_update_task: TokioJoinHandle<()>,
         verification_tasks: HashMap<(String, String), TokioJoinHandle<()>>,
     },
 }
@@ -241,19 +242,45 @@ async fn handle_login(
         session.user_id.clone(),
         event_tx.clone(),
     );
+    let room_read_state_update_task =
+        match matrix::start_room_read_state_update_task(client.clone(), event_tx.clone()) {
+            Ok(task) => task,
+            Err(err) => {
+                emit_event(
+                    event_tx,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::RoomReadState,
+                        message: format!(
+                            "failed to subscribe Matrix event cache for room read-state updates: {err}"
+                        ),
+                    }),
+                );
+                tokio::task::spawn_local(async {})
+            }
+        };
     let rooms = matrix::initial_room_sync(&client).await;
+    let room_read_states = rooms
+        .as_ref()
+        .ok()
+        .map(|_| matrix::summarize_joined_room_read_states(&client));
 
     *state = WorkerState::Ready {
         client,
         sync_task: None,
         session_update_task,
         send_queue_update_task,
+        room_read_state_update_task,
         verification_tasks: HashMap::new(),
     };
     emit_event(event_tx, Event::LoggedIn { session });
 
     match rooms {
-        Ok(rooms) => emit_event(event_tx, Event::SyncedRooms(rooms)),
+        Ok(rooms) => {
+            emit_event(event_tx, Event::SyncedRooms(rooms));
+            for read_state in room_read_states.expect("read states exist after successful sync") {
+                emit_event(event_tx, Event::RoomReadState(read_state));
+            }
+        }
         Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
     }
 
@@ -299,19 +326,45 @@ async fn handle_restore_session(
     let session_update_task = matrix::start_session_update_task(client.clone(), event_tx.clone());
     let send_queue_update_task =
         matrix::start_send_queue_update_task(client.clone(), current_user_id, event_tx.clone());
+    let room_read_state_update_task =
+        match matrix::start_room_read_state_update_task(client.clone(), event_tx.clone()) {
+            Ok(task) => task,
+            Err(err) => {
+                emit_event(
+                    event_tx,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::RoomReadState,
+                        message: format!(
+                            "failed to subscribe Matrix event cache for room read-state updates: {err}"
+                        ),
+                    }),
+                );
+                tokio::task::spawn_local(async {})
+            }
+        };
     let rooms = matrix::initial_room_sync(&client).await;
+    let room_read_states = rooms
+        .as_ref()
+        .ok()
+        .map(|_| matrix::summarize_joined_room_read_states(&client));
 
     *state = WorkerState::Ready {
         client,
         sync_task: None,
         session_update_task,
         send_queue_update_task,
+        room_read_state_update_task,
         verification_tasks: HashMap::new(),
     };
     emit_event(event_tx, Event::RestoredSession);
 
     match rooms {
-        Ok(rooms) => emit_event(event_tx, Event::SyncedRooms(rooms)),
+        Ok(rooms) => {
+            emit_event(event_tx, Event::SyncedRooms(rooms));
+            for read_state in room_read_states.expect("read states exist after successful sync") {
+                emit_event(event_tx, Event::RoomReadState(read_state));
+            }
+        }
         Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
     }
 
@@ -490,6 +543,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
         sync_task,
         session_update_task,
         send_queue_update_task,
+        room_read_state_update_task,
         verification_tasks,
     } = state
     else {
@@ -504,6 +558,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     abort_sync_task(sync_task);
     session_update_task.abort();
     send_queue_update_task.abort();
+    room_read_state_update_task.abort();
     abort_verification_tasks(verification_tasks);
 
     if let Err(err) = matrix::logout(client.clone()).await {
@@ -521,6 +576,7 @@ fn shutdown_state(state: &mut WorkerState) {
         sync_task,
         session_update_task,
         send_queue_update_task,
+        room_read_state_update_task,
         verification_tasks,
         ..
     } = state
@@ -528,6 +584,7 @@ fn shutdown_state(state: &mut WorkerState) {
         abort_sync_task(sync_task);
         session_update_task.abort();
         send_queue_update_task.abort();
+        room_read_state_update_task.abort();
         abort_verification_tasks(verification_tasks);
     }
 
@@ -661,6 +718,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 sync_task: Some(existing_task),
+                room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 verification_tasks: HashMap::new(),
@@ -681,6 +739,7 @@ mod tests {
 
             if let WorkerState::Ready {
                 sync_task,
+                room_read_state_update_task,
                 session_update_task,
                 send_queue_update_task,
                 ..
@@ -689,6 +748,7 @@ mod tests {
                 if let Some(task) = sync_task.take() {
                     task.abort();
                 }
+                room_read_state_update_task.abort();
                 session_update_task.abort();
                 send_queue_update_task.abort();
             }
@@ -713,6 +773,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 sync_task: None,
+                room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 session_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 send_queue_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 verification_tasks: HashMap::from([(

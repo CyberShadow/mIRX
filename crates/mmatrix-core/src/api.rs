@@ -155,6 +155,18 @@ pub struct RoomTyping {
     pub user_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomReadState {
+    pub room_id: String,
+    pub latest_active_event_id: Option<String>,
+    pub fully_read_event_id: Option<String>,
+    pub marked_unread: bool,
+    pub num_unread: u64,
+    pub num_notifications: u64,
+    pub num_mentions: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityUpdateKind {
@@ -280,6 +292,7 @@ pub enum Operation {
     StartSync,
     SendMessage,
     MarkRoomRead,
+    RoomReadState,
     Verification,
     Logout,
     Shutdown,
@@ -296,6 +309,7 @@ pub enum Event {
     RoomActivity(RoomActivity),
     RoomActivityUpdate(RoomActivityUpdate),
     RoomTyping(RoomTyping),
+    RoomReadState(RoomReadState),
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),
     LoggedOut,

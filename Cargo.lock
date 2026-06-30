@@ -2036,6 +2036,7 @@ dependencies = [
  "blake3",
  "futures-util",
  "matrix-sdk",
+ "matrix-sdk-base",
  "serde",
  "serde_json",
  "tempfile",

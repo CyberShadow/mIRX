@@ -3,10 +3,11 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CoreConfig, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -672,6 +673,29 @@ fn room_typing_event_round_trips_through_serde() {
 }
 
 #[test]
+fn room_read_state_event_round_trips_through_serde() {
+    let event = Event::RoomReadState(RoomReadState {
+        room_id: "!ops:example.org".to_owned(),
+        latest_active_event_id: Some("$latest:example.org".to_owned()),
+        fully_read_event_id: Some("$fully-read:example.org".to_owned()),
+        marked_unread: true,
+        num_unread: 7,
+        num_notifications: 3,
+        num_mentions: 1,
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize room read state event");
+    assert_eq!(
+        json,
+        r#"{"RoomReadState":{"room_id":"!ops:example.org","latest_active_event_id":"$latest:example.org","fully_read_event_id":"$fully-read:example.org","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}}"#
+    );
+
+    let restored: Event =
+        serde_json::from_str(&json).expect("deserialize room read state event");
+    assert_eq!(restored, event);
+}
+
+#[test]
 fn verification_request_event_preserves_existing_passive_wire_shape() {
     let event = Event::VerificationRequest(VerificationRequest {
         flow_id: "txn-123".to_owned(),
@@ -853,6 +877,14 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "room typing must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomReadState>(
+            r#"{"room_id":"!ops:example.org","latest_active_event_id":"$latest:example.org","fully_read_event_id":"$fully-read:example.org","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room read state must reject unknown fields"
     );
 }
 

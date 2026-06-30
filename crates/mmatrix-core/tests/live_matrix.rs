@@ -121,7 +121,10 @@ fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
                 assert_non_empty_session(&session, "session update");
             }
             Event::SyncedRooms(_) => saw_rooms = true,
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomReadState(_) => {}
             Event::Error(err) => panic!(
                 "live login failed during {:?}: {}",
                 err.operation, err.message
@@ -151,7 +154,10 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomReadState(_) => {}
             Event::Error(err) => {
                 panic!(
                     "{context} failed during {:?}: {}",
@@ -185,7 +191,10 @@ fn live_shutdown_and_join(handle: CoreHandle) {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomReadState(_) => {}
             Event::Error(err) => {
                 panic!(
                     "live shutdown failed during {:?}: {}",
@@ -299,7 +308,10 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomReadState(_) => {}
             Event::Error(err) => panic!(
                 "live start sync failed during {:?}: {}",
                 err.operation, err.message
@@ -331,7 +343,10 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::SessionUpdated { session } => {
                 assert_non_empty_session(&session, "session update");
             }
-            Event::RoomActivity(_) | Event::RoomActivityUpdate(_) | Event::RoomTyping(_) => {}
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomReadState(_) => {}
             other => panic!("unexpected duplicate start sync event: {other:?}"),
         }
     }

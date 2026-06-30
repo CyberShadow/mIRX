@@ -36,12 +36,13 @@ use matrix_sdk::{
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
 };
+use matrix_sdk_base::{RoomInfoNotableUpdateReasons, read_receipts::RoomReadReceipts};
 use tokio::task::JoinHandle;
 
 use crate::api::{
     CoreConfig, CoreErrorEvent, Event, LoginRequest, MarkRoomReadRequest, Operation, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
     StoredSession, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
@@ -181,6 +182,53 @@ pub(crate) async fn summarize_joined_rooms(
     }
 
     Ok(rooms)
+}
+
+pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons) -> bool {
+    reasons.intersects(
+        RoomInfoNotableUpdateReasons::READ_RECEIPT
+            | RoomInfoNotableUpdateReasons::FULLY_READ
+            | RoomInfoNotableUpdateReasons::UNREAD_MARKER,
+    )
+}
+
+pub(crate) fn room_read_state_from_room(room: &Room) -> RoomReadState {
+    let receipts = room.read_receipts();
+    let fully_read_event_id = room.fully_read_event_id();
+    room_read_state_from_parts(
+        room.room_id().as_str(),
+        &receipts,
+        fully_read_event_id.as_deref(),
+        room.is_marked_unread(),
+    )
+}
+
+pub(crate) fn room_read_state_from_parts(
+    room_id: &str,
+    receipts: &RoomReadReceipts,
+    fully_read_event_id: Option<&EventId>,
+    marked_unread: bool,
+) -> RoomReadState {
+    RoomReadState {
+        room_id: room_id.to_owned(),
+        latest_active_event_id: receipts
+            .latest_active
+            .as_ref()
+            .map(|receipt| receipt.event_id.to_string()),
+        fully_read_event_id: fully_read_event_id.map(ToString::to_string),
+        marked_unread,
+        num_unread: receipts.num_unread,
+        num_notifications: receipts.num_notifications,
+        num_mentions: receipts.num_mentions,
+    }
+}
+
+pub(crate) fn summarize_joined_room_read_states(client: &Client) -> Vec<RoomReadState> {
+    client
+        .joined_rooms()
+        .into_iter()
+        .map(|room| room_read_state_from_room(&room))
+        .collect()
 }
 
 async fn summarize_space_children(
@@ -804,6 +852,49 @@ pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle
     })
 }
 
+pub(crate) fn start_room_read_state_update_task(
+    client: Client,
+    events: EventSender,
+) -> Result<JoinHandle<()>, matrix_sdk::event_cache::EventCacheError> {
+    client.event_cache().subscribe()?;
+    let mut updates = client.room_info_notable_update_receiver();
+
+    Ok(tokio::task::spawn_local(async move {
+        loop {
+            match updates.recv().await {
+                Ok(update) => {
+                    if !room_read_update_is_relevant(update.reasons) {
+                        continue;
+                    }
+
+                    let Some(room) = client.get_room(&update.room_id) else {
+                        continue;
+                    };
+
+                    if events
+                        .send(Event::RoomReadState(room_read_state_from_room(&room)))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if events
+                        .send(Event::Error(CoreErrorEvent {
+                            operation: Operation::RoomReadState,
+                            message: "missed Matrix room read-state update".to_owned(),
+                        }))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+    }))
+}
+
 pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
     let mut session_changes = client.subscribe_to_session_changes();
 
@@ -1148,6 +1239,7 @@ mod tests {
         cancelled_state, map_decimals, map_emoji_array, map_emoji_short_auth_string,
         map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
+        room_read_state_from_parts, room_read_update_is_relevant,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_message_event_content, room_typing_from_sync_typing,
         verification_flow_id_from_to_device, verification_request_from_to_device,
@@ -1156,9 +1248,9 @@ mod tests {
     use crate::api::{
         CoreErrorEvent, Event, Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
-        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+        RoomStateNoticeContent, RoomTyping, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
@@ -1178,6 +1270,10 @@ mod tests {
         send_queue::{RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
     };
+    use matrix_sdk_base::{
+        RoomInfoNotableUpdateReasons,
+        read_receipts::{LatestReadReceipt, RoomReadReceipts},
+    };
 
     fn room_id() -> OwnedRoomId {
         OwnedRoomId::try_from("!room:example.org").expect("valid room id")
@@ -1189,6 +1285,14 @@ mod tests {
 
     fn event_id() -> OwnedEventId {
         OwnedEventId::try_from("$event:example.org").expect("valid event id")
+    }
+
+    fn latest_event_id() -> OwnedEventId {
+        OwnedEventId::try_from("$latest:example.org").expect("valid latest event id")
+    }
+
+    fn fully_read_event_id() -> OwnedEventId {
+        OwnedEventId::try_from("$fully-read:example.org").expect("valid fully read event id")
     }
 
     fn matrix_emojis() -> [MatrixEmoji; 7] {
@@ -1555,6 +1659,73 @@ mod tests {
                 reason: "The user cancelled the verification.".to_owned(),
                 code: "m.user".to_owned(),
                 cancelled_by_us: true,
+            }
+        );
+    }
+
+    #[test]
+    fn room_read_update_relevance_tracks_read_state_reasons() {
+        for reasons in [
+            RoomInfoNotableUpdateReasons::READ_RECEIPT,
+            RoomInfoNotableUpdateReasons::FULLY_READ,
+            RoomInfoNotableUpdateReasons::UNREAD_MARKER,
+        ] {
+            assert!(room_read_update_is_relevant(reasons), "{reasons:?} should be relevant");
+        }
+    }
+
+    #[test]
+    fn room_read_update_relevance_ignores_display_name() {
+        assert!(!room_read_update_is_relevant(
+            RoomInfoNotableUpdateReasons::DISPLAY_NAME
+        ));
+    }
+
+    #[test]
+    fn room_read_state_from_parts_maps_all_public_fields() {
+        let receipts = RoomReadReceipts {
+            num_unread: 7,
+            num_notifications: 3,
+            num_mentions: 1,
+            latest_active: Some(LatestReadReceipt {
+                event_id: latest_event_id(),
+            }),
+            ..RoomReadReceipts::default()
+        };
+
+        assert_eq!(
+            room_read_state_from_parts(
+                "!room:example.org",
+                &receipts,
+                Some(fully_read_event_id().as_ref()),
+                true,
+            ),
+            RoomReadState {
+                room_id: "!room:example.org".to_owned(),
+                latest_active_event_id: Some("$latest:example.org".to_owned()),
+                fully_read_event_id: Some("$fully-read:example.org".to_owned()),
+                marked_unread: true,
+                num_unread: 7,
+                num_notifications: 3,
+                num_mentions: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn room_read_state_from_parts_preserves_absent_markers() {
+        let receipts = RoomReadReceipts::default();
+
+        assert_eq!(
+            room_read_state_from_parts("!room:example.org", &receipts, None, false),
+            RoomReadState {
+                room_id: "!room:example.org".to_owned(),
+                latest_active_event_id: None,
+                fully_read_event_id: None,
+                marked_unread: false,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
             }
         );
     }
