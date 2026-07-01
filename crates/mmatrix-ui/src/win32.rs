@@ -19,10 +19,11 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, E2eeBackupState,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, StoredSession,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -267,6 +268,7 @@ impl RoomViewModel {
                     }
                 }
             }
+            RoomActivityKind::Image(_) => self.activities.push(activity),
             RoomActivityKind::UnsupportedMessage(_) => self.activities.push(activity),
             RoomActivityKind::StateNotice(notice) => {
                 if let RoomStateNoticeContent::Topic { topic } = &notice.content {
@@ -523,6 +525,19 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             body: format!("[unsupported {}] {}", message.msgtype, message.body),
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::Image(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[image] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::StateNotice(_) => None,
     }
 }
@@ -532,6 +547,7 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
         RoomActivityKind::Message(RoomMessageActivity { send_state, .. }) => {
             !matches!(send_state, &RoomMessageSendState::Pending)
         }
+        RoomActivityKind::Image(_) => true,
         RoomActivityKind::UnsupportedMessage(_) => true,
         RoomActivityKind::StateNotice(_) => true,
     }
@@ -548,6 +564,7 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
             send_state,
             ..
         }) if !matches!(send_state, RoomMessageSendState::Pending) => Some(event_id.as_str()),
+        RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
         _ => None,
@@ -2941,6 +2958,15 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
                     };
                     lines.push(format!("{base}{suffix}"));
                 }
+                RoomActivityKind::Image(message) => {
+                    let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
+                    let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
+                    lines.push(format!(
+                        "* [{}] {} sent image: {display_name}{metadata_suffix}",
+                        format_timestamp_hhmm_utc(activity.timestamp_ms),
+                        message.sender,
+                    ));
+                }
                 RoomActivityKind::UnsupportedMessage(message) => lines.push(format!(
                     "* [{}] {} sent unsupported {}: {}",
                     format_timestamp_hhmm_utc(activity.timestamp_ms),
@@ -2982,6 +3008,29 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
     }
 
     lines
+}
+
+fn format_room_image_metadata_suffix(info: Option<&RoomImageInfo>) -> String {
+    let Some(info) = info else {
+        return String::new();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(mimetype) = info.mimetype.as_deref() {
+        parts.push(mimetype.to_owned());
+    }
+    if let (Some(width), Some(height)) = (info.width, info.height) {
+        parts.push(format!("{width}x{height}"));
+    }
+    if let Some(size) = info.size {
+        parts.push(format!("{size} bytes"));
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
 }
 
 fn format_timestamp_hhmm_utc(timestamp_ms: u64) -> String {
@@ -6402,6 +6451,52 @@ mod tests {
         ))
     }
 
+    fn image_activity(
+        room_id: &str,
+        event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        body: &str,
+        filename: Option<&str>,
+        info: Option<RoomImageInfo>,
+    ) -> RoomActivity {
+        RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{event_id}"),
+            timestamp_ms,
+            kind: RoomActivityKind::Image(mmatrix_core::RoomImageActivity {
+                event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                body: body.to_owned(),
+                filename: filename.map(str::to_owned),
+                source: mmatrix_core::RoomMediaSource::Plain {
+                    url: "mxc://example.org/diagram".to_owned(),
+                },
+                info,
+            }),
+        }
+    }
+
+    fn image_message(
+        room_id: &str,
+        event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        body: &str,
+        filename: Option<&str>,
+        info: Option<RoomImageInfo>,
+    ) -> Event {
+        Event::RoomActivity(image_activity(
+            room_id,
+            event_id,
+            sender,
+            timestamp_ms,
+            body,
+            filename,
+            info,
+        ))
+    }
+
     fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
         Event::RoomTyping(RoomTyping {
             room_id: room_id.to_owned(),
@@ -7118,6 +7213,57 @@ mod tests {
     }
 
     #[test]
+    fn clear_room_timeline_removes_image_rows() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                }),
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view must exist after timeline update")
+            .clear_visible_entries();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.activities),
+            Some(&vec![pending_message_activity(
+                "!ops:example",
+                "txn-1",
+                "hello"
+            )])
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "outgoing sent requires an existing queued timeline row")]
     fn room_activity_update_sent_without_existing_queued_row_panics() {
         let mut state = test_state();
@@ -7332,6 +7478,69 @@ mod tests {
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
                 "* [16:00] @alice:example.org sent unsupported m.image: diagram.png".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn render_room_lines_include_typed_image_with_metadata() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "body fallback",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                }),
+            ),
+        )
+        .unwrap();
+
+        let lines = render_room_lines(&state.model, "!ops:example");
+        assert_eq!(
+            lines,
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
+                    .to_owned(),
+            ]
+        );
+        assert!(!lines.join("\n").contains("unsupported m.image"));
+    }
+
+    #[test]
+    fn render_room_lines_omit_empty_image_metadata_suffix() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
             ]
         );
     }
@@ -8090,6 +8299,45 @@ mod tests {
     }
 
     #[test]
+    fn inactive_image_messages_record_room_activity_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!inactive:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                }),
+            ),
+        )
+        .unwrap();
+
+        assert!(state.room_activity.contains("!inactive:example"));
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!inactive:example")
+                .map(String::as_str),
+            Some("$image1:example.org")
+        );
+    }
+
+    #[test]
     fn inactive_state_notices_record_room_activity_read_targets() {
         let mut state = test_state();
         state.model.rooms = vec![
@@ -8179,6 +8427,39 @@ mod tests {
                 timestamp_ms: 1_710_000_000_000,
                 presentation: RoomMessagePresentationKind::Text,
                 body: "[unsupported m.image] diagram.png".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn image_room_activity_updates_last_activity_preview() {
+        let activity = image_activity(
+            "!media:example.org",
+            "$image1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "body fallback",
+            Some("diagram.png"),
+            Some(RoomImageInfo {
+                mimetype: Some("image/png".to_owned()),
+                size: Some(12_345),
+                width: Some(640),
+                height: Some(480),
+                is_animated: Some(false),
+            }),
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$image1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[image] diagram.png".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             })
         );
