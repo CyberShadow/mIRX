@@ -1297,18 +1297,17 @@ mod tests {
         COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
-        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
-        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageActivity, DumpRoomImageInfo,
+        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
+        DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse,
+        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
+        SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2299,8 +2298,7 @@ mod tests {
             (
                 COMMAND_ID_CANCEL_VERIFICATION,
                 "cancel-verification",
-                br#"{"id":"cancel-verification","args":{"user_id":"@alice:example"}}"#
-                    .as_slice(),
+                br#"{"id":"cancel-verification","args":{"user_id":"@alice:example"}}"#.as_slice(),
             ),
             (
                 COMMAND_ID_CONFIRM_VERIFICATION_SAS,
@@ -2310,8 +2308,7 @@ mod tests {
             (
                 COMMAND_ID_REJECT_VERIFICATION_SAS,
                 "reject-verification",
-                br#"{"id":"reject-verification","args":{"user_id":"@alice:example"}}"#
-                    .as_slice(),
+                br#"{"id":"reject-verification","args":{"user_id":"@alice:example"}}"#.as_slice(),
             ),
         ] {
             let error = parse_command_request(command_id, request).unwrap_err();

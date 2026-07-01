@@ -77,13 +77,13 @@ use crate::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityResponse,
-        DumpRoomMessageActivityLine, DumpSubmittedVerificationAction, FailureEnvelope,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
+        DumpRoomMessageActivityLine, DumpSubmittedVerificationAction, DumpVerificationActionKind,
+        FailureEnvelope, GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse,
+        MdiState, MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        ResponseEnvelope, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState,
+        VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_verification_from_state_event,
         failure_response, parse_command_request, success_response,
     },
@@ -875,7 +875,6 @@ struct WindowState {
     compose_history: ComposeHistory,
     edit_window_proc: WNDPROC,
     model: UiModel,
-    #[cfg(test)]
     recorded_commands: Vec<Command>,
 }
 
@@ -943,7 +942,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         compose_history: ComposeHistory::default(),
         edit_window_proc: None,
         model: initial_model(),
-        #[cfg(test)]
         recorded_commands: Vec::new(),
     });
 
@@ -5785,23 +5783,14 @@ unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
-#[cfg(test)]
 fn dump_submitted_verification_action(
     command: &Command,
 ) -> Option<DumpSubmittedVerificationAction> {
     let (action, flow) = match command {
-        Command::AcceptVerification(flow) => {
-            (crate::automation::DumpVerificationActionKind::Accept, flow)
-        }
-        Command::CancelVerification(flow) => {
-            (crate::automation::DumpVerificationActionKind::Cancel, flow)
-        }
-        Command::ConfirmVerificationSas(flow) => {
-            (crate::automation::DumpVerificationActionKind::ConfirmSas, flow)
-        }
-        Command::RejectVerificationSas(flow) => {
-            (crate::automation::DumpVerificationActionKind::RejectSas, flow)
-        }
+        Command::AcceptVerification(flow) => (DumpVerificationActionKind::Accept, flow),
+        Command::CancelVerification(flow) => (DumpVerificationActionKind::Cancel, flow),
+        Command::ConfirmVerificationSas(flow) => (DumpVerificationActionKind::ConfirmSas, flow),
+        Command::RejectVerificationSas(flow) => (DumpVerificationActionKind::RejectSas, flow),
         _ => return None,
     };
     Some(DumpSubmittedVerificationAction {
@@ -5811,7 +5800,6 @@ fn dump_submitted_verification_action(
     })
 }
 
-#[cfg(test)]
 fn submitted_verification_actions_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedVerificationAction> {
@@ -5820,13 +5808,6 @@ fn submitted_verification_actions_from_state(
         .iter()
         .filter_map(dump_submitted_verification_action)
         .collect()
-}
-
-#[cfg(not(test))]
-fn submitted_verification_actions_from_state(
-    _state: &WindowState,
-) -> Vec<DumpSubmittedVerificationAction> {
-    Vec::new()
 }
 
 fn dump_model_from_state(state: &WindowState) -> DumpModel {
@@ -5992,7 +5973,6 @@ fn submit_verification_command(
             format!("failed to enqueue {action_name} verification command: {err}")
         })?;
     }
-    #[cfg(test)]
     state.recorded_commands.push(command);
     Ok(())
 }

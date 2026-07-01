@@ -855,11 +855,10 @@ impl MmatrixApp {
         flow_id: impl Into<String>,
         user_id: impl Into<String>,
     ) -> Result<(), TestkitError> {
-        self.inner
-            .confirm_verification_sas(VerificationActionArgs {
-                flow_id: Some(flow_id.into()),
-                user_id: Some(user_id.into()),
-            })
+        self.inner.confirm_verification_sas(VerificationActionArgs {
+            flow_id: Some(flow_id.into()),
+            user_id: Some(user_id.into()),
+        })
     }
 
     pub fn reject_verification_sas(&self) -> Result<(), TestkitError> {
