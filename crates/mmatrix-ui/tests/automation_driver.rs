@@ -19,11 +19,12 @@ use mmatrix_core::{
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
-    RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, SpaceChild, StoredSession, SubmittedVerificationAction, SwitchbarItem,
-    TestkitError, UiError, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionKind, VerificationState, ViewIdentity,
+    RoomActivity, RoomActivityKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
+    StoredSession, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -682,6 +683,31 @@ fn unsupported_entry_with_event_id(
             sender: sender.to_owned(),
             msgtype: msgtype.to_owned(),
             body: body.to_owned(),
+        }),
+    }
+}
+
+fn image_entry_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+    filename: Option<&str>,
+    source: RoomMediaSource,
+    info: Option<RoomImageInfo>,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{event_id}"),
+        timestamp_ms,
+        kind: RoomActivityKind::Image(RoomImageActivity {
+            event_id: event_id.to_owned(),
+            sender: sender.to_owned(),
+            body: body.to_owned(),
+            filename: filename.map(str::to_owned),
+            source,
+            info,
         }),
     }
 }
@@ -2892,6 +2918,78 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
 }
 
 #[test]
+fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("image-message.json");
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(
+        initial_state.mdi.active,
+        room_identity("!images:example.org")
+    );
+    assert_active_switchbar_item(&initial_state, &room_identity("!images:example.org"));
+    let initial_model = app.dump_model()?;
+    assert_eq!(
+        initial_model.selected_room.as_deref(),
+        Some("!images:example.org")
+    );
+    assert_eq!(
+        initial_model.last_activity,
+        Some(RoomMessageActivityLine {
+            room_id: "!images:example.org".to_owned(),
+            activity_id: "event:$image-typed:example.org".to_owned(),
+            timestamp_ms: 1_710_000_000_000,
+            event_id: Some("$image-typed:example.org".to_owned()),
+            transaction_id: None,
+            sender: "@alice:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "[image] diagram.png".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        })
+    );
+    assert_switchbar_activity(&initial_state, &room_identity("!images:example.org"), false);
+    assert_eq!(
+        app.room_activity(Some("!images:example.org"))?,
+        vec![image_entry_with_event_id(
+            "!images:example.org",
+            "$image-typed:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "diagram.png",
+            Some("diagram.png"),
+            RoomMediaSource::Plain {
+                url: "mxc://example.org/diagram".to_owned(),
+            },
+            Some(RoomImageInfo {
+                mimetype: Some("image/png".to_owned()),
+                size: Some(12_345),
+                width: Some(640),
+                height: Some(480),
+                is_animated: Some(false),
+            }),
+        )]
+    );
+
+    let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
+    assert!(view_contains(
+        image_view,
+        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+    ));
+    assert!(!view_contains(image_view, "unsupported m.image"));
+
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
@@ -2920,13 +3018,13 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
         initial_model.last_activity,
         Some(RoomMessageActivityLine {
             room_id: "!media:example.org".to_owned(),
-            activity_id: "event:$image1:example.org".to_owned(),
+            activity_id: "event:$audio1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
-            event_id: Some("$image1:example.org".to_owned()),
+            event_id: Some("$audio1:example.org".to_owned()),
             transaction_id: None,
             sender: "@alice:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
-            body: "[unsupported m.image] diagram.png".to_owned(),
+            body: "[unsupported m.audio] voice-note.ogg".to_owned(),
             send_state: RoomMessageSendState::Sent,
         })
     );
@@ -2936,16 +3034,16 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
         app.room_activity(Some("!media:example.org"))?,
         vec![unsupported_entry_with_event_id(
             "!media:example.org",
-            "$image1:example.org",
+            "$audio1:example.org",
             "@alice:example.org",
             1_710_000_000_000,
-            "m.image",
-            "diagram.png",
+            "m.audio",
+            "voice-note.ogg",
         )]
     );
     assert!(view_contains(
         find_view(&initial_state, &room_identity("!media:example.org")),
-        "* [16:00] @alice:example.org sent unsupported m.image: diagram.png",
+        "* [16:00] @alice:example.org sent unsupported m.audio: voice-note.ogg",
     ));
 
     app.select_room("!media:example.org")?;

@@ -1,0 +1,39 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!images:example.org",
+        "display_name": "Images",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!images:example.org",
+      "activity_id": "event:$image-typed:example.org",
+      "timestamp_ms": 1710000000000,
+      "kind": {
+        "type": "image",
+        "event_id": "$image-typed:example.org",
+        "sender": "@alice:example.org",
+        "body": "diagram.png",
+        "filename": "diagram.png",
+        "source": {
+          "type": "plain",
+          "url": "mxc://example.org/diagram"
+        },
+        "info": {
+          "mimetype": "image/png",
+          "size": 12345,
+          "width": 640,
+          "height": 480,
+          "is_animated": false
+        }
+      }
+    }
+  }
+]
