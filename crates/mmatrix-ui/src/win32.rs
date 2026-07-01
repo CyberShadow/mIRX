@@ -578,7 +578,9 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
         && actionable_room_by_id(&state.model.rooms, &activity.room_id).is_some()
     {
         state.room_activity.insert(activity.room_id.clone());
-        if let Some(event_id) = read_target_for_room_activity(&activity) {
+        if !state.synthetic_load_in_progress
+            && let Some(event_id) = read_target_for_room_activity(&activity)
+        {
             state
                 .room_activity_read_targets
                 .insert(activity.room_id.clone(), event_id.to_owned());
@@ -4191,9 +4193,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             validate_synthetic_room_activity_events(&room_views, &args.events).map_err(
                 |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
             )?;
-            unsafe { apply_events_and_refresh(hwnd, args.events) }.map_err(|message| {
-                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
-            })?;
+            unsafe { apply_synthetic_events_and_refresh(hwnd, args.events) }.map_err(
+                |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
+            )?;
             let rooms = state_ref(hwnd).model.rooms.len();
             let timeline_events = state_ref(hwnd)
                 .model
@@ -4715,6 +4717,10 @@ unsafe fn select_navigation_path(hwnd: HWND, path: &[NavigationPathSegment]) -> 
             current as LPARAM,
         );
     }
+    let view_id = state_ref(hwnd).tree_items.get(&current).cloned();
+    if let Some(view_id) = view_id {
+        activate_view(hwnd, &view_id, Some(current))?;
+    }
 
     Ok(())
 }
@@ -5079,10 +5085,16 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
     Ok(())
 }
 
+unsafe fn apply_synthetic_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(), String> {
+    state_mut(hwnd).synthetic_load_in_progress = true;
+    let result = apply_events_and_refresh(hwnd, events);
+    state_mut(hwnd).synthetic_load_in_progress = false;
+    result
+}
+
 unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usize), String> {
     {
         let state = state_mut(hwnd);
-        state.synthetic_load_in_progress = true;
         state.pending_login_homeserver_url = None;
         state.current_session_homeserver_url = None;
         state.switchbar_views.clear();
@@ -5091,7 +5103,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.model = initial_model();
     }
 
-    apply_events_and_refresh(hwnd, events)?;
+    apply_synthetic_events_and_refresh(hwnd, events)?;
 
     let (rooms, timeline_events, active_view) = {
         let state = state_mut(hwnd);
@@ -5124,7 +5136,6 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         (rooms, timeline_events, active_view)
     };
 
-    state_mut(hwnd).synthetic_load_in_progress = false;
     sync_views_and_tree(hwnd)?;
     activate_view(hwnd, &active_view, None)?;
 
@@ -8393,6 +8404,28 @@ mod tests {
                 .get("!inactive:example")
                 .map(String::as_str),
             Some("$!inactive:example:hello")
+        );
+    }
+
+    #[test]
+    fn synthetic_inactive_messages_mark_activity_without_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+        state.synthetic_load_in_progress = true;
+
+        apply_core_event(&mut state, timeline("!inactive:example", "hello")).unwrap();
+
+        assert!(state.room_activity.contains("!inactive:example"));
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!inactive:example")
+                .map(String::as_str),
+            None
         );
     }
 
