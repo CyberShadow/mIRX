@@ -32,7 +32,7 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_WINDOW, EndPaint, FillRect, HBRUSH, InvalidateRect, PAINTSTRUCT, SetBkMode,
-    TRANSPARENT, TextOutW,
+    SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -173,9 +173,44 @@ struct MdiChildCreateState {
     view_id: ViewId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineRow {
+    kind: TimelineRowKind,
+    text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TimelineRowKind {
+    Header,
+    Topic,
+    Typing,
+    Message {
+        presentation: RoomMessagePresentationKind,
+        send_state: TimelineMessageSendState,
+    },
+    Image,
+    Unsupported,
+    StateNotice,
+    Plain,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimelineMessageSendState {
+    Pending,
+    Sent,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelinePaintLine {
+    kind: TimelineRowKind,
+    text: String,
+}
+
 struct TimelineState {
     rendered_text: String,
     lines: Vec<String>,
+    paint_lines: Vec<TimelinePaintLine>,
     top_line: usize,
     line_height: i32,
     vertical_padding: i32,
@@ -186,6 +221,7 @@ impl Default for TimelineState {
         Self {
             rendered_text: String::new(),
             lines: Vec::new(),
+            paint_lines: Vec::new(),
             top_line: 0,
             line_height: TIMELINE_ROW_HEIGHT,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
@@ -1688,15 +1724,64 @@ unsafe fn timeline_state_mut(hwnd: HWND) -> &'static mut TimelineState {
     &mut *state_ptr
 }
 
-unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
-    let (rendered_text, lines) = normalize_timeline_text(&wide_ptr_to_string(text_ptr));
+fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintLine> {
+    lines
+        .iter()
+        .cloned()
+        .map(|text| TimelinePaintLine {
+            kind: TimelineRowKind::Plain,
+            text,
+        })
+        .collect()
+}
+
+fn timeline_row_paint_lines(rows: &[TimelineRow]) -> Vec<TimelinePaintLine> {
+    let mut paint_lines = Vec::new();
+    for row in rows {
+        for text in split_rendered_lines(&row.text) {
+            paint_lines.push(TimelinePaintLine {
+                kind: row.kind.clone(),
+                text,
+            });
+        }
+    }
+    paint_lines
+}
+
+unsafe fn apply_timeline_content(
+    hwnd: HWND,
+    rendered_text: String,
+    lines: Vec<String>,
+    paint_lines: Vec<TimelinePaintLine>,
+) {
     let state = timeline_state_mut(hwnd);
     state.rendered_text = rendered_text;
     state.lines = lines;
+    state.paint_lines = paint_lines;
     clamp_timeline_top_line(hwnd);
     update_timeline_scrollbar(hwnd);
     InvalidateRect(hwnd, null(), 1);
+}
+
+unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
+    let (rendered_text, lines) = normalize_timeline_text(&wide_ptr_to_string(text_ptr));
+    let paint_lines = plain_timeline_paint_lines(&lines);
+    apply_timeline_content(hwnd, rendered_text, lines, paint_lines);
     1
+}
+
+unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
+    let (rendered_text, lines) =
+        normalize_timeline_text(&render_view_text(&project_timeline_rows(rows)));
+    let paint_lines = timeline_row_paint_lines(rows);
+    debug_assert_eq!(
+        lines,
+        paint_lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>()
+    );
+    apply_timeline_content(hwnd, rendered_text, lines, paint_lines);
 }
 
 unsafe fn timeline_text_len(hwnd: HWND) -> LRESULT {
@@ -1850,13 +1935,14 @@ unsafe fn paint_timeline(hwnd: HWND) {
     let state = timeline_state_ref(hwnd);
     let visible_rows = timeline_visible_rows(hwnd);
     for (row, line) in state
-        .lines
+        .paint_lines
         .iter()
         .skip(state.top_line)
         .take(visible_rows)
         .enumerate()
     {
-        let text = wide_null(line);
+        let text = wide_null(&line.text);
+        SetTextColor(hdc, timeline_row_color(&line.kind));
         TextOutW(
             hdc,
             TIMELINE_LEFT_PADDING,
@@ -1867,6 +1953,38 @@ unsafe fn paint_timeline(hwnd: HWND) {
     }
 
     EndPaint(hwnd, &paint);
+}
+
+const fn rgb(r: u8, g: u8, b: u8) -> u32 {
+    r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
+}
+
+fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
+    match kind {
+        TimelineRowKind::Header | TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
+        TimelineRowKind::Topic => rgb(0x4A, 0x42, 0x2A),
+        TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
+        TimelineRowKind::Message {
+            send_state: TimelineMessageSendState::Pending,
+            ..
+        } => rgb(0x4E, 0x5D, 0x69),
+        TimelineRowKind::Message {
+            send_state: TimelineMessageSendState::Failed,
+            ..
+        } => rgb(0x86, 0x22, 0x22),
+        TimelineRowKind::Message {
+            presentation: RoomMessagePresentationKind::Notice,
+            send_state: TimelineMessageSendState::Sent,
+        } => rgb(0x63, 0x54, 0x2A),
+        TimelineRowKind::Message {
+            presentation: RoomMessagePresentationKind::Emote,
+            send_state: TimelineMessageSendState::Sent,
+        } => rgb(0x24, 0x5E, 0x7A),
+        TimelineRowKind::Message { .. } => rgb(0x00, 0x00, 0x00),
+        TimelineRowKind::Image => rgb(0x1F, 0x64, 0x5A),
+        TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
+        TimelineRowKind::StateNotice => rgb(0x3D, 0x67, 0x35),
+    }
 }
 
 unsafe extern "system" fn login_dialog_window_proc(
@@ -2903,19 +3021,33 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
     Ok(())
 }
 
-fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
+fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMessageSendState {
+    match send_state {
+        RoomMessageSendState::Pending => TimelineMessageSendState::Pending,
+        RoomMessageSendState::Sent => TimelineMessageSendState::Sent,
+        RoomMessageSendState::Failed { .. } => TimelineMessageSendState::Failed,
+    }
+}
+
+fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
-    let mut lines = Vec::new();
+    let mut rows = Vec::new();
     let mut header = format!("Room: {}", room.display_name);
     if room.encrypted {
         header.push_str(" [e2ee]");
     }
     header.push_str(&format!(" ({room_id})"));
-    lines.push(header);
+    rows.push(TimelineRow {
+        kind: TimelineRowKind::Header,
+        text: header,
+    });
 
     let room_view = model.room_views.get(room_id);
     if let Some(topic) = room_view.and_then(|view| view.topic.as_deref()) {
-        lines.push(format!("Topic: {topic}"));
+        rows.push(TimelineRow {
+            kind: TimelineRowKind::Topic,
+            text: format!("Topic: {topic}"),
+        });
     }
 
     if let Some(room_view) = room_view {
@@ -2926,7 +3058,10 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
             } else {
                 "are"
             };
-            lines.push(format!("* {users} {verb} typing"));
+            rows.push(TimelineRow {
+                kind: TimelineRowKind::Typing,
+                text: format!("* {users} {verb} typing"),
+            });
         }
 
         for activity in &room_view.activities {
@@ -2957,30 +3092,45 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
                         RoomMessageSendState::Sent => "",
                         RoomMessageSendState::Failed { .. } => " (failed)",
                     };
-                    lines.push(format!("{base}{suffix}"));
+                    rows.push(TimelineRow {
+                        kind: TimelineRowKind::Message {
+                            presentation: message.presentation,
+                            send_state: timeline_message_send_state(&message.send_state),
+                        },
+                        text: format!("{base}{suffix}"),
+                    });
                 }
                 RoomActivityKind::Image(message) => {
                     let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
                     let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
-                    lines.push(format!(
-                        "* [{}] {} sent image: {display_name}{metadata_suffix}",
+                    rows.push(TimelineRow {
+                        kind: TimelineRowKind::Image,
+                        text: format!(
+                            "* [{}] {} sent image: {display_name}{metadata_suffix}",
+                            format_timestamp_hhmm_utc(activity.timestamp_ms),
+                            message.sender,
+                        ),
+                    });
+                }
+                RoomActivityKind::UnsupportedMessage(message) => rows.push(TimelineRow {
+                    kind: TimelineRowKind::Unsupported,
+                    text: format!(
+                        "* [{}] {} sent unsupported {}: {}",
                         format_timestamp_hhmm_utc(activity.timestamp_ms),
                         message.sender,
-                    ));
-                }
-                RoomActivityKind::UnsupportedMessage(message) => lines.push(format!(
-                    "* [{}] {} sent unsupported {}: {}",
-                    format_timestamp_hhmm_utc(activity.timestamp_ms),
-                    message.sender,
-                    message.msgtype,
-                    message.body
-                )),
+                        message.msgtype,
+                        message.body
+                    ),
+                }),
                 RoomActivityKind::StateNotice(notice) => match &notice.content {
-                    RoomStateNoticeContent::Topic { topic } => lines.push(format!(
-                        "* [{}] {} set topic: {topic}",
-                        format_timestamp_hhmm_utc(activity.timestamp_ms),
-                        notice.sender,
-                    )),
+                    RoomStateNoticeContent::Topic { topic } => rows.push(TimelineRow {
+                        kind: TimelineRowKind::StateNotice,
+                        text: format!(
+                            "* [{}] {} set topic: {topic}",
+                            format_timestamp_hhmm_utc(activity.timestamp_ms),
+                            notice.sender,
+                        ),
+                    }),
                     RoomStateNoticeContent::Member {
                         membership,
                         displayname,
@@ -2990,17 +3140,26 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
                             "join" => {
                                 let member =
                                     displayname.as_deref().unwrap_or(notice.state_key.as_str());
-                                lines.push(format!("* [{timestamp}] {member} joined"));
+                                rows.push(TimelineRow {
+                                    kind: TimelineRowKind::StateNotice,
+                                    text: format!("* [{timestamp}] {member} joined"),
+                                });
                             }
                             "leave" => {
                                 let member =
                                     displayname.as_deref().unwrap_or(notice.state_key.as_str());
-                                lines.push(format!("* [{timestamp}] {member} left"));
+                                rows.push(TimelineRow {
+                                    kind: TimelineRowKind::StateNotice,
+                                    text: format!("* [{timestamp}] {member} left"),
+                                });
                             }
-                            membership => lines.push(format!(
-                                "* [{timestamp}] {} membership: {membership}",
-                                notice.state_key
-                            )),
+                            membership => rows.push(TimelineRow {
+                                kind: TimelineRowKind::StateNotice,
+                                text: format!(
+                                    "* [{timestamp}] {} membership: {membership}",
+                                    notice.state_key
+                                ),
+                            }),
                         }
                     }
                 },
@@ -3008,7 +3167,16 @@ fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
         }
     }
 
-    lines
+    rows
+}
+
+fn project_timeline_rows(rows: &[TimelineRow]) -> Vec<String> {
+    rows.iter().map(|row| row.text.clone()).collect()
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
+    project_timeline_rows(&build_room_timeline_rows(model, room_id))
 }
 
 fn format_room_image_metadata_suffix(info: Option<&RoomImageInfo>) -> String {
@@ -3472,25 +3640,33 @@ unsafe fn destroy_stale_room_views(hwnd: HWND) {
 }
 
 unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
-    let (child, content, title, text) = {
+    let (child, content, title) = {
         let state = state_ref(hwnd);
         let view = state
             .views
             .get(view_id)
             .ok_or_else(|| "view state was not tracked".to_owned())?;
         let title = view_title(&state.model, view_id);
-        let lines = match view_id {
-            ViewId::Status => render_status_lines(&state.model),
-            ViewId::Room(room_id) => render_room_lines(&state.model, room_id),
-        };
-        (view.child, view.content, title, render_view_text(&lines))
+        (view.child, view.content, title)
     };
 
     let title = wide_null(&title);
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
     match view_id {
-        ViewId::Status => set_edit_text(content, &text),
-        ViewId::Room(_) => set_window_text(content, &text),
+        ViewId::Status => {
+            let text = {
+                let state = state_ref(hwnd);
+                render_view_text(&render_status_lines(&state.model))
+            };
+            set_edit_text(content, &text);
+        }
+        ViewId::Room(room_id) => {
+            let rows = {
+                let state = state_ref(hwnd);
+                build_room_timeline_rows(&state.model, room_id)
+            };
+            set_timeline_rows(content, &rows);
+        }
     }
     Ok(())
 }
@@ -7520,6 +7696,163 @@ mod tests {
     }
 
     #[test]
+    fn build_room_timeline_rows_capture_kind_order_and_projection() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org", "@bob:example.org"]),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event-text:example.org",
+                None,
+                "<body>",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(sent_message_activity_with_presentation(
+                "!ops:example",
+                "$event-notice:example.org",
+                None,
+                RoomMessagePresentationKind::Notice,
+                "maintenance window",
+                1_700_000_030_000,
+            )),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(sent_message_activity_with_presentation(
+                "!ops:example",
+                "$event-emote:example.org",
+                None,
+                RoomMessagePresentationKind::Emote,
+                "waves",
+                1_700_000_090_000,
+            )),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-pending", "pending local echo"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            failed_message("!ops:example", "txn-failed", "failed local echo", "network"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "body fallback",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                }),
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            unsupported_message(
+                "!ops:example",
+                "$audio1:example.org",
+                "@alice:example.org",
+                1_710_000_060_000,
+                "m.audio",
+                "voice-note.ogg",
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            member_state("!ops:example", "@carol:example", "join", Some("carol")),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            member_state("!ops:example", "@dave:example", "leave", None),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Header,
+                TimelineRowKind::Topic,
+                TimelineRowKind::Typing,
+                TimelineRowKind::StateNotice,
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Notice,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Emote,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Pending,
+                },
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Failed,
+                },
+                TimelineRowKind::Image,
+                TimelineRowKind::Unsupported,
+                TimelineRowKind::StateNotice,
+                TimelineRowKind::StateNotice,
+            ]
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            project_timeline_rows(&rows)
+        );
+        assert_eq!(
+            project_timeline_rows(&rows),
+            vec![
+                "Room: Ops [e2ee] (!ops:example)".to_owned(),
+                "Topic: incident review".to_owned(),
+                "* @alice:example.org, @bob:example.org are typing".to_owned(),
+                "* [22:14] @alice:example set topic: incident review".to_owned(),
+                "[22:13] @alice:example: <body>".to_owned(),
+                "[22:13] -@alice:example- maintenance window".to_owned(),
+                "* [22:14] @alice:example waves".to_owned(),
+                "[22:13] @alice:example: pending local echo (sending)".to_owned(),
+                "[22:13] @alice:example: failed local echo (failed)".to_owned(),
+                "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
+                    .to_owned(),
+                "* [16:01] @alice:example.org sent unsupported m.audio: voice-note.ogg"
+                    .to_owned(),
+                "* [22:15] carol joined".to_owned(),
+                "* [22:15] @dave:example left".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn render_room_lines_include_text_notice_emote_and_state_activities() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", true)];
@@ -7589,7 +7922,7 @@ mod tests {
                 "* [22:14] @alice:example set topic: incident review".to_owned(),
                 "[22:13] @alice:example: <body>".to_owned(),
                 "[22:13] -@alice:example- maintenance window".to_owned(),
-                "* [22:15] @alice:example waves".to_owned(),
+                "* [22:14] @alice:example waves".to_owned(),
                 "* [22:15] carol joined".to_owned(),
                 "* [22:15] @dave:example left".to_owned(),
                 "* [22:15] @erin:example membership: ban".to_owned(),
@@ -9584,7 +9917,7 @@ mod tests {
 
     #[test]
     fn automation_verification_partial_explicit_args_fail_during_parsing_before_submission() {
-        let mut state = test_state();
+        let state = test_state();
 
         let error = parse_command_request(
             crate::automation::COMMAND_ID_ACCEPT_VERIFICATION,
