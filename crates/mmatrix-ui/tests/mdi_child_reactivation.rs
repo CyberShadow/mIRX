@@ -12,7 +12,7 @@ use mmatrix_core::{
     Event, RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessagePresentationKind,
     RoomMessageSendState, RoomSummary,
 };
-use mmatrix_testkit::{LaunchOptions, MmatrixApp};
+use mmatrix_testkit::{LaunchOptions, MmatrixApp, ViewIdentity};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::Memory::{FILE_MAP_READ, OpenFileMappingW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -61,6 +61,12 @@ fn unique_state_path() -> PathBuf {
         .expect("system clock must be after unix epoch")
         .as_nanos();
     env::temp_dir().join(format!("mmatrix-ui-mdi-reactivation-{unique}.json"))
+}
+
+fn fixture_state_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/ui-states")
+        .join(name)
 }
 
 fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -162,6 +168,53 @@ fn select_room_recreates_room_mdi_child_after_external_destroy()
     wait_for_child_count(frame, baseline_count, Duration::from_secs(5))?;
 
     let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn select_thread_recreates_thread_mdi_child_after_external_destroy()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, launch_options())?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view = ViewIdentity::Thread {
+        room_id: "!ops:example".to_owned(),
+        thread_root_event_id: "$thread-root".to_owned(),
+    };
+    app.select_view(thread_view)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let frame = wait_for_frame(Duration::from_secs(5))?;
+    let mdi_client = wait_for_mdi_client(frame, Duration::from_secs(5))?;
+    let baseline_count = wait_for_nonzero_child_count(frame, Duration::from_secs(5))?;
+    let thread_child = unsafe { SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND };
+    if thread_child.is_null() {
+        return Err("active thread MDI child was not found".into());
+    }
+
+    unsafe {
+        SendMessageW(mdi_client, WM_MDIDESTROY, thread_child as WPARAM, 0);
+    }
+
+    wait_for_child_count(
+        frame,
+        baseline_count.saturating_sub(1),
+        Duration::from_secs(5),
+    )?;
+
+    app.select_view(ViewIdentity::Thread {
+        room_id: "!ops:example".to_owned(),
+        thread_root_event_id: "$thread-root".to_owned(),
+    })?;
+    wait_for_child_count(frame, baseline_count, Duration::from_secs(5))?;
+
     Ok(())
 }
 

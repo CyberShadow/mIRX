@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity as CoreRoomMessageActivity,
+    RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomMemberSummary, RoomMembers, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
     StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
@@ -20,8 +20,8 @@ use mmatrix_core::{
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
-    RoomActivity, RoomActivityKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo,
+    RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
     StoredSession, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
@@ -335,11 +335,31 @@ fn message_event_with_event_id(
     presentation: CoreRoomMessagePresentationKind,
     body: &str,
 ) -> Event {
+    message_event_with_event_id_and_relation(
+        room_id,
+        event_id,
+        sender,
+        timestamp_ms,
+        None,
+        presentation,
+        body,
+    )
+}
+
+fn message_event_with_event_id_and_relation(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    relation: Option<CoreRoomActivityRelation>,
+    presentation: CoreRoomMessagePresentationKind,
+    body: &str,
+) -> Event {
     Event::RoomActivity(Box::new(CoreRoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
-        relation: None,
+        relation,
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
@@ -538,11 +558,31 @@ fn message_entry_with_event_id(
     presentation: RoomMessagePresentationKind,
     body: &str,
 ) -> RoomActivity {
+    message_entry_with_event_id_and_relation(
+        room_id,
+        event_id,
+        sender,
+        timestamp_ms,
+        None,
+        presentation,
+        body,
+    )
+}
+
+fn message_entry_with_event_id_and_relation(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    relation: Option<RoomActivityRelation>,
+    presentation: RoomMessagePresentationKind,
+    body: &str,
+) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
-        relation: None,
+        relation,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
@@ -566,6 +606,25 @@ fn text_entry_with_event_id(
         event_id,
         sender,
         timestamp_ms,
+        RoomMessagePresentationKind::Text,
+        body,
+    )
+}
+
+fn text_entry_with_event_id_and_relation(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    relation: Option<RoomActivityRelation>,
+    body: &str,
+) -> RoomActivity {
+    message_entry_with_event_id_and_relation(
+        room_id,
+        event_id,
+        sender,
+        timestamp_ms,
+        relation,
         RoomMessagePresentationKind::Text,
         body,
     )
@@ -731,6 +790,13 @@ fn room_identity(room_id: &str) -> ViewIdentity {
     }
 }
 
+fn thread_identity(room_id: &str, thread_root_event_id: &str) -> ViewIdentity {
+    ViewIdentity::Thread {
+        room_id: room_id.to_owned(),
+        thread_root_event_id: thread_root_event_id.to_owned(),
+    }
+}
+
 fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> &'a MdiView {
     ui_state
         .mdi
@@ -827,6 +893,36 @@ fn nav_segment(text: &str, same_text_index: u32) -> NavigationPathSegment {
         text: text.to_owned(),
         same_text_index,
     }
+}
+
+fn navigation_path_by_substrings(
+    root: &NavigationNode,
+    path_substrings: &[&str],
+) -> Vec<NavigationPathSegment> {
+    fn find_text_path(node: &NavigationNode, path_substrings: &[&str]) -> Option<Vec<String>> {
+        let (segment, remaining) = path_substrings.split_first()?;
+        if !node.text.contains(segment) {
+            return None;
+        }
+        if remaining.is_empty() {
+            return Some(vec![node.text.clone()]);
+        }
+
+        node.children.iter().find_map(|child| {
+            find_text_path(child, remaining).map(|mut path| {
+                let mut with_self = Vec::with_capacity(path.len() + 1);
+                with_self.push(node.text.clone());
+                with_self.append(&mut path);
+                with_self
+            })
+        })
+    }
+
+    find_text_path(root, path_substrings)
+        .unwrap_or_else(|| panic!("missing navigation path containing {path_substrings:?}"))
+        .into_iter()
+        .map(NavigationPathSegment::first)
+        .collect()
 }
 
 fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
@@ -2444,6 +2540,123 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![
+            text_entry_with_event_id(
+                "!ops:example",
+                "$ops-room-1",
+                "@alice:example",
+                1_700_000_000_000,
+                "lobby",
+            ),
+            text_entry_with_event_id(
+                "!ops:example",
+                "$thread-root",
+                "@bob:example",
+                1_700_000_060_000,
+                "root msg",
+            ),
+            text_entry_with_event_id_and_relation(
+                "!ops:example",
+                "$reply-1",
+                "@carol:example",
+                1_700_000_120_000,
+                Some(RoomActivityRelation::Reply {
+                    in_reply_to_event_id: "$ops-room-1".to_owned(),
+                }),
+                "plain",
+            ),
+            text_entry_with_event_id_and_relation(
+                "!ops:example",
+                "$thread-1",
+                "@dave:example",
+                1_700_000_180_000,
+                Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                "thread rep",
+            ),
+        ]
+    );
+
+    let initial_state = app.dump_ui_state()?;
+    let room_path = navigation_path_by_substrings(
+        &initial_state.navigation,
+        &["mmatrix", "rooms: 1", "Work", "Ops"],
+    );
+    let thread_path = navigation_path_by_substrings(
+        &initial_state.navigation,
+        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg"],
+    );
+
+    app.select_navigation_path(&room_path)?;
+    assert_eq!(app.selected_navigation_path()?, room_path);
+    let room_state = app.dump_ui_state()?;
+    assert_eq!(room_state.mdi.active, room_identity("!ops:example"));
+    let parent_view = find_view(&room_state, &room_identity("!ops:example"));
+    let parent_lines = parent_view.lines.clone();
+    assert!(view_contains(parent_view, "lobby"));
+    assert!(view_contains(parent_view, "root msg"));
+    assert!(view_contains(parent_view, "plain"));
+    assert!(view_contains(parent_view, "thread rep"));
+
+    app.select_navigation_path(&thread_path)?;
+    assert_eq!(app.selected_navigation_path()?, thread_path);
+    let thread_state = app.dump_ui_state()?;
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    assert_eq!(thread_state.mdi.active, thread_view_identity);
+    assert_eq!(
+        thread_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| item.identity.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ViewIdentity::Status,
+            room_identity("!ops:example"),
+            thread_view_identity.clone(),
+        ]
+    );
+    assert_active_switchbar_item(&thread_state, &thread_view_identity);
+    assert!(!find_switchbar_item(&thread_state, &room_identity("!ops:example")).active);
+
+    let thread_view = find_view(&thread_state, &thread_view_identity);
+    assert!(view_contains(thread_view, "root msg"));
+    assert!(view_contains(thread_view, "thread rep"));
+    assert!(!view_contains(thread_view, "lobby"));
+    assert!(!view_contains(thread_view, "plain"));
+
+    app.select_room("!ops:example")?;
+    let reactivated_room_state = app.dump_ui_state()?;
+    assert_eq!(
+        reactivated_room_state.mdi.active,
+        room_identity("!ops:example")
+    );
+    assert_eq!(
+        find_view(&reactivated_room_state, &room_identity("!ops:example")).lines,
+        parent_lines
+    );
+
     Ok(())
 }
 

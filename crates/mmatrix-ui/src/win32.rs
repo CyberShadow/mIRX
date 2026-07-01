@@ -19,11 +19,11 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, E2eeBackupState,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomImageInfo, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
+    RoomSummary, RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -173,6 +173,30 @@ enum ViewId {
     },
 }
 
+impl ViewId {
+    fn room_id(&self) -> Option<&str> {
+        match self {
+            Self::Status => None,
+            Self::Room(room_id) => Some(room_id.as_str()),
+            Self::Thread { room_id, .. } => Some(room_id.as_str()),
+        }
+    }
+
+    fn is_room_view(&self) -> bool {
+        matches!(self, Self::Room(_))
+    }
+
+    fn thread_key(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Thread {
+                room_id,
+                thread_root_event_id,
+            } => Some((room_id.as_str(), thread_root_event_id.as_str())),
+            _ => None,
+        }
+    }
+}
+
 struct MdiViewState {
     child: HWND,
     content: HWND,
@@ -260,8 +284,14 @@ struct UiModel {
 struct RoomViewModel {
     topic: Option<String>,
     activities: Vec<RoomActivity>,
+    threads: BTreeMap<String, ThreadViewModel>,
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThreadViewModel {
+    label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +317,7 @@ impl RoomViewModel {
                 })
             )
         });
+        self.rebuild_threads();
     }
 
     fn apply_activity(&mut self, activity: RoomActivity) {
@@ -329,6 +360,7 @@ impl RoomViewModel {
                 self.activities.push(activity);
             }
         }
+        self.rebuild_threads();
     }
 
     fn replace_typing(&mut self, typing: RoomTyping) {
@@ -376,6 +408,7 @@ impl RoomViewModel {
             Some((
                 activity.activity_id,
                 activity.timestamp_ms,
+                activity.relation,
                 message.sender,
                 message.presentation,
                 message.body,
@@ -383,20 +416,23 @@ impl RoomViewModel {
         });
         let new_activity_id = duplicate_event
             .as_ref()
-            .map(|(activity_id, _, _, _, _)| activity_id.clone())
+            .map(|(activity_id, _, _, _, _, _)| activity_id.clone())
             .unwrap_or_else(|| format!("event:{event_id}"));
         let synced_timestamp_ms = duplicate_event
             .as_ref()
-            .map(|(_, timestamp_ms, _, _, _)| *timestamp_ms);
+            .map(|(_, timestamp_ms, _, _, _, _)| *timestamp_ms);
+        let synced_relation = duplicate_event
+            .as_ref()
+            .and_then(|(_, _, relation, _, _, _)| relation.clone());
         let synced_sender = duplicate_event
             .as_ref()
-            .map(|(_, _, sender, _, _)| sender.clone());
+            .map(|(_, _, _, sender, _, _)| sender.clone());
         let synced_presentation = duplicate_event
             .as_ref()
-            .map(|(_, _, _, presentation, _)| *presentation);
+            .map(|(_, _, _, _, presentation, _)| *presentation);
         let synced_body = duplicate_event
             .as_ref()
-            .map(|(_, _, _, _, body)| body.clone());
+            .map(|(_, _, _, _, _, body)| body.clone());
 
         let activity = self
             .activities
@@ -405,6 +441,9 @@ impl RoomViewModel {
         activity.activity_id = new_activity_id;
         if let Some(synced_timestamp_ms) = synced_timestamp_ms {
             activity.timestamp_ms = synced_timestamp_ms;
+        }
+        if let Some(synced_relation) = synced_relation {
+            activity.relation = Some(synced_relation);
         }
         let RoomActivityKind::Message(message) = &mut activity.kind else {
             panic!("outgoing sent requires a message room activity");
@@ -425,6 +464,7 @@ impl RoomViewModel {
         if let Some(duplicate_event_index) = duplicate_event_index {
             self.activities.remove(duplicate_event_index);
         }
+        self.rebuild_threads();
     }
 
     fn mark_message_failed(&mut self, update: RoomActivityUpdate) {
@@ -451,6 +491,7 @@ impl RoomViewModel {
             message,
             recoverable,
         };
+        self.rebuild_threads();
     }
 
     fn find_message_activity_index(
@@ -508,6 +549,32 @@ impl RoomViewModel {
     ) -> Option<&mut RoomActivity> {
         let index = self.find_pending_message_activity_index(transaction_id)?;
         self.activities.get_mut(index)
+    }
+
+    fn rebuild_threads(&mut self) {
+        let root_labels = self
+            .activities
+            .iter()
+            .filter_map(|activity| {
+                Some((
+                    room_activity_event_id(activity)?.to_owned(),
+                    room_activity_thread_root_label(activity)?,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        self.threads = self
+            .activities
+            .iter()
+            .filter_map(|activity| room_activity_thread_root_event_id(activity))
+            .map(|thread_root_event_id| {
+                let label = root_labels
+                    .get(thread_root_event_id)
+                    .cloned()
+                    .unwrap_or_else(|| thread_root_event_id.to_owned());
+                (thread_root_event_id.to_owned(), ThreadViewModel { label })
+            })
+            .collect();
     }
 
     fn validate_update(&self, update: &RoomActivityUpdate) -> Result<(), String> {
@@ -609,20 +676,58 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
     }
 }
 
+fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
+    match &activity.kind {
+        RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event_id),
+            ..
+        }) => Some(event_id.as_str()),
+        RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
+        _ => None,
+    }
+}
+
+fn room_activity_thread_root_event_id(activity: &RoomActivity) -> Option<&str> {
+    match &activity.relation {
+        Some(RoomActivityRelation::Thread {
+            thread_root_event_id,
+            ..
+        }) => Some(thread_root_event_id.as_str()),
+        _ => None,
+    }
+}
+
+fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
+    match &activity.kind {
+        RoomActivityKind::Message(message) => Some(message.body.clone()),
+        RoomActivityKind::Image(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
+        RoomActivityKind::StateNotice(_) => None,
+    }
+}
+
 fn room_activity_update_marks_inactive_room(update: &RoomActivityUpdate) -> bool {
     matches!(&update.kind, RoomActivityUpdateKind::MessageFailed { .. })
 }
 
 fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
     match &activity.kind {
-        RoomActivityKind::Message(RoomMessageActivity {
-            event_id: Some(event_id),
-            send_state,
-            ..
-        }) if !matches!(send_state, RoomMessageSendState::Pending) => Some(event_id.as_str()),
-        RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
-        RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
-        RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
+        RoomActivityKind::Message(RoomMessageActivity { send_state, .. })
+            if !matches!(send_state, RoomMessageSendState::Pending) =>
+        {
+            room_activity_event_id(activity)
+        }
+        RoomActivityKind::Image(_)
+        | RoomActivityKind::UnsupportedMessage(_)
+        | RoomActivityKind::StateNotice(_) => room_activity_event_id(activity),
         _ => None,
     }
 }
@@ -733,10 +838,8 @@ fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadStat
         state.room_activity_read_targets.remove(&room_id);
     }
 
-    let room_is_active = matches!(
-        &state.active_view,
-        ViewId::Room(active_room_id) if active_room_id == &room_id
-    );
+    let room_is_active =
+        state.active_view.is_room_view() && state.active_view.room_id() == Some(room_id.as_str());
     if has_unread_state && !room_is_active {
         state.room_activity.insert(room_id);
     } else {
@@ -3258,20 +3361,25 @@ fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMes
     }
 }
 
-fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
-    let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
-    let mut rows = Vec::new();
+fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
     let mut header = format!("Room: {}", room.display_name);
     if room.encrypted {
         header.push_str(" [e2ee]");
     }
-    header.push_str(&format!(" ({room_id})"));
-    rows.push(TimelineRow {
+    header.push_str(&format!(" ({})", room.room_id));
+    TimelineRow {
         kind: TimelineRowKind::Header,
         text: header,
-    });
+    }
+}
 
-    let room_view = model.room_views.get(room_id);
+fn push_room_context_rows(
+    rows: &mut Vec<TimelineRow>,
+    room: &RoomSummary,
+    room_view: Option<&RoomViewModel>,
+) {
+    rows.push(build_room_timeline_header(room));
+
     if let Some(topic) = room_view.and_then(|view| view.topic.as_deref()) {
         rows.push(TimelineRow {
             kind: TimelineRowKind::Topic,
@@ -3279,123 +3387,156 @@ fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> 
         });
     }
 
-    if let Some(room_view) = room_view {
-        if !room_view.typing_user_ids.is_empty() {
-            let users = room_view.typing_user_ids.join(", ");
-            let verb = if room_view.typing_user_ids.len() == 1 {
-                "is"
-            } else {
-                "are"
+    if let Some(room_view) = room_view
+        && !room_view.typing_user_ids.is_empty()
+    {
+        let users = room_view.typing_user_ids.join(", ");
+        let verb = if room_view.typing_user_ids.len() == 1 {
+            "is"
+        } else {
+            "are"
+        };
+        rows.push(TimelineRow {
+            kind: TimelineRowKind::Typing,
+            text: format!("* {users} {verb} typing"),
+        });
+    }
+}
+
+fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) {
+    match &activity.kind {
+        RoomActivityKind::Message(message) => {
+            let base = match message.presentation {
+                RoomMessagePresentationKind::Text => format!(
+                    "[{}] {}: {}",
+                    format_timestamp_hhmm_utc(activity.timestamp_ms),
+                    message.sender,
+                    message.body
+                ),
+                RoomMessagePresentationKind::Notice => format!(
+                    "[{}] -{}- {}",
+                    format_timestamp_hhmm_utc(activity.timestamp_ms),
+                    message.sender,
+                    message.body
+                ),
+                RoomMessagePresentationKind::Emote => format!(
+                    "* [{}] {} {}",
+                    format_timestamp_hhmm_utc(activity.timestamp_ms),
+                    message.sender,
+                    message.body
+                ),
+            };
+            let suffix = match &message.send_state {
+                RoomMessageSendState::Pending => " (sending)",
+                RoomMessageSendState::Sent => "",
+                RoomMessageSendState::Failed { .. } => " (failed)",
             };
             rows.push(TimelineRow {
-                kind: TimelineRowKind::Typing,
-                text: format!("* {users} {verb} typing"),
+                kind: TimelineRowKind::Message {
+                    presentation: message.presentation,
+                    send_state: timeline_message_send_state(&message.send_state),
+                },
+                text: format!("{base}{suffix}"),
             });
         }
-
-        for activity in &room_view.activities {
-            match &activity.kind {
-                RoomActivityKind::Message(message) => {
-                    let base = match message.presentation {
-                        RoomMessagePresentationKind::Text => format!(
-                            "[{}] {}: {}",
-                            format_timestamp_hhmm_utc(activity.timestamp_ms),
-                            message.sender,
-                            message.body
-                        ),
-                        RoomMessagePresentationKind::Notice => format!(
-                            "[{}] -{}- {}",
-                            format_timestamp_hhmm_utc(activity.timestamp_ms),
-                            message.sender,
-                            message.body
-                        ),
-                        RoomMessagePresentationKind::Emote => format!(
-                            "* [{}] {} {}",
-                            format_timestamp_hhmm_utc(activity.timestamp_ms),
-                            message.sender,
-                            message.body
-                        ),
-                    };
-                    let suffix = match &message.send_state {
-                        RoomMessageSendState::Pending => " (sending)",
-                        RoomMessageSendState::Sent => "",
-                        RoomMessageSendState::Failed { .. } => " (failed)",
-                    };
-                    rows.push(TimelineRow {
-                        kind: TimelineRowKind::Message {
-                            presentation: message.presentation,
-                            send_state: timeline_message_send_state(&message.send_state),
-                        },
-                        text: format!("{base}{suffix}"),
-                    });
-                }
-                RoomActivityKind::Image(message) => {
-                    let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
-                    let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
-                    rows.push(TimelineRow {
-                        kind: TimelineRowKind::Image,
-                        text: format!(
-                            "* [{}] {} sent image: {display_name}{metadata_suffix}",
-                            format_timestamp_hhmm_utc(activity.timestamp_ms),
-                            message.sender,
-                        ),
-                    });
-                }
-                RoomActivityKind::UnsupportedMessage(message) => rows.push(TimelineRow {
-                    kind: TimelineRowKind::Unsupported,
-                    text: format!(
-                        "* [{}] {} sent unsupported {}: {}",
-                        format_timestamp_hhmm_utc(activity.timestamp_ms),
-                        message.sender,
-                        message.msgtype,
-                        message.body
-                    ),
-                }),
-                RoomActivityKind::StateNotice(notice) => match &notice.content {
-                    RoomStateNoticeContent::Topic { topic } => rows.push(TimelineRow {
+        RoomActivityKind::Image(message) => {
+            let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
+            let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
+            rows.push(TimelineRow {
+                kind: TimelineRowKind::Image,
+                text: format!(
+                    "* [{}] {} sent image: {display_name}{metadata_suffix}",
+                    format_timestamp_hhmm_utc(activity.timestamp_ms),
+                    message.sender,
+                ),
+            });
+        }
+        RoomActivityKind::UnsupportedMessage(message) => rows.push(TimelineRow {
+            kind: TimelineRowKind::Unsupported,
+            text: format!(
+                "* [{}] {} sent unsupported {}: {}",
+                format_timestamp_hhmm_utc(activity.timestamp_ms),
+                message.sender,
+                message.msgtype,
+                message.body
+            ),
+        }),
+        RoomActivityKind::StateNotice(notice) => match &notice.content {
+            RoomStateNoticeContent::Topic { topic } => rows.push(TimelineRow {
+                kind: TimelineRowKind::StateNotice,
+                text: format!(
+                    "* [{}] {} set topic: {topic}",
+                    format_timestamp_hhmm_utc(activity.timestamp_ms),
+                    notice.sender,
+                ),
+            }),
+            RoomStateNoticeContent::Member {
+                membership,
+                displayname,
+            } => {
+                let timestamp = format_timestamp_hhmm_utc(activity.timestamp_ms);
+                match membership.as_str() {
+                    "join" => {
+                        let member = displayname.as_deref().unwrap_or(notice.state_key.as_str());
+                        rows.push(TimelineRow {
+                            kind: TimelineRowKind::StateNotice,
+                            text: format!("* [{timestamp}] {member} joined"),
+                        });
+                    }
+                    "leave" => {
+                        let member = displayname.as_deref().unwrap_or(notice.state_key.as_str());
+                        rows.push(TimelineRow {
+                            kind: TimelineRowKind::StateNotice,
+                            text: format!("* [{timestamp}] {member} left"),
+                        });
+                    }
+                    membership => rows.push(TimelineRow {
                         kind: TimelineRowKind::StateNotice,
                         text: format!(
-                            "* [{}] {} set topic: {topic}",
-                            format_timestamp_hhmm_utc(activity.timestamp_ms),
-                            notice.sender,
+                            "* [{timestamp}] {} membership: {membership}",
+                            notice.state_key
                         ),
                     }),
-                    RoomStateNoticeContent::Member {
-                        membership,
-                        displayname,
-                    } => {
-                        let timestamp = format_timestamp_hhmm_utc(activity.timestamp_ms);
-                        match membership.as_str() {
-                            "join" => {
-                                let member =
-                                    displayname.as_deref().unwrap_or(notice.state_key.as_str());
-                                rows.push(TimelineRow {
-                                    kind: TimelineRowKind::StateNotice,
-                                    text: format!("* [{timestamp}] {member} joined"),
-                                });
-                            }
-                            "leave" => {
-                                let member =
-                                    displayname.as_deref().unwrap_or(notice.state_key.as_str());
-                                rows.push(TimelineRow {
-                                    kind: TimelineRowKind::StateNotice,
-                                    text: format!("* [{timestamp}] {member} left"),
-                                });
-                            }
-                            membership => rows.push(TimelineRow {
-                                kind: TimelineRowKind::StateNotice,
-                                text: format!(
-                                    "* [{timestamp}] {} membership: {membership}",
-                                    notice.state_key
-                                ),
-                            }),
-                        }
-                    }
-                },
+                }
             }
+        },
+    }
+}
+
+fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
+    let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
+    let mut rows = Vec::new();
+    let room_view = model.room_views.get(room_id);
+    push_room_context_rows(&mut rows, room, room_view);
+
+    if let Some(room_view) = room_view {
+        for activity in &room_view.activities {
+            push_room_activity_row(&mut rows, activity);
         }
     }
 
+    rows
+}
+
+fn build_thread_timeline_rows(
+    model: &UiModel,
+    room_id: &str,
+    thread_root_event_id: &str,
+) -> Vec<TimelineRow> {
+    let room = room_by_id(&model.rooms, room_id).expect("thread view must target an existing room");
+    let room_view = model
+        .room_views
+        .get(room_id)
+        .expect("thread view must target an existing room view");
+    let mut rows = Vec::new();
+    push_room_context_rows(&mut rows, room, Some(room_view));
+    for activity in &room_view.activities {
+        if room_activity_event_id(activity) == Some(thread_root_event_id)
+            || room_activity_thread_root_event_id(activity) == Some(thread_root_event_id)
+        {
+            push_room_activity_row(&mut rows, activity);
+        }
+    }
     rows
 }
 
@@ -3565,19 +3706,33 @@ fn render_view_text(lines: &[String]) -> String {
 fn resolve_active_view(
     active_view: &ViewId,
     selected_room: Option<&str>,
-    rooms: &[RoomSummary],
+    model: &UiModel,
 ) -> ViewId {
     match active_view {
         ViewId::Status => ViewId::Status,
-        ViewId::Room(room_id) if actionable_room_by_id(rooms, room_id).is_some() => {
+        ViewId::Room(room_id) if actionable_room_by_id(&model.rooms, room_id).is_some() => {
+            ViewId::Room(room_id.clone())
+        }
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } if projected_thread_by_id(model, room_id, thread_root_event_id).is_some() => {
+            ViewId::Thread {
+                room_id: room_id.clone(),
+                thread_root_event_id: thread_root_event_id.clone(),
+            }
+        }
+        ViewId::Thread { room_id, .. }
+            if actionable_room_by_id(&model.rooms, room_id).is_some() =>
+        {
             ViewId::Room(room_id.clone())
         }
         ViewId::Room(_) | ViewId::Thread { .. } => {
-            if let Some(room_id) =
-                selected_room.filter(|room_id| actionable_room_by_id(rooms, room_id).is_some())
+            if let Some(room_id) = selected_room
+                .filter(|room_id| actionable_room_by_id(&model.rooms, room_id).is_some())
             {
                 ViewId::Room(room_id.to_owned())
-            } else if let Some(room) = rooms.iter().find(|room| is_actionable_room(room)) {
+            } else if let Some(room) = model.rooms.iter().find(|room| is_actionable_room(room)) {
                 ViewId::Room(room.room_id.clone())
             } else {
                 ViewId::Status
@@ -3590,13 +3745,7 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
     let stale_view_ids = state
         .views
         .keys()
-        .filter(|view_id| {
-            matches!(
-                view_id,
-                ViewId::Room(room_id)
-                    if actionable_room_by_id(&state.model.rooms, room_id).is_none()
-            ) || matches!(view_id, ViewId::Thread { .. })
-        })
+        .filter(|view_id| !view_id_is_valid(&state.model, view_id))
         .cloned()
         .collect::<Vec<_>>();
 
@@ -3609,15 +3758,15 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
         })
         .collect::<Vec<_>>();
 
-    if !matches!(
-        resolve_active_view(
-            &state.active_view,
-            state.model.selected_room.as_deref(),
-            &state.model.rooms,
-        ),
-        ViewId::Room(_)
-    ) {
+    let resolved_active_view = resolve_active_view(
+        &state.active_view,
+        state.model.selected_room.as_deref(),
+        &state.model,
+    );
+    if matches!(resolved_active_view, ViewId::Status) {
         state.active_view = ViewId::Status;
+    } else {
+        state.active_view = resolved_active_view;
     }
 
     removed
@@ -3635,6 +3784,30 @@ fn actionable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<
     room_by_id(rooms, room_id).filter(|room| is_actionable_room(room))
 }
 
+fn projected_thread_by_id<'a>(
+    model: &'a UiModel,
+    room_id: &str,
+    thread_root_event_id: &str,
+) -> Option<&'a ThreadViewModel> {
+    actionable_room_by_id(&model.rooms, room_id)?;
+    model
+        .room_views
+        .get(room_id)?
+        .threads
+        .get(thread_root_event_id)
+}
+
+fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
+    match view_id {
+        ViewId::Status => true,
+        ViewId::Room(room_id) => actionable_room_by_id(&model.rooms, room_id).is_some(),
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => projected_thread_by_id(model, room_id, thread_root_event_id).is_some(),
+    }
+}
+
 fn room_tree_label(room: &RoomSummary) -> String {
     let mut label = room.display_name.clone();
     if room.encrypted {
@@ -3648,6 +3821,15 @@ fn space_tree_label(space: &RoomSummary) -> String {
 }
 
 fn view_title(model: &UiModel, view_id: &ViewId) -> String {
+    if let Some((room_id, thread_root_event_id)) = view_id.thread_key() {
+        return format!(
+            "Thread: {}",
+            projected_thread_by_id(model, room_id, thread_root_event_id)
+                .expect("thread view activation must target an existing projected thread")
+                .label
+        );
+    }
+
     match view_id {
         ViewId::Status => "Status".to_owned(),
         ViewId::Room(room_id) => {
@@ -3655,17 +3837,17 @@ fn view_title(model: &UiModel, view_id: &ViewId) -> String {
                 .expect("room view activation must target an existing room");
             room_tree_label(room)
         }
-        ViewId::Thread { room_id, .. } => {
-            let room = room_by_id(&model.rooms, room_id)
-                .expect("thread view activation must target an existing room");
-            room_tree_label(room)
-        }
+        ViewId::Thread { .. } => unreachable!("thread views are handled above"),
     }
 }
 
 fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
     let mut text = view_title(&state.model, view_id);
-    if matches!(view_id, ViewId::Room(room_id) if state.room_activity.contains(room_id)) {
+    if view_id.is_room_view()
+        && view_id
+            .room_id()
+            .is_some_and(|room_id| state.room_activity.contains(room_id))
+    {
         text.insert_str(0, "* ");
     }
     text
@@ -3757,9 +3939,8 @@ unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND
                 | WS_VSCROLL,
             WS_EX_CLIENTEDGE,
         ),
-        ViewId::Room(_) => (ROOM_CONTENT_CLASS_NAME, WS_CHILD | WS_VISIBLE, 0),
-        ViewId::Thread { .. } => {
-            return Err("thread views are not implemented".to_owned());
+        ViewId::Room(_) | ViewId::Thread { .. } => {
+            (ROOM_CONTENT_CLASS_NAME, WS_CHILD | WS_VISIBLE, 0)
         }
     };
     let content = CreateWindowExW(
@@ -3820,7 +4001,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         state.active_view = resolve_active_view(
             &state.active_view,
             state.model.selected_room.as_deref(),
-            &state.model.rooms,
+            &state.model,
         );
     }
     Some(view_id)
@@ -3843,10 +4024,6 @@ unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
 }
 
 unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
-    if matches!(view_id, ViewId::Thread { .. }) {
-        return Err("thread views are not implemented".to_owned());
-    }
-
     let stale_child = state_ref(hwnd)
         .views
         .get(&view_id)
@@ -3885,6 +4062,29 @@ unsafe fn ensure_room_view(hwnd: HWND, room_id: &str) -> Result<HWND, String> {
     }
 
     ensure_view(hwnd, ViewId::Room(room_id.to_owned()))
+}
+
+unsafe fn ensure_thread_view(
+    hwnd: HWND,
+    room_id: &str,
+    thread_root_event_id: &str,
+) -> Result<HWND, String> {
+    if actionable_room_by_id(&state_ref(hwnd).model.rooms, room_id).is_none() {
+        return Err(format!("unknown room id: {room_id}"));
+    }
+    if projected_thread_by_id(&state_ref(hwnd).model, room_id, thread_root_event_id).is_none() {
+        return Err(format!(
+            "unknown thread root event id for {room_id}: {thread_root_event_id}"
+        ));
+    }
+
+    ensure_view(
+        hwnd,
+        ViewId::Thread {
+            room_id: room_id.to_owned(),
+            thread_root_event_id: thread_root_event_id.to_owned(),
+        },
+    )
 }
 
 unsafe fn destroy_stale_room_views(hwnd: HWND) {
@@ -3936,8 +4136,25 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             set_timeline_rows(room_content_timeline(content), &rows);
             set_room_member_list(room_content_member_list(content), &member_rows);
         }
-        ViewId::Thread { .. } => {
-            return Err("thread views are not implemented".to_owned());
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => {
+            let (rows, member_rows) = {
+                let state = state_ref(hwnd);
+                let rows = build_thread_timeline_rows(&state.model, room_id, thread_root_event_id);
+                let member_rows = room_member_view_rows(
+                    &state
+                        .model
+                        .room_views
+                        .get(room_id)
+                        .map(|room_view| room_view.members.as_slice())
+                        .unwrap_or_default(),
+                );
+                (rows, member_rows)
+            };
+            set_timeline_rows(room_content_timeline(content), &rows);
+            set_room_member_list(room_content_member_list(content), &member_rows);
         }
     }
     Ok(())
@@ -3962,8 +4179,12 @@ unsafe fn activate_view(
             }
             ensure_room_view(hwnd, room_id)?
         }
-        ViewId::Thread { .. } => {
-            return Err("thread views are not implemented".to_owned());
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => {
+            select_room(state_mut(hwnd), room_id)?;
+            ensure_thread_view(hwnd, room_id, thread_root_event_id)?
         }
     };
 
@@ -4011,7 +4232,7 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         let active = resolve_active_view(
             &state.active_view,
             state.model.selected_room.as_deref(),
-            &state.model.rooms,
+            &state.model,
         );
         state.active_view = active.clone();
         active
@@ -4220,12 +4441,45 @@ unsafe fn insert_mapped_tree_item(
 }
 
 unsafe fn render_room_tree_leaf(state: &mut WindowState, parent: isize, room: &RoomSummary) {
-    insert_mapped_tree_item(
+    let room_item = insert_mapped_tree_item(
         state,
         parent,
         &room_tree_label(room),
         ViewId::Room(room.room_id.clone()),
     );
+    let threads = state
+        .model
+        .room_views
+        .get(&room.room_id)
+        .map(|room_view| {
+            room_view
+                .threads
+                .iter()
+                .map(|(thread_root_event_id, thread)| {
+                    (thread_root_event_id.clone(), thread.label.clone())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for (thread_root_event_id, label) in threads {
+        insert_mapped_tree_item(
+            state,
+            room_item,
+            &label,
+            ViewId::Thread {
+                room_id: room.room_id.clone(),
+                thread_root_event_id,
+            },
+        );
+    }
+    if state
+        .model
+        .room_views
+        .get(&room.room_id)
+        .is_some_and(|room_view| !room_view.threads.is_empty())
+    {
+        expand_tree_item(state.controls.tree, room_item);
+    }
 }
 
 fn mark_reachable_space_ids(
@@ -4880,6 +5134,17 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
         if state.views.contains_key(&view_id) {
             ordered.push(view_id);
         }
+        if let Some(room_view) = state.model.room_views.get(&room.room_id) {
+            for thread_root_event_id in room_view.threads.keys() {
+                let thread_view_id = ViewId::Thread {
+                    room_id: room.room_id.clone(),
+                    thread_root_event_id: thread_root_event_id.clone(),
+                };
+                if state.views.contains_key(&thread_view_id) {
+                    ordered.push(thread_view_id);
+                }
+            }
+        }
     }
 
     let mut remaining = state
@@ -5243,7 +5508,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                         split_rendered_lines(&read_window_text(room_content_timeline(view.content)))
                     }
                     ViewId::Thread { .. } => {
-                        return Err("thread views are not implemented".to_owned());
+                        split_rendered_lines(&read_window_text(room_content_timeline(view.content)))
                     }
                 },
                 members: match &view_id {
@@ -5256,9 +5521,14 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                             .map(|room_view| room_view.members.as_slice())
                             .unwrap_or_default(),
                     ),
-                    ViewId::Thread { .. } => {
-                        return Err("thread views are not implemented".to_owned());
-                    }
+                    ViewId::Thread { room_id, .. } => room_member_view_rows(
+                        &state_ref(hwnd)
+                            .model
+                            .room_views
+                            .get(room_id)
+                            .map(|room_view| room_view.members.as_slice())
+                            .unwrap_or_default(),
+                    ),
                 },
                 identity,
             })
@@ -5281,10 +5551,10 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
             identity: view_identity_from_view_id(&view_id),
             title: switchbar_button_text(state, &view_id),
             active: view_identity_from_view_id(&view_id) == active,
-            has_activity: matches!(
-                &view_id,
-                ViewId::Room(room_id) if state.room_activity.contains(room_id)
-            ),
+            has_activity: view_id.is_room_view()
+                && view_id
+                    .room_id()
+                    .is_some_and(|room_id| state.room_activity.contains(room_id)),
         })
         .collect();
 
@@ -5937,7 +6207,7 @@ unsafe fn execute_local_slash_command(
                 set_local_command_status(hwnd, format!("cleared window: {room_id}"))
             }
             ViewId::Thread { .. } => {
-                set_local_command_status(hwnd, "thread views are not implemented".to_owned())
+                set_local_command_status(hwnd, "nothing to clear in thread view".to_owned())
             }
             ViewId::Status => {
                 set_local_command_status(hwnd, "nothing to clear in status view".to_owned())
@@ -6791,6 +7061,28 @@ mod tests {
         }
     }
 
+    fn sent_message_activity_with_relation_and_presentation(
+        room_id: &str,
+        event_id: &str,
+        transaction_id: Option<&str>,
+        relation: Option<RoomActivityRelation>,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+        timestamp_ms: u64,
+    ) -> RoomActivity {
+        RoomActivity {
+            relation,
+            ..sent_message_activity_with_presentation(
+                room_id,
+                event_id,
+                transaction_id,
+                presentation,
+                body,
+                timestamp_ms,
+            )
+        }
+    }
+
     fn sent_message_activity(
         room_id: &str,
         event_id: &str,
@@ -6808,6 +7100,20 @@ mod tests {
         )
     }
 
+    fn thread_relation(thread_root_event_id: &str) -> RoomActivityRelation {
+        RoomActivityRelation::Thread {
+            thread_root_event_id: thread_root_event_id.to_owned(),
+            in_reply_to_event_id: Some(thread_root_event_id.to_owned()),
+            is_falling_back: false,
+        }
+    }
+
+    fn reply_relation(in_reply_to_event_id: &str) -> RoomActivityRelation {
+        RoomActivityRelation::Reply {
+            in_reply_to_event_id: in_reply_to_event_id.to_owned(),
+        }
+    }
+
     fn timeline(room_id: &str, body: &str) -> Event {
         let event_id = format!("${room_id}:{}", body.replace(' ', "_"));
         Event::RoomActivity(Box::new(sent_message_activity(
@@ -6817,6 +7123,40 @@ mod tests {
             body,
             1_700_000_000_000,
         )))
+    }
+
+    fn timeline_with_relation_and_presentation(
+        room_id: &str,
+        event_id: &str,
+        transaction_id: Option<&str>,
+        relation: Option<RoomActivityRelation>,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+        timestamp_ms: u64,
+    ) -> Event {
+        Event::RoomActivity(Box::new(
+            sent_message_activity_with_relation_and_presentation(
+                room_id,
+                event_id,
+                transaction_id,
+                relation,
+                presentation,
+                body,
+                timestamp_ms,
+            ),
+        ))
+    }
+
+    fn thread_timeline(room_id: &str, event_id: &str, root_event_id: &str, body: &str) -> Event {
+        timeline_with_relation_and_presentation(
+            room_id,
+            event_id,
+            None,
+            Some(thread_relation(root_event_id)),
+            RoomMessagePresentationKind::Text,
+            body,
+            1_700_000_120_000,
+        )
     }
 
     fn timeline_with_transaction_id_with_presentation(
@@ -8690,16 +9030,19 @@ mod tests {
 
     #[test]
     fn resolve_active_view_preserves_existing_active_room() {
-        let rooms = vec![
-            room("!keep:example", "Keep", false),
-            room("!other:example", "Other", false),
-        ];
+        let model = UiModel {
+            rooms: vec![
+                room("!keep:example", "Keep", false),
+                room("!other:example", "Other", false),
+            ],
+            ..UiModel::default()
+        };
 
         assert_eq!(
             resolve_active_view(
                 &ViewId::Room("!keep:example".to_owned()),
                 Some("!other:example"),
-                &rooms,
+                &model,
             ),
             ViewId::Room("!keep:example".to_owned())
         );
@@ -8707,36 +9050,94 @@ mod tests {
 
     #[test]
     fn resolve_active_view_falls_back_to_first_room_when_active_room_is_stale() {
-        let rooms = vec![
-            room("!alpha:example", "Alpha", false),
-            room("!beta:example", "Beta", false),
-        ];
+        let model = UiModel {
+            rooms: vec![
+                room("!alpha:example", "Alpha", false),
+                room("!beta:example", "Beta", false),
+            ],
+            ..UiModel::default()
+        };
 
         assert_eq!(
-            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &rooms),
+            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &model),
             ViewId::Room("!alpha:example".to_owned())
         );
     }
 
     #[test]
     fn resolve_active_view_skips_spaces_when_falling_back() {
-        let rooms = vec![
-            space("!space:example", "Space"),
-            room("!alpha:example", "Alpha", false),
-            room("!beta:example", "Beta", false),
-        ];
+        let model = UiModel {
+            rooms: vec![
+                space("!space:example", "Space"),
+                room("!alpha:example", "Alpha", false),
+                room("!beta:example", "Beta", false),
+            ],
+            ..UiModel::default()
+        };
 
         assert_eq!(
-            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &rooms),
+            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &model),
             ViewId::Room("!alpha:example".to_owned())
         );
     }
 
     #[test]
     fn resolve_active_view_falls_back_to_status_when_no_rooms_remain() {
+        let model = UiModel::default();
         assert_eq!(
-            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &[]),
+            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &model),
             ViewId::Status
+        );
+    }
+
+    #[test]
+    fn resolve_active_view_preserves_existing_active_thread() {
+        let mut room_view = RoomViewModel::default();
+        room_view.threads.insert(
+            "$thread-root".to_owned(),
+            ThreadViewModel {
+                label: "root msg".to_owned(),
+            },
+        );
+        let model = UiModel {
+            rooms: vec![room("!alpha:example", "Alpha", false)],
+            room_views: BTreeMap::from([("!alpha:example".to_owned(), room_view)]),
+            ..UiModel::default()
+        };
+
+        assert_eq!(
+            resolve_active_view(
+                &ViewId::Thread {
+                    room_id: "!alpha:example".to_owned(),
+                    thread_root_event_id: "$thread-root".to_owned(),
+                },
+                Some("!alpha:example"),
+                &model,
+            ),
+            ViewId::Thread {
+                room_id: "!alpha:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_active_view_falls_back_to_parent_room_when_active_thread_is_stale() {
+        let model = UiModel {
+            rooms: vec![room("!alpha:example", "Alpha", false)],
+            ..UiModel::default()
+        };
+
+        assert_eq!(
+            resolve_active_view(
+                &ViewId::Thread {
+                    room_id: "!alpha:example".to_owned(),
+                    thread_root_event_id: "$thread-root".to_owned(),
+                },
+                Some("!alpha:example"),
+                &model,
+            ),
+            ViewId::Room("!alpha:example".to_owned())
         );
     }
 
@@ -8833,6 +9234,7 @@ mod tests {
                     "hello",
                     1_700_000_000_000,
                 )],
+                threads: BTreeMap::new(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
             },
@@ -8971,6 +9373,271 @@ mod tests {
                 ViewId::Room("!space:example".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn view_identity_round_trips_thread_view_id() {
+        let view_id = ViewId::Thread {
+            room_id: "!ops:example".to_owned(),
+            thread_root_event_id: "$thread-root".to_owned(),
+        };
+
+        assert_eq!(
+            view_identity_from_view_id(&view_id),
+            ViewIdentity::Thread {
+                room_id: "!ops:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            }
+        );
+        assert_eq!(
+            view_id_from_identity(&ViewIdentity::Thread {
+                room_id: "!ops:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            }),
+            view_id
+        );
+    }
+
+    #[test]
+    fn thread_labels_use_observed_root_body_when_available_and_fall_back_to_root_event_id() {
+        let mut room_view = RoomViewModel::default();
+
+        room_view.apply_activity(sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$thread-1",
+            None,
+            Some(thread_relation("$thread-root")),
+            RoomMessagePresentationKind::Text,
+            "thread rep",
+            1_700_000_120_000,
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("$thread-root")
+        );
+
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$thread-root",
+            None,
+            "root msg",
+            1_700_000_060_000,
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("root msg")
+        );
+
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$thread-root",
+            None,
+            "root msg",
+            1_700_000_060_000,
+        ));
+        room_view.apply_activity(sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$thread-2",
+            None,
+            Some(thread_relation("$thread-root")),
+            RoomMessagePresentationKind::Text,
+            "thread rep",
+            1_700_000_120_000,
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("root msg")
+        );
+    }
+
+    #[test]
+    fn thread_timeline_filters_room_activity() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(&mut state, timeline("!ops:example", "lobby")).unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$reply-1",
+                None,
+                Some(reply_relation("$lobby-root")),
+                RoomMessagePresentationKind::Text,
+                "plain",
+                1_700_000_090_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$thread-1", "$thread-root", "thread rep"),
+        )
+        .unwrap();
+
+        let lines = project_timeline_rows(&build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+        ));
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Room: Ops (!ops:example)"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Topic: incident review"))
+        );
+        assert!(lines.iter().any(|line| line.contains("root msg")));
+        assert!(lines.iter().any(|line| line.contains("thread rep")));
+        assert!(!lines.iter().any(|line| line.contains("lobby")));
+        assert!(!lines.iter().any(|line| line.contains("plain")));
+    }
+
+    #[test]
+    fn ordered_view_ids_place_threads_after_parent_rooms() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!alpha:example", "Alpha", false),
+            room("!beta:example", "Beta", false),
+        ];
+        state.model.room_views.insert(
+            "!alpha:example".to_owned(),
+            RoomViewModel {
+                threads: BTreeMap::from([(
+                    "$thread-root".to_owned(),
+                    ThreadViewModel {
+                        label: "root msg".to_owned(),
+                    },
+                )]),
+                ..RoomViewModel::default()
+            },
+        );
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state
+            .views
+            .insert(ViewId::Room("!alpha:example".to_owned()), tracked_view(20));
+        state.views.insert(
+            ViewId::Thread {
+                room_id: "!alpha:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            },
+            tracked_view(30),
+        );
+        state
+            .views
+            .insert(ViewId::Room("!beta:example".to_owned()), tracked_view(40));
+
+        assert_eq!(
+            ordered_view_ids(&state),
+            vec![
+                ViewId::Status,
+                ViewId::Room("!alpha:example".to_owned()),
+                ViewId::Thread {
+                    room_id: "!alpha:example".to_owned(),
+                    thread_root_event_id: "$thread-root".to_owned(),
+                },
+                ViewId::Room("!beta:example".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn stale_thread_cleanup_falls_back_to_parent_room_when_possible() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!alpha:example", "Alpha", false)];
+        state.model.selected_room = Some("!alpha:example".to_owned());
+        state.active_view = ViewId::Thread {
+            room_id: "!alpha:example".to_owned(),
+            thread_root_event_id: "$thread-root".to_owned(),
+        };
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state
+            .views
+            .insert(ViewId::Room("!alpha:example".to_owned()), tracked_view(20));
+        state.views.insert(
+            ViewId::Thread {
+                room_id: "!alpha:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            },
+            tracked_view(30),
+        );
+        state.hwnd_views.insert(10, ViewId::Status);
+        state
+            .hwnd_views
+            .insert(20, ViewId::Room("!alpha:example".to_owned()));
+        state.hwnd_views.insert(
+            30,
+            ViewId::Thread {
+                room_id: "!alpha:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            },
+        );
+
+        let removed = take_stale_room_views(&mut state);
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(state.active_view, ViewId::Room("!alpha:example".to_owned()));
+        assert!(!state.views.contains_key(&ViewId::Thread {
+            room_id: "!alpha:example".to_owned(),
+            thread_root_event_id: "$thread-root".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn stale_thread_cleanup_removes_threads_when_room_disappears() {
+        let mut state = test_state();
+        state.model.selected_room = Some("!alpha:example".to_owned());
+        state.active_view = ViewId::Thread {
+            room_id: "!alpha:example".to_owned(),
+            thread_root_event_id: "$thread-root".to_owned(),
+        };
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state.views.insert(
+            ViewId::Thread {
+                room_id: "!alpha:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            },
+            tracked_view(20),
+        );
+        state.hwnd_views.insert(10, ViewId::Status);
+        state.hwnd_views.insert(
+            20,
+            ViewId::Thread {
+                room_id: "!alpha:example".to_owned(),
+                thread_root_event_id: "$thread-root".to_owned(),
+            },
+        );
+
+        let removed = take_stale_room_views(&mut state);
+
+        assert_eq!(removed.len(), 1);
+        assert_eq!(state.active_view, ViewId::Status);
+        assert!(state.views.contains_key(&ViewId::Status));
     }
 
     #[test]
@@ -9216,6 +9883,27 @@ mod tests {
         apply_core_event(&mut state, topic_state("!room:example", "incident review")).unwrap();
 
         assert!(!state.room_activity.contains("!room:example"));
+    }
+
+    #[test]
+    fn thread_view_is_not_treated_as_active_room_for_room_activity_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.active_view = ViewId::Thread {
+            room_id: "!room:example".to_owned(),
+            thread_root_event_id: "$thread-root".to_owned(),
+        };
+
+        apply_core_event(&mut state, timeline("!room:example", "hello")).unwrap();
+
+        assert!(state.room_activity.contains("!room:example"));
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get("!room:example")
+                .map(String::as_str),
+            Some("$!room:example:hello")
+        );
     }
 
     #[test]
