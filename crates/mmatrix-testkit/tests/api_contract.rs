@@ -13,7 +13,8 @@ use mmatrix_testkit::{
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild, StatusBarState, StoredSession,
     SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState, UnsupportedRoomMessageActivity,
-    Verification, VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -164,6 +165,7 @@ fn data_models_round_trip_through_json() {
                 },
             },
         }),
+        submitted_verification_actions: Vec::new(),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
             message: "failed".to_owned(),
@@ -171,7 +173,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 13,
+        protocol_version: 15,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -922,6 +924,7 @@ fn model_last_activity_round_trips_through_json() {
         }),
         e2ee_status: None,
         last_verification: None,
+        submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
     };
@@ -979,7 +982,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":13,
+            "protocol_version":15,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -1747,6 +1750,54 @@ fn recover_e2ee_args_reject_unknown_fields() {
     );
 }
 
+#[test]
+fn verification_action_args_round_trip_with_omitted_and_explicit_flow() {
+    let omitted = VerificationActionArgs::default();
+    assert_eq!(
+        serde_json::to_value(&omitted).expect("serialize omitted verification args"),
+        serde_json::json!({})
+    );
+    assert_eq!(
+        serde_json::from_value::<VerificationActionArgs>(serde_json::json!({}))
+            .expect("deserialize omitted verification args"),
+        omitted
+    );
+
+    let explicit = VerificationActionArgs {
+        flow_id: Some("flow-verify-123".to_owned()),
+        user_id: Some("@alice:example".to_owned()),
+    };
+    assert_eq!(
+        serde_json::to_value(&explicit).expect("serialize explicit verification args"),
+        serde_json::json!({
+            "flow_id":"flow-verify-123",
+            "user_id":"@alice:example"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<VerificationActionArgs>(serde_json::json!({
+            "flow_id":"flow-verify-123",
+            "user_id":"@alice:example"
+        }))
+        .expect("deserialize explicit verification args"),
+        explicit
+    );
+}
+
+#[test]
+fn verification_action_args_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<VerificationActionArgs>(
+            r#"{
+            "flow_id":"flow-verify-123",
+            "user_id":"@alice:example",
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+}
+
 #[cfg(not(windows))]
 #[test]
 fn non_windows_platform_reports_unsupported_driver() {
@@ -1810,6 +1861,14 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
     unsupported(app.start_sync());
     unsupported(app.logout());
     unsupported(app.recover_e2ee("sample recovery secret"));
+    unsupported(app.accept_verification());
+    unsupported(app.accept_verification_flow("flow-1", "@alice:example"));
+    unsupported(app.cancel_verification());
+    unsupported(app.cancel_verification_flow("flow-1", "@alice:example"));
+    unsupported(app.confirm_verification_sas());
+    unsupported(app.confirm_verification_sas_flow("flow-1", "@alice:example"));
+    unsupported(app.reject_verification_sas());
+    unsupported(app.reject_verification_sas_flow("flow-1", "@alice:example"));
     unsupported(app.wait_for_lifecycle_state("ready", Duration::from_millis(1)));
     unsupported(app.wait_for_min_rooms(1, Duration::from_millis(1)));
     assert_eq!(app.pid(), 0);

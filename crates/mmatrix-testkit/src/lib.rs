@@ -61,6 +61,14 @@ const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
 #[cfg(windows)]
 const COMMAND_ID_RECOVER_E2EE: u32 = 23;
 #[cfg(windows)]
+const COMMAND_ID_ACCEPT_VERIFICATION: u32 = 24;
+#[cfg(windows)]
+const COMMAND_ID_CANCEL_VERIFICATION: u32 = 25;
+#[cfg(windows)]
+const COMMAND_ID_CONFIRM_VERIFICATION_SAS: u32 = 26;
+#[cfg(windows)]
+const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -130,6 +138,15 @@ fn default_device_display_name() -> String {
     "mmatrix-ui".to_owned()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerificationActionArgs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
@@ -139,8 +156,27 @@ pub struct Model {
     pub last_activity: Option<RoomMessageActivityLine>,
     pub e2ee_status: Option<E2eeStatus>,
     pub last_verification: Option<Verification>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedVerificationAction {
+    pub action: VerificationActionKind,
+    pub flow_id: String,
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationActionKind {
+    Accept,
+    Cancel,
+    ConfirmSas,
+    RejectSas,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -777,6 +813,71 @@ impl MmatrixApp {
         })
     }
 
+    pub fn accept_verification(&self) -> Result<(), TestkitError> {
+        self.inner
+            .accept_verification(VerificationActionArgs::default())
+    }
+
+    pub fn accept_verification_flow(
+        &self,
+        flow_id: impl Into<String>,
+        user_id: impl Into<String>,
+    ) -> Result<(), TestkitError> {
+        self.inner.accept_verification(VerificationActionArgs {
+            flow_id: Some(flow_id.into()),
+            user_id: Some(user_id.into()),
+        })
+    }
+
+    pub fn cancel_verification(&self) -> Result<(), TestkitError> {
+        self.inner
+            .cancel_verification(VerificationActionArgs::default())
+    }
+
+    pub fn cancel_verification_flow(
+        &self,
+        flow_id: impl Into<String>,
+        user_id: impl Into<String>,
+    ) -> Result<(), TestkitError> {
+        self.inner.cancel_verification(VerificationActionArgs {
+            flow_id: Some(flow_id.into()),
+            user_id: Some(user_id.into()),
+        })
+    }
+
+    pub fn confirm_verification_sas(&self) -> Result<(), TestkitError> {
+        self.inner
+            .confirm_verification_sas(VerificationActionArgs::default())
+    }
+
+    pub fn confirm_verification_sas_flow(
+        &self,
+        flow_id: impl Into<String>,
+        user_id: impl Into<String>,
+    ) -> Result<(), TestkitError> {
+        self.inner
+            .confirm_verification_sas(VerificationActionArgs {
+                flow_id: Some(flow_id.into()),
+                user_id: Some(user_id.into()),
+            })
+    }
+
+    pub fn reject_verification_sas(&self) -> Result<(), TestkitError> {
+        self.inner
+            .reject_verification_sas(VerificationActionArgs::default())
+    }
+
+    pub fn reject_verification_sas_flow(
+        &self,
+        flow_id: impl Into<String>,
+        user_id: impl Into<String>,
+    ) -> Result<(), TestkitError> {
+        self.inner.reject_verification_sas(VerificationActionArgs {
+            flow_id: Some(flow_id.into()),
+            user_id: Some(user_id.into()),
+        })
+    }
+
     pub fn load_events(&self, events_json: &str) -> Result<(), TestkitError> {
         self.inner.load_events(events_json)
     }
@@ -1198,6 +1299,42 @@ mod imp {
         }
 
         pub(crate) fn recover_e2ee(&self, _args: RecoverE2eeArgs) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn accept_verification(
+            &self,
+            _args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn cancel_verification(
+            &self,
+            _args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn confirm_verification_sas(
+            &self,
+            _args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn reject_verification_sas(
+            &self,
+            _args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -1640,6 +1777,66 @@ mod imp {
             } else {
                 Err(TestkitError::InvalidResponse(
                     "RECOVER_E2EE was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn accept_verification(
+            &self,
+            args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_ACCEPT_VERIFICATION, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "ACCEPT_VERIFICATION was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn cancel_verification(
+            &self,
+            args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_CANCEL_VERIFICATION, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "CANCEL_VERIFICATION was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn confirm_verification_sas(
+            &self,
+            args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_CONFIRM_VERIFICATION_SAS, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "CONFIRM_VERIFICATION_SAS was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn reject_verification_sas(
+            &self,
+            args: VerificationActionArgs,
+        ) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_REJECT_VERIFICATION_SAS, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "REJECT_VERIFICATION_SAS was not accepted".to_owned(),
                 ))
             }
         }

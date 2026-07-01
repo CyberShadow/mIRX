@@ -77,11 +77,12 @@ use crate::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityResponse,
-        DumpRoomMessageActivityLine, FailureEnvelope, GetVersionResponse, LifecycleState,
-        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
-        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, SelectRoomResponse,
-        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiState, ViewIdentity, WaitIdleResponse,
+        DumpRoomMessageActivityLine, DumpSubmittedVerificationAction, FailureEnvelope,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        ResponseEnvelope, SelectRoomResponse, SelectViewResponse,
+        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
         dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_verification_from_state_event,
         failure_response, parse_command_request, success_response,
@@ -4059,7 +4060,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )
         }
         ParsedCommand::DumpModel { id } => {
-            let dump = dump_model_from_ui(&state_ref(hwnd).model);
+            let dump = dump_model_from_state(state_ref(hwnd));
             serialize_success_json(&id, dump)
         }
         ParsedCommand::DumpUiState { id } => {
@@ -4260,6 +4261,31 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::AcceptVerification { id, args } => {
+            submit_automation_verification_action(hwnd, VerificationAction::Accept, args).map_err(
+                |message| failure_response(Some(id.clone()), "verification_failed", message),
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::CancelVerification { id, args } => {
+            submit_automation_verification_action(hwnd, VerificationAction::Cancel, args).map_err(
+                |message| failure_response(Some(id.clone()), "verification_failed", message),
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::ConfirmVerificationSas { id, args } => {
+            submit_automation_verification_action(hwnd, VerificationAction::Confirm, args)
+                .map_err(|message| {
+                    failure_response(Some(id.clone()), "verification_failed", message)
+                })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::RejectVerificationSas { id, args } => {
+            submit_automation_verification_action(hwnd, VerificationAction::Reject, args).map_err(
+                |message| failure_response(Some(id.clone()), "verification_failed", message),
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
     }
 }
 
@@ -4287,7 +4313,11 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SendComposeKey { id, .. }
         | ParsedCommand::SelectNavigationPath { id, .. }
         | ParsedCommand::AppendSyntheticEvents { id, .. }
-        | ParsedCommand::RecoverE2ee { id, .. } => id,
+        | ParsedCommand::RecoverE2ee { id, .. }
+        | ParsedCommand::AcceptVerification { id, .. }
+        | ParsedCommand::CancelVerification { id, .. }
+        | ParsedCommand::ConfirmVerificationSas { id, .. }
+        | ParsedCommand::RejectVerificationSas { id, .. } => id,
     }
 }
 
@@ -5755,7 +5785,52 @@ unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
-fn dump_model_from_ui(model: &UiModel) -> DumpModel {
+#[cfg(test)]
+fn dump_submitted_verification_action(
+    command: &Command,
+) -> Option<DumpSubmittedVerificationAction> {
+    let (action, flow) = match command {
+        Command::AcceptVerification(flow) => {
+            (crate::automation::DumpVerificationActionKind::Accept, flow)
+        }
+        Command::CancelVerification(flow) => {
+            (crate::automation::DumpVerificationActionKind::Cancel, flow)
+        }
+        Command::ConfirmVerificationSas(flow) => {
+            (crate::automation::DumpVerificationActionKind::ConfirmSas, flow)
+        }
+        Command::RejectVerificationSas(flow) => {
+            (crate::automation::DumpVerificationActionKind::RejectSas, flow)
+        }
+        _ => return None,
+    };
+    Some(DumpSubmittedVerificationAction {
+        action,
+        flow_id: flow.flow_id.clone(),
+        user_id: flow.user_id.clone(),
+    })
+}
+
+#[cfg(test)]
+fn submitted_verification_actions_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedVerificationAction> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_verification_action)
+        .collect()
+}
+
+#[cfg(not(test))]
+fn submitted_verification_actions_from_state(
+    _state: &WindowState,
+) -> Vec<DumpSubmittedVerificationAction> {
+    Vec::new()
+}
+
+fn dump_model_from_state(state: &WindowState) -> DumpModel {
+    let model = &state.model;
     DumpModel {
         status: model.status.clone(),
         lifecycle_state: model.lifecycle_state,
@@ -5769,6 +5844,7 @@ fn dump_model_from_ui(model: &UiModel) -> DumpModel {
             .last_verification
             .as_ref()
             .map(dump_verification_from_state_event),
+        submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }
@@ -5877,6 +5953,20 @@ fn verification_action_label(action: VerificationAction) -> &'static str {
     }
 }
 
+fn verification_flow_id_from_action_args(
+    model: &UiModel,
+    args: &VerificationActionArgs,
+) -> Result<VerificationFlowId, String> {
+    match (&args.flow_id, &args.user_id) {
+        (Some(flow_id), Some(user_id)) => Ok(VerificationFlowId {
+            flow_id: flow_id.clone(),
+            user_id: user_id.clone(),
+        }),
+        (None, None) => current_verification_flow_id(model),
+        _ => unreachable!("verification action args must contain both flow_id and user_id"),
+    }
+}
+
 fn current_verification_flow_id(model: &UiModel) -> Result<VerificationFlowId, String> {
     let event = model
         .last_verification
@@ -5905,6 +5995,38 @@ fn submit_verification_command(
     #[cfg(test)]
     state.recorded_commands.push(command);
     Ok(())
+}
+
+unsafe fn submit_automation_verification_action(
+    hwnd: HWND,
+    action: VerificationAction,
+    args: VerificationActionArgs,
+) -> Result<(), String> {
+    {
+        let state = state_mut(hwnd);
+        submit_verification_automation_action_to_state(state, action, args)?;
+    }
+    set_local_command_status(
+        hwnd,
+        format!(
+            "verification {} submitted",
+            verification_action_label(action)
+        ),
+    )
+}
+
+fn submit_verification_automation_action_to_state(
+    state: &mut WindowState,
+    action: VerificationAction,
+    args: VerificationActionArgs,
+) -> Result<(), String> {
+    let flow = verification_flow_id_from_action_args(&state.model, &args)?;
+    match action {
+        VerificationAction::Accept => submit_accept_verification_flow(state, flow),
+        VerificationAction::Cancel => submit_cancel_verification_flow(state, flow),
+        VerificationAction::Confirm => submit_confirm_verification_sas_flow(state, flow),
+        VerificationAction::Reject => submit_reject_verification_sas_flow(state, flow),
+    }
 }
 
 fn submit_mark_room_read(
@@ -5946,24 +6068,52 @@ fn handle_room_activation(state: &mut WindowState, room_id: &str) -> Result<bool
     Ok(cleared_room_activity)
 }
 
+fn submit_accept_verification_flow(
+    state: &mut WindowState,
+    flow: VerificationFlowId,
+) -> Result<(), String> {
+    submit_verification_command(state, Command::AcceptVerification(flow), "accept")
+}
+
 fn submit_accept_verification(state: &mut WindowState) -> Result<(), String> {
     let flow = current_verification_flow_id(&state.model)?;
-    submit_verification_command(state, Command::AcceptVerification(flow), "accept")
+    submit_accept_verification_flow(state, flow)
+}
+
+fn submit_cancel_verification_flow(
+    state: &mut WindowState,
+    flow: VerificationFlowId,
+) -> Result<(), String> {
+    submit_verification_command(state, Command::CancelVerification(flow), "cancel")
 }
 
 fn submit_cancel_verification(state: &mut WindowState) -> Result<(), String> {
     let flow = current_verification_flow_id(&state.model)?;
-    submit_verification_command(state, Command::CancelVerification(flow), "cancel")
+    submit_cancel_verification_flow(state, flow)
+}
+
+fn submit_confirm_verification_sas_flow(
+    state: &mut WindowState,
+    flow: VerificationFlowId,
+) -> Result<(), String> {
+    submit_verification_command(state, Command::ConfirmVerificationSas(flow), "confirm")
 }
 
 fn submit_confirm_verification_sas(state: &mut WindowState) -> Result<(), String> {
     let flow = current_verification_flow_id(&state.model)?;
-    submit_verification_command(state, Command::ConfirmVerificationSas(flow), "confirm")
+    submit_confirm_verification_sas_flow(state, flow)
+}
+
+fn submit_reject_verification_sas_flow(
+    state: &mut WindowState,
+    flow: VerificationFlowId,
+) -> Result<(), String> {
+    submit_verification_command(state, Command::RejectVerificationSas(flow), "reject")
 }
 
 fn submit_reject_verification_sas(state: &mut WindowState) -> Result<(), String> {
     let flow = current_verification_flow_id(&state.model)?;
-    submit_verification_command(state, Command::RejectVerificationSas(flow), "reject")
+    submit_reject_verification_sas_flow(state, flow)
 }
 
 fn dump_room_activity_entry_from_room_entry(activity: &RoomActivity) -> DumpRoomActivity {
@@ -9305,6 +9455,138 @@ mod tests {
     }
 
     #[test]
+    fn automation_verification_actions_use_current_flow_when_args_are_omitted() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification = Some(VerificationStateEvent {
+            flow_id: "flow-current".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::Requested,
+        });
+        let last_verification = state.model.last_verification.clone();
+
+        submit_verification_automation_action_to_state(
+            &mut state,
+            VerificationAction::Accept,
+            VerificationActionArgs::default(),
+        )
+        .unwrap();
+        submit_verification_automation_action_to_state(
+            &mut state,
+            VerificationAction::Cancel,
+            VerificationActionArgs::default(),
+        )
+        .unwrap();
+        submit_verification_automation_action_to_state(
+            &mut state,
+            VerificationAction::Confirm,
+            VerificationActionArgs::default(),
+        )
+        .unwrap();
+        submit_verification_automation_action_to_state(
+            &mut state,
+            VerificationAction::Reject,
+            VerificationActionArgs::default(),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::AcceptVerification(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::CancelVerification(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::ConfirmVerificationSas(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::RejectVerificationSas(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+            ]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn automation_verification_actions_use_explicit_flow_args_without_mutating_current_flow() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification = Some(VerificationStateEvent {
+            flow_id: "flow-current".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::SasReady {
+                emojis: vec![VerificationEmoji {
+                    symbol: "🐶".to_owned(),
+                    description: "dog".to_owned(),
+                }],
+                decimals: mmatrix_core::VerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
+        });
+        let last_verification = state.model.last_verification.clone();
+
+        submit_verification_automation_action_to_state(
+            &mut state,
+            VerificationAction::Accept,
+            VerificationActionArgs {
+                flow_id: Some("flow-explicit".to_owned()),
+                user_id: Some("@bob:example".to_owned()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::AcceptVerification(VerificationFlowId {
+                flow_id: "flow-explicit".to_owned(),
+                user_id: "@bob:example".to_owned(),
+            })]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn automation_verification_partial_explicit_args_fail_during_parsing_before_submission() {
+        let mut state = test_state();
+
+        let error = parse_command_request(
+            crate::automation::COMMAND_ID_ACCEPT_VERIFICATION,
+            br#"{"id":"accept-verification","args":{"flow_id":"flow-1"}}"#,
+        )
+        .expect_err("partial explicit flow args must fail");
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap()["err"]["code"],
+            json!("invalid_args")
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
     fn submit_verification_helpers_require_current_flow() {
         let mut state = test_state();
 
@@ -9578,7 +9860,7 @@ mod tests {
             assert_bytes_do_not_contain(&session_bytes, "updated-access-token");
             assert_bytes_do_not_contain(&session_bytes, "updated-refresh-token");
             assert!(
-                !serde_json::to_string(&dump_model_from_ui(&state.model))
+                !serde_json::to_string(&dump_model_from_state(&state))
                     .unwrap()
                     .contains("updated-access-token")
             );

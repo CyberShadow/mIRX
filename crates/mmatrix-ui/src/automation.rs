@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 14;
+pub(crate) const PROTOCOL_VERSION: u32 = 15;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -37,6 +37,10 @@ pub(crate) const COMMAND_ID_SELECT_NAVIGATION_PATH: u32 = 20;
 pub(crate) const COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH: u32 = 21;
 pub(crate) const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
 pub(crate) const COMMAND_ID_RECOVER_E2EE: u32 = 23;
+pub(crate) const COMMAND_ID_ACCEPT_VERIFICATION: u32 = 24;
+pub(crate) const COMMAND_ID_CANCEL_VERIFICATION: u32 = 25;
+pub(crate) const COMMAND_ID_CONFIRM_VERIFICATION_SAS: u32 = 26;
+pub(crate) const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -63,6 +67,10 @@ pub(crate) enum CommandKind {
     DumpSelectedNavigationPath,
     AppendSyntheticEvents,
     RecoverE2ee,
+    AcceptVerification,
+    CancelVerification,
+    ConfirmVerificationSas,
+    RejectVerificationSas,
 }
 
 impl CommandKind {
@@ -91,6 +99,10 @@ impl CommandKind {
             COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH => Some(Self::DumpSelectedNavigationPath),
             COMMAND_ID_APPEND_SYNTHETIC_EVENTS => Some(Self::AppendSyntheticEvents),
             COMMAND_ID_RECOVER_E2EE => Some(Self::RecoverE2ee),
+            COMMAND_ID_ACCEPT_VERIFICATION => Some(Self::AcceptVerification),
+            COMMAND_ID_CANCEL_VERIFICATION => Some(Self::CancelVerification),
+            COMMAND_ID_CONFIRM_VERIFICATION_SAS => Some(Self::ConfirmVerificationSas),
+            COMMAND_ID_REJECT_VERIFICATION_SAS => Some(Self::RejectVerificationSas),
             _ => None,
         }
     }
@@ -180,6 +192,22 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: RecoverE2eeArgs,
     },
+    AcceptVerification {
+        id: String,
+        args: VerificationActionArgs,
+    },
+    CancelVerification {
+        id: String,
+        args: VerificationActionArgs,
+    },
+    ConfirmVerificationSas {
+        id: String,
+        args: VerificationActionArgs,
+    },
+    RejectVerificationSas {
+        id: String,
+        args: VerificationActionArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -208,6 +236,10 @@ impl ParsedCommand {
             Self::DumpSelectedNavigationPath { .. } => CommandKind::DumpSelectedNavigationPath,
             Self::AppendSyntheticEvents { .. } => CommandKind::AppendSyntheticEvents,
             Self::RecoverE2ee { .. } => CommandKind::RecoverE2ee,
+            Self::AcceptVerification { .. } => CommandKind::AcceptVerification,
+            Self::CancelVerification { .. } => CommandKind::CancelVerification,
+            Self::ConfirmVerificationSas { .. } => CommandKind::ConfirmVerificationSas,
+            Self::RejectVerificationSas { .. } => CommandKind::RejectVerificationSas,
         }
     }
 }
@@ -300,6 +332,15 @@ pub(crate) struct RestoreSessionArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RecoverE2eeArgs {
     pub(crate) recovery_secret: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VerificationActionArgs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) flow_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) user_id: Option<String>,
 }
 
 impl fmt::Debug for RecoverE2eeArgs {
@@ -633,8 +674,27 @@ pub(crate) struct DumpModel {
     pub(crate) last_activity: Option<DumpRoomMessageActivityLine>,
     pub(crate) e2ee_status: Option<E2eeStatus>,
     pub(crate) last_verification: Option<DumpVerification>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedVerificationAction {
+    pub(crate) action: DumpVerificationActionKind,
+    pub(crate) flow_id: String,
+    pub(crate) user_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpVerificationActionKind {
+    Accept,
+    Cancel,
+    ConfirmSas,
+    RejectSas,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1085,6 +1145,22 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_recover_e2ee_args(&envelope.id, envelope.args)?,
         }),
+        CommandKind::AcceptVerification => Ok(ParsedCommand::AcceptVerification {
+            id: envelope.id.clone(),
+            args: parse_verification_action_args(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::CancelVerification => Ok(ParsedCommand::CancelVerification {
+            id: envelope.id.clone(),
+            args: parse_verification_action_args(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::ConfirmVerificationSas => Ok(ParsedCommand::ConfirmVerificationSas {
+            id: envelope.id.clone(),
+            args: parse_verification_action_args(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::RejectVerificationSas => Ok(ParsedCommand::RejectVerificationSas {
+            id: envelope.id.clone(),
+            args: parse_verification_action_args(&envelope.id, envelope.args)?,
+        }),
     }
 }
 
@@ -1182,6 +1258,21 @@ fn parse_recover_e2ee_args(
     })
 }
 
+fn parse_verification_action_args(
+    id: &str,
+    args: Option<Value>,
+) -> Result<VerificationActionArgs, FailureEnvelope> {
+    let args = parse_args_with_default::<VerificationActionArgs>(id, args)?;
+    if args.flow_id.is_some() != args.user_id.is_some() {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid verification action args: `flow_id` and `user_id` must be provided together",
+        ));
+    }
+    Ok(args)
+}
+
 #[cfg(test)]
 mod tests {
     use mmatrix_core::{
@@ -1195,27 +1286,29 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AcceptedResponse, COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_DUMP_COMPOSE_TEXT,
-        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
+        AcceptedResponse, COMMAND_ID_ACCEPT_VERIFICATION, COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
+        COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CONFIRM_VERIFICATION_SAS,
+        COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION,
         COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
         COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
-        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
-        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
-        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
-        DumpRoomActivityResponse, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
-        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiState, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_RESTORE_SAVED_SESSION,
+        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
+        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
+        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1245,8 +1338,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_14() {
-        assert_eq!(PROTOCOL_VERSION, 14);
+    fn protocol_version_is_15() {
+        assert_eq!(PROTOCOL_VERSION, 15);
     }
 
     #[test]
@@ -1344,10 +1437,29 @@ mod tests {
             Some(CommandKind::RecoverE2ee)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_ACCEPT_VERIFICATION),
+            Some(CommandKind::AcceptVerification)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_CANCEL_VERIFICATION),
+            Some(CommandKind::CancelVerification)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_CONFIRM_VERIFICATION_SAS),
+            Some(CommandKind::ConfirmVerificationSas)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_REJECT_VERIFICATION_SAS),
+            Some(CommandKind::RejectVerificationSas)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
-        assert_eq!(CommandKind::from_id(COMMAND_ID_RECOVER_E2EE + 1), None);
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_REJECT_VERIFICATION_SAS + 1),
+            None
+        );
     }
 
     #[test]
@@ -1684,6 +1796,56 @@ mod tests {
                 id: "recover".to_owned(),
                 args: RecoverE2eeArgs {
                     recovery_secret: "correct horse battery staple".to_owned(),
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_ACCEPT_VERIFICATION,
+                br#"{"id":"accept-verification"}"#,
+            )
+            .unwrap(),
+            ParsedCommand::AcceptVerification {
+                id: "accept-verification".to_owned(),
+                args: VerificationActionArgs::default(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_CANCEL_VERIFICATION,
+                br#"{"id":"cancel-verification","args":{"flow_id":"flow-1","user_id":"@alice:example"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::CancelVerification {
+                id: "cancel-verification".to_owned(),
+                args: VerificationActionArgs {
+                    flow_id: Some("flow-1".to_owned()),
+                    user_id: Some("@alice:example".to_owned()),
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_CONFIRM_VERIFICATION_SAS,
+                br#"{"id":"confirm-verification","args":{}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::ConfirmVerificationSas {
+                id: "confirm-verification".to_owned(),
+                args: VerificationActionArgs::default(),
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_REJECT_VERIFICATION_SAS,
+                br#"{"id":"reject-verification","args":{"flow_id":"flow-2","user_id":"@bob:example"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::RejectVerificationSas {
+                id: "reject-verification".to_owned(),
+                args: VerificationActionArgs {
+                    flow_id: Some("flow-2".to_owned()),
+                    user_id: Some("@bob:example".to_owned()),
                 },
             }
         );
@@ -2127,6 +2289,72 @@ mod tests {
     }
 
     #[test]
+    fn verification_action_commands_reject_partial_explicit_flow_args() {
+        for (command_id, request_id, request) in [
+            (
+                COMMAND_ID_ACCEPT_VERIFICATION,
+                "accept-verification",
+                br#"{"id":"accept-verification","args":{"flow_id":"flow-1"}}"#.as_slice(),
+            ),
+            (
+                COMMAND_ID_CANCEL_VERIFICATION,
+                "cancel-verification",
+                br#"{"id":"cancel-verification","args":{"user_id":"@alice:example"}}"#
+                    .as_slice(),
+            ),
+            (
+                COMMAND_ID_CONFIRM_VERIFICATION_SAS,
+                "confirm-verification",
+                br#"{"id":"confirm-verification","args":{"flow_id":"flow-1"}}"#.as_slice(),
+            ),
+            (
+                COMMAND_ID_REJECT_VERIFICATION_SAS,
+                "reject-verification",
+                br#"{"id":"reject-verification","args":{"user_id":"@alice:example"}}"#
+                    .as_slice(),
+            ),
+        ] {
+            let error = parse_command_request(command_id, request).unwrap_err();
+            assert_eq!(
+                serde_json::to_value(error).unwrap(),
+                json!({
+                    "id": request_id,
+                    "ok": false,
+                    "err": {
+                        "code": "invalid_args",
+                        "message": "invalid verification action args: `flow_id` and `user_id` must be provided together"
+                    }
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn verification_action_commands_reject_unknown_fields() {
+        for (command_id, request_id) in [
+            (COMMAND_ID_ACCEPT_VERIFICATION, "accept-verification"),
+            (COMMAND_ID_CANCEL_VERIFICATION, "cancel-verification"),
+            (COMMAND_ID_CONFIRM_VERIFICATION_SAS, "confirm-verification"),
+            (COMMAND_ID_REJECT_VERIFICATION_SAS, "reject-verification"),
+        ] {
+            let request = format!(
+                r#"{{"id":"{request_id}","args":{{"flow_id":"flow-1","user_id":"@alice:example","unexpected":true}}}}"#
+            );
+            let error = parse_command_request(command_id, request.as_bytes()).unwrap_err();
+            let value = serde_json::to_value(error).unwrap();
+            assert_eq!(value["id"], json!(request_id));
+            assert_eq!(value["ok"], json!(false));
+            assert_eq!(value["err"]["code"], json!("invalid_args"));
+            assert!(
+                value["err"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unknown field `unexpected`")
+            );
+        }
+    }
+
+    #[test]
     fn recover_e2ee_debug_redacts_secret() {
         let command = ParsedCommand::RecoverE2ee {
             id: "recover".to_owned(),
@@ -2148,7 +2376,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":14,
+                    "protocol_version":15,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -2191,6 +2419,7 @@ mod tests {
                     last_activity: None,
                     e2ee_status: Some(sample_e2ee_status()),
                     last_verification: None,
+                    submitted_verification_actions: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -2607,6 +2836,7 @@ mod tests {
             last_activity: None,
             e2ee_status: Some(sample_e2ee_status()),
             last_verification: None,
+            submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,
         };
