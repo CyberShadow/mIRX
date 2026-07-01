@@ -689,26 +689,14 @@ fn unsupported_entry_with_event_id(
 
 fn image_entry_with_event_id(
     room_id: &str,
-    event_id: &str,
-    sender: &str,
     timestamp_ms: u64,
-    body: &str,
-    filename: Option<&str>,
-    source: RoomMediaSource,
-    info: Option<RoomImageInfo>,
+    activity: RoomImageActivity,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
-        activity_id: format!("event:{event_id}"),
+        activity_id: format!("event:{}", activity.event_id),
         timestamp_ms,
-        kind: RoomActivityKind::Image(RoomImageActivity {
-            event_id: event_id.to_owned(),
-            sender: sender.to_owned(),
-            body: body.to_owned(),
-            filename: filename.map(str::to_owned),
-            source,
-            info,
-        }),
+        kind: RoomActivityKind::Image(activity),
     }
 }
 
@@ -2961,21 +2949,23 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
         app.room_activity(Some("!images:example.org"))?,
         vec![image_entry_with_event_id(
             "!images:example.org",
-            "$image-typed:example.org",
-            "@alice:example.org",
             1_710_000_000_000,
-            "diagram.png",
-            Some("diagram.png"),
-            RoomMediaSource::Plain {
-                url: "mxc://example.org/diagram".to_owned(),
+            RoomImageActivity {
+                event_id: "$image-typed:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                body: "diagram.png".to_owned(),
+                filename: Some("diagram.png".to_owned()),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/diagram".to_owned(),
+                },
+                info: Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                }),
             },
-            Some(RoomImageInfo {
-                mimetype: Some("image/png".to_owned()),
-                size: Some(12_345),
-                width: Some(640),
-                height: Some(480),
-                is_animated: Some(false),
-            }),
         )]
     );
 
