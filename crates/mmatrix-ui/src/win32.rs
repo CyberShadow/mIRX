@@ -2971,6 +2971,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
+        Event::RoomMembers(_) => {}
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
         Event::E2eeStatus(status) => {
             state.model.last_e2ee_status = Some(status);
