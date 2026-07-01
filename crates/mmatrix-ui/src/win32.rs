@@ -4124,7 +4124,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 let state = state_ref(hwnd);
                 let rows = build_room_timeline_rows(&state.model, room_id);
                 let member_rows = room_member_view_rows(
-                    &state
+                    state
                         .model
                         .room_views
                         .get(room_id)
@@ -4144,7 +4144,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 let state = state_ref(hwnd);
                 let rows = build_thread_timeline_rows(&state.model, room_id, thread_root_event_id);
                 let member_rows = room_member_view_rows(
-                    &state
+                    state
                         .model
                         .room_views
                         .get(room_id)
@@ -4166,6 +4166,7 @@ unsafe fn activate_view(
     preferred_tree_item: Option<isize>,
 ) -> Result<(), String> {
     let mut cleared_room_activity = false;
+    let rebuild_switchbar_after_activation = !state_ref(hwnd).switchbar_views.contains(view_id);
     let child = match view_id {
         ViewId::Status => {
             state_mut(hwnd).model.selected_room = None;
@@ -4199,7 +4200,7 @@ unsafe fn activate_view(
     let mdi_client = state_ref(hwnd).controls.mdi_client;
     SendMessageW(mdi_client, WM_MDIACTIVATE, child as WPARAM, 0);
     SendMessageW(mdi_client, WM_MDIMAXIMIZE, child as WPARAM, 0);
-    if cleared_room_activity {
+    if cleared_room_activity || rebuild_switchbar_after_activation {
         rebuild_switchbar(hwnd)?;
     } else {
         refresh_switchbar_state(hwnd)?;
@@ -5514,7 +5515,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                 members: match &view_id {
                     ViewId::Status => Vec::new(),
                     ViewId::Room(room_id) => room_member_view_rows(
-                        &state_ref(hwnd)
+                        state_ref(hwnd)
                             .model
                             .room_views
                             .get(room_id)
@@ -5522,7 +5523,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                             .unwrap_or_default(),
                     ),
                     ViewId::Thread { room_id, .. } => room_member_view_rows(
-                        &state_ref(hwnd)
+                        state_ref(hwnd)
                             .model
                             .room_views
                             .get(room_id)
@@ -5545,7 +5546,9 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
 
     let active = active_view_identity(hwnd)?;
     let state = state_ref(hwnd);
-    let items = ordered_view_ids(state)
+    let items = state
+        .switchbar_views
+        .clone()
         .into_iter()
         .map(|view_id| SwitchbarItem {
             identity: view_identity_from_view_id(&view_id),
