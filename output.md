@@ -1,108 +1,126 @@
 # Execution Report
 
-## Final commits produced
+## Scope
 
-- `1e6ed7f` `Finish room activity fixture and automation migration`
-- `27363f5` `Add room activity migration report`
-- `6ac9fc4` `Handle invalid synthetic event panics at automation boundary`
-- `4822da9` `Validate synthetic room activity updates deterministically`
+Ran the full nine-gate survey at `HEAD` in `/home/vladimir/work/.cydo/tasks/25113/worktree` on branch `verification-snapshots` using the repo-documented devshell invocation from `README.md`: `nix develop -c ...`.
 
-## What changed
+No source, fixture, snapshot, test, or script files were modified. Temporary local log capture was removed before finish.
 
-- Migrated checked-in fixture streams in:
-  - `tests/ui-states/multi-room.json`
-  - `tests/ui-states/space-hierarchy.json`
-  - `tests/ui-states/verification-error.json`
-- Added `tests/ui-states/mixed-room-activity.json` covering:
-  - synced sent text
-  - topic notice
-  - join member notice
-  - leave member notice
-  - pending local echo
-  - failed local echo via `RoomActivityUpdate::MessageFailed`
-  - encrypted room metadata
-- Updated `crates/mmatrix-ui/tests/automation_driver.rs` to use typed `RoomActivity` / `RoomActivityUpdate` helpers and typed testkit DTO assertions only.
-- Added Wine automation coverage for:
-  - failed outgoing state using typed failed send-state details
-  - remote-echo reconciliation after `MessageSent`
-  - `/clear` preserving only the pending row and later reconciling it in place
-  - loading the new mixed fixture through the file API
-  - invalid `AppendSyntheticEvents` with a missing pending transaction returning `invalid_synthetic_state` while the UI process stays alive
-- Updated `crates/mmatrix-ui/tests/mdi_child_reactivation.rs` to use typed sent-message activities.
-- Updated `crates/mmatrix-ui/src/automation.rs` command tests to use typed event payloads only.
-- Added a narrow append-only automation command through:
-  - `crates/mmatrix-ui/src/automation.rs`
-  - `crates/mmatrix-ui/src/win32.rs`
-  - `crates/mmatrix-testkit/src/lib.rs`
-- Removed the old unwind-based automation boundary handling in `crates/mmatrix-ui/src/win32.rs` and replaced it with deterministic pre-validation of synthetic room-activity updates before `LoadSyntheticState` / `AppendSyntheticEvents` mutate live state.
-- Removed old core room DTOs/event variants from:
-  - `crates/mmatrix-core/src/api.rs`
-  - `crates/mmatrix-core/src/lib.rs`
-- Removed remaining downstream legacy references and Win32 compatibility branches from:
-  - `crates/mmatrix-ui/src/win32.rs`
-  - `crates/mmatrix-core/tests/live_matrix.rs`
+## Gate Results
 
-## Deviation from plan
+1. `nix develop -c cargo fmt --check`
+   - PASS
+   - Relevant output: none
+   - Tracked files modified: no
 
-- The original unit plan assumed the automation surface could inject later synthetic updates into an existing session after `/clear`.
-- The actual code only had replacement semantics through `LoadSyntheticState`.
-- After escalation, I added a narrow append-only command reusing `LoadEventsArgs` / `LoadEventsResponse` so the `/clear` automation test could prove later in-session `MessageSent` reconciliation without changing replacement behavior.
-- This required a protocol bump from `10` to `11`.
-- The first boundary fix for invalid synthetic updates used an unwind-based wrapper in `6ac9fc4`; review rejected that because release builds use `panic = "abort"`.
-- `4822da9` replaced it with deterministic validation at the automation boundary, preserving the internal fail-fast panics while guaranteeing protocol-level `invalid_synthetic_state` responses for invalid synthetic update sequencing.
+2. `nix develop -c cargo clippy --workspace --all-targets -- -D warnings`
+   - PASS
+   - Relevant output: `Finished 'dev' profile [unoptimized + debuginfo] target(s) in 1.90s`
+   - Tracked files modified: no
 
-## Verification
+3. `nix develop -c cargo test --workspace`
+   - PASS
+   - Relevant output: workspace tests all green; notable summaries included `mmatrix_core` 41 passed, `runtime` 33 passed, `api_contract` 35 passed, `mmatrix_ui` unit/non-Windows suites passed
+   - Tracked files modified: no
 
-Review passed after the deterministic validation rework.
+4. `nix develop -c ./scripts/cross-build.sh`
+   - PASS
+   - Relevant output: `Finished 'release' profile [optimized] target(s) in 4.32s`
+   - Tracked files modified: no
 
-Required commands passed:
+5. `nix develop -c ./scripts/wine-smoke.sh`
+   - PASS
+   - Relevant output: `mmatrix-ui self-test ok`
+   - Notes: Wine emitted non-fatal `fixme` / `menubuilder` noise and final `X connection ... broken` shutdown text
+   - Tracked files modified: no
 
-```sh
-TMPDIR=$PWD/.tmp-verification nix develop -c cargo fmt --check
-TMPDIR=$PWD/.tmp-verification nix develop -c cargo test --workspace
-TMPDIR=$PWD/.tmp-verification nix develop -c cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver
-TMPDIR=$PWD/.tmp-verification nix develop -c cargo clippy --workspace --all-targets -- -D warnings
+6. `nix develop -c cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver`
+   - FAIL
+   - Exit status: `101`
+   - First failing test: `automation_driver_empty_me_reports_usage_without_sending`
+   - Assertion:
+
+```text
+assertion `left == right` failed
+  left: Some(UiError { operation: "mark_room_read", message: "mark room read requires an authenticated session" })
+ right: None
 ```
 
-Final results and environment notes:
+   - Full failing set:
+     - `automation_driver_empty_me_reports_usage_without_sending`
+     - `automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_selection`
+     - `automation_driver_slash_clear_clears_only_active_room_timeline`
+     - `automation_driver_slash_clear_in_status_view_is_a_no_op`
+     - `automation_driver_slash_status_activates_status_view`
+     - `automation_driver_slash_unknown_feedback_is_local`
+     - `automation_driver_slash_window_reports_unknown_and_ambiguous_targets`
+     - `automation_driver_slash_window_switches_by_room_id_and_display_name`
+   - Additional distinct failure detail:
 
-- Host `fmt`, workspace tests, and workspace `clippy` passed.
-- The Windows automation command passed on immediate identical reruns during the unit, first at `34 passed` and then after the deterministic validation fix at `35 passed`.
-- The environment also showed repeated unrelated Wine launch-timeout flakes in `automation_driver_can_activate_status_view_and_return_to_room` during later verification/review runs outside the code fix path.
-- Wine emitted non-fatal `Fontconfig` noise and final `X connection ... broken` shutdown messages after successful runs.
-
-## Old core DTO/event removal
-
-- Removed:
-  - `TimelineText`
-  - `OutgoingTextQueued`
-  - `OutgoingTextSent`
-  - `OutgoingTextFailed`
-  - `RoomStateEntry`
-  - `RoomStateEventKind`
-  - `RoomStateContent`
-  - `RoomTopicState`
-  - `RoomMemberState`
-  - `Event::TimelineText`
-  - `Event::OutgoingTextQueued`
-  - `Event::OutgoingTextSent`
-  - `Event::OutgoingTextFailed`
-  - `Event::RoomState`
-- Post-change search:
-
-```sh
-rg "TimelineText|OutgoingTextQueued|OutgoingTextSent|OutgoingTextFailed|RoomStateEntry|RoomStateEventKind|RoomStateContent|RoomTopicState|RoomMemberState|Event::RoomState|Event::TimelineText|Event::OutgoingText" crates tests
+```text
+automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_selection
+left:  [mmatrix, rooms: 4, Work, Shared]
+right: [mmatrix, rooms: 4, Social, Shared]
 ```
 
-- Result: no hits.
+   - Summary: `test result: FAILED. 40 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out`
+   - Tracked files modified: no
 
-## Blockers
+7. `nix develop -c ./scripts/ui-snapshot.sh`
+   - PASS
+   - Relevant output: all snapshot cases passed, including generated checks for `image-message.png`, `mixed-room-activity.png`, and `space-hierarchy.png`
+   - Tracked files modified: no
 
-- No old blockers remain.
+8. `nix develop -c ./scripts/dll-gate.sh`
+   - PASS
+   - Relevant output: `dll-gate ok: advapi32.dll api-ms-win-core-synch-l1-2-0.dll bcrypt.dll bcryptprimitives.dll comctl32.dll crypt32.dll gdi32.dll kernel32.dll msvcrt.dll ntdll.dll user32.dll ws2_32.dll`
+   - Tracked files modified: no
 
-## Next unit
+9. `nix develop -c ./scripts/measure.sh`
+   - PASS
+   - Relevant output:
 
-- Finalize snapshot script/baseline work deferred by plan:
-  - update `scripts/ui-snapshot.sh` expectations for `mixed-room-activity.json`
-  - add the matching PNG baseline under `artifacts/ui-snapshots/`
-- Handle the documentation follow-up for the completed room-activity migration and any public-facing mention of the automation test surface that remains appropriate.
+```text
+exe: /home/vladimir/work/.cydo/tasks/25113/worktree/target/x86_64-pc-windows-gnu/release/mmatrix-ui.exe
+size: 14667776 bytes (14MiB)
+imports:
+ADVAPI32.dll
+KERNEL32.dll
+api-ms-win-core-synch-l1-2-0.dll
+bcrypt.dll
+bcryptprimitives.dll
+comctl32.dll
+crypt32.dll
+gdi32.dll
+kernel32.dll
+msvcrt.dll
+ntdll.dll
+user32.dll
+ws2_32.dll
+```
+
+   - Tracked files modified: no
+
+## Suspected Failures Check
+
+- `image-message` UI snapshot expectation gap: not present
+- Windows `automation_driver` timestamp expectation failure: not present
+- `cargo fmt` drift: not present
+
+## Complete Current Red Set
+
+Only one gate is red at current `HEAD`:
+
+- `cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver`
+
+Observed failure pattern:
+
+- Seven tests fail because an unexpected `mark_room_read requires an authenticated session` `UiError` is present where `None` is expected.
+- One test fails because the rendered duplicate-selection navigation path is `Work > Shared` instead of expected `Social > Shared`.
+
+## Final Worktree Status
+
+```text
+## verification-snapshots
+ M output.md
+```
