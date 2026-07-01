@@ -211,6 +211,20 @@ pub struct RoomTyping {
     pub user_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomMemberSummary {
+    pub user_id: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomMembers {
+    pub room_id: String,
+    pub members: Vec<RoomMemberSummary>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomReadState {
@@ -425,6 +439,7 @@ pub enum Event {
     RoomActivity(RoomActivity),
     RoomActivityUpdate(RoomActivityUpdate),
     RoomTyping(RoomTyping),
+    RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),
     E2eeStatus(E2eeStatus),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),

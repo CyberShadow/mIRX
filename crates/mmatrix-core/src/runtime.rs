@@ -12,7 +12,7 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, E2eeRecoveryOperation, E2eeRecoverySucceeded, Event,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest,
-    RoomReadState, RoomSummary, VerificationFlowId,
+    RoomMembers, RoomReadState, RoomSummary, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -248,15 +248,21 @@ async fn handle_login(
         event_tx.clone(),
     );
     let rooms = matrix::initial_room_sync(&client).await;
+    let room_members = if rooms.is_ok() {
+        Some(matrix::summarize_joined_room_members(&client).await)
+    } else {
+        None
+    };
     let room_read_states = rooms
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
     emit_event(event_tx, Event::LoggedIn { session });
     match rooms {
-        Ok(rooms) => emit_initial_synced_rooms_and_read_states(
+        Ok(rooms) => emit_initial_synced_rooms_members_and_read_states(
             event_tx,
             rooms,
+            room_members.expect("room members exist after successful sync"),
             room_read_states.expect("read states exist after successful sync"),
         ),
         Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
@@ -326,15 +332,21 @@ async fn handle_restore_session(
     let send_queue_update_task =
         matrix::start_send_queue_update_task(client.clone(), current_user_id, event_tx.clone());
     let rooms = matrix::initial_room_sync(&client).await;
+    let room_members = if rooms.is_ok() {
+        Some(matrix::summarize_joined_room_members(&client).await)
+    } else {
+        None
+    };
     let room_read_states = rooms
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
     emit_event(event_tx, Event::RestoredSession);
     match rooms {
-        Ok(rooms) => emit_initial_synced_rooms_and_read_states(
+        Ok(rooms) => emit_initial_synced_rooms_members_and_read_states(
             event_tx,
             rooms,
+            room_members.expect("room members exist after successful sync"),
             room_read_states.expect("read states exist after successful sync"),
         ),
         Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
@@ -712,12 +724,16 @@ fn task_is_running(
     false
 }
 
-fn emit_initial_synced_rooms_and_read_states(
+fn emit_initial_synced_rooms_members_and_read_states(
     event_tx: &EventSender,
     rooms: Vec<RoomSummary>,
+    room_members: Vec<RoomMembers>,
     room_read_states: Vec<RoomReadState>,
 ) {
     emit_event(event_tx, Event::SyncedRooms(rooms));
+    for members in room_members {
+        emit_event(event_tx, Event::RoomMembers(members));
+    }
     for read_state in room_read_states {
         emit_event(event_tx, Event::RoomReadState(read_state));
     }
@@ -777,11 +793,13 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        EventSender, WorkerState, emit_initial_synced_rooms_and_read_states, handle_start_sync,
-        run_worker, shutdown_state,
+        EventSender, WorkerState, emit_initial_synced_rooms_members_and_read_states,
+        handle_start_sync, run_worker, shutdown_state,
     };
     use crate::api::CoreConfig;
-    use crate::api::{Event, Operation, RoomReadState, RoomSummary};
+    use crate::api::{
+        Event, Operation, RoomMemberSummary, RoomMembers, RoomReadState, RoomSummary,
+    };
 
     fn room_summary(room_id: &str, display_name: &str) -> RoomSummary {
         RoomSummary {
@@ -806,6 +824,19 @@ mod tests {
             num_unread: 2,
             num_notifications: 1,
             num_mentions: 0,
+        }
+    }
+
+    fn room_members(room_id: &str, members: &[(&str, Option<&str>)]) -> RoomMembers {
+        RoomMembers {
+            room_id: room_id.to_owned(),
+            members: members
+                .iter()
+                .map(|(user_id, display_name)| RoomMemberSummary {
+                    user_id: (*user_id).to_owned(),
+                    display_name: display_name.map(str::to_owned),
+                })
+                .collect(),
         }
     }
 
@@ -872,11 +903,21 @@ mod tests {
     }
 
     #[test]
-    fn initial_room_read_states_follow_synced_rooms() {
+    fn initial_room_members_and_read_states_follow_synced_rooms() {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let rooms = vec![
             room_summary("!ops:example.org", "Ops"),
             room_summary("!eng:example.org", "Eng"),
+        ];
+        let room_members = vec![
+            room_members(
+                "!ops:example.org",
+                &[
+                    ("@alice:example.org", Some("Alice")),
+                    ("@bob:example.org", None),
+                ],
+            ),
+            room_members("!eng:example.org", &[("@carol:example.org", Some("Carol"))]),
         ];
         let read_states = vec![
             room_read_state(
@@ -891,9 +932,10 @@ mod tests {
             ),
         ];
 
-        emit_initial_synced_rooms_and_read_states(
+        emit_initial_synced_rooms_members_and_read_states(
             &event_tx as &EventSender,
             rooms.clone(),
+            room_members.clone(),
             read_states.clone(),
         );
 
@@ -903,6 +945,14 @@ mod tests {
                 .expect("synced rooms event"),
             Event::SyncedRooms(rooms)
         );
+        for members in room_members {
+            assert_eq!(
+                event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("room members event"),
+                Event::RoomMembers(members)
+            );
+        }
         for read_state in read_states {
             assert_eq!(
                 event_rx
@@ -914,7 +964,7 @@ mod tests {
         assert_eq!(
             event_rx.try_recv(),
             Err(TryRecvError::Empty),
-            "initial snapshot must only emit synced rooms followed by room read states"
+            "initial snapshot must only emit synced rooms, room members, and room read states"
         );
     }
 

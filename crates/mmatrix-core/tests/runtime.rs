@@ -5,11 +5,11 @@ use mmatrix_core::{
     E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo,
-    RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -857,6 +857,48 @@ fn room_typing_event_round_trips_through_serde() {
 }
 
 #[test]
+fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
+    let populated_event = Event::RoomMembers(RoomMembers {
+        room_id: "!ops:example.org".to_owned(),
+        members: vec![
+            RoomMemberSummary {
+                user_id: "@alice:example.org".to_owned(),
+                display_name: Some("Alice".to_owned()),
+            },
+            RoomMemberSummary {
+                user_id: "@bob:example.org".to_owned(),
+                display_name: None,
+            },
+        ],
+    });
+
+    let populated_json = serde_json::to_string(&populated_event).expect("serialize room members");
+    assert_eq!(
+        populated_json,
+        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","display_name":"Alice"},{"user_id":"@bob:example.org","display_name":null}]}}"#
+    );
+
+    let restored: Event =
+        serde_json::from_str(&populated_json).expect("deserialize populated room members");
+    assert_eq!(restored, populated_event);
+
+    let empty_event = Event::RoomMembers(RoomMembers {
+        room_id: "!empty:example.org".to_owned(),
+        members: Vec::new(),
+    });
+
+    let empty_json = serde_json::to_string(&empty_event).expect("serialize empty room members");
+    assert_eq!(
+        empty_json,
+        r#"{"RoomMembers":{"room_id":"!empty:example.org","members":[]}}"#
+    );
+
+    let restored: Event =
+        serde_json::from_str(&empty_json).expect("deserialize empty room members");
+    assert_eq!(restored, empty_event);
+}
+
+#[test]
 fn room_read_state_event_round_trips_through_serde() {
     let event = Event::RoomReadState(RoomReadState {
         room_id: "!ops:example.org".to_owned(),
@@ -1167,6 +1209,22 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "room typing must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomMemberSummary>(
+            r#"{"user_id":"@alice:example.org","display_name":"Alice","unexpected":"value"}"#
+        )
+        .is_err(),
+        "room member summary must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomMembers>(
+            r#"{"room_id":"!ops:example.org","members":[],"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room members must reject unknown fields"
     );
 
     assert!(

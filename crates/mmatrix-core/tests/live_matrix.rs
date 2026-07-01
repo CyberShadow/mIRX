@@ -124,6 +124,7 @@ fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
             | Event::RoomReadState(_)
             | Event::E2eeStatus(_)
             | Event::E2eeRecoverySucceeded(_) => {}
@@ -159,6 +160,7 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
             | Event::RoomReadState(_)
             | Event::E2eeStatus(_)
             | Event::E2eeRecoverySucceeded(_) => {}
@@ -198,6 +200,7 @@ fn live_shutdown_and_join(handle: CoreHandle) {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
             | Event::RoomReadState(_)
             | Event::E2eeStatus(_)
             | Event::E2eeRecoverySucceeded(_) => {}
@@ -317,6 +320,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
             | Event::RoomReadState(_)
             | Event::E2eeStatus(_)
             | Event::E2eeRecoverySucceeded(_) => {}
@@ -354,6 +358,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             Event::RoomActivity(_)
             | Event::RoomActivityUpdate(_)
             | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
             | Event::RoomReadState(_)
             | Event::E2eeStatus(_)
             | Event::E2eeRecoverySucceeded(_) => {}

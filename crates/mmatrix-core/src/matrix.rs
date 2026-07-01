@@ -4,7 +4,7 @@ use std::fmt::{self, Display, Formatter};
 
 use futures_util::StreamExt;
 use matrix_sdk::{
-    Client, LoopCtrl, Room, SessionChange, SessionMeta, SessionTokens,
+    Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::SyncOrStrippedState,
@@ -47,11 +47,12 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, LoginRequest, MarkRoomReadRequest, Operation,
     RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -275,6 +276,86 @@ pub(crate) async fn summarize_joined_rooms(
     Ok(rooms)
 }
 
+fn room_member_display_label(member: &RoomMemberSummary) -> &str {
+    match member.display_name.as_deref() {
+        Some(display_name) if !display_name.is_empty() => display_name,
+        _ => member.user_id.as_str(),
+    }
+}
+
+fn sorted_room_member_summaries_from_parts(
+    members: Vec<(String, Option<String>)>,
+) -> Vec<RoomMemberSummary> {
+    let mut members = members
+        .into_iter()
+        .map(|(user_id, display_name)| RoomMemberSummary {
+            user_id,
+            display_name,
+        })
+        .collect::<Vec<_>>();
+
+    members.sort_by(|left, right| {
+        room_member_display_label(left)
+            .to_lowercase()
+            .cmp(&room_member_display_label(right).to_lowercase())
+            .then_with(|| left.user_id.cmp(&right.user_id))
+    });
+
+    members
+}
+
+fn room_members_from_parts(room_id: &str, members: Vec<(String, Option<String>)>) -> RoomMembers {
+    RoomMembers {
+        room_id: room_id.to_owned(),
+        members: sorted_room_member_summaries_from_parts(members),
+    }
+}
+
+async fn joined_room_members(room: &Room) -> matrix_sdk::Result<RoomMembers> {
+    let members = room.members(RoomMemberships::JOIN).await?;
+    Ok(room_members_from_parts(
+        room.room_id().as_str(),
+        members
+            .into_iter()
+            .map(|member| {
+                (
+                    member.user_id().to_string(),
+                    member.display_name().map(str::to_owned),
+                )
+            })
+            .collect(),
+    ))
+}
+
+async fn joined_room_members_no_sync(room: &Room) -> matrix_sdk::Result<RoomMembers> {
+    let members = room.members_no_sync(RoomMemberships::JOIN).await?;
+    Ok(room_members_from_parts(
+        room.room_id().as_str(),
+        members
+            .into_iter()
+            .map(|member| {
+                (
+                    member.user_id().to_string(),
+                    member.display_name().map(str::to_owned),
+                )
+            })
+            .collect(),
+    ))
+}
+
+pub(crate) async fn summarize_joined_room_members(client: &Client) -> Vec<RoomMembers> {
+    let joined_rooms = client.joined_rooms();
+    let mut room_members = Vec::with_capacity(joined_rooms.len());
+
+    for room in joined_rooms {
+        if let Ok(members) = joined_room_members(&room).await {
+            room_members.push(members);
+        }
+    }
+
+    room_members
+}
+
 pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons) -> bool {
     reasons.intersects(
         RoomInfoNotableUpdateReasons::READ_RECEIPT
@@ -447,6 +528,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
                         &event,
                     )),
                 );
+            }
+
+            if let Ok(snapshot) = joined_room_members_no_sync(&room).await {
+                emit_event(&events, Event::RoomMembers(snapshot));
             }
         }
     });
@@ -1460,15 +1545,15 @@ mod tests {
         map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_message_event_content, room_read_state_from_parts,
-        room_read_update_is_relevant, room_typing_from_sync_typing,
-        verification_flow_id_from_to_device, verification_request_from_to_device,
-        verification_requested_state_event,
+        room_activity_from_sync_topic, room_members_from_parts, room_message_event_content,
+        room_read_state_from_parts, room_read_update_is_relevant, room_typing_from_sync_typing,
+        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
         RoomStateNoticeContent, RoomTyping, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
@@ -1646,6 +1731,70 @@ mod tests {
         ] {
             assert_eq!(map_cross_signing_status(status), expected);
         }
+    }
+
+    #[test]
+    fn room_member_sorting_uses_case_insensitive_display_name_then_user_id() {
+        assert_eq!(
+            sorted_room_member_summaries_from_parts(vec![
+                ("@charlie:example.org".to_owned(), None),
+                ("@delta:example.org".to_owned(), Some("beta".to_owned())),
+                ("@echo:example.org".to_owned(), Some("alice".to_owned())),
+                ("@beta:example.org".to_owned(), Some(String::new())),
+                ("@alpha:example.org".to_owned(), Some("ALICE".to_owned())),
+            ]),
+            vec![
+                RoomMemberSummary {
+                    user_id: "@beta:example.org".to_owned(),
+                    display_name: Some(String::new()),
+                },
+                RoomMemberSummary {
+                    user_id: "@charlie:example.org".to_owned(),
+                    display_name: None,
+                },
+                RoomMemberSummary {
+                    user_id: "@alpha:example.org".to_owned(),
+                    display_name: Some("ALICE".to_owned()),
+                },
+                RoomMemberSummary {
+                    user_id: "@echo:example.org".to_owned(),
+                    display_name: Some("alice".to_owned()),
+                },
+                RoomMemberSummary {
+                    user_id: "@delta:example.org".to_owned(),
+                    display_name: Some("beta".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn room_members_from_parts_breaks_duplicate_display_names_by_user_id() {
+        assert_eq!(
+            room_members_from_parts(
+                "!room:example.org",
+                vec![
+                    ("@zulu:example.org".to_owned(), Some("Same".to_owned())),
+                    ("@alpha:example.org".to_owned(), Some("same".to_owned())),
+                    ("@mike:example.org".to_owned(), Some("same".to_owned())),
+                ],
+            )
+            .members,
+            vec![
+                RoomMemberSummary {
+                    user_id: "@alpha:example.org".to_owned(),
+                    display_name: Some("same".to_owned()),
+                },
+                RoomMemberSummary {
+                    user_id: "@mike:example.org".to_owned(),
+                    display_name: Some("same".to_owned()),
+                },
+                RoomMemberSummary {
+                    user_id: "@zulu:example.org".to_owned(),
+                    display_name: Some("Same".to_owned()),
+                },
+            ]
+        );
     }
 
     #[test]
