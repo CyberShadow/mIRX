@@ -13,14 +13,17 @@ use mmatrix_core::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
-    StoredSession as CoreStoredSession,
+    StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
+    VerificationEmoji as CoreVerificationEmoji, VerificationState as CoreVerificationState,
+    VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
     RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessageActivityLine,
     RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, SpaceChild, StoredSession, SwitchbarItem, TestkitError, UiError,
-    UiState, UnsupportedRoomMessageActivity, Verification, VerificationState, ViewIdentity,
+    RoomStateNoticeContent, SpaceChild, StoredSession, SubmittedVerificationAction, SwitchbarItem,
+    TestkitError, UiError, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionKind, VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -247,6 +250,14 @@ fn sample_e2ee_status() -> E2eeStatus {
             complete: false,
         }),
     }
+}
+
+fn verification_state_event(flow_id: &str, user_id: &str, state: CoreVerificationState) -> Event {
+    Event::VerificationState(CoreVerificationStateEvent {
+        flow_id: flow_id.to_owned(),
+        user_id: user_id.to_owned(),
+        state,
+    })
 }
 
 fn replacement_events() -> Vec<Event> {
@@ -1506,6 +1517,130 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
             .status_bar
             .text
             .contains("e2ee: recovery incomplete, backup enabled")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_submits_verification_actions_for_current_flow_without_local_state_mutation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        verification_state_event(
+            "flow-current",
+            "@alice:example",
+            CoreVerificationState::SasReady {
+                emojis: vec![CoreVerificationEmoji {
+                    symbol: "🐶".to_owned(),
+                    description: "dog".to_owned(),
+                }],
+                decimals: CoreVerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_model = app.dump_model()?;
+    assert_eq!(
+        initial_model.last_verification,
+        Some(Verification {
+            flow_id: "flow-current".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state: VerificationState::SasReady {
+                emojis: vec![mmatrix_testkit::VerificationEmoji {
+                    symbol: "🐶".to_owned(),
+                    description: "dog".to_owned(),
+                }],
+                decimals: mmatrix_testkit::VerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
+        })
+    );
+    assert!(initial_model.submitted_verification_actions.is_empty());
+
+    app.accept_verification()?;
+    app.cancel_verification()?;
+    app.confirm_verification_sas()?;
+    app.reject_verification_sas()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.last_verification, initial_model.last_verification);
+    assert_eq!(
+        model.submitted_verification_actions,
+        vec![
+            SubmittedVerificationAction {
+                action: VerificationActionKind::Accept,
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            },
+            SubmittedVerificationAction {
+                action: VerificationActionKind::Cancel,
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            },
+            SubmittedVerificationAction {
+                action: VerificationActionKind::ConfirmSas,
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            },
+            SubmittedVerificationAction {
+                action: VerificationActionKind::RejectSas,
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            },
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_submits_verification_action_for_explicit_flow()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        verification_state_event(
+            "flow-current",
+            "@alice:example",
+            CoreVerificationState::Requested,
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_model = app.dump_model()?;
+    app.accept_verification_flow("flow-explicit", "@bob:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.last_verification, initial_model.last_verification);
+    assert_eq!(
+        model.submitted_verification_actions,
+        vec![SubmittedVerificationAction {
+            action: VerificationActionKind::Accept,
+            flow_id: "flow-explicit".to_owned(),
+            user_id: "@bob:example".to_owned(),
+        }]
     );
 
     Ok(())
