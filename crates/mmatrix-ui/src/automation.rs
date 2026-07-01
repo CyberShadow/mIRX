@@ -4,15 +4,16 @@ use std::fmt;
 
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 13;
+pub(crate) const PROTOCOL_VERSION: u32 = 14;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -681,6 +682,7 @@ pub(crate) struct DumpRoomActivity {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DumpRoomActivityKind {
     Message(DumpRoomMessageActivity),
+    Image(DumpRoomImageActivity),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     StateNotice(DumpRoomStateNoticeActivity),
 }
@@ -694,6 +696,34 @@ pub(crate) struct DumpRoomMessageActivity {
     pub(crate) presentation: RoomMessagePresentationKind,
     pub(crate) body: String,
     pub(crate) send_state: DumpRoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomImageActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) body: String,
+    pub(crate) filename: Option<String>,
+    pub(crate) source: DumpRoomMediaSource,
+    pub(crate) info: Option<DumpRoomImageInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum DumpRoomMediaSource {
+    Plain { url: String },
+    Encrypted { url: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomImageInfo {
+    pub(crate) mimetype: Option<String>,
+    pub(crate) size: Option<u64>,
+    pub(crate) width: Option<u64>,
+    pub(crate) height: Option<u64>,
+    pub(crate) is_animated: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -824,6 +854,9 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::Message(message) => {
             DumpRoomActivityKind::Message(dump_room_message_activity_from_core(message))
         }
+        RoomActivityKind::Image(image) => {
+            DumpRoomActivityKind::Image(dump_room_image_activity_from_core(image))
+        }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
         ),
@@ -859,6 +892,36 @@ pub(crate) fn dump_room_message_send_state_from_core(
             message: message.clone(),
             recoverable: *recoverable,
         },
+    }
+}
+
+pub(crate) fn dump_room_image_activity_from_core(
+    image: &RoomImageActivity,
+) -> DumpRoomImageActivity {
+    DumpRoomImageActivity {
+        event_id: image.event_id.clone(),
+        sender: image.sender.clone(),
+        body: image.body.clone(),
+        filename: image.filename.clone(),
+        source: dump_room_media_source_from_core(&image.source),
+        info: image.info.as_ref().map(dump_room_image_info_from_core),
+    }
+}
+
+pub(crate) fn dump_room_media_source_from_core(source: &RoomMediaSource) -> DumpRoomMediaSource {
+    match source {
+        RoomMediaSource::Plain { url } => DumpRoomMediaSource::Plain { url: url.clone() },
+        RoomMediaSource::Encrypted { url } => DumpRoomMediaSource::Encrypted { url: url.clone() },
+    }
+}
+
+pub(crate) fn dump_room_image_info_from_core(info: &RoomImageInfo) -> DumpRoomImageInfo {
+    DumpRoomImageInfo {
+        mimetype: info.mimetype.clone(),
+        size: info.size,
+        width: info.width,
+        height: info.height,
+        is_animated: info.is_animated,
     }
 }
 
@@ -1124,9 +1187,10 @@ mod tests {
     use mmatrix_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomSummary, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomSummary,
+        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
+        VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1141,8 +1205,9 @@ mod tests {
         COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
         COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
         DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
-        DumpRoomActivityResponse, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
-        DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpRoomActivityResponse, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
+        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
+        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
         DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
@@ -1180,8 +1245,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_13() {
-        assert_eq!(PROTOCOL_VERSION, 13);
+    fn protocol_version_is_14() {
+        assert_eq!(PROTOCOL_VERSION, 14);
     }
 
     #[test]
@@ -2083,7 +2148,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":13,
+                    "protocol_version":14,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -2216,6 +2281,27 @@ mod tests {
                         },
                         DumpRoomActivity {
                             room_id: "!room:example".to_owned(),
+                            activity_id: "event:$image:example".to_owned(),
+                            timestamp_ms: 1_700_000_030_000,
+                            kind: DumpRoomActivityKind::Image(DumpRoomImageActivity {
+                                event_id: "$image:example".to_owned(),
+                                sender: "@alice:example".to_owned(),
+                                body: "diagram.png".to_owned(),
+                                filename: Some("diagram.png".to_owned()),
+                                source: DumpRoomMediaSource::Plain {
+                                    url: "mxc://example.org/diagram".to_owned(),
+                                },
+                                info: Some(DumpRoomImageInfo {
+                                    mimetype: Some("image/png".to_owned()),
+                                    size: Some(12_345),
+                                    width: Some(640),
+                                    height: Some(480),
+                                    is_animated: Some(false),
+                                }),
+                            }),
+                        },
+                        DumpRoomActivity {
+                            room_id: "!room:example".to_owned(),
                             activity_id: "state:$state-1".to_owned(),
                             timestamp_ms: 1_700_000_060_000,
                             kind: DumpRoomActivityKind::StateNotice(DumpRoomStateNoticeActivity {
@@ -2249,6 +2335,29 @@ mod tests {
                                 "presentation":"text",
                                 "body":"hello",
                                 "send_state":{"state":"failed","message":"send failed","recoverable":true}
+                            }
+                        },
+                        {
+                            "room_id":"!room:example",
+                            "activity_id":"event:$image:example",
+                            "timestamp_ms":1700000030000u64,
+                            "kind":{
+                                "type":"image",
+                                "event_id":"$image:example",
+                                "sender":"@alice:example",
+                                "body":"diagram.png",
+                                "filename":"diagram.png",
+                                "source":{
+                                    "type":"plain",
+                                    "url":"mxc://example.org/diagram"
+                                },
+                                "info":{
+                                    "mimetype":"image/png",
+                                    "size":12345u64,
+                                    "width":640u64,
+                                    "height":480u64,
+                                    "is_animated":false
+                                }
                             }
                         },
                         {
@@ -2638,27 +2747,27 @@ mod tests {
         );
         let unsupported_activity = RoomActivity {
             room_id: "!room:example".to_owned(),
-            activity_id: "event:$image1:example.org".to_owned(),
+            activity_id: "event:$audio1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
             kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-                event_id: "$image1:example.org".to_owned(),
+                event_id: "$audio1:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),
-                msgtype: "m.image".to_owned(),
-                body: "diagram.png".to_owned(),
+                msgtype: "m.audio".to_owned(),
+                body: "voice-note.ogg".to_owned(),
             }),
         };
         assert_eq!(
             super::dump_room_activity_from_activity(&unsupported_activity),
             DumpRoomActivity {
                 room_id: "!room:example".to_owned(),
-                activity_id: "event:$image1:example.org".to_owned(),
+                activity_id: "event:$audio1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
                 kind: DumpRoomActivityKind::UnsupportedMessage(
                     DumpUnsupportedRoomMessageActivity {
-                        event_id: "$image1:example.org".to_owned(),
+                        event_id: "$audio1:example.org".to_owned(),
                         sender: "@alice:example.org".to_owned(),
-                        msgtype: "m.image".to_owned(),
-                        body: "diagram.png".to_owned(),
+                        msgtype: "m.audio".to_owned(),
+                        body: "voice-note.ogg".to_owned(),
                     }
                 ),
             }
@@ -2670,19 +2779,95 @@ mod tests {
             .expect("serialize unsupported dump room activity"),
             json!({
                 "room_id":"!room:example",
-                "activity_id":"event:$image1:example.org",
+                "activity_id":"event:$audio1:example.org",
                 "timestamp_ms":1710000000000u64,
                 "kind":{
                     "type":"unsupported_message",
-                    "event_id":"$image1:example.org",
+                    "event_id":"$audio1:example.org",
                     "sender":"@alice:example.org",
-                    "msgtype":"m.image",
-                    "body":"diagram.png"
+                    "msgtype":"m.audio",
+                    "body":"voice-note.ogg"
                 }
             })
         );
         assert_eq!(
             super::dump_room_message_activity_line_from_activity(&unsupported_activity),
+            None
+        );
+        let image_activity = RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$image1:example.org".to_owned(),
+            timestamp_ms: 1_710_000_010_000,
+            kind: RoomActivityKind::Image(RoomImageActivity {
+                event_id: "$image1:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                body: "diagram.png".to_owned(),
+                filename: Some("diagram.png".to_owned()),
+                source: RoomMediaSource::Encrypted {
+                    url: "mxc://example.org/diagram".to_owned(),
+                },
+                info: Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                }),
+            }),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&image_activity),
+            DumpRoomActivity {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$image1:example.org".to_owned(),
+                timestamp_ms: 1_710_000_010_000,
+                kind: DumpRoomActivityKind::Image(DumpRoomImageActivity {
+                    event_id: "$image1:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "diagram.png".to_owned(),
+                    filename: Some("diagram.png".to_owned()),
+                    source: DumpRoomMediaSource::Encrypted {
+                        url: "mxc://example.org/diagram".to_owned(),
+                    },
+                    info: Some(DumpRoomImageInfo {
+                        mimetype: Some("image/png".to_owned()),
+                        size: Some(12_345),
+                        width: Some(640),
+                        height: Some(480),
+                        is_animated: Some(false),
+                    }),
+                }),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(super::dump_room_activity_from_activity(&image_activity))
+                .expect("serialize image dump room activity"),
+            json!({
+                "room_id":"!room:example",
+                "activity_id":"event:$image1:example.org",
+                "timestamp_ms":1710000010000u64,
+                "kind":{
+                    "type":"image",
+                    "event_id":"$image1:example.org",
+                    "sender":"@alice:example.org",
+                    "body":"diagram.png",
+                    "filename":"diagram.png",
+                    "source":{
+                        "type":"encrypted",
+                        "url":"mxc://example.org/diagram"
+                    },
+                    "info":{
+                        "mimetype":"image/png",
+                        "size":12345u64,
+                        "width":640u64,
+                        "height":480u64,
+                        "is_animated":false
+                    }
+                }
+            })
+        );
+        assert_eq!(
+            super::dump_room_message_activity_line_from_activity(&image_activity),
             None
         );
         assert!(
@@ -2699,6 +2884,37 @@ mod tests {
                     "body":"hello",
                     "send_state":{"state":"sent"}
                 },
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomImageActivity>(json!({
+                "event_id":"$image1:example.org",
+                "sender":"@alice:example.org",
+                "body":"diagram.png",
+                "filename":"diagram.png",
+                "source":{"type":"plain","url":"mxc://example.org/diagram"},
+                "info":{"mimetype":"image/png","size":12345u64,"width":640u64,"height":480u64,"is_animated":false},
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomMediaSource>(json!({
+                "type":"plain",
+                "url":"mxc://example.org/diagram",
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomImageInfo>(json!({
+                "mimetype":"image/png",
+                "size":12345u64,
+                "width":640u64,
+                "height":480u64,
+                "is_animated":false,
                 "unexpected":true
             }))
             .is_err()

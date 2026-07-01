@@ -188,6 +188,7 @@ pub struct RoomActivity {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityKind {
     Message(RoomMessageActivity),
+    Image(RoomImageActivity),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     StateNotice(RoomStateNoticeActivity),
 }
@@ -209,6 +210,34 @@ pub struct RoomMessageActivity {
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub send_state: RoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomImageActivity {
+    pub event_id: String,
+    pub sender: String,
+    pub body: String,
+    pub filename: Option<String>,
+    pub source: RoomMediaSource,
+    pub info: Option<RoomImageInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomMediaSource {
+    Plain { url: String },
+    Encrypted { url: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomImageInfo {
+    pub mimetype: Option<String>,
+    pub size: Option<u64>,
+    pub width: Option<u64>,
+    pub height: Option<u64>,
+    pub is_animated: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
