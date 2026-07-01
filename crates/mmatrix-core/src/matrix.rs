@@ -498,7 +498,7 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         async move {
             if let Some(activity) = room_activity_from_sync_message(room.room_id().as_str(), &event)
             {
-                emit_event(&events, Event::RoomActivity(activity));
+                emit_event(&events, Event::RoomActivity(Box::new(activity)));
             }
         }
     });
@@ -510,10 +510,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             if let SyncRoomTopicEvent::Original(event) = event {
                 emit_event(
                     &events,
-                    Event::RoomActivity(room_activity_from_sync_topic(
+                    Event::RoomActivity(Box::new(room_activity_from_sync_topic(
                         room.room_id().as_str(),
                         &event,
-                    )),
+                    ))),
                 );
             }
         }
@@ -526,10 +526,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             if let SyncRoomMemberEvent::Original(event) = event {
                 emit_event(
                     &events,
-                    Event::RoomActivity(room_activity_from_sync_member(
+                    Event::RoomActivity(Box::new(room_activity_from_sync_member(
                         room.room_id().as_str(),
                         &event,
-                    )),
+                    ))),
                 );
             }
 
@@ -1426,7 +1426,7 @@ fn outgoing_events_from_local_echo_event(
         return Ok(Vec::new());
     };
 
-    let mut events = vec![Event::RoomActivity(activity)];
+    let mut events = vec![Event::RoomActivity(Box::new(activity))];
     if let Some(send_error) = send_error {
         events.push(Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id,
@@ -2715,7 +2715,7 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![Event::RoomActivity(RoomActivity {
+            vec![Event::RoomActivity(Box::new(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
@@ -2728,7 +2728,7 @@ mod tests {
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Pending,
                 }),
-            })]
+            }))]
         );
     }
 
@@ -2753,7 +2753,7 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                Event::RoomActivity(RoomActivity {
+                Event::RoomActivity(Box::new(RoomActivity {
                     room_id: "!room:example.org".to_owned(),
                     activity_id: "txn:txn-1".to_owned(),
                     timestamp_ms: created_at.get().into(),
@@ -2766,7 +2766,7 @@ mod tests {
                         body: "hello".to_owned(),
                         send_state: RoomMessageSendState::Pending,
                     }),
-                }),
+                })),
                 Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
                     transaction_id: "txn-1".to_owned(),

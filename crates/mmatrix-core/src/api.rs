@@ -450,7 +450,7 @@ pub enum Event {
     RestoredSession,
     SyncStarted,
     SyncedRooms(Vec<RoomSummary>),
-    RoomActivity(RoomActivity),
+    RoomActivity(Box<RoomActivity>),
     RoomActivityUpdate(RoomActivityUpdate),
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),

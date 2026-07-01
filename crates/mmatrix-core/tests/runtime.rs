@@ -626,7 +626,7 @@ fn room_message_presentations_round_trip_through_serde() {
 
 #[test]
 fn room_activity_events_round_trip_through_serde() {
-    let message_event = Event::RoomActivity(RoomActivity {
+    let message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$event:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_000,
@@ -639,8 +639,8 @@ fn room_activity_events_round_trip_through_serde() {
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Sent,
         }),
-    });
-    let pending_message_event = Event::RoomActivity(RoomActivity {
+    }));
+    let pending_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "txn:txn-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
@@ -653,8 +653,8 @@ fn room_activity_events_round_trip_through_serde() {
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Pending,
         }),
-    });
-    let state_notice_event = Event::RoomActivity(RoomActivity {
+    }));
+    let state_notice_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "state:$topic:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_001,
@@ -667,8 +667,8 @@ fn room_activity_events_round_trip_through_serde() {
                 topic: "incident review".to_owned(),
             },
         }),
-    });
-    let member_notice_event = Event::RoomActivity(RoomActivity {
+    }));
+    let member_notice_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "state:$member:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_002,
@@ -682,8 +682,8 @@ fn room_activity_events_round_trip_through_serde() {
                 displayname: Some("carol".to_owned()),
             },
         }),
-    });
-    let image_event = Event::RoomActivity(RoomActivity {
+    }));
+    let image_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
@@ -704,8 +704,8 @@ fn room_activity_events_round_trip_through_serde() {
                 is_animated: Some(false),
             }),
         }),
-    });
-    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+    }));
+    let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_004,
@@ -716,7 +716,7 @@ fn room_activity_events_round_trip_through_serde() {
             msgtype: "m.audio".to_owned(),
             body: "voice.ogg".to_owned(),
         }),
-    });
+    }));
     let sent_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         transaction_id: "txn-1".to_owned(),
@@ -751,7 +751,7 @@ fn room_activity_events_round_trip_through_serde() {
 
 #[test]
 fn room_activity_events_serialize_with_tagged_wire_shape() {
-    let pending_message_event = Event::RoomActivity(RoomActivity {
+    let pending_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "txn:txn-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
@@ -764,8 +764,8 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             body: "hello".to_owned(),
             send_state: RoomMessageSendState::Pending,
         }),
-    });
-    let member_notice_event = Event::RoomActivity(RoomActivity {
+    }));
+    let member_notice_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "state:$member:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_002,
@@ -779,8 +779,8 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
                 displayname: Some("carol".to_owned()),
             },
         }),
-    });
-    let image_event = Event::RoomActivity(RoomActivity {
+    }));
+    let image_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
@@ -801,8 +801,8 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
                 is_animated: Some(false),
             }),
         }),
-    });
-    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+    }));
+    let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_004,
@@ -813,7 +813,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             msgtype: "m.audio".to_owned(),
             body: "voice.ogg".to_owned(),
         }),
-    });
+    }));
     let failed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         transaction_id: "txn-1".to_owned(),
