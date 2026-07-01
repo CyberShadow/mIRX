@@ -9,12 +9,12 @@ pub use api::{
     Command, CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest,
-    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
+    RoomImageInfo, RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

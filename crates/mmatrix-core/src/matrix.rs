@@ -1470,9 +1470,8 @@ mod tests {
         Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
         RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTyping, UnsupportedRoomMessageActivity,
-        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomStateNoticeContent, RoomTyping, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::{
