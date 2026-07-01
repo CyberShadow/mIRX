@@ -217,7 +217,22 @@ pub struct RoomActivity {
     pub room_id: String,
     pub activity_id: String,
     pub timestamp_ms: u64,
+    #[serde(default)]
+    pub relation: Option<RoomActivityRelation>,
     pub kind: RoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityRelation {
+    Reply {
+        in_reply_to_event_id: String,
+    },
+    Thread {
+        thread_root_event_id: String,
+        in_reply_to_event_id: Option<String>,
+        is_falling_back: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -478,7 +493,13 @@ pub struct SwitchbarState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ViewIdentity {
     Status,
-    Room { room_id: String },
+    Room {
+        room_id: String,
+    },
+    Thread {
+        room_id: String,
+        thread_root_event_id: String,
+    },
 }
 
 impl<'de> Deserialize<'de> for ViewIdentity {
@@ -491,6 +512,7 @@ impl<'de> Deserialize<'de> for ViewIdentity {
         enum Kind {
             Status,
             Room,
+            Thread,
         }
 
         #[derive(Deserialize)]
@@ -506,6 +528,15 @@ impl<'de> Deserialize<'de> for ViewIdentity {
             #[serde(rename = "kind")]
             _kind: Kind,
             room_id: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ThreadIdentity {
+            #[serde(rename = "kind")]
+            _kind: Kind,
+            room_id: String,
+            thread_root_event_id: String,
         }
 
         let value = serde_json::Value::deserialize(deserializer)?;
@@ -524,6 +555,19 @@ impl<'de> Deserialize<'de> for ViewIdentity {
                 .map(|view| {
                     let RoomIdentity { _kind, room_id } = view;
                     Self::Room { room_id }
+                })
+                .map_err(serde::de::Error::custom),
+            Kind::Thread => serde_json::from_value::<ThreadIdentity>(value)
+                .map(|view| {
+                    let ThreadIdentity {
+                        _kind,
+                        room_id,
+                        thread_root_event_id,
+                    } = view;
+                    Self::Thread {
+                        room_id,
+                        thread_root_event_id,
+                    }
                 })
                 .map_err(serde::de::Error::custom),
         }

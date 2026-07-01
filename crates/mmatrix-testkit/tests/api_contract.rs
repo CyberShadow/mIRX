@@ -9,8 +9,8 @@ use mmatrix_core::{
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
-    RoomActivityKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberView,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource,
+    RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
     StatusBarState, StoredSession, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
@@ -229,6 +229,16 @@ fn data_models_round_trip_through_json() {
                         label: "Alice".to_owned(),
                     }],
                 },
+                MdiView {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    title: "Thread".to_owned(),
+                    active: false,
+                    lines: vec!["reply".to_owned()],
+                    members: Vec::new(),
+                },
             ],
         },
         status_bar: StatusBarState {
@@ -248,6 +258,15 @@ fn data_models_round_trip_through_json() {
                     },
                     title: "Room".to_owned(),
                     active: true,
+                    has_activity: true,
+                },
+                SwitchbarItem {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    title: "Thread".to_owned(),
+                    active: false,
                     has_activity: true,
                 },
             ],
@@ -394,6 +413,17 @@ fn data_models_round_trip_through_json() {
                                 "label": "Alice",
                             }
                         ],
+                    },
+                    {
+                        "identity": {
+                            "kind": "thread",
+                            "room_id": "!room:example",
+                            "thread_root_event_id": "$thread-root:example",
+                        },
+                        "title": "Thread",
+                        "active": false,
+                        "lines": ["reply"],
+                        "members": [],
                     }
                 ],
             },
@@ -418,6 +448,16 @@ fn data_models_round_trip_through_json() {
                         "title": "Room",
                         "active": true,
                         "has_activity": true,
+                    },
+                    {
+                        "identity": {
+                            "kind": "thread",
+                            "room_id": "!room:example",
+                            "thread_root_event_id": "$thread-root:example",
+                        },
+                        "title": "Thread",
+                        "active": false,
+                        "has_activity": true,
                     }
                 ],
             },
@@ -440,6 +480,7 @@ fn room_activity_sent_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
@@ -456,6 +497,7 @@ fn room_activity_sent_message_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-1",
             "timestamp_ms": 1700000000000u64,
+            "relation": null,
             "kind": {
                 "type": "message",
                 "event_id": "$event:example",
@@ -482,6 +524,7 @@ fn room_activity_pending_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-2".to_owned(),
         timestamp_ms: 1_700_000_060_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some("txn-2".to_owned()),
@@ -498,6 +541,7 @@ fn room_activity_pending_message_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-2",
             "timestamp_ms": 1700000060000u64,
+            "relation": null,
             "kind": {
                 "type": "message",
                 "event_id": null,
@@ -524,6 +568,7 @@ fn room_activity_failed_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-3".to_owned(),
         timestamp_ms: 1_700_000_120_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some("txn-3".to_owned()),
@@ -543,6 +588,7 @@ fn room_activity_failed_message_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-3",
             "timestamp_ms": 1700000120000u64,
+            "relation": null,
             "kind": {
                 "type": "message",
                 "event_id": null,
@@ -571,6 +617,7 @@ fn room_activity_notice_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-notice".to_owned(),
         timestamp_ms: 1_700_000_150_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$notice:example".to_owned()),
             transaction_id: None,
@@ -585,6 +632,7 @@ fn room_activity_notice_message_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "activity-notice",
         "timestamp_ms": 1700000150000u64,
+        "relation": null,
         "kind": {
             "type": "message",
             "event_id": "$notice:example",
@@ -614,6 +662,7 @@ fn room_activity_emote_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-emote".to_owned(),
         timestamp_ms: 1_700_000_165_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$emote:example".to_owned()),
             transaction_id: Some("txn-emote".to_owned()),
@@ -628,6 +677,7 @@ fn room_activity_emote_message_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "activity-emote",
         "timestamp_ms": 1700000165000u64,
+        "relation": null,
         "kind": {
             "type": "message",
             "event_id": "$emote:example",
@@ -657,6 +707,7 @@ fn room_activity_topic_state_notice_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-4".to_owned(),
         timestamp_ms: 1_700_000_180_000,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$topic:example".to_owned(),
             sender: "@alice:example".to_owned(),
@@ -673,6 +724,7 @@ fn room_activity_topic_state_notice_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-4",
             "timestamp_ms": 1700000180000u64,
+            "relation": null,
             "kind": {
                 "type": "state_notice",
                 "event_id": "$topic:example",
@@ -698,6 +750,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-5".to_owned(),
         timestamp_ms: 1_700_000_240_000,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$member:example".to_owned(),
             sender: "@carol:example".to_owned(),
@@ -715,6 +768,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-5",
             "timestamp_ms": 1700000240000u64,
+            "relation": null,
             "kind": {
                 "type": "state_notice",
                 "event_id": "$member:example",
@@ -741,6 +795,7 @@ fn room_activity_unsupported_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        relation: None,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -753,6 +808,7 @@ fn room_activity_unsupported_message_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$audio1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "relation": null,
         "kind": {
             "type": "unsupported_message",
             "event_id": "$audio1:example.org",
@@ -779,6 +835,7 @@ fn room_activity_image_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Image(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -801,6 +858,7 @@ fn room_activity_image_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "relation": null,
         "kind": {
             "type": "image",
             "event_id": "$image1:example.org",
@@ -827,6 +885,160 @@ fn room_activity_image_round_trips_through_json() {
     );
     assert_eq!(
         serde_json::from_value::<RoomActivity>(json).expect("deserialize image activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_relation_reply_round_trips_through_json() {
+    let relation = RoomActivityRelation::Reply {
+        in_reply_to_event_id: "$reply:example".to_owned(),
+    };
+    let json = serde_json::json!({
+        "type": "reply",
+        "in_reply_to_event_id": "$reply:example",
+    });
+
+    assert_eq!(
+        serde_json::to_value(&relation).expect("serialize reply relation"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityRelation>(json).expect("deserialize reply relation"),
+        relation
+    );
+    assert!(
+        serde_json::from_value::<RoomActivityRelation>(serde_json::json!({
+            "type": "reply",
+            "in_reply_to_event_id": "$reply:example",
+            "unexpected": true,
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn room_activity_relation_thread_round_trips_through_json() {
+    let relation = RoomActivityRelation::Thread {
+        thread_root_event_id: "$thread-root:example".to_owned(),
+        in_reply_to_event_id: Some("$reply:example".to_owned()),
+        is_falling_back: false,
+    };
+    let json = serde_json::json!({
+        "type": "thread",
+        "thread_root_event_id": "$thread-root:example",
+        "in_reply_to_event_id": "$reply:example",
+        "is_falling_back": false,
+    });
+
+    assert_eq!(
+        serde_json::to_value(&relation).expect("serialize thread relation"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityRelation>(json).expect("deserialize thread relation"),
+        relation
+    );
+    assert!(
+        serde_json::from_value::<RoomActivityRelation>(serde_json::json!({
+            "type": "thread",
+            "thread_root_event_id": "$thread-root:example",
+            "in_reply_to_event_id": "$reply:example",
+            "is_falling_back": false,
+            "unexpected": true,
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn room_activity_omitted_relation_defaults_to_none() {
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "activity-omitted-relation",
+        "timestamp_ms": 1700000000000u64,
+        "kind": {
+            "type": "message",
+            "event_id": "$event:example",
+            "transaction_id": null,
+            "sender": "@alice:example",
+            "presentation": "text",
+            "body": "hello",
+            "send_state": {
+                "state": "sent"
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json)
+            .expect("deserialize activity without relation"),
+        RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "activity-omitted-relation".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            relation: None,
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$event:example".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
+        }
+    );
+}
+
+#[test]
+fn room_activity_thread_relation_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "activity-thread".to_owned(),
+        timestamp_ms: 1_700_000_300_000,
+        relation: Some(RoomActivityRelation::Thread {
+            thread_root_event_id: "$thread-root:example".to_owned(),
+            in_reply_to_event_id: Some("$reply:example".to_owned()),
+            is_falling_back: true,
+        }),
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some("$thread-event:example".to_owned()),
+            transaction_id: None,
+            sender: "@alice:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "thread reply".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    };
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "activity-thread",
+        "timestamp_ms": 1700000300000u64,
+        "relation": {
+            "type": "thread",
+            "thread_root_event_id": "$thread-root:example",
+            "in_reply_to_event_id": "$reply:example",
+            "is_falling_back": true,
+        },
+        "kind": {
+            "type": "message",
+            "event_id": "$thread-event:example",
+            "transaction_id": null,
+            "sender": "@alice:example",
+            "presentation": "text",
+            "body": "thread reply",
+            "send_state": {
+                "state": "sent"
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize thread activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize thread activity"),
         activity
     );
 }
@@ -914,6 +1126,7 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
@@ -946,6 +1159,7 @@ fn room_activity_contains_matches_unsupported_message_fields() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        relation: None,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -965,6 +1179,7 @@ fn room_activity_contains_matches_image_fields() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Image(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -1453,6 +1668,50 @@ fn data_models_reject_unknown_fields() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn view_identity_thread_round_trips_through_json() {
+    let identity = ViewIdentity::Thread {
+        room_id: "!room:example".to_owned(),
+        thread_root_event_id: "$thread-root:example".to_owned(),
+    };
+    let json = serde_json::json!({
+        "kind": "thread",
+        "room_id": "!room:example",
+        "thread_root_event_id": "$thread-root:example",
+    });
+
+    assert_eq!(
+        serde_json::to_value(&identity).expect("serialize thread identity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<ViewIdentity>(json).expect("deserialize thread identity"),
+        identity
+    );
+}
+
+#[test]
+fn view_identity_thread_rejects_missing_or_unknown_fields() {
+    for json in [
+        serde_json::json!({
+            "kind": "thread",
+            "thread_root_event_id": "$thread-root:example",
+        }),
+        serde_json::json!({
+            "kind": "thread",
+            "room_id": "!room:example",
+        }),
+        serde_json::json!({
+            "kind": "thread",
+            "room_id": "!room:example",
+            "thread_root_event_id": "$thread-root:example",
+            "unexpected": true,
+        }),
+    ] {
+        assert!(serde_json::from_value::<ViewIdentity>(json).is_err());
+    }
 }
 
 #[test]

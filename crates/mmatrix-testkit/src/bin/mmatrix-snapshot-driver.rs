@@ -693,7 +693,7 @@ mod windows_main {
             "  --expect-verification <flow_id>",
             "  --expect-verification-state <requested|accepted|ready|sas_ready|confirmed|done|cancelled>",
             "  --expect-verification-text <substring>",
-            "  --expect-active-view <status|room:<room_id>>",
+            "  --expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>",
             "  --expect-room-view <room_id>::<substring>",
             "  --expect-room-member <room_id>::<substring>",
             "  --expect-status-view <substring>",
@@ -701,10 +701,11 @@ mod windows_main {
             "  --expect-status-bar <substring>",
             "  --expect-no-status-bar <substring>",
             "  --expect-switchbar-item <identity>::<title-substring>",
-            "  --expect-no-switchbar-item <status|room:<room_id>>",
-            "  --expect-switchbar-active <status|room:<room_id>>",
-            "  --expect-switchbar-activity <status|room:<room_id>>",
-            "  --expect-no-switchbar-activity <status|room:<room_id>>",
+            "  <identity> is status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>",
+            "  --expect-no-switchbar-item <identity>",
+            "  --expect-switchbar-active <identity>",
+            "  --expect-switchbar-activity <identity>",
+            "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
             "  --expect-no-navigation-text <substring>",
         ]
@@ -718,7 +719,7 @@ mod windows_main {
         if let Some(room_id) = value.strip_prefix("room:") {
             if room_id.is_empty() {
                 return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status or room:<room_id>\n{}",
+                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
                     usage()
                 ));
             }
@@ -726,8 +727,26 @@ mod windows_main {
                 room_id: room_id.to_owned(),
             });
         }
+        if let Some(thread_identity) = value.strip_prefix("thread:") {
+            let Some((room_id, thread_root_event_id)) = thread_identity.split_once('|') else {
+                return Err(format!(
+                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    usage()
+                ));
+            };
+            if room_id.is_empty() || thread_root_event_id.is_empty() {
+                return Err(format!(
+                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    usage()
+                ));
+            }
+            return Ok(ViewIdentity::Thread {
+                room_id: room_id.to_owned(),
+                thread_root_event_id: thread_root_event_id.to_owned(),
+            });
+        }
         Err(format!(
-            "invalid {flag_name} value {value:?}; expected status or room:<room_id>\n{}",
+            "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
             usage()
         ))
     }
@@ -736,6 +755,10 @@ mod windows_main {
         match identity {
             ViewIdentity::Status => "status".to_owned(),
             ViewIdentity::Room { room_id } => format!("room:{room_id}"),
+            ViewIdentity::Thread {
+                room_id,
+                thread_root_event_id,
+            } => format!("thread:{room_id}|{thread_root_event_id}"),
         }
     }
 
@@ -818,6 +841,61 @@ mod windows_main {
                 .children
                 .iter()
                 .any(|child| navigation_contains(child, substring))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{format_view_identity, parse_view_identity_arg, usage};
+        use mmatrix_testkit::ViewIdentity;
+
+        #[test]
+        fn usage_documents_thread_identity_format() {
+            assert!(usage().contains(
+                "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
+            ));
+            assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
+        }
+
+        #[test]
+        fn parse_view_identity_arg_accepts_thread_identity() {
+            assert_eq!(
+                parse_view_identity_arg(
+                    "--expect-active-view",
+                    "thread:!room:example|$thread-root:example"
+                )
+                .unwrap(),
+                ViewIdentity::Thread {
+                    room_id: "!room:example".to_owned(),
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                }
+            );
+        }
+
+        #[test]
+        fn parse_view_identity_arg_rejects_missing_thread_components() {
+            for value in [
+                "thread:",
+                "thread:!room:example",
+                "thread:!room:example|",
+                "thread:|$thread-root:example",
+            ] {
+                assert!(
+                    parse_view_identity_arg("--expect-active-view", value).is_err(),
+                    "expected {value:?} to be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn format_view_identity_formats_thread_identity() {
+            assert_eq!(
+                format_view_identity(&ViewIdentity::Thread {
+                    room_id: "!room:example".to_owned(),
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                }),
+                "thread:!room:example|$thread-root:example"
+            );
+        }
     }
 
     pub(crate) fn main() -> ExitCode {

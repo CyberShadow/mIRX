@@ -4,7 +4,7 @@ use std::fmt;
 
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+    RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, StoredSession, UnsupportedRoomMessageActivity,
     VerificationState, VerificationStateEvent,
@@ -530,7 +530,13 @@ pub(crate) struct SwitchbarState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum ViewIdentity {
     Status,
-    Room { room_id: String },
+    Room {
+        room_id: String,
+    },
+    Thread {
+        room_id: String,
+        thread_root_event_id: String,
+    },
 }
 
 impl<'de> Deserialize<'de> for ViewIdentity {
@@ -543,6 +549,7 @@ impl<'de> Deserialize<'de> for ViewIdentity {
         enum Kind {
             Status,
             Room,
+            Thread,
         }
 
         #[derive(Deserialize)]
@@ -558,6 +565,15 @@ impl<'de> Deserialize<'de> for ViewIdentity {
             #[serde(rename = "kind")]
             _kind: Kind,
             room_id: String,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ThreadIdentity {
+            #[serde(rename = "kind")]
+            _kind: Kind,
+            room_id: String,
+            thread_root_event_id: String,
         }
 
         let value = Value::deserialize(deserializer)?;
@@ -576,6 +592,19 @@ impl<'de> Deserialize<'de> for ViewIdentity {
                 .map(|view| {
                     let RoomIdentity { _kind, room_id } = view;
                     Self::Room { room_id }
+                })
+                .map_err(serde::de::Error::custom),
+            Kind::Thread => serde_json::from_value::<ThreadIdentity>(value)
+                .map(|view| {
+                    let ThreadIdentity {
+                        _kind,
+                        room_id,
+                        thread_root_event_id,
+                    } = view;
+                    Self::Thread {
+                        room_id,
+                        thread_root_event_id,
+                    }
                 })
                 .map_err(serde::de::Error::custom),
         }
@@ -744,7 +773,21 @@ pub(crate) struct DumpRoomActivity {
     pub(crate) room_id: String,
     pub(crate) activity_id: String,
     pub(crate) timestamp_ms: u64,
+    pub(crate) relation: Option<DumpRoomActivityRelation>,
     pub(crate) kind: DumpRoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum DumpRoomActivityRelation {
+    Reply {
+        in_reply_to_event_id: String,
+    },
+    Thread {
+        thread_root_event_id: String,
+        in_reply_to_event_id: Option<String>,
+        is_falling_back: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -895,7 +938,32 @@ pub(crate) fn dump_room_activity_from_activity(activity: &RoomActivity) -> DumpR
         room_id: activity.room_id.clone(),
         activity_id: activity.activity_id.clone(),
         timestamp_ms: activity.timestamp_ms,
+        relation: activity
+            .relation
+            .as_ref()
+            .map(dump_room_activity_relation_from_core),
         kind: dump_room_activity_kind_from_core(&activity.kind),
+    }
+}
+
+fn dump_room_activity_relation_from_core(
+    relation: &RoomActivityRelation,
+) -> DumpRoomActivityRelation {
+    match relation {
+        RoomActivityRelation::Reply {
+            in_reply_to_event_id,
+        } => DumpRoomActivityRelation::Reply {
+            in_reply_to_event_id: in_reply_to_event_id.clone(),
+        },
+        RoomActivityRelation::Thread {
+            thread_root_event_id,
+            in_reply_to_event_id,
+            is_falling_back,
+        } => DumpRoomActivityRelation::Thread {
+            thread_root_event_id: thread_root_event_id.clone(),
+            in_reply_to_event_id: in_reply_to_event_id.clone(),
+            is_falling_back: *is_falling_back,
+        },
     }
 }
 
@@ -1287,10 +1355,10 @@ mod tests {
     use mmatrix_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomSummary,
-        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
-        VerificationState, VerificationStateEvent,
+        RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+        RoomSummary, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1306,17 +1374,18 @@ mod tests {
         COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageActivity, DumpRoomImageInfo,
-        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
-        DumpRoomMessageSendState, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
-        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
-        WaitIdleResponse, failure_response, parse_command_request, success_response,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
+        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
+        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1613,6 +1682,22 @@ mod tests {
                 args: SelectViewArgs {
                     view: ViewIdentity::Room {
                         room_id: "!room:example".to_owned(),
+                    },
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_VIEW,
+                br#"{"id":"thread-view","args":{"view":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"}}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SelectView {
+                id: "thread-view".to_owned(),
+                args: SelectViewArgs {
+                    view: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
                     },
                 },
             }
@@ -2298,6 +2383,149 @@ mod tests {
     }
 
     #[test]
+    fn select_view_related_payloads_accept_thread_identities() {
+        let select_view_response = SelectViewResponse {
+            active: ViewIdentity::Thread {
+                room_id: "!room:example".to_owned(),
+                thread_root_event_id: "$thread-root:example".to_owned(),
+            },
+        };
+        let select_view_response_json = json!({
+            "active": {
+                "kind": "thread",
+                "room_id": "!room:example",
+                "thread_root_event_id": "$thread-root:example",
+            }
+        });
+        assert_eq!(
+            serde_json::from_value::<SelectViewResponse>(select_view_response_json.clone())
+                .expect("deserialize thread select-view response"),
+            select_view_response
+        );
+        assert_eq!(
+            serde_json::to_value(&select_view_response)
+                .expect("serialize thread select-view response"),
+            select_view_response_json
+        );
+
+        let mdi_view = MdiView {
+            identity: ViewIdentity::Thread {
+                room_id: "!room:example".to_owned(),
+                thread_root_event_id: "$thread-root:example".to_owned(),
+            },
+            title: "Thread".to_owned(),
+            active: true,
+            lines: vec!["reply".to_owned()],
+            members: Vec::new(),
+        };
+        let mdi_view_json = json!({
+            "identity": {
+                "kind": "thread",
+                "room_id": "!room:example",
+                "thread_root_event_id": "$thread-root:example",
+            },
+            "title": "Thread",
+            "active": true,
+            "lines": ["reply"],
+            "members": [],
+        });
+        assert_eq!(
+            serde_json::from_value::<MdiView>(mdi_view_json.clone())
+                .expect("deserialize thread mdi view"),
+            mdi_view
+        );
+        assert_eq!(
+            serde_json::to_value(&mdi_view).expect("serialize thread mdi view"),
+            mdi_view_json
+        );
+
+        let switchbar_item = SwitchbarItem {
+            identity: ViewIdentity::Thread {
+                room_id: "!room:example".to_owned(),
+                thread_root_event_id: "$thread-root:example".to_owned(),
+            },
+            title: "Thread".to_owned(),
+            active: false,
+            has_activity: true,
+        };
+        let switchbar_item_json = json!({
+            "identity": {
+                "kind": "thread",
+                "room_id": "!room:example",
+                "thread_root_event_id": "$thread-root:example",
+            },
+            "title": "Thread",
+            "active": false,
+            "has_activity": true,
+        });
+        assert_eq!(
+            serde_json::from_value::<SwitchbarItem>(switchbar_item_json.clone())
+                .expect("deserialize thread switchbar item"),
+            switchbar_item
+        );
+        assert_eq!(
+            serde_json::to_value(&switchbar_item).expect("serialize thread switchbar item"),
+            switchbar_item_json
+        );
+    }
+
+    #[test]
+    fn select_view_related_payloads_reject_unknown_fields_on_thread_identities() {
+        let error = parse_command_request(
+            COMMAND_ID_SELECT_VIEW,
+            br#"{"id":"thread-view","args":{"view":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example","unexpected":true}}}"#,
+        )
+        .expect_err("thread select-view unknown field must fail");
+        assert!(
+            serde_json::to_value(error).unwrap()["err"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field `unexpected`")
+        );
+
+        assert!(
+            serde_json::from_value::<SelectViewResponse>(json!({
+                "active": {
+                    "kind": "thread",
+                    "room_id": "!room:example",
+                    "thread_root_event_id": "$thread-root:example",
+                    "unexpected": true,
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<MdiView>(json!({
+                "identity": {
+                    "kind": "thread",
+                    "room_id": "!room:example",
+                    "thread_root_event_id": "$thread-root:example",
+                    "unexpected": true,
+                },
+                "title": "Thread",
+                "active": true,
+                "lines": [],
+                "members": [],
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<SwitchbarItem>(json!({
+                "identity": {
+                    "kind": "thread",
+                    "room_id": "!room:example",
+                    "thread_root_event_id": "$thread-root:example",
+                    "unexpected": true,
+                },
+                "title": "Thread",
+                "active": false,
+                "has_activity": true,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn verification_action_commands_reject_partial_explicit_flow_args() {
         for (command_id, request_id, request) in [
             (
@@ -2503,6 +2731,11 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "txn:txn-1".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
+                            relation: Some(DumpRoomActivityRelation::Thread {
+                                thread_root_event_id: "$thread-root:example".to_owned(),
+                                in_reply_to_event_id: Some("$reply:example".to_owned()),
+                                is_falling_back: false,
+                            }),
                             kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: Some("txn-1".to_owned()),
@@ -2519,6 +2752,7 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "event:$image:example".to_owned(),
                             timestamp_ms: 1_700_000_030_000,
+                            relation: None,
                             kind: DumpRoomActivityKind::Image(DumpRoomImageActivity {
                                 event_id: "$image:example".to_owned(),
                                 sender: "@alice:example".to_owned(),
@@ -2540,6 +2774,7 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "state:$state-1".to_owned(),
                             timestamp_ms: 1_700_000_060_000,
+                            relation: None,
                             kind: DumpRoomActivityKind::StateNotice(DumpRoomStateNoticeActivity {
                                 event_id: "$state-1".to_owned(),
                                 sender: "@alice:example".to_owned(),
@@ -2563,6 +2798,12 @@ mod tests {
                             "room_id":"!room:example",
                             "activity_id":"txn:txn-1",
                             "timestamp_ms":1700000000000u64,
+                            "relation":{
+                                "type":"thread",
+                                "thread_root_event_id":"$thread-root:example",
+                                "in_reply_to_event_id":"$reply:example",
+                                "is_falling_back":false
+                            },
                             "kind":{
                                 "type":"message",
                                 "event_id":"$event:example",
@@ -2577,6 +2818,7 @@ mod tests {
                             "room_id":"!room:example",
                             "activity_id":"event:$image:example",
                             "timestamp_ms":1700000030000u64,
+                            "relation":null,
                             "kind":{
                                 "type":"image",
                                 "event_id":"$image:example",
@@ -2600,6 +2842,7 @@ mod tests {
                             "room_id":"!room:example",
                             "activity_id":"state:$state-1",
                             "timestamp_ms":1700000060000u64,
+                            "relation":null,
                             "kind":{
                                 "type":"state_notice",
                                 "event_id":"$state-1",
@@ -2748,6 +2991,16 @@ mod tests {
                                     label: "Alice".to_owned(),
                                 }],
                             },
+                            MdiView {
+                                identity: ViewIdentity::Thread {
+                                    room_id: "!room:example".to_owned(),
+                                    thread_root_event_id: "$thread-root:example".to_owned(),
+                                },
+                                title: "Thread".to_owned(),
+                                active: false,
+                                lines: vec!["reply".to_owned()],
+                                members: Vec::new(),
+                            },
                         ],
                     },
                     status_bar: StatusBarState {
@@ -2767,6 +3020,15 @@ mod tests {
                                 },
                                 title: "Room".to_owned(),
                                 active: true,
+                                has_activity: true,
+                            },
+                            SwitchbarItem {
+                                identity: ViewIdentity::Thread {
+                                    room_id: "!room:example".to_owned(),
+                                    thread_root_event_id: "$thread-root:example".to_owned(),
+                                },
+                                title: "Thread".to_owned(),
+                                active: false,
                                 has_activity: true,
                             },
                         ],
@@ -2807,6 +3069,13 @@ mod tests {
                                         "label":"Alice"
                                     }
                                 ]
+                            },
+                            {
+                                "identity":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"},
+                                "title":"Thread",
+                                "active":false,
+                                "lines":["reply"],
+                                "members":[]
                             }
                         ]
                     },
@@ -2826,6 +3095,12 @@ mod tests {
                                 "title":"Room",
                                 "active":true,
                                 "has_activity":true
+                            },
+                            {
+                                "identity":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"},
+                                "title":"Thread",
+                                "active":false,
+                                "has_activity":true
                             }
                         ]
                     }
@@ -2836,14 +3111,17 @@ mod tests {
             serde_json::to_value(success_response(
                 "select-view",
                 SelectViewResponse {
-                    active: ViewIdentity::Status,
+                    active: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
                 },
             ))
             .unwrap(),
             json!({
                 "id":"select-view",
                 "ok":true,
-                "json":{"active":{"kind":"status"}}
+                "json":{"active":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"}}
             })
         );
     }
@@ -2957,7 +3235,11 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$event:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
-            relation: None,
+            relation: Some(RoomActivityRelation::Thread {
+                thread_root_event_id: "$thread-root:example".to_owned(),
+                in_reply_to_event_id: Some("$reply:example".to_owned()),
+                is_falling_back: true,
+            }),
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
@@ -2973,6 +3255,11 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$event:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                relation: Some(DumpRoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                    in_reply_to_event_id: Some("$reply:example".to_owned()),
+                    is_falling_back: true,
+                }),
                 kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
                     event_id: Some("$event:example".to_owned()),
                     transaction_id: Some("txn-1".to_owned()),
@@ -3015,6 +3302,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$audio1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
+                relation: None,
                 kind: DumpRoomActivityKind::UnsupportedMessage(
                     DumpUnsupportedRoomMessageActivity {
                         event_id: "$audio1:example.org".to_owned(),
@@ -3034,6 +3322,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$audio1:example.org",
                 "timestamp_ms":1710000000000u64,
+                "relation":null,
                 "kind":{
                     "type":"unsupported_message",
                     "event_id":"$audio1:example.org",
@@ -3075,6 +3364,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_010_000,
+                relation: None,
                 kind: DumpRoomActivityKind::Image(DumpRoomImageActivity {
                     event_id: "$image1:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -3100,6 +3390,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$image1:example.org",
                 "timestamp_ms":1710000010000u64,
+                "relation":null,
                 "kind":{
                     "type":"image",
                     "event_id":"$image1:example.org",
