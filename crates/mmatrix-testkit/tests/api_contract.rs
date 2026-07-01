@@ -9,12 +9,12 @@ use mmatrix_core::{
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
-    RoomActivityKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild, StatusBarState, StoredSession,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewIdentity,
+    RoomActivityKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberView,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
+    StatusBarState, StoredSession, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 fn stored_session() -> StoredSession {
@@ -214,6 +214,7 @@ fn data_models_round_trip_through_json() {
                     title: "Status".to_owned(),
                     active: false,
                     lines: vec!["status: synced".to_owned()],
+                    members: Vec::new(),
                 },
                 MdiView {
                     identity: ViewIdentity::Room {
@@ -222,6 +223,11 @@ fn data_models_round_trip_through_json() {
                     title: "Room".to_owned(),
                     active: true,
                     lines: vec!["hello".to_owned()],
+                    members: vec![RoomMemberView {
+                        user_id: "@alice:example".to_owned(),
+                        display_name: Some("Alice".to_owned()),
+                        label: "Alice".to_owned(),
+                    }],
                 },
             ],
         },
@@ -335,6 +341,87 @@ fn data_models_round_trip_through_json() {
     assert_eq!(
         serde_json::from_slice::<UiState>(&ui_state_json).expect("deserialize ui state"),
         ui_state
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&ui_state_json)
+            .expect("deserialize ui state value"),
+        serde_json::json!({
+            "navigation": {
+                "text": "mmatrix",
+                "children": [
+                    {
+                        "text": "status",
+                        "children": [],
+                    },
+                    {
+                        "text": "rooms: 1",
+                        "children": [
+                            {
+                                "text": "Room",
+                                "children": [],
+                            }
+                        ],
+                    }
+                ],
+            },
+            "mdi": {
+                "active": {
+                    "kind": "room",
+                    "room_id": "!room:example",
+                },
+                "views": [
+                    {
+                        "identity": {
+                            "kind": "status",
+                        },
+                        "title": "Status",
+                        "active": false,
+                        "lines": ["status: synced"],
+                        "members": [],
+                    },
+                    {
+                        "identity": {
+                            "kind": "room",
+                            "room_id": "!room:example",
+                        },
+                        "title": "Room",
+                        "active": true,
+                        "lines": ["hello"],
+                        "members": [
+                            {
+                                "user_id": "@alice:example",
+                                "display_name": "Alice",
+                                "label": "Alice",
+                            }
+                        ],
+                    }
+                ],
+            },
+            "status_bar": {
+                "text": "synced 1 room(s)",
+            },
+            "switchbar": {
+                "items": [
+                    {
+                        "identity": {
+                            "kind": "status",
+                        },
+                        "title": "Status",
+                        "active": false,
+                        "has_activity": false,
+                    },
+                    {
+                        "identity": {
+                            "kind": "room",
+                            "room_id": "!room:example",
+                        },
+                        "title": "Room",
+                        "active": true,
+                        "has_activity": true,
+                    }
+                ],
+            },
+        })
     );
     assert_eq!(
         serde_json::from_slice::<Vec<NavigationPathSegment>>(&navigation_path_json)
@@ -1291,6 +1378,18 @@ fn data_models_reject_unknown_fields() {
             "title":"Status",
             "active":true,
             "lines":[],
+            "members":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMemberView>(
+            r#"{
+            "user_id":"@alice:example",
+            "display_name":"Alice",
+            "label":"Alice",
             "unexpected":true
         }"#
         )

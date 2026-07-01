@@ -19,10 +19,10 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, E2eeBackupState,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, StoredSession,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
 };
 use serde::Serialize;
@@ -80,10 +80,10 @@ use crate::{
         DumpRoomMessageActivityLine, DumpSubmittedVerificationAction, DumpVerificationActionKind,
         FailureEnvelope, GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse,
         MdiState, MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiState,
-        VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
+        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
+        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_verification_from_state_event,
         failure_response, parse_command_request, success_response,
     },
@@ -247,6 +247,7 @@ struct RoomViewModel {
     topic: Option<String>,
     activities: Vec<RoomActivity>,
     typing_user_ids: Vec<String>,
+    members: Vec<RoomMemberSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +319,10 @@ impl RoomViewModel {
 
     fn replace_typing(&mut self, typing: RoomTyping) {
         self.typing_user_ids = typing.user_ids;
+    }
+
+    fn replace_members(&mut self, members: RoomMembers) {
+        self.members = members.members;
     }
 
     fn upsert_message_activity(
@@ -732,6 +737,56 @@ fn apply_room_typing_event(state: &mut WindowState, typing: RoomTyping) {
         .entry(typing.room_id.clone())
         .or_default()
         .replace_typing(typing);
+}
+
+fn apply_room_members_event(state: &mut WindowState, members: RoomMembers) {
+    state
+        .model
+        .room_views
+        .entry(members.room_id.clone())
+        .or_default()
+        .replace_members(members);
+}
+
+fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
+    let mut display_name_counts = BTreeMap::new();
+    for member in members {
+        if let Some(display_name) = member
+            .display_name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+        {
+            *display_name_counts
+                .entry(display_name.to_owned())
+                .or_insert(0usize) += 1;
+        }
+    }
+
+    members
+        .iter()
+        .map(|member| {
+            let label = match member.display_name.as_deref() {
+                Some(display_name) if !display_name.is_empty() => {
+                    if display_name_counts
+                        .get(display_name)
+                        .copied()
+                        .unwrap_or_default()
+                        > 1
+                    {
+                        format!("{display_name} ({})", member.user_id)
+                    } else {
+                        display_name.to_owned()
+                    }
+                }
+                _ => member.user_id.clone(),
+            };
+            RoomMemberView {
+                user_id: member.user_id.clone(),
+                display_name: member.display_name.clone(),
+                label,
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2964,6 +3019,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             for (room_id, room_view) in &mut state.model.room_views {
                 if actionable_room_by_id(&rooms, room_id).is_none() {
                     room_view.typing_user_ids.clear();
+                    room_view.members.clear();
                 }
             }
             state.model.rooms = rooms;
@@ -2971,7 +3027,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
-        Event::RoomMembers(_) => {}
+        Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
         Event::E2eeStatus(status) => {
             state.model.last_e2ee_status = Some(status);
@@ -4963,6 +5019,17 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                 title: read_window_text(view.child),
                 active: identity == active,
                 lines: split_rendered_lines(&read_window_text(view.content)),
+                members: match &view_id {
+                    ViewId::Status => Vec::new(),
+                    ViewId::Room(room_id) => room_member_view_rows(
+                        &state_ref(hwnd)
+                            .model
+                            .room_views
+                            .get(room_id)
+                            .map(|room_view| room_view.members.as_slice())
+                            .unwrap_or_default(),
+                    ),
+                },
                 identity,
             })
         })
@@ -8520,6 +8587,7 @@ mod tests {
                     1_700_000_000_000,
                 )],
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
+                members: Vec::new(),
             },
         );
         state.model.last_activity = Some(LastMessageActivity {

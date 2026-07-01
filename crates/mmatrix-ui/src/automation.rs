@@ -627,11 +627,20 @@ impl<'de> Deserialize<'de> for ComposeKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct RoomMemberView {
+    pub(crate) user_id: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MdiView {
     pub(crate) identity: ViewIdentity,
     pub(crate) title: String,
     pub(crate) active: bool,
     pub(crate) lines: Vec<String>,
+    pub(crate) members: Vec<RoomMemberView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1303,10 +1312,10 @@ mod tests {
         DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
+        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
         WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
@@ -2723,6 +2732,7 @@ mod tests {
                                 title: "Status".to_owned(),
                                 active: false,
                                 lines: vec!["status: synced".to_owned()],
+                                members: Vec::new(),
                             },
                             MdiView {
                                 identity: ViewIdentity::Room {
@@ -2731,6 +2741,11 @@ mod tests {
                                 title: "Room".to_owned(),
                                 active: true,
                                 lines: vec!["hello".to_owned()],
+                                members: vec![RoomMemberView {
+                                    user_id: "@alice:example".to_owned(),
+                                    display_name: Some("Alice".to_owned()),
+                                    label: "Alice".to_owned(),
+                                }],
                             },
                         ],
                     },
@@ -2776,13 +2791,21 @@ mod tests {
                                 "identity":{"kind":"status"},
                                 "title":"Status",
                                 "active":false,
-                                "lines":["status: synced"]
+                                "lines":["status: synced"],
+                                "members":[]
                             },
                             {
                                 "identity":{"kind":"room","room_id":"!room:example"},
                                 "title":"Room",
                                 "active":true,
-                                "lines":["hello"]
+                                "lines":["hello"],
+                                "members":[
+                                    {
+                                        "user_id":"@alice:example",
+                                        "display_name":"Alice",
+                                        "label":"Alice"
+                                    }
+                                ]
                             }
                         ]
                     },

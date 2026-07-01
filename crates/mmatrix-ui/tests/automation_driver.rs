@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
     StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
@@ -441,6 +442,19 @@ fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
     })
 }
 
+fn room_members_event(room_id: &str, members: &[(&str, Option<&str>)]) -> Event {
+    Event::RoomMembers(RoomMembers {
+        room_id: room_id.to_owned(),
+        members: members
+            .iter()
+            .map(|(user_id, display_name)| RoomMemberSummary {
+                user_id: (*user_id).to_owned(),
+                display_name: display_name.map(str::to_owned),
+            })
+            .collect(),
+    })
+}
+
 fn timeline_line(
     room_id: &str,
     sender: &str,
@@ -753,6 +767,19 @@ fn assert_switchbar_activity(ui_state: &UiState, identity: &ViewIdentity, expect
 
 fn view_contains(view: &MdiView, substring: &str) -> bool {
     view.lines.iter().any(|line| line.contains(substring))
+}
+
+fn view_member_labels(view: &MdiView) -> Vec<&str> {
+    view.members
+        .iter()
+        .map(|member| member.label.as_str())
+        .collect()
+}
+
+fn view_members_contain(view: &MdiView, needle: &str) -> bool {
+    view.members
+        .iter()
+        .any(|member| member.label.contains(needle))
 }
 
 fn navigation_contains(node: &NavigationNode, substring: &str) -> bool {
@@ -1777,6 +1804,139 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     ));
     assert!(view_contains(ops_view, "* [22:14] carol joined"));
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_dumps_room_member_labels_in_mdi_views()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!members:example", "Members", false)]),
+        text_event_with_event_id(
+            "!members:example",
+            "$members-context",
+            "@alice:example",
+            1_700_000_000_000,
+            "room members context",
+        ),
+        room_members_event(
+            "!members:example",
+            &[
+                ("@alice:example", Some("Alice")),
+                ("@sam-one:example", Some("Sam")),
+                ("@sam-two:example", Some("Sam")),
+                ("@ghost:example", None),
+            ],
+        ),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!members:example")?;
+    let ui_state = app.dump_ui_state()?;
+    let members_view = find_view(&ui_state, &room_identity("!members:example"));
+    assert_eq!(
+        view_member_labels(members_view),
+        vec![
+            "Alice",
+            "Sam (@sam-one:example)",
+            "Sam (@sam-two:example)",
+            "@ghost:example",
+        ]
+    );
+    assert!(view_contains(members_view, "room members context"));
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_replaces_room_members_on_append_and_state_reload()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!members:example", "Members", false)]),
+        text_event_with_event_id(
+            "!members:example",
+            "$members-context",
+            "@alice:example",
+            1_700_000_000_000,
+            "room members context",
+        ),
+        room_members_event(
+            "!members:example",
+            &[
+                ("@alice:example", Some("Alice")),
+                ("@bob:example", Some("Bob")),
+            ],
+        ),
+    ])?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!members:example")?;
+    let initial_state = app.dump_ui_state()?;
+    let initial_view = find_view(&initial_state, &room_identity("!members:example"));
+    assert_eq!(view_member_labels(initial_view), vec!["Alice", "Bob"]);
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_members_event(
+        "!members:example",
+        &[
+            ("@alice:example", Some("Alice")),
+            ("@carol:example", Some("Carol")),
+        ],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let appended_state = app.dump_ui_state()?;
+    let appended_view = find_view(&appended_state, &room_identity("!members:example"));
+    assert_eq!(view_member_labels(appended_view), vec!["Alice", "Carol"]);
+    assert!(!view_members_contain(appended_view, "Bob"));
+    assert!(view_members_contain(appended_view, "Carol"));
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!members:example", "Members", false)]),
+        text_event_with_event_id(
+            "!members:example",
+            "$members-context",
+            "@alice:example",
+            1_700_000_000_000,
+            "room members context",
+        ),
+        room_members_event(
+            "!members:example",
+            &[
+                ("@alice:example", Some("Alice")),
+                ("@dave:example", Some("Dave")),
+            ],
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!members:example")?;
+
+    let reloaded_state = app.dump_ui_state()?;
+    let reloaded_view = find_view(&reloaded_state, &room_identity("!members:example"));
+    assert_eq!(view_member_labels(reloaded_view), vec!["Alice", "Dave"]);
+    assert!(!view_members_contain(reloaded_view, "Carol"));
+    assert!(view_members_contain(reloaded_view, "Dave"));
+
+    let _ = fs::remove_file(&state_path);
     Ok(())
 }
 

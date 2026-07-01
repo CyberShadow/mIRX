@@ -575,11 +575,20 @@ impl<'de> Deserialize<'de> for ComposeKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomMemberView {
+    pub user_id: String,
+    pub display_name: Option<String>,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MdiView {
     pub identity: ViewIdentity,
     pub title: String,
     pub active: bool,
     pub lines: Vec<String>,
+    pub members: Vec<RoomMemberView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
