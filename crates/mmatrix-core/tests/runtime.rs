@@ -630,6 +630,7 @@ fn room_activity_events_round_trip_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$event:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$event:example.org".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
@@ -643,6 +644,7 @@ fn room_activity_events_round_trip_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "txn:txn-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some("txn-1".to_owned()),
@@ -656,6 +658,7 @@ fn room_activity_events_round_trip_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "state:$topic:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_001,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$topic:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -669,6 +672,7 @@ fn room_activity_events_round_trip_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "state:$member:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_002,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$member:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -683,6 +687,7 @@ fn room_activity_events_round_trip_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
+        relation: None,
         kind: RoomActivityKind::Image(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -704,6 +709,7 @@ fn room_activity_events_round_trip_through_serde() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_004,
+        relation: None,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -749,6 +755,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "txn:txn-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some("txn-1".to_owned()),
@@ -762,6 +769,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "state:$member:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_002,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$member:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -776,6 +784,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
+        relation: None,
         kind: RoomActivityKind::Image(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -797,6 +806,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_004,
+        relation: None,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -815,20 +825,20 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"pending"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"pending"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":"@alice:example.org","state_key":"@carol:example.org","content":{"type":"member","membership":"join","displayname":"carol"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"relation":null,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":"@alice:example.org","state_key":"@carol:example.org","content":{"type":"member","membership":"join","displayname":"carol"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&image_event).expect("serialize image room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"kind":{"type":"image","event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"relation":null,"kind":{"type":"image","event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&unsupported_message_event)
             .expect("serialize unsupported room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg"}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"relation":null,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg"}}}"#
     );
     assert_eq!(
         serde_json::to_string(&failed_update_event).expect("serialize failed room activity update"),

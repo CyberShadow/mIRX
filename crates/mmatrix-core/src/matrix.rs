@@ -29,7 +29,10 @@ use matrix_sdk::{
             room::{
                 ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
-                message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+                message::{
+                    MessageType, OriginalSyncRoomMessageEvent, Relation as MessageRelation,
+                    RoomMessageEventContent,
+                },
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
             space::child::{SpaceChildEventContent, SpaceChildOrd},
@@ -46,13 +49,13 @@ use tokio::task::JoinHandle;
 use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -573,6 +576,8 @@ fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
 ) -> Option<RoomActivity> {
+    let relation = room_activity_relation_from_message(event);
+
     if let Some((presentation, body)) =
         room_message_presentation_and_body_from_message_type(&event.content.msgtype)
     {
@@ -580,6 +585,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            relation,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some(event.event_id.to_string()),
                 transaction_id: event
@@ -600,6 +606,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            relation: relation.clone(),
             kind: RoomActivityKind::Image(RoomImageActivity {
                 event_id: event.event_id.to_string(),
                 sender: event.sender.to_string(),
@@ -617,6 +624,7 @@ fn room_activity_from_sync_message(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        relation,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: event.event_id.to_string(),
             sender: event.sender.to_string(),
@@ -624,6 +632,25 @@ fn room_activity_from_sync_message(
             body: body.to_owned(),
         }),
     })
+}
+
+fn room_activity_relation_from_message(
+    event: &OriginalSyncRoomMessageEvent,
+) -> Option<RoomActivityRelation> {
+    match event.content.relates_to.as_ref()? {
+        MessageRelation::Reply(reply) => Some(RoomActivityRelation::Reply {
+            in_reply_to_event_id: reply.in_reply_to.event_id.to_string(),
+        }),
+        MessageRelation::Thread(thread) => Some(RoomActivityRelation::Thread {
+            thread_root_event_id: thread.event_id.to_string(),
+            in_reply_to_event_id: thread
+                .in_reply_to
+                .as_ref()
+                .map(|in_reply_to| in_reply_to.event_id.to_string()),
+            is_falling_back: thread.is_falling_back,
+        }),
+        _ => None,
+    }
 }
 
 fn room_media_source_from_matrix(source: &MediaSource) -> RoomMediaSource {
@@ -693,6 +720,7 @@ fn room_activity_from_sync_topic(
         room_id: room_id.to_owned(),
         activity_id: format!("state:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
             sender: event.sender.to_string(),
@@ -712,6 +740,7 @@ fn room_activity_from_sync_member(
         room_id: room_id.to_owned(),
         activity_id: format!("state:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
             sender: event.sender.to_string(),
@@ -1433,6 +1462,7 @@ fn map_local_message_activity(
         room_id,
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms: created_at.get().into(),
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id),
@@ -1552,11 +1582,12 @@ mod tests {
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
-        Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTyping, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        Operation, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+        RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
+        RoomMemberSummary, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+        RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::{
@@ -1820,6 +1851,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: Some("txn-1".to_owned()),
@@ -1852,6 +1884,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: None,
@@ -1884,6 +1917,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: None,
@@ -1891,6 +1925,136 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
                     send_state: RoomMessageSendState::Sent,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn thread_sync_text_message_maps_thread_relation() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello from thread",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread-root:example.org",
+                    "is_falling_back": true,
+                    "m.in_reply_to": {
+                        "event_id": "$reply-target:example.org"
+                    }
+                }
+            },
+            "event_id": "$threaded:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000005u64
+        }))
+        .expect("deserialize threaded sync text event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$threaded:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_005,
+                relation: Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root:example.org".to_owned(),
+                    in_reply_to_event_id: Some("$reply-target:example.org".to_owned()),
+                    is_falling_back: true,
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$threaded:example.org".to_owned()),
+                    transaction_id: None,
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello from thread".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn ordinary_reply_sync_message_maps_reply_relation_not_thread() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "reply only",
+                "m.relates_to": {
+                    "m.in_reply_to": {
+                        "event_id": "$parent:example.org"
+                    }
+                }
+            },
+            "event_id": "$reply:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000010u64
+        }))
+        .expect("deserialize reply sync text event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$reply:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_010,
+                relation: Some(RoomActivityRelation::Reply {
+                    in_reply_to_event_id: "$parent:example.org".to_owned(),
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$reply:example.org".to_owned()),
+                    transaction_id: None,
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "reply only".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn threaded_sync_image_mapping_preserves_image_kind_and_relation() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.image",
+                "body": "diagram.png",
+                "url": "mxc://example.org/image",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$thread-root:example.org",
+                    "is_falling_back": false
+                }
+            },
+            "event_id": "$image-thread:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000015u64
+        }))
+        .expect("deserialize threaded sync image event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$image-thread:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_015,
+                relation: Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root:example.org".to_owned(),
+                    in_reply_to_event_id: None,
+                    is_falling_back: false,
+                }),
+                kind: RoomActivityKind::Image(RoomImageActivity {
+                    event_id: "$image-thread:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "diagram.png".to_owned(),
+                    filename: None,
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/image".to_owned(),
+                    },
+                    info: None,
                 }),
             })
         );
@@ -1924,6 +2088,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                relation: None,
                 kind: RoomActivityKind::Image(RoomImageActivity {
                     event_id: "$event:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -1966,6 +2131,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_050,
+                relation: None,
                 kind: RoomActivityKind::Image(RoomImageActivity {
                     event_id: "$image:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -2001,6 +2167,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$audio:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
+                relation: None,
                 kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                     event_id: "$audio:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -2032,6 +2199,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$file:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_200,
+                relation: None,
                 kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                     event_id: "$file:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -2063,6 +2231,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$video:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_300,
+                relation: None,
                 kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                     event_id: "$video:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -2134,6 +2303,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "state:$topic:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_001,
+                relation: None,
                 kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                     event_id: "$topic:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -2167,6 +2337,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "state:$member:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_002,
+                relation: None,
                 kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                     event_id: "$member:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -2390,6 +2561,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
@@ -2427,6 +2599,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
@@ -2463,6 +2636,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
@@ -2545,6 +2719,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
@@ -2582,6 +2757,7 @@ mod tests {
                     room_id: "!room:example.org".to_owned(),
                     activity_id: "txn:txn-1".to_owned(),
                     timestamp_ms: created_at.get().into(),
+                    relation: None,
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: None,
                         transaction_id: Some("txn-1".to_owned()),

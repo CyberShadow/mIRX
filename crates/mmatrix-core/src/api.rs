@@ -99,7 +99,21 @@ pub struct RoomActivity {
     pub room_id: String,
     pub activity_id: String,
     pub timestamp_ms: u64,
+    pub relation: Option<RoomActivityRelation>,
     pub kind: RoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityRelation {
+    Reply {
+        in_reply_to_event_id: String,
+    },
+    Thread {
+        thread_root_event_id: String,
+        in_reply_to_event_id: Option<String>,
+        is_falling_back: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
