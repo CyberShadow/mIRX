@@ -1550,7 +1550,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -1565,10 +1565,11 @@ mod tests {
                             is_space: false,
                             space_children: Vec::new(),
                         }]),
-                        Event::RoomActivity(RoomActivity {
+                        Event::RoomActivity(Box::new(RoomActivity {
                             room_id: "!room:example".to_owned(),
                             activity_id: "event:$event:example".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
+                            relation: None,
                             kind: RoomActivityKind::Message(RoomMessageActivity {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: None,
@@ -1577,7 +1578,7 @@ mod tests {
                                 body: "hello".to_owned(),
                                 send_state: RoomMessageSendState::Sent,
                             }),
-                        }),
+                        })),
                     ],
                 },
             }
@@ -2956,6 +2957,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$event:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
@@ -2999,6 +3001,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$audio1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
+            relation: None,
             kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                 event_id: "$audio1:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),
@@ -3048,6 +3051,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$image1:example.org".to_owned(),
             timestamp_ms: 1_710_000_010_000,
+            relation: None,
             kind: RoomActivityKind::Image(RoomImageActivity {
                 event_id: "$image1:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),

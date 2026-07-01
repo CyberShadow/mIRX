@@ -5369,10 +5369,11 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 space_children: Vec::new(),
             },
         ]),
-        Event::RoomActivity(RoomActivity {
+        Event::RoomActivity(Box::new(RoomActivity {
             room_id: "!one:example".to_owned(),
             activity_id: "event:$one-first".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$one-first".to_owned()),
                 transaction_id: None,
@@ -5381,11 +5382,12 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 body: "first line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
-        }),
-        Event::RoomActivity(RoomActivity {
+        })),
+        Event::RoomActivity(Box::new(RoomActivity {
             room_id: "!one:example".to_owned(),
             activity_id: "event:$one-second".to_owned(),
             timestamp_ms: 1_700_000_060_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$one-second".to_owned()),
                 transaction_id: None,
@@ -5394,11 +5396,12 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 body: "second line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
-        }),
-        Event::RoomActivity(RoomActivity {
+        })),
+        Event::RoomActivity(Box::new(RoomActivity {
             room_id: "!two:example".to_owned(),
             activity_id: "event:$two-third".to_owned(),
             timestamp_ms: 1_700_000_120_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$two-third".to_owned()),
                 transaction_id: None,
@@ -5407,7 +5410,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 body: "third line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
-        }),
+        })),
     ];
     let load_response = send_automation_request(
         hwnd,
@@ -6730,6 +6733,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some(event_id.to_owned()),
                 transaction_id: transaction_id.map(str::to_owned),
@@ -6760,13 +6764,13 @@ mod tests {
 
     fn timeline(room_id: &str, body: &str) -> Event {
         let event_id = format!("${room_id}:{}", body.replace(' ', "_"));
-        Event::RoomActivity(sent_message_activity(
+        Event::RoomActivity(Box::new(sent_message_activity(
             room_id,
             &event_id,
             None,
             body,
             1_700_000_000_000,
-        ))
+        )))
     }
 
     fn timeline_with_transaction_id_with_presentation(
@@ -6777,14 +6781,14 @@ mod tests {
         body: &str,
         timestamp_ms: u64,
     ) -> Event {
-        Event::RoomActivity(sent_message_activity_with_presentation(
+        Event::RoomActivity(Box::new(sent_message_activity_with_presentation(
             room_id,
             event_id,
             transaction_id,
             presentation,
             body,
             timestamp_ms,
-        ))
+        )))
     }
 
     fn timeline_with_transaction_id(
@@ -6814,6 +6818,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("txn:{transaction_id}"),
             timestamp_ms: 1_700_000_000_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
@@ -6835,7 +6840,11 @@ mod tests {
     }
 
     fn outgoing_queued(room_id: &str, transaction_id: &str, body: &str) -> Event {
-        Event::RoomActivity(pending_message_activity(room_id, transaction_id, body))
+        Event::RoomActivity(Box::new(pending_message_activity(
+            room_id,
+            transaction_id,
+            body,
+        )))
     }
 
     fn outgoing_queued_with_presentation(
@@ -6844,12 +6853,12 @@ mod tests {
         presentation: RoomMessagePresentationKind,
         body: &str,
     ) -> Event {
-        Event::RoomActivity(pending_message_activity_with_presentation(
+        Event::RoomActivity(Box::new(pending_message_activity_with_presentation(
             room_id,
             transaction_id,
             presentation,
             body,
-        ))
+        )))
     }
 
     fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
@@ -6904,6 +6913,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("txn:{transaction_id}"),
             timestamp_ms: 1_700_000_000_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
@@ -6925,13 +6935,13 @@ mod tests {
         body: &str,
         message: &str,
     ) -> Event {
-        Event::RoomActivity(failed_message_activity_with_presentation(
+        Event::RoomActivity(Box::new(failed_message_activity_with_presentation(
             room_id,
             transaction_id,
             presentation,
             body,
             message,
-        ))
+        )))
     }
 
     fn failed_message(room_id: &str, transaction_id: &str, body: &str, message: &str) -> Event {
@@ -6945,10 +6955,11 @@ mod tests {
     }
 
     fn topic_state(room_id: &str, topic: &str) -> Event {
-        Event::RoomActivity(RoomActivity {
+        Event::RoomActivity(Box::new(RoomActivity {
             room_id: room_id.to_owned(),
             activity_id: format!("state:$topic:{room_id}:{topic}"),
             timestamp_ms: 1_700_000_060_000,
+            relation: None,
             kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                 event_id: format!("$topic:{room_id}:{topic}"),
                 sender: "@alice:example".to_owned(),
@@ -6957,7 +6968,7 @@ mod tests {
                     topic: topic.to_owned(),
                 },
             }),
-        })
+        }))
     }
 
     fn member_state(
@@ -6966,10 +6977,11 @@ mod tests {
         membership: &str,
         display_name: Option<&str>,
     ) -> Event {
-        Event::RoomActivity(RoomActivity {
+        Event::RoomActivity(Box::new(RoomActivity {
             room_id: room_id.to_owned(),
             timestamp_ms: 1_700_000_120_000,
             activity_id: format!("state:$member:{room_id}:{state_key}:{membership}"),
+            relation: None,
             kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                 event_id: format!("$member:{room_id}:{state_key}:{membership}"),
                 sender: "@alice:example".to_owned(),
@@ -6979,7 +6991,7 @@ mod tests {
                     displayname: display_name.map(str::to_owned),
                 },
             }),
-        })
+        }))
     }
 
     fn unsupported_message_activity(
@@ -6994,6 +7006,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            relation: None,
             kind: RoomActivityKind::UnsupportedMessage(
                 mmatrix_core::UnsupportedRoomMessageActivity {
                     event_id: event_id.to_owned(),
@@ -7013,14 +7026,14 @@ mod tests {
         msgtype: &str,
         body: &str,
     ) -> Event {
-        Event::RoomActivity(unsupported_message_activity(
+        Event::RoomActivity(Box::new(unsupported_message_activity(
             room_id,
             event_id,
             sender,
             timestamp_ms,
             msgtype,
             body,
-        ))
+        )))
     }
 
     fn image_activity(
@@ -7036,6 +7049,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            relation: None,
             kind: RoomActivityKind::Image(mmatrix_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
@@ -7058,7 +7072,7 @@ mod tests {
         filename: Option<&str>,
         info: Option<RoomImageInfo>,
     ) -> Event {
-        Event::RoomActivity(image_activity(
+        Event::RoomActivity(Box::new(image_activity(
             room_id,
             event_id,
             sender,
@@ -7066,7 +7080,7 @@ mod tests {
             body,
             filename,
             info,
-        ))
+        )))
     }
 
     fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
@@ -7973,26 +7987,26 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            Event::RoomActivity(sent_message_activity_with_presentation(
+            Event::RoomActivity(Box::new(sent_message_activity_with_presentation(
                 "!ops:example",
                 "$event-notice:example.org",
                 None,
                 RoomMessagePresentationKind::Notice,
                 "maintenance window",
                 1_700_000_030_000,
-            )),
+            ))),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            Event::RoomActivity(sent_message_activity_with_presentation(
+            Event::RoomActivity(Box::new(sent_message_activity_with_presentation(
                 "!ops:example",
                 "$event-emote:example.org",
                 None,
                 RoomMessagePresentationKind::Emote,
                 "waves",
                 1_700_000_090_000,
-            )),
+            ))),
         )
         .unwrap();
         apply_core_event(
@@ -8130,26 +8144,26 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            Event::RoomActivity(sent_message_activity_with_presentation(
+            Event::RoomActivity(Box::new(sent_message_activity_with_presentation(
                 "!ops:example",
                 "$event-notice:example.org",
                 None,
                 RoomMessagePresentationKind::Notice,
                 "maintenance window",
                 1_700_000_030_000,
-            )),
+            ))),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            Event::RoomActivity(sent_message_activity_with_presentation(
+            Event::RoomActivity(Box::new(sent_message_activity_with_presentation(
                 "!ops:example",
                 "$event-emote:example.org",
                 None,
                 RoomMessagePresentationKind::Emote,
                 "waves",
                 1_700_000_090_000,
-            )),
+            ))),
         )
         .unwrap();
         apply_core_event(

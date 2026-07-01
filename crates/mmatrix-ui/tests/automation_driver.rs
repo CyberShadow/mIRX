@@ -301,10 +301,11 @@ fn message_event(
     presentation: CoreRoomMessagePresentationKind,
     body: &str,
 ) -> Event {
-    Event::RoomActivity(CoreRoomActivity {
+    Event::RoomActivity(Box::new(CoreRoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", generated_event_id(room_id, body)),
         timestamp_ms,
+        relation: None,
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
@@ -313,7 +314,7 @@ fn message_event(
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Sent,
         }),
-    })
+    }))
 }
 
 fn text_event(room_id: &str, sender: &str, timestamp_ms: u64, body: &str) -> Event {
@@ -334,10 +335,11 @@ fn message_event_with_event_id(
     presentation: CoreRoomMessagePresentationKind,
     body: &str,
 ) -> Event {
-    Event::RoomActivity(CoreRoomActivity {
+    Event::RoomActivity(Box::new(CoreRoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
+        relation: None,
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
@@ -346,7 +348,7 @@ fn message_event_with_event_id(
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Sent,
         }),
-    })
+    }))
 }
 
 fn text_event_with_event_id(
@@ -374,10 +376,11 @@ fn pending_message_event_with_presentation(
     presentation: CoreRoomMessagePresentationKind,
     body: &str,
 ) -> Event {
-    Event::RoomActivity(CoreRoomActivity {
+    Event::RoomActivity(Box::new(CoreRoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms,
+        relation: None,
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
@@ -386,7 +389,7 @@ fn pending_message_event_with_presentation(
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Pending,
         }),
-    })
+    }))
 }
 
 fn pending_message_event(
@@ -505,6 +508,7 @@ fn message_entry(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", generated_event_id(room_id, body)),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
@@ -538,6 +542,7 @@ fn message_entry_with_event_id(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
@@ -578,6 +583,7 @@ fn pending_entry_with_presentation(
         room_id: room_id.to_owned(),
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
@@ -619,6 +625,7 @@ fn failed_entry(
         room_id: room_id.to_owned(),
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
@@ -644,6 +651,7 @@ fn topic_entry_with_event_id(
         room_id: room_id.to_owned(),
         activity_id: format!("state:{event_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
@@ -668,6 +676,7 @@ fn member_entry_with_event_id(
         room_id: room_id.to_owned(),
         activity_id: format!("state:{event_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
@@ -692,6 +701,7 @@ fn unsupported_entry_with_event_id(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
@@ -710,6 +720,7 @@ fn image_entry_with_event_id(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", activity.event_id),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::Image(activity),
     }
 }
@@ -1087,6 +1098,7 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
             room_id: "!ops:example".to_owned(),
             activity_id: "event:$event:example.org".to_owned(),
             timestamp_ms: 1_700_000_000_100,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
@@ -2645,6 +2657,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 room_id: "!mixed:example".to_owned(),
                 activity_id: "txn:txn-failed-1".to_owned(),
                 timestamp_ms: 1_700_000_300_000,
+                relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-failed-1".to_owned()),
@@ -3854,6 +3867,7 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
             room_id: "!ops:example".to_owned(),
             activity_id: "event:$event:example.org".to_owned(),
             timestamp_ms: 1_700_000_060_000,
+            relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),

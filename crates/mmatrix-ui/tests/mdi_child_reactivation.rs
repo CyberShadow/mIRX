@@ -90,6 +90,7 @@ fn sent_message_activity(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
+        relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
@@ -108,20 +109,20 @@ fn base_events() -> Vec<Event> {
             room_summary("!beta:example", "Beta", true),
             room_summary("!alpha:example", "Alpha", false),
         ]),
-        Event::RoomActivity(sent_message_activity(
+        Event::RoomActivity(Box::new(sent_message_activity(
             "!alpha:example",
             "$alpha-first",
             "@alice:example",
             1_700_000_000_000,
             "alpha first",
-        )),
-        Event::RoomActivity(sent_message_activity(
+        ))),
+        Event::RoomActivity(Box::new(sent_message_activity(
             "!beta:example",
             "$beta-first",
             "@bob:example",
             1_700_000_060_000,
             "beta first",
-        )),
+        ))),
     ]
 }
 
