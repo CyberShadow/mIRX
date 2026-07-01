@@ -4,10 +4,11 @@ use mmatrix_core::{
     Command, CoreConfig, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
+    RoomImageInfo, RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
     VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
@@ -678,15 +679,36 @@ fn room_activity_events_round_trip_through_serde() {
             },
         }),
     });
-    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+    let image_event = Event::RoomActivity(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
-        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+        kind: RoomActivityKind::Image(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.image".to_owned(),
             body: "diagram.png".to_owned(),
+            filename: Some("Incident diagram.png".to_owned()),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/image".to_owned(),
+            },
+            info: Some(RoomImageInfo {
+                mimetype: Some("image/png".to_owned()),
+                size: Some(4096),
+                width: Some(800),
+                height: Some(600),
+                is_animated: Some(false),
+            }),
+        }),
+    });
+    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$audio1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_004,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$audio1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "m.audio".to_owned(),
+            body: "voice.ogg".to_owned(),
         }),
     });
     let sent_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
@@ -710,6 +732,7 @@ fn room_activity_events_round_trip_through_serde() {
         pending_message_event,
         state_notice_event,
         member_notice_event,
+        image_event,
         unsupported_message_event,
         sent_update_event,
         failed_update_event,
@@ -749,15 +772,36 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             },
         }),
     });
-    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+    let image_event = Event::RoomActivity(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
-        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+        kind: RoomActivityKind::Image(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.image".to_owned(),
             body: "diagram.png".to_owned(),
+            filename: Some("Incident diagram.png".to_owned()),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/image".to_owned(),
+            },
+            info: Some(RoomImageInfo {
+                mimetype: Some("image/png".to_owned()),
+                size: Some(4096),
+                width: Some(800),
+                height: Some(600),
+                is_animated: Some(false),
+            }),
+        }),
+    });
+    let unsupported_message_event = Event::RoomActivity(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$audio1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_004,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$audio1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "m.audio".to_owned(),
+            body: "voice.ogg".to_owned(),
         }),
     });
     let failed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
@@ -778,9 +822,13 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"state:$member:example.org","timestamp_ms":1700000000002,"kind":{"type":"state_notice","event_id":"$member:example.org","sender":"@alice:example.org","state_key":"@carol:example.org","content":{"type":"member","membership":"join","displayname":"carol"}}}}"#
     );
     assert_eq!(
+        serde_json::to_string(&image_event).expect("serialize image room activity"),
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"kind":{"type":"image","event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false}}}}"#
+    );
+    assert_eq!(
         serde_json::to_string(&unsupported_message_event)
             .expect("serialize unsupported room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"kind":{"type":"unsupported_message","event_id":"$image1:example.org","sender":"@alice:example.org","msgtype":"m.image","body":"diagram.png"}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg"}}}"#
     );
     assert_eq!(
         serde_json::to_string(&failed_update_event).expect("serialize failed room activity update"),
@@ -1019,10 +1067,34 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<UnsupportedRoomMessageActivity>(
-            r#"{"event_id":"$image1:example.org","sender":"@alice:example.org","msgtype":"m.image","body":"diagram.png","unexpected":"value"}"#
+            r#"{"event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg","unexpected":"value"}"#
         )
         .is_err(),
         "unsupported room message activity must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageActivity>(
+            r#"{"event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room image activity must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomMediaSource>(
+            r#"{"type":"plain","url":"mxc://example.org/image","unexpected":"value"}"#
+        )
+        .is_err(),
+        "room media source must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageInfo>(
+            r#"{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room image info must reject unknown fields"
     );
 
     assert!(
@@ -1067,7 +1139,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"kind":{"type":"unsupported_message","event_id":"$image1:example.org","sender":"@alice:example.org","msgtype":"m.image","body":"diagram.png","unexpected":"value"}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg","unexpected":"value"}}}"#
         )
         .is_err(),
         "unsupported room activity kind must reject unknown fields"

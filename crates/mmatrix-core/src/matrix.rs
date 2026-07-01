@@ -27,6 +27,7 @@ use matrix_sdk::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
             room::{
+                ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent},
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
@@ -46,11 +47,11 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, LoginRequest, MarkRoomReadRequest, Operation,
     RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -509,6 +510,22 @@ fn room_activity_from_sync_message(
         });
     }
 
+    if let MessageType::Image(image) = &event.content.msgtype {
+        return Some(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{}", event.event_id),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            kind: RoomActivityKind::Image(RoomImageActivity {
+                event_id: event.event_id.to_string(),
+                sender: event.sender.to_string(),
+                body: image.body.clone(),
+                filename: image.filename.clone(),
+                source: room_media_source_from_matrix(&image.source),
+                info: image.info.as_deref().map(room_image_info_from_matrix),
+            }),
+        });
+    }
+
     let (msgtype, body) = unsupported_room_message_body(&event.content.msgtype)?;
 
     Some(RoomActivity {
@@ -522,6 +539,27 @@ fn room_activity_from_sync_message(
             body: body.to_owned(),
         }),
     })
+}
+
+fn room_media_source_from_matrix(source: &MediaSource) -> RoomMediaSource {
+    match source {
+        MediaSource::Plain(url) => RoomMediaSource::Plain {
+            url: url.as_str().to_owned(),
+        },
+        MediaSource::Encrypted(file) => RoomMediaSource::Encrypted {
+            url: file.url.as_str().to_owned(),
+        },
+    }
+}
+
+fn room_image_info_from_matrix(info: &ImageInfo) -> RoomImageInfo {
+    RoomImageInfo {
+        mimetype: info.mimetype.as_deref().map(str::to_owned),
+        size: info.size.map(u64::from),
+        width: info.width.map(u64::from),
+        height: info.height.map(u64::from),
+        is_animated: info.is_animated,
+    }
 }
 
 fn room_message_presentation_and_body_from_message_type(
@@ -1430,10 +1468,11 @@ mod tests {
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         Operation, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
-        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+        RoomStateNoticeContent, RoomTyping, UnsupportedRoomMessageActivity,
+        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::{
@@ -1710,13 +1749,20 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_sync_image_mapping_produces_placeholder() {
+    fn received_sync_image_mapping_produces_typed_image_activity() {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": {
                 "msgtype": "m.image",
                 "body": "diagram.png",
-                "url": "mxc://example.org/image"
+                "url": "mxc://example.org/image",
+                "info": {
+                    "mimetype": "image/png",
+                    "size": 4096u64,
+                    "w": 800u64,
+                    "h": 600u64,
+                    "is_animated": true
+                }
             },
             "event_id": "$event:example.org",
             "sender": "@alice:example.org",
@@ -1730,11 +1776,57 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
-                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                kind: RoomActivityKind::Image(RoomImageActivity {
                     event_id: "$event:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
-                    msgtype: "m.image".to_owned(),
                     body: "diagram.png".to_owned(),
+                    filename: None,
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/image".to_owned(),
+                    },
+                    info: Some(RoomImageInfo {
+                        mimetype: Some("image/png".to_owned()),
+                        size: Some(4096),
+                        width: Some(800),
+                        height: Some(600),
+                        is_animated: Some(true),
+                    }),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn received_sync_image_mapping_preserves_distinct_filename() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.image",
+                "body": "Quarterly diagram",
+                "filename": "diagram.png",
+                "url": "mxc://example.org/image"
+            },
+            "event_id": "$image:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000050u64
+        }))
+        .expect("deserialize sync image event with filename");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$image:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_050,
+                kind: RoomActivityKind::Image(RoomImageActivity {
+                    event_id: "$image:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "Quarterly diagram".to_owned(),
+                    filename: Some("diagram.png".to_owned()),
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/image".to_owned(),
+                    },
+                    info: None,
                 }),
             })
         );
@@ -1847,6 +1939,26 @@ mod tests {
             "origin_server_ts": 1700000000400u64
         }))
         .expect("deserialize sync location event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            None
+        );
+    }
+
+    #[test]
+    fn custom_sync_message_mapping_remains_ignored() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "com.example.custom",
+                "body": "mystery payload"
+            },
+            "event_id": "$custom:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000450u64
+        }))
+        .expect("deserialize custom sync message event");
 
         assert_eq!(
             room_activity_from_sync_message("!room:example.org", &event),
