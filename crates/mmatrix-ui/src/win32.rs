@@ -167,6 +167,10 @@ struct Controls {
 enum ViewId {
     Status,
     Room(String),
+    Thread {
+        room_id: String,
+        thread_root_event_id: String,
+    },
 }
 
 struct MdiViewState {
@@ -3568,7 +3572,7 @@ fn resolve_active_view(
         ViewId::Room(room_id) if actionable_room_by_id(rooms, room_id).is_some() => {
             ViewId::Room(room_id.clone())
         }
-        ViewId::Room(_) => {
+        ViewId::Room(_) | ViewId::Thread { .. } => {
             if let Some(room_id) =
                 selected_room.filter(|room_id| actionable_room_by_id(rooms, room_id).is_some())
             {
@@ -3591,7 +3595,7 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
                 view_id,
                 ViewId::Room(room_id)
                     if actionable_room_by_id(&state.model.rooms, room_id).is_none()
-            )
+            ) || matches!(view_id, ViewId::Thread { .. })
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -3651,6 +3655,11 @@ fn view_title(model: &UiModel, view_id: &ViewId) -> String {
                 .expect("room view activation must target an existing room");
             room_tree_label(room)
         }
+        ViewId::Thread { room_id, .. } => {
+            let room = room_by_id(&model.rooms, room_id)
+                .expect("thread view activation must target an existing room");
+            room_tree_label(room)
+        }
     }
 }
 
@@ -3668,6 +3677,13 @@ fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
         ViewId::Room(room_id) => ViewIdentity::Room {
             room_id: room_id.clone(),
         },
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => ViewIdentity::Thread {
+            room_id: room_id.clone(),
+            thread_root_event_id: thread_root_event_id.clone(),
+        },
     }
 }
 
@@ -3675,6 +3691,13 @@ fn view_id_from_identity(identity: &ViewIdentity) -> ViewId {
     match identity {
         ViewIdentity::Status => ViewId::Status,
         ViewIdentity::Room { room_id } => ViewId::Room(room_id.clone()),
+        ViewIdentity::Thread {
+            room_id,
+            thread_root_event_id,
+        } => ViewId::Thread {
+            room_id: room_id.clone(),
+            thread_root_event_id: thread_root_event_id.clone(),
+        },
     }
 }
 
@@ -3735,6 +3758,9 @@ unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND
             WS_EX_CLIENTEDGE,
         ),
         ViewId::Room(_) => (ROOM_CONTENT_CLASS_NAME, WS_CHILD | WS_VISIBLE, 0),
+        ViewId::Thread { .. } => {
+            return Err("thread views are not implemented".to_owned());
+        }
     };
     let content = CreateWindowExW(
         ex_style,
@@ -3817,6 +3843,10 @@ unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
 }
 
 unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
+    if matches!(view_id, ViewId::Thread { .. }) {
+        return Err("thread views are not implemented".to_owned());
+    }
+
     let stale_child = state_ref(hwnd)
         .views
         .get(&view_id)
@@ -3906,6 +3936,9 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             set_timeline_rows(room_content_timeline(content), &rows);
             set_room_member_list(room_content_member_list(content), &member_rows);
         }
+        ViewId::Thread { .. } => {
+            return Err("thread views are not implemented".to_owned());
+        }
     }
     Ok(())
 }
@@ -3928,6 +3961,9 @@ unsafe fn activate_view(
                 cleared_room_activity = handle_room_activation(state, room_id)?;
             }
             ensure_room_view(hwnd, room_id)?
+        }
+        ViewId::Thread { .. } => {
+            return Err("thread views are not implemented".to_owned());
         }
     };
 
@@ -4857,6 +4893,7 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
                 Some(room_id.clone())
             }
             ViewId::Room(_) => None,
+            ViewId::Thread { .. } => None,
         })
         .collect::<Vec<_>>();
     remaining.sort();
@@ -5205,6 +5242,9 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                     ViewId::Room(_) => {
                         split_rendered_lines(&read_window_text(room_content_timeline(view.content)))
                     }
+                    ViewId::Thread { .. } => {
+                        return Err("thread views are not implemented".to_owned());
+                    }
                 },
                 members: match &view_id {
                     ViewId::Status => Vec::new(),
@@ -5216,6 +5256,9 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                             .map(|room_view| room_view.members.as_slice())
                             .unwrap_or_default(),
                     ),
+                    ViewId::Thread { .. } => {
+                        return Err("thread views are not implemented".to_owned());
+                    }
                 },
                 identity,
             })
@@ -5892,6 +5935,9 @@ unsafe fn execute_local_slash_command(
                 }
                 refresh_view_content(hwnd, &ViewId::Room(room_id.clone()))?;
                 set_local_command_status(hwnd, format!("cleared window: {room_id}"))
+            }
+            ViewId::Thread { .. } => {
+                set_local_command_status(hwnd, "thread views are not implemented".to_owned())
             }
             ViewId::Status => {
                 set_local_command_status(hwnd, "nothing to clear in status view".to_owned())
