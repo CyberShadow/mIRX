@@ -535,7 +535,7 @@ fn validate_synthetic_room_activity_events(
             Event::RoomActivity(activity) => room_views
                 .entry(activity.room_id.clone())
                 .or_default()
-                .apply_activity(activity.clone()),
+                .apply_activity(activity.as_ref().clone()),
             Event::RoomActivityUpdate(update) => {
                 let room_view = room_views.entry(update.room_id.clone()).or_default();
                 room_view.validate_update(update)?;
@@ -3192,7 +3192,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             }
             state.model.rooms = rooms;
         }
-        Event::RoomActivity(activity) => apply_room_activity_event(state, activity),
+        Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
