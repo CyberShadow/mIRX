@@ -657,12 +657,12 @@ configure_case_expectations() {
       )
       room_activity_expect_args=(
         --expect-room-activity '!media:example.org::unsupported_message'
-        --expect-room-activity '!media:example.org::m.image'
-        --expect-room-activity '!media:example.org::diagram.png'
+        --expect-room-activity '!media:example.org::m.audio'
+        --expect-room-activity '!media:example.org::voice-note.ogg'
       )
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
-        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent unsupported m.image: diagram.png'
+        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent unsupported m.audio: voice-note.ogg'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !media:example.org'
@@ -680,6 +680,41 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       expect_switchbar_active='room:!alpha:example.org'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'voice-note.ogg'
+      )
+      ;;
+    image-message)
+      expect_selected='!images:example.org'
+      expect_active_view='room:!images:example.org'
+      room_expect_args=(
+        --expect-room '!images:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!images:example.org::"type":"image"'
+        --expect-room-activity '!images:example.org::diagram.png'
+        --expect-room-activity '!images:example.org::mxc://example.org/diagram'
+        --expect-room-activity '!images:example.org::image/png'
+        --expect-room-activity '!images:example.org::640'
+        --expect-room-activity '!images:example.org::480'
+        --expect-room-activity '!images:example.org::12345'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !images:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!images:example.org::Images'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!images:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!images:example.org'
       navigation_forbid_args=(
         --expect-no-navigation-text 'diagram.png'
       )
