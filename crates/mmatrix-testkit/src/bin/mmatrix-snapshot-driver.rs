@@ -23,6 +23,7 @@ mod windows_main {
     struct Config {
         find_timeout: Duration,
         wait_idle: Duration,
+        select_view: Option<ViewIdentity>,
         expect_selected: Option<String>,
         expect_rooms: Vec<String>,
         expect_room_activities: Vec<RoomActivityExpectation>,
@@ -31,6 +32,8 @@ mod windows_main {
         expect_verification_state: Option<String>,
         expect_verification_texts: Vec<String>,
         expect_active_view: Option<ViewIdentity>,
+        expect_views: Vec<ViewExpectation>,
+        expect_no_views: Vec<ViewExpectation>,
         expect_room_views: Vec<ViewTextExpectation>,
         expect_room_members: Vec<ViewTextExpectation>,
         expect_status_views: Vec<String>,
@@ -56,6 +59,11 @@ mod windows_main {
         substring: String,
     }
 
+    struct ViewExpectation {
+        identity: ViewIdentity,
+        substring: String,
+    }
+
     struct SwitchbarItemExpectation {
         identity: ViewIdentity,
         title_substring: String,
@@ -64,6 +72,8 @@ mod windows_main {
     impl Config {
         fn requires_ui_state(&self) -> bool {
             self.expect_active_view.is_some()
+                || !self.expect_views.is_empty()
+                || !self.expect_no_views.is_empty()
                 || !self.expect_room_views.is_empty()
                 || !self.expect_room_members.is_empty()
                 || !self.expect_status_views.is_empty()
@@ -87,6 +97,13 @@ mod windows_main {
         })?;
         app.wait_idle(config.wait_idle)
             .map_err(|error| format!("WAIT_IDLE failed: {error}"))?;
+
+        if let Some(view) = config.select_view.as_ref() {
+            app.select_view(view.clone())
+                .map_err(|error| format!("SELECT_VIEW failed: {error}"))?;
+            app.wait_idle(config.wait_idle)
+                .map_err(|error| format!("WAIT_IDLE after SELECT_VIEW failed: {error}"))?;
+        }
 
         let model = app
             .dump_model()
@@ -228,6 +245,36 @@ mod windows_main {
                     ));
                 }
                 println!("PASS active view {}", format_view_identity(expected_view));
+            }
+
+            for expectation in &config.expect_views {
+                assert_view_contains(&ui_state, expectation, "view assertion failed")?;
+                println!(
+                    "PASS view {} contains {:?}",
+                    format_view_identity(&expectation.identity),
+                    expectation.substring
+                );
+            }
+
+            for expectation in &config.expect_no_views {
+                let view = find_view(&ui_state, &expectation.identity).ok_or_else(|| {
+                    format!(
+                        "view assertion failed: missing view {}",
+                        format_view_identity(&expectation.identity)
+                    )
+                })?;
+                if view_contains(view, &expectation.substring) {
+                    return Err(format!(
+                        "view assertion failed: {} unexpectedly contained {:?}",
+                        format_view_identity(&expectation.identity),
+                        expectation.substring
+                    ));
+                }
+                println!(
+                    "PASS view {} excludes {:?}",
+                    format_view_identity(&expectation.identity),
+                    expectation.substring
+                );
             }
 
             for expectation in &config.expect_room_views {
@@ -474,6 +521,12 @@ mod windows_main {
                         .map_err(|_| format!("invalid --wait-idle-ms value: {value}"))?;
                     config.wait_idle = Duration::from_millis(millis);
                 }
+                "--select-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --select-view".to_owned())?;
+                    config.select_view = Some(parse_view_identity_arg("--select-view", &value)?);
+                }
                 "--expect-selected" => {
                     config.expect_selected = Some(
                         args.next()
@@ -542,6 +595,22 @@ mod windows_main {
                         .ok_or_else(|| "missing value for --expect-active-view".to_owned())?;
                     config.expect_active_view =
                         Some(parse_view_identity_arg("--expect-active-view", &value)?);
+                }
+                "--expect-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-view".to_owned())?;
+                    config
+                        .expect_views
+                        .push(parse_view_expectation("--expect-view", &value)?);
+                }
+                "--expect-no-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-no-view".to_owned())?;
+                    config
+                        .expect_no_views
+                        .push(parse_view_expectation("--expect-no-view", &value)?);
                 }
                 "--expect-room-view" => {
                     let value = args
@@ -686,6 +755,7 @@ mod windows_main {
             "usage: mmatrix-snapshot-driver [options]",
             "  --find-timeout-ms <ms>",
             "  --wait-idle-ms <ms>",
+            "  --select-view <identity>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
             "  --expect-room-activity <room_id>::<substring>",
@@ -694,6 +764,8 @@ mod windows_main {
             "  --expect-verification-state <requested|accepted|ready|sas_ready|confirmed|done|cancelled>",
             "  --expect-verification-text <substring>",
             "  --expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>",
+            "  --expect-view <identity>::<substring>",
+            "  --expect-no-view <identity>::<substring>",
             "  --expect-room-view <room_id>::<substring>",
             "  --expect-room-member <room_id>::<substring>",
             "  --expect-status-view <substring>",
@@ -751,6 +823,16 @@ mod windows_main {
         ))
     }
 
+    fn parse_view_expectation(flag_name: &str, value: &str) -> Result<ViewExpectation, String> {
+        let (identity, substring) = value.split_once("::").ok_or_else(|| {
+            format!("invalid {flag_name} value {value:?}; expected <identity>::<substring>")
+        })?;
+        Ok(ViewExpectation {
+            identity: parse_view_identity_arg(flag_name, identity)?,
+            substring: substring.to_owned(),
+        })
+    }
+
     fn format_view_identity(identity: &ViewIdentity) -> String {
         match identity {
             ViewIdentity::Status => "status".to_owned(),
@@ -768,6 +850,27 @@ mod windows_main {
             .views
             .iter()
             .find(|view| &view.identity == identity)
+    }
+
+    fn assert_view_contains(
+        ui_state: &UiState,
+        expectation: &ViewExpectation,
+        error_prefix: &str,
+    ) -> Result<(), String> {
+        let view = find_view(ui_state, &expectation.identity).ok_or_else(|| {
+            format!(
+                "{error_prefix}: missing view {}",
+                format_view_identity(&expectation.identity)
+            )
+        })?;
+        if !view_contains(view, &expectation.substring) {
+            return Err(format!(
+                "{error_prefix}: {} did not contain {:?}",
+                format_view_identity(&expectation.identity),
+                expectation.substring
+            ));
+        }
+        Ok(())
     }
 
     fn view_contains(view: &MdiView, substring: &str) -> bool {
@@ -845,7 +948,10 @@ mod windows_main {
 
     #[cfg(test)]
     mod tests {
-        use super::{format_view_identity, parse_view_identity_arg, usage};
+        use super::{
+            ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
+            parse_view_identity_arg, usage,
+        };
         use mmatrix_testkit::ViewIdentity;
 
         #[test]
@@ -853,6 +959,9 @@ mod windows_main {
             assert!(usage().contains(
                 "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
             ));
+            assert!(usage().contains("--select-view <identity>"));
+            assert!(usage().contains("--expect-view <identity>::<substring>"));
+            assert!(usage().contains("--expect-no-view <identity>::<substring>"));
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
         }
 
@@ -895,6 +1004,102 @@ mod windows_main {
                 }),
                 "thread:!room:example|$thread-root:example"
             );
+        }
+
+        #[test]
+        fn parse_args_accepts_select_view_thread_identity() {
+            let config = parse_args(
+                ["--select-view", "thread:!room:example|$thread-root:example"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.select_view,
+                Some(ViewIdentity::Thread {
+                    room_id: "!room:example".to_owned(),
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                })
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_generic_thread_view_expectation() {
+            let config = parse_args(
+                [
+                    "--expect-view",
+                    "thread:!room:example|$thread-root:example::needle",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_views,
+                vec![ViewExpectation {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    substring: "needle".to_owned(),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_generic_thread_negative_view_expectation() {
+            let config = parse_args(
+                [
+                    "--expect-no-view",
+                    "thread:!room:example|$thread-root:example::needle",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_no_views,
+                vec![ViewExpectation {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    substring: "needle".to_owned(),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_view_expectation_rejects_malformed_thread_identity() {
+            for value in [
+                "thread:::needle",
+                "thread:!room:example::needle",
+                "thread:!room:example|::needle",
+                "thread:|$thread-root:example::needle",
+            ] {
+                assert!(
+                    parse_view_expectation("--expect-view", value).is_err(),
+                    "expected {value:?} to be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_args_rejects_malformed_thread_identity_for_view_flags() {
+            for args in [
+                vec!["--select-view", "thread:!room:example"],
+                vec!["--expect-view", "thread:!room:example::needle"],
+                vec!["--expect-no-view", "thread:!room:example::needle"],
+            ] {
+                assert!(
+                    parse_args(args.into_iter().map(str::to_owned)).is_err(),
+                    "expected {:?} to be rejected",
+                    args
+                );
+            }
         }
     }
 

@@ -26,7 +26,8 @@
         "send_state": {
           "state": "sent"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -43,7 +44,8 @@
           "type": "topic",
           "topic": "mixed room topic"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -61,7 +63,8 @@
           "membership": "join",
           "displayname": "bob"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -79,7 +82,8 @@
           "membership": "leave",
           "displayname": null
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -97,7 +101,8 @@
         "send_state": {
           "state": "sent"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -115,7 +120,8 @@
         "send_state": {
           "state": "sent"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -133,7 +139,8 @@
         "send_state": {
           "state": "pending"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -151,7 +158,8 @@
         "send_state": {
           "state": "pending"
         }
-      }
+      },
+      "relation": null
     }
   },
   {

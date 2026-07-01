@@ -62,14 +62,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
     PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW, SetMenu, SetTimer,
-    SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE,
-    WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE,
-    WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
+    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
+    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
+    WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -1179,6 +1179,9 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
 
         unsafe {
             ShowWindow(hwnd, SW_SHOW);
+            if automation_enabled {
+                SetForegroundWindow(hwnd);
+            }
             if let Some(events) = render_state_events {
                 apply_event_load(hwnd, events)?;
             }
@@ -4135,6 +4138,9 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             };
             set_timeline_rows(room_content_timeline(content), &rows);
             set_room_member_list(room_content_member_list(content), &member_rows);
+            InvalidateRect(content, null(), 1);
+            InvalidateRect(room_content_timeline(content), null(), 1);
+            InvalidateRect(room_content_member_list(content), null(), 1);
         }
         ViewId::Thread {
             room_id,
@@ -4155,6 +4161,9 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             };
             set_timeline_rows(room_content_timeline(content), &rows);
             set_room_member_list(room_content_member_list(content), &member_rows);
+            InvalidateRect(content, null(), 1);
+            InvalidateRect(room_content_timeline(content), null(), 1);
+            InvalidateRect(room_content_member_list(content), null(), 1);
         }
     }
     Ok(())
@@ -5776,6 +5785,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                         "room_id":"!one:example",
                         "activity_id":"event:$one-first",
                         "timestamp_ms":1700000000000u64,
+                        "relation":null,
                         "kind":{
                             "type":"message",
                             "event_id":"$one-first",
@@ -5790,6 +5800,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                         "room_id":"!one:example",
                         "activity_id":"event:$one-second",
                         "timestamp_ms":1700000060000u64,
+                        "relation":null,
                         "kind":{
                             "type":"message",
                             "event_id":"$one-second",

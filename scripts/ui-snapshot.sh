@@ -158,6 +158,8 @@ configure_case_expectations() {
   room_activity_expect_args=()
   room_expect_args=()
   room_view_expect_args=()
+  view_expect_args=()
+  view_forbid_args=()
   room_member_expect_args=()
   status_view_expect_args=()
   status_view_forbid_args=()
@@ -174,6 +176,7 @@ configure_case_expectations() {
   expect_verification=
   expect_verification_state=
   expect_active_view=
+  select_view=
   expect_switchbar_active=
   verification_text_expect_args=()
 
@@ -272,6 +275,54 @@ configure_case_expectations() {
         --expect-no-navigation-text 'ops workspace is ready'
         --expect-no-navigation-text 'shared room has updates'
         --expect-no-navigation-text 'random room has updates'
+      )
+      ;;
+    thread-hierarchy)
+      expect_selected='!ops:example'
+      expect_active_view='thread:!ops:example|$thread-root'
+      select_view='thread:!ops:example|$thread-root'
+      room_expect_args=(
+        --expect-room '!work:example'
+        --expect-room '!ops:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!ops:example::"type":"thread"'
+        --expect-room-activity '!ops:example::$thread-root'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::lobby'
+        --expect-room-view '!ops:example::root msg'
+        --expect-room-view '!ops:example::thread rep'
+      )
+      view_expect_args=(
+        --expect-view 'thread:!ops:example|$thread-root::root msg'
+        --expect-view 'thread:!ops:example|$thread-root::thread rep'
+      )
+      view_forbid_args=(
+        --expect-no-view 'thread:!ops:example|$thread-root::lobby'
+        --expect-no-view 'thread:!ops:example|$thread-root::plain'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'thread:!ops:example|$thread-root::root msg'
+      )
+      switchbar_no_item_expect_args=(
+        --expect-no-switchbar-item 'room:!work:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'thread:!ops:example|$thread-root'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='thread:!ops:example|$thread-root'
+      navigation_expect_args=(
+        --expect-navigation-text 'Work'
+        --expect-navigation-text 'Ops'
+        --expect-navigation-text 'root msg'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'plain'
       )
       ;;
     verification-error)
@@ -776,6 +827,8 @@ run_case() {
     --expect-active-view "$expect_active_view"
     "${room_expect_args[@]}"
     "${room_activity_expect_args[@]}"
+    "${view_expect_args[@]}"
+    "${view_forbid_args[@]}"
     "${room_view_expect_args[@]}"
     "${room_member_expect_args[@]}"
     "${status_view_expect_args[@]}"
@@ -792,6 +845,9 @@ run_case() {
 
   if [[ -n "${expect_selected:-}" ]]; then
     driver_args+=(--expect-selected "$expect_selected")
+  fi
+  if [[ -n "${select_view:-}" ]]; then
+    driver_args+=(--select-view "$select_view")
   fi
   if [[ -n "${expect_error:-}" ]]; then
     driver_args+=(--expect-error "$expect_error")
@@ -894,6 +950,17 @@ main() {
   local state_files=("$states_dir"/*.json)
   shopt -u nullglob
   [[ ${#state_files[@]} -gt 0 ]] || die "no state files found in $states_dir"
+
+  if [[ $# -gt 0 ]]; then
+    local requested=()
+    local case_name=
+    for case_name in "$@"; do
+      local state_path="$states_dir/$case_name.json"
+      [[ -f "$state_path" ]] || die "unknown snapshot case: $case_name"
+      requested+=("$state_path")
+    done
+    state_files=("${requested[@]}")
+  fi
 
   for state_path in "${state_files[@]}"; do
     run_case "$state_path"

@@ -29,7 +29,8 @@
         "sender": "@alice:example.org",
         "msgtype": "m.audio",
         "body": "voice-note.ogg"
-      }
+      },
+      "relation": null
     }
   }
 ]

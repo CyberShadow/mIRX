@@ -26,7 +26,8 @@
         "send_state": {
           "state": "sent"
         }
-      }
+      },
+      "relation": null
     }
   },
   {
@@ -44,7 +45,8 @@
         "send_state": {
           "state": "sent"
         }
-      }
+      },
+      "relation": null
     }
   },
   {

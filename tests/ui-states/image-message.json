@@ -33,7 +33,8 @@
           "height": 480,
           "is_animated": false
         }
-      }
+      },
+      "relation": null
     }
   }
 ]
