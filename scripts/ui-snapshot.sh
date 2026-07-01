@@ -158,6 +158,7 @@ configure_case_expectations() {
   room_activity_expect_args=()
   room_expect_args=()
   room_view_expect_args=()
+  room_member_expect_args=()
   status_view_expect_args=()
   status_view_forbid_args=()
   status_bar_expect_args=()
@@ -608,6 +609,34 @@ configure_case_expectations() {
         --expect-no-navigation-text 'failed local echo'
       )
       ;;
+    member-list)
+      expect_selected='!members:example'
+      expect_active_view='room:!members:example'
+      room_expect_args=(
+        --expect-room '!members:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!members:example::Room: Members (!members:example)'
+        --expect-room-view '!members:example::member list context line'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!members:example::Alice'
+        --expect-room-member '!members:example::Sam (@sam-one:example)'
+        --expect-room-member '!members:example::@ghost:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!members:example::Members'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!members:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!members:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'member list context line'
+      )
+      ;;
     typing-indicator)
       expect_selected='!typing:example'
       expect_active_view='room:!typing:example'
@@ -748,6 +777,7 @@ run_case() {
     "${room_expect_args[@]}"
     "${room_activity_expect_args[@]}"
     "${room_view_expect_args[@]}"
+    "${room_member_expect_args[@]}"
     "${status_view_expect_args[@]}"
     "${status_view_forbid_args[@]}"
     "${status_bar_expect_args[@]}"

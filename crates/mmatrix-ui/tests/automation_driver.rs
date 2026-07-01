@@ -33,9 +33,9 @@ use windows_sys::Win32::System::DataExchange::{
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo, GetWindowLongPtrW,
-    SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
+    GetWindowLongPtrW, SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, WM_CHAR,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -1808,34 +1808,14 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn automation_driver_dumps_room_member_labels_in_mdi_views()
--> Result<(), Box<dyn std::error::Error>> {
+fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
-    let state_path = write_state_file(&[
-        Event::Started,
-        Event::SyncedRooms(vec![room_summary("!members:example", "Members", false)]),
-        text_event_with_event_id(
-            "!members:example",
-            "$members-context",
-            "@alice:example",
-            1_700_000_000_000,
-            "room members context",
-        ),
-        room_members_event(
-            "!members:example",
-            &[
-                ("@alice:example", Some("Alice")),
-                ("@sam-one:example", Some("Sam")),
-                ("@sam-two:example", Some("Sam")),
-                ("@ghost:example", None),
-            ],
-        ),
-    ])?;
+    let fixture_path = fixture_state_path("member-list.json");
 
     let args = [
         OsString::from("--render-state"),
-        state_path.as_os_str().to_os_string(),
+        fixture_path.as_os_str().to_os_string(),
     ];
     let app = MmatrixApp::launch(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -1847,14 +1827,16 @@ fn automation_driver_dumps_room_member_labels_in_mdi_views()
         view_member_labels(members_view),
         vec![
             "Alice",
+            "Casey",
             "Sam (@sam-one:example)",
             "Sam (@sam-two:example)",
             "@ghost:example",
+            "@blank:example",
+            "Zoe",
         ]
     );
-    assert!(view_contains(members_view, "room members context"));
+    assert!(view_contains(members_view, "member list context line"));
 
-    let _ = fs::remove_file(&state_path);
     Ok(())
 }
 
@@ -1970,8 +1952,15 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
         Duration::from_secs(5),
     )?;
 
-    let timeline_hwnd = unsafe { active_mdi_content_hwnd(&app) };
+    let content_hwnd = unsafe { active_mdi_content_hwnd(&app) };
+    assert_eq!(
+        unsafe { class_name(content_hwnd) },
+        "mmatrixWin32RoomContent"
+    );
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let member_list_hwnd = unsafe { active_room_member_list_hwnd(&app) };
     assert_eq!(unsafe { class_name(timeline_hwnd) }, "mmatrixWin32Timeline");
+    assert_eq!(unsafe { class_name(member_list_hwnd) }, "ListBox");
     let timeline_style = unsafe { window_style(timeline_hwnd) };
     let timeline_rect = unsafe { client_rect(timeline_hwnd) };
     assert!(
@@ -2079,7 +2068,7 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
         Duration::from_secs(5),
     )?;
 
-    let timeline_hwnd = unsafe { active_mdi_content_hwnd(&app) };
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
     let text = unsafe { read_window_text(timeline_hwnd) };
     assert!(
         text.contains("multiline row 00 line a\r\nmultiline row 00 line b"),
@@ -2091,7 +2080,7 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
     app.select_room("!beta:example")?;
     app.wait_idle(Duration::from_secs(2))?;
 
-    let text_after_switch = unsafe { read_window_text(active_mdi_content_hwnd(&app)) };
+    let text_after_switch = unsafe { read_window_text(active_room_timeline_hwnd(&app)) };
     assert!(
         text_after_switch.contains("multiline row 00 line a\r\nmultiline row 00 line b"),
         "timeline WM_GETTEXT must preserve CRLF normalization after view switches: {text_after_switch:?}"
@@ -2128,7 +2117,7 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
         Duration::from_secs(5),
     )?;
 
-    let timeline_hwnd = unsafe { active_mdi_content_hwnd(&app) };
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
     let text = unsafe { read_window_text(timeline_hwnd) };
     assert!(
         text.contains("trailing blank line a\r\n"),
@@ -2140,7 +2129,7 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     app.select_room("!beta:example")?;
     app.wait_idle(Duration::from_secs(2))?;
 
-    let text_after_switch = unsafe { read_window_text(active_mdi_content_hwnd(&app)) };
+    let text_after_switch = unsafe { read_window_text(active_room_timeline_hwnd(&app)) };
     assert!(
         text_after_switch.contains("trailing blank line a\r\n"),
         "timeline WM_GETTEXT must keep trailing blank lines after view switches: {text_after_switch:?}"
@@ -2159,6 +2148,28 @@ unsafe fn active_mdi_content_hwnd(app: &MmatrixApp) -> HWND {
     let content = unsafe { GetDlgItem(active_child, VIEW_CONTENT_ID) };
     assert!(!content.is_null(), "active MDI child content must exist");
     content
+}
+
+unsafe fn active_room_timeline_hwnd(app: &MmatrixApp) -> HWND {
+    unsafe { child_window_with_class(active_mdi_content_hwnd(app), "mmatrixWin32Timeline") }
+}
+
+unsafe fn active_room_member_list_hwnd(app: &MmatrixApp) -> HWND {
+    unsafe { child_window_with_class(active_mdi_content_hwnd(app), "ListBox") }
+}
+
+unsafe fn child_window_with_class(parent: HWND, expected_class_name: &str) -> HWND {
+    let mut child = unsafe { FindWindowExW(parent, 0 as HWND, std::ptr::null(), std::ptr::null()) };
+    while !child.is_null() {
+        if unsafe { class_name(child) } == expected_class_name {
+            return child;
+        }
+        child = unsafe { FindWindowExW(parent, child, std::ptr::null(), std::ptr::null()) };
+    }
+    panic!(
+        "child window with class {expected_class_name} was not found under {}",
+        unsafe { class_name(parent) }
+    );
 }
 
 unsafe fn class_name(hwnd: HWND) -> String {

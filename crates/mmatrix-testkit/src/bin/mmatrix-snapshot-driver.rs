@@ -32,6 +32,7 @@ mod windows_main {
         expect_verification_texts: Vec<String>,
         expect_active_view: Option<ViewIdentity>,
         expect_room_views: Vec<ViewTextExpectation>,
+        expect_room_members: Vec<ViewTextExpectation>,
         expect_status_views: Vec<String>,
         expect_no_status_views: Vec<String>,
         expect_status_bars: Vec<String>,
@@ -64,6 +65,7 @@ mod windows_main {
         fn requires_ui_state(&self) -> bool {
             self.expect_active_view.is_some()
                 || !self.expect_room_views.is_empty()
+                || !self.expect_room_members.is_empty()
                 || !self.expect_status_views.is_empty()
                 || !self.expect_no_status_views.is_empty()
                 || !self.expect_status_bars.is_empty()
@@ -246,6 +248,28 @@ mod windows_main {
                 }
                 println!(
                     "PASS room view {} contains {:?}",
+                    expectation.room_id, expectation.substring
+                );
+            }
+
+            for expectation in &config.expect_room_members {
+                let identity = ViewIdentity::Room {
+                    room_id: expectation.room_id.clone(),
+                };
+                let view = find_view(&ui_state, &identity).ok_or_else(|| {
+                    format!(
+                        "room member assertion failed: missing room view {}",
+                        expectation.room_id
+                    )
+                })?;
+                if !view_members_contain(view, &expectation.substring) {
+                    return Err(format!(
+                        "room member assertion failed: room {} did not contain {:?}",
+                        expectation.room_id, expectation.substring
+                    ));
+                }
+                println!(
+                    "PASS room member {} contains {:?}",
                     expectation.room_id, expectation.substring
                 );
             }
@@ -533,6 +557,20 @@ mod windows_main {
                         substring: substring.to_owned(),
                     });
                 }
+                "--expect-room-member" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-member".to_owned())?;
+                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid --expect-room-member value {value:?}; expected <room_id>::<substring>"
+                        )
+                    })?;
+                    config.expect_room_members.push(ViewTextExpectation {
+                        room_id: room_id.to_owned(),
+                        substring: substring.to_owned(),
+                    });
+                }
                 "--expect-status-view" => {
                     config.expect_status_views.push(
                         args.next()
@@ -657,6 +695,7 @@ mod windows_main {
             "  --expect-verification-text <substring>",
             "  --expect-active-view <status|room:<room_id>>",
             "  --expect-room-view <room_id>::<substring>",
+            "  --expect-room-member <room_id>::<substring>",
             "  --expect-status-view <substring>",
             "  --expect-no-status-view <substring>",
             "  --expect-status-bar <substring>",
@@ -710,6 +749,12 @@ mod windows_main {
 
     fn view_contains(view: &MdiView, substring: &str) -> bool {
         view.lines.iter().any(|line| line.contains(substring))
+    }
+
+    fn view_members_contain(view: &MdiView, substring: &str) -> bool {
+        view.members
+            .iter()
+            .any(|member| member.label.contains(substring) || member.user_id.contains(substring))
     }
 
     fn room_activity_contains(entry: &RoomActivity, substring: &str) -> bool {

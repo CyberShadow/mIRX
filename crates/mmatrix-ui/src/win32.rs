@@ -58,17 +58,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
     ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
     GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    IsWindow, KillTimer, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING,
-    MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
-    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
-    SB_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_SHOW,
-    SendMessageW, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
-    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
-    WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW,
+    MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW, SetMenu, SetTimer,
+    SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
+    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETTEXT,
+    WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE,
+    WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE,
+    WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::{
@@ -91,6 +92,7 @@ use crate::{
 
 const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
+const ROOM_CONTENT_CLASS_NAME: &str = "mmatrixWin32RoomContent";
 const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
@@ -132,6 +134,9 @@ const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
 const SWITCHBAR_HEIGHT: i32 = 28;
 const STATUS_BAR_HEIGHT: i32 = 22;
+const ROOM_MEMBER_LIST_WIDTH: i32 = 180;
+const ROOM_MEMBER_LIST_GAP: i32 = 4;
+const ROOM_TIMELINE_MIN_WIDTH: i32 = 240;
 const TIMELINE_ROW_HEIGHT: i32 = 20;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_VERTICAL_PADDING: i32 = 6;
@@ -171,6 +176,11 @@ struct MdiViewState {
 
 struct MdiChildCreateState {
     view_id: ViewId,
+}
+
+struct RoomContentState {
+    timeline: HWND,
+    members: HWND,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1006,6 +1016,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     init_common_controls()?;
     register_frame_class(instance)?;
     register_mdi_child_class(instance)?;
+    register_room_content_class(instance)?;
     register_timeline_class(instance)?;
     register_login_dialog_class(instance)?;
     register_recover_e2ee_dialog_class(instance)?;
@@ -1464,6 +1475,34 @@ fn register_mdi_child_class(instance: *mut c_void) -> Result<(), String> {
     Ok(())
 }
 
+fn register_room_content_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(ROOM_CONTENT_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(room_content_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error("RegisterClassExW room content"));
+        }
+    }
+
+    Ok(())
+}
+
 fn register_timeline_class(instance: *mut c_void) -> Result<(), String> {
     let class_name = wide_null(TIMELINE_CLASS_NAME);
     let window_class = WNDCLASSEXW {
@@ -1746,6 +1785,40 @@ unsafe extern "system" fn timeline_window_proc(
     }
 }
 
+unsafe extern "system" fn room_content_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_CREATE => match create_room_content_state(hwnd) {
+            Ok(state) => {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+                layout_room_content(hwnd);
+                0
+            }
+            Err(message) => {
+                eprintln!("{message}");
+                -1
+            }
+        },
+        WM_SIZE => {
+            layout_room_content(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            let state_ptr = room_content_state_ptr(hwnd);
+            if !state_ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(state_ptr));
+            }
+            DefWindowProcW(hwnd, message, wparam, lparam)
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
 unsafe fn mdi_child_create_state(lparam: LPARAM) -> &'static MdiChildCreateState {
     let create = &*(lparam as *const CREATESTRUCTW);
     let mdi_create = &*(create.lpCreateParams as *const MDICREATESTRUCTW);
@@ -1755,6 +1828,93 @@ unsafe fn mdi_child_create_state(lparam: LPARAM) -> &'static MdiChildCreateState
         "MDI child creation state must be present during WM_CREATE"
     );
     &*state_ptr
+}
+
+unsafe fn room_content_state_ptr(hwnd: HWND) -> *mut RoomContentState {
+    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RoomContentState
+}
+
+unsafe fn room_content_state_ref(hwnd: HWND) -> &'static RoomContentState {
+    let state_ptr = room_content_state_ptr(hwnd);
+    assert!(
+        !state_ptr.is_null(),
+        "room content state must exist while the control is alive"
+    );
+    &*state_ptr
+}
+
+unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>, String> {
+    let instance = GetModuleHandleW(null());
+    let timeline = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        wide_null(TIMELINE_CLASS_NAME).as_ptr(),
+        wide_null("").as_ptr(),
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+        0,
+        0,
+        0,
+        0,
+        hwnd,
+        null_mut(),
+        instance,
+        null_mut(),
+    );
+    if timeline.is_null() {
+        return Err(last_os_error("CreateWindowExW room timeline"));
+    }
+
+    let members = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        wide_null("LISTBOX").as_ptr(),
+        wide_null("").as_ptr(),
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOINTEGRALHEIGHT as u32,
+        0,
+        0,
+        0,
+        0,
+        hwnd,
+        null_mut(),
+        instance,
+        null_mut(),
+    );
+    if members.is_null() {
+        return Err(last_os_error("CreateWindowExW room member list"));
+    }
+
+    Ok(Box::new(RoomContentState { timeline, members }))
+}
+
+unsafe fn layout_room_content(hwnd: HWND) {
+    let state_ptr = room_content_state_ptr(hwnd);
+    if state_ptr.is_null() {
+        return;
+    }
+
+    let state = &*state_ptr;
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    let show_members =
+        width >= ROOM_TIMELINE_MIN_WIDTH + ROOM_MEMBER_LIST_GAP + ROOM_MEMBER_LIST_WIDTH;
+
+    if show_members {
+        let timeline_width = width - ROOM_MEMBER_LIST_WIDTH - ROOM_MEMBER_LIST_GAP;
+        MoveWindow(state.timeline, 0, 0, timeline_width, height, 1);
+        MoveWindow(
+            state.members,
+            timeline_width + ROOM_MEMBER_LIST_GAP,
+            0,
+            ROOM_MEMBER_LIST_WIDTH,
+            height,
+            1,
+        );
+        ShowWindow(state.members, SW_SHOW);
+    } else {
+        MoveWindow(state.timeline, 0, 0, width, height, 1);
+        MoveWindow(state.members, 0, 0, 0, 0, 1);
+        ShowWindow(state.members, SW_HIDE);
+    }
 }
 
 unsafe fn timeline_state_ptr(hwnd: HWND) -> *mut TimelineState {
@@ -1837,6 +1997,14 @@ unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
             .collect::<Vec<_>>()
     );
     apply_timeline_content(hwnd, rendered_text, lines, paint_lines);
+}
+
+unsafe fn set_room_member_list(hwnd: HWND, rows: &[RoomMemberView]) {
+    SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
+    for row in rows {
+        let label = wide_null(&row.label);
+        SendMessageW(hwnd, LB_ADDSTRING, 0, label.as_ptr() as LPARAM);
+    }
 }
 
 unsafe fn timeline_text_len(hwnd: HWND) -> LRESULT {
@@ -3566,11 +3734,7 @@ unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND
                 | WS_VSCROLL,
             WS_EX_CLIENTEDGE,
         ),
-        ViewId::Room(_) => (
-            TIMELINE_CLASS_NAME,
-            WS_CHILD | WS_VISIBLE | WS_VSCROLL,
-            WS_EX_CLIENTEDGE,
-        ),
+        ViewId::Room(_) => (ROOM_CONTENT_CLASS_NAME, WS_CHILD | WS_VISIBLE, 0),
     };
     let content = CreateWindowExW(
         ex_style,
@@ -3606,6 +3770,14 @@ unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND
 
 unsafe fn mdi_child_content(hwnd: HWND) -> HWND {
     GetWindowLongPtrW(hwnd, GWLP_USERDATA) as HWND
+}
+
+unsafe fn room_content_timeline(content: HWND) -> HWND {
+    room_content_state_ref(content).timeline
+}
+
+unsafe fn room_content_member_list(content: HWND) -> HWND {
+    room_content_state_ref(content).members
 }
 
 fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<ViewId> {
@@ -3718,11 +3890,21 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             set_edit_text(content, &text);
         }
         ViewId::Room(room_id) => {
-            let rows = {
+            let (rows, member_rows) = {
                 let state = state_ref(hwnd);
-                build_room_timeline_rows(&state.model, room_id)
+                let rows = build_room_timeline_rows(&state.model, room_id);
+                let member_rows = room_member_view_rows(
+                    &state
+                        .model
+                        .room_views
+                        .get(room_id)
+                        .map(|room_view| room_view.members.as_slice())
+                        .unwrap_or_default(),
+                );
+                (rows, member_rows)
             };
-            set_timeline_rows(content, &rows);
+            set_timeline_rows(room_content_timeline(content), &rows);
+            set_room_member_list(room_content_member_list(content), &member_rows);
         }
     }
     Ok(())
@@ -5018,7 +5200,12 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
             Ok(MdiView {
                 title: read_window_text(view.child),
                 active: identity == active,
-                lines: split_rendered_lines(&read_window_text(view.content)),
+                lines: match &view_id {
+                    ViewId::Status => split_rendered_lines(&read_window_text(view.content)),
+                    ViewId::Room(_) => {
+                        split_rendered_lines(&read_window_text(room_content_timeline(view.content)))
+                    }
+                },
                 members: match &view_id {
                     ViewId::Status => Vec::new(),
                     ViewId::Room(room_id) => room_member_view_rows(
