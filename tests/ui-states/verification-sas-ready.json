@@ -1,0 +1,47 @@
+[
+  "Started",
+  {
+    "VerificationState": {
+      "flow_id": "flow-verify-sas-ready",
+      "user_id": "@alice:example",
+      "state": {
+        "state": "sas_ready",
+        "emojis": [
+          {
+            "symbol": "🐶",
+            "description": "dog"
+          },
+          {
+            "symbol": "🐱",
+            "description": "cat"
+          },
+          {
+            "symbol": "🦁",
+            "description": "lion"
+          },
+          {
+            "symbol": "🐎",
+            "description": "horse"
+          },
+          {
+            "symbol": "🦄",
+            "description": "unicorn"
+          },
+          {
+            "symbol": "🐷",
+            "description": "pig"
+          },
+          {
+            "symbol": "🐘",
+            "description": "elephant"
+          }
+        ],
+        "decimals": {
+          "first": 1234,
+          "second": 5678,
+          "third": 9012
+        }
+      }
+    }
+  }
+]

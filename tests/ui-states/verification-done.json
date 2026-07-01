@@ -1,0 +1,12 @@
+[
+  "Started",
+  {
+    "VerificationState": {
+      "flow_id": "flow-verify-done",
+      "user_id": "@alice:example",
+      "state": {
+        "state": "done"
+      }
+    }
+  }
+]

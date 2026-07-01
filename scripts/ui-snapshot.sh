@@ -171,8 +171,10 @@ configure_case_expectations() {
   expect_selected=
   expect_error=
   expect_verification=
+  expect_verification_state=
   expect_active_view=
   expect_switchbar_active=
+  verification_text_expect_args=()
 
   case "$case_name" in
     multi-room)
@@ -320,6 +322,152 @@ configure_case_expectations() {
         --expect-no-navigation-text 'waiting for confirmation'
         --expect-no-navigation-text 'flow-verify-123'
         --expect-no-navigation-text 'message send failed'
+      )
+      ;;
+    verification-request)
+      expect_active_view='status'
+      expect_verification='flow-verify-request'
+      expect_verification_state='requested'
+      verification_text_expect_args=(
+        --expect-verification-text 'flow_id=flow-verify-request'
+        --expect-verification-text 'user_id=@alice:example'
+        --expect-verification-text 'state=requested'
+      )
+      status_view_expect_args=(
+        --expect-status-view 'status: verification requested by @alice:example'
+        --expect-status-view 'state: requested'
+        --expect-status-view 'flow_id: flow-verify-request'
+        --expect-status-view 'from_user: @alice:example'
+        --expect-status-view 'actions: /verify accept, /verify cancel'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'verification requested by @alice:example'
+        --expect-status-bar 'verification: requested flow-verify-request from @alice:example'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view '/verify confirm'
+        --expect-no-status-view '/verify reject'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'flow-verify-request'
+        --expect-no-navigation-text '@alice:example'
+      )
+      ;;
+    verification-sas-ready)
+      expect_active_view='status'
+      expect_verification='flow-verify-sas-ready'
+      expect_verification_state='sas_ready'
+      verification_text_expect_args=(
+        --expect-verification-text 'flow_id=flow-verify-sas-ready'
+        --expect-verification-text 'state=sas_ready'
+        --expect-verification-text 'emoji=🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
+        --expect-verification-text 'decimals=1234-5678-9012'
+      )
+      status_view_expect_args=(
+        --expect-status-view 'status: verification sas ready with @alice:example'
+        --expect-status-view 'state: sas ready'
+        --expect-status-view 'flow_id: flow-verify-sas-ready'
+        --expect-status-view 'from_user: @alice:example'
+        --expect-status-view 'emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
+        --expect-status-view 'decimals: 1234-5678-9012'
+        --expect-status-view 'actions: /verify confirm, /verify reject, /verify cancel'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'verification sas ready with @alice:example'
+        --expect-status-bar 'verification: sas ready flow-verify-sas-ready from @alice:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'flow-verify-sas-ready'
+        --expect-no-navigation-text '1234-5678-9012'
+      )
+      ;;
+    verification-done)
+      expect_active_view='status'
+      expect_verification='flow-verify-done'
+      expect_verification_state='done'
+      verification_text_expect_args=(
+        --expect-verification-text 'flow_id=flow-verify-done'
+        --expect-verification-text 'state=done'
+      )
+      status_view_expect_args=(
+        --expect-status-view 'status: verification done with @alice:example'
+        --expect-status-view 'state: done'
+        --expect-status-view 'flow_id: flow-verify-done'
+        --expect-status-view 'from_user: @alice:example'
+        --expect-status-view 'result: verified'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view '/verify confirm'
+        --expect-no-status-view '/verify reject'
+        --expect-no-status-view '/verify cancel'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'verification done with @alice:example'
+        --expect-status-bar 'verification: done flow-verify-done from @alice:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'flow-verify-done'
+        --expect-no-navigation-text 'verified'
+      )
+      ;;
+    verification-cancelled)
+      expect_active_view='status'
+      expect_verification='flow-verify-cancelled'
+      expect_verification_state='cancelled'
+      verification_text_expect_args=(
+        --expect-verification-text 'flow_id=flow-verify-cancelled'
+        --expect-verification-text 'state=cancelled'
+        --expect-verification-text 'reason=timed out waiting for confirmation'
+        --expect-verification-text 'code=m.timeout'
+      )
+      status_view_expect_args=(
+        --expect-status-view 'status: verification cancelled with @alice:example'
+        --expect-status-view 'state: cancelled'
+        --expect-status-view 'flow_id: flow-verify-cancelled'
+        --expect-status-view 'from_user: @alice:example'
+        --expect-status-view 'reason: timed out waiting for confirmation'
+        --expect-status-view 'code: m.timeout'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view '/verify confirm'
+        --expect-no-status-view '/verify reject'
+        --expect-no-status-view '/verify cancel'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'verification cancelled with @alice:example'
+        --expect-status-bar 'verification: cancelled flow-verify-cancelled from @alice:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'flow-verify-cancelled'
+        --expect-no-navigation-text 'm.timeout'
       )
       ;;
     e2ee-recovery-needed)
@@ -586,6 +734,10 @@ run_case() {
   if [[ -n "${expect_verification:-}" ]]; then
     driver_args+=(--expect-verification "$expect_verification")
   fi
+  if [[ -n "${expect_verification_state:-}" ]]; then
+    driver_args+=(--expect-verification-state "$expect_verification_state")
+  fi
+  driver_args+=("${verification_text_expect_args[@]}")
   if [[ -n "${expect_switchbar_active:-}" ]]; then
     driver_args+=(--expect-switchbar-active "$expect_switchbar_active")
   fi

@@ -1,0 +1,9 @@
+[
+  "Started",
+  {
+    "VerificationRequest": {
+      "flow_id": "flow-verify-request",
+      "user_id": "@alice:example"
+    }
+  }
+]

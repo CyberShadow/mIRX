@@ -12,7 +12,8 @@ mod windows_main {
     use std::time::Duration;
 
     use mmatrix_testkit::{
-        MdiView, MmatrixApp, NavigationNode, RoomActivity, UiState, ViewIdentity,
+        MdiView, MmatrixApp, NavigationNode, RoomActivity, UiState, Verification,
+        VerificationState, ViewIdentity,
     };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -27,6 +28,8 @@ mod windows_main {
         expect_room_activities: Vec<RoomActivityExpectation>,
         expect_error: Option<String>,
         expect_verification: Option<String>,
+        expect_verification_state: Option<String>,
+        expect_verification_texts: Vec<String>,
         expect_active_view: Option<ViewIdentity>,
         expect_room_views: Vec<ViewTextExpectation>,
         expect_status_views: Vec<String>,
@@ -125,6 +128,37 @@ mod windows_main {
                 ));
             }
             println!("PASS verification {expected_flow_id}");
+        }
+
+        if let Some(expected_state) = config.expect_verification_state.as_deref() {
+            let verification = model.last_verification.as_ref().ok_or_else(|| {
+                format!(
+                    "verification state assertion failed: expected state {expected_state}, found none"
+                )
+            })?;
+            let actual_state = verification_state_name(&verification.state);
+            if actual_state != expected_state {
+                return Err(format!(
+                    "verification state assertion failed: expected {expected_state}, found {actual_state}"
+                ));
+            }
+            println!("PASS verification state {expected_state}");
+        }
+
+        if !config.expect_verification_texts.is_empty() {
+            let verification = model.last_verification.as_ref().ok_or_else(|| {
+                "verification text assertion failed: expected verification, found none".to_owned()
+            })?;
+            let rendered = render_verification_text(verification);
+            for substring in &config.expect_verification_texts {
+                if !rendered.contains(substring) {
+                    return Err(format!(
+                        "verification text assertion failed: expected substring {:?} in {:?}",
+                        substring, rendered
+                    ));
+                }
+                println!("PASS verification text contains {:?}", substring);
+            }
         }
 
         if let Some(expected_substring) = config.expect_error.as_deref() {
@@ -454,6 +488,30 @@ mod windows_main {
                             .ok_or_else(|| "missing value for --expect-verification".to_owned())?,
                     );
                 }
+                "--expect-verification-state" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-verification-state".to_owned()
+                    })?;
+                    match value.as_str() {
+                        "requested" | "accepted" | "ready" | "sas_ready" | "confirmed" | "done"
+                        | "cancelled" => {
+                            config.expect_verification_state = Some(value);
+                        }
+                        _ => {
+                            return Err(format!(
+                                "invalid --expect-verification-state value {value:?}; expected requested|accepted|ready|sas_ready|confirmed|done|cancelled\n{}",
+                                usage()
+                            ));
+                        }
+                    }
+                }
+                "--expect-verification-text" => {
+                    config
+                        .expect_verification_texts
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-verification-text".to_owned()
+                        })?);
+                }
                 "--expect-active-view" => {
                     let value = args
                         .next()
@@ -595,6 +653,8 @@ mod windows_main {
             "  --expect-room-activity <room_id>::<substring>",
             "  --expect-error <substring>",
             "  --expect-verification <flow_id>",
+            "  --expect-verification-state <requested|accepted|ready|sas_ready|confirmed|done|cancelled>",
+            "  --expect-verification-text <substring>",
             "  --expect-active-view <status|room:<room_id>>",
             "  --expect-room-view <room_id>::<substring>",
             "  --expect-status-view <substring>",
@@ -654,6 +714,57 @@ mod windows_main {
 
     fn room_activity_contains(entry: &RoomActivity, substring: &str) -> bool {
         entry.contains(substring)
+    }
+
+    fn verification_state_name(state: &VerificationState) -> &'static str {
+        match state {
+            VerificationState::Requested => "requested",
+            VerificationState::Accepted => "accepted",
+            VerificationState::Ready => "ready",
+            VerificationState::SasReady { .. } => "sas_ready",
+            VerificationState::Confirmed => "confirmed",
+            VerificationState::Done => "done",
+            VerificationState::Cancelled { .. } => "cancelled",
+        }
+    }
+
+    fn render_verification_text(verification: &Verification) -> String {
+        let mut parts = vec![
+            format!("flow_id={}", verification.flow_id),
+            format!("user_id={}", verification.user_id),
+            format!("state={}", verification_state_name(&verification.state)),
+        ];
+
+        match &verification.state {
+            VerificationState::SasReady { emojis, decimals } => {
+                let emoji_text = emojis
+                    .iter()
+                    .map(|emoji| format!("{} {}", emoji.symbol, emoji.description))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                parts.push(format!("emoji={emoji_text}"));
+                parts.push(format!(
+                    "decimals={}-{}-{}",
+                    decimals.first, decimals.second, decimals.third
+                ));
+            }
+            VerificationState::Cancelled {
+                reason,
+                code,
+                cancelled_by_us,
+            } => {
+                parts.push(format!("reason={reason}"));
+                parts.push(format!("code={code}"));
+                parts.push(format!("cancelled_by_us={cancelled_by_us}"));
+            }
+            VerificationState::Requested
+            | VerificationState::Accepted
+            | VerificationState::Ready
+            | VerificationState::Confirmed
+            | VerificationState::Done => {}
+        }
+
+        parts.join(" ")
     }
 
     fn navigation_contains(node: &NavigationNode, substring: &str) -> bool {
