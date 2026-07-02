@@ -59,6 +59,7 @@ mod windows_main {
         substring: String,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
     struct ViewExpectation {
         identity: ViewIdentity,
         substring: String,
@@ -1095,7 +1096,7 @@ mod windows_main {
                 vec!["--expect-no-view", "thread:!room:example::needle"],
             ] {
                 assert!(
-                    parse_args(args.into_iter().map(str::to_owned)).is_err(),
+                    parse_args(args.iter().copied().map(str::to_owned)).is_err(),
                     "expected {:?} to be rejected",
                     args
                 );
