@@ -160,9 +160,9 @@ mod cli {
                         .push(parse_room_tag_expectation(&value)?);
                 }
                 "--expect-room-read-target" => {
-                    let value = args.next().ok_or_else(|| {
-                        "missing value for --expect-room-read-target".to_owned()
-                    })?;
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-read-target".to_owned())?;
                     config
                         .expect_room_read_targets
                         .push(parse_room_read_target_expectation(&value)?);
@@ -522,19 +522,13 @@ mod cli {
         Ok(RoomUnreadExpectation {
             room_id: parts[0].to_owned(),
             num_unread: parts[1].parse::<u64>().map_err(|_| {
-                format!(
-                    "invalid --expect-room-unread num_unread {value:?}; expected u64"
-                )
+                format!("invalid --expect-room-unread num_unread {value:?}; expected u64")
             })?,
             num_notifications: parts[2].parse::<u64>().map_err(|_| {
-                format!(
-                    "invalid --expect-room-unread num_notifications {value:?}; expected u64"
-                )
+                format!("invalid --expect-room-unread num_notifications {value:?}; expected u64")
             })?,
             num_mentions: parts[3].parse::<u64>().map_err(|_| {
-                format!(
-                    "invalid --expect-room-unread num_mentions {value:?}; expected u64"
-                )
+                format!("invalid --expect-room-unread num_mentions {value:?}; expected u64")
             })?,
             marked_unread: parse_strict_bool_arg("--expect-room-unread", value, parts[4])?,
         })
@@ -576,9 +570,9 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation,
-            ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
-            parse_view_identity_arg, usage,
+            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation, ViewExpectation,
+            format_view_identity, parse_args, parse_view_expectation, parse_view_identity_arg,
+            usage,
         };
         use mmatrix_testkit::ViewIdentity;
         use std::time::Duration;
@@ -594,9 +588,7 @@ mod cli {
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
             assert!(usage().contains("--expect-direct-room <room_id>"));
             assert!(usage().contains("--expect-room-tag <room_id>::<tag>::<order-or-null>"));
-            assert!(
-                usage().contains("--expect-room-read-target <room_id>::<event-id-or-null>")
-            );
+            assert!(usage().contains("--expect-room-read-target <room_id>::<event-id-or-null>"));
             assert!(usage().contains(
                 "--expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>"
             ));
@@ -929,7 +921,10 @@ mod cli {
             )
             .unwrap();
 
-            assert_eq!(config.expect_direct_rooms, vec!["!direct:example".to_owned()]);
+            assert_eq!(
+                config.expect_direct_rooms,
+                vec!["!direct:example".to_owned()]
+            );
         }
 
         #[test]
