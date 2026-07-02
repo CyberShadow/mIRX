@@ -5,72 +5,785 @@ fn main() {
 }
 
 #[cfg(any(windows, test))]
+mod cli {
+    use std::time::Duration;
+
+    use mmatrix_testkit::ViewIdentity;
+
+    const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
+    const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
+
+    #[derive(Default)]
+    pub(crate) struct Config {
+        pub(crate) find_timeout: Duration,
+        pub(crate) wait_idle: Duration,
+        pub(crate) select_views: Vec<ViewIdentity>,
+        pub(crate) append_events: Option<String>,
+        pub(crate) expect_selected: Option<String>,
+        pub(crate) expect_rooms: Vec<String>,
+        pub(crate) expect_room_activities: Vec<RoomActivityExpectation>,
+        pub(crate) expect_error: Option<String>,
+        pub(crate) expect_verification: Option<String>,
+        pub(crate) expect_verification_state: Option<String>,
+        pub(crate) expect_verification_texts: Vec<String>,
+        pub(crate) expect_active_view: Option<ViewIdentity>,
+        pub(crate) expect_views: Vec<ViewExpectation>,
+        pub(crate) expect_no_views: Vec<ViewExpectation>,
+        pub(crate) expect_room_views: Vec<ViewTextExpectation>,
+        pub(crate) expect_room_members: Vec<ViewTextExpectation>,
+        pub(crate) expect_status_views: Vec<String>,
+        pub(crate) expect_no_status_views: Vec<String>,
+        pub(crate) expect_status_bars: Vec<String>,
+        pub(crate) expect_no_status_bars: Vec<String>,
+        pub(crate) expect_switchbar_items: Vec<SwitchbarItemExpectation>,
+        pub(crate) expect_no_switchbar_items: Vec<ViewIdentity>,
+        pub(crate) expect_switchbar_active: Option<ViewIdentity>,
+        pub(crate) expect_switchbar_activity: Vec<ViewIdentity>,
+        pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
+        pub(crate) expect_navigation_texts: Vec<String>,
+        pub(crate) expect_no_navigation_texts: Vec<String>,
+    }
+
+    pub(crate) struct RoomActivityExpectation {
+        pub(crate) room_id: String,
+        pub(crate) substring: String,
+    }
+
+    pub(crate) struct ViewTextExpectation {
+        pub(crate) room_id: String,
+        pub(crate) substring: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct ViewExpectation {
+        pub(crate) identity: ViewIdentity,
+        pub(crate) substring: String,
+    }
+
+    pub(crate) struct SwitchbarItemExpectation {
+        pub(crate) identity: ViewIdentity,
+        pub(crate) title_substring: String,
+    }
+
+    pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
+        let mut config = Config {
+            find_timeout: DEFAULT_FIND_TIMEOUT,
+            wait_idle: DEFAULT_WAIT_IDLE,
+            ..Config::default()
+        };
+        let mut args = args.peekable();
+
+        while let Some(flag) = args.next() {
+            match flag.as_str() {
+                "--find-timeout-ms" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --find-timeout-ms".to_owned())?;
+                    let millis = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid --find-timeout-ms value: {value}"))?;
+                    config.find_timeout = Duration::from_millis(millis);
+                }
+                "--wait-idle-ms" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --wait-idle-ms".to_owned())?;
+                    let millis = value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid --wait-idle-ms value: {value}"))?;
+                    config.wait_idle = Duration::from_millis(millis);
+                }
+                "--select-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --select-view".to_owned())?;
+                    config
+                        .select_views
+                        .push(parse_view_identity_arg("--select-view", &value)?);
+                }
+                "--append-events" => {
+                    config.append_events = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --append-events".to_owned())?,
+                    );
+                }
+                "--expect-selected" => {
+                    config.expect_selected = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-selected".to_owned())?,
+                    );
+                }
+                "--expect-room" => {
+                    config.expect_rooms.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-room".to_owned())?,
+                    );
+                }
+                "--expect-room-activity" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for room activity expectation".to_owned())?;
+                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid room activity expectation {value:?}; expected <room_id>::<substring>"
+                        )
+                    })?;
+                    config.expect_room_activities.push(RoomActivityExpectation {
+                        room_id: room_id.to_owned(),
+                        substring: substring.to_owned(),
+                    });
+                }
+                "--expect-error" => {
+                    config.expect_error = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-error".to_owned())?,
+                    );
+                }
+                "--expect-verification" => {
+                    config.expect_verification = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-verification".to_owned())?,
+                    );
+                }
+                "--expect-verification-state" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-verification-state".to_owned()
+                    })?;
+                    match value.as_str() {
+                        "requested" | "accepted" | "ready" | "sas_ready" | "confirmed" | "done"
+                        | "cancelled" => {
+                            config.expect_verification_state = Some(value);
+                        }
+                        _ => {
+                            return Err(format!(
+                                "invalid --expect-verification-state value {value:?}; expected requested|accepted|ready|sas_ready|confirmed|done|cancelled\n{}",
+                                usage()
+                            ));
+                        }
+                    }
+                }
+                "--expect-verification-text" => {
+                    config
+                        .expect_verification_texts
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-verification-text".to_owned()
+                        })?);
+                }
+                "--expect-active-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-active-view".to_owned())?;
+                    config.expect_active_view =
+                        Some(parse_view_identity_arg("--expect-active-view", &value)?);
+                }
+                "--expect-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-view".to_owned())?;
+                    config
+                        .expect_views
+                        .push(parse_view_expectation("--expect-view", &value)?);
+                }
+                "--expect-no-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-no-view".to_owned())?;
+                    config
+                        .expect_no_views
+                        .push(parse_view_expectation("--expect-no-view", &value)?);
+                }
+                "--expect-room-view" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-view".to_owned())?;
+                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid --expect-room-view value {value:?}; expected <room_id>::<substring>"
+                        )
+                    })?;
+                    config.expect_room_views.push(ViewTextExpectation {
+                        room_id: room_id.to_owned(),
+                        substring: substring.to_owned(),
+                    });
+                }
+                "--expect-room-member" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-member".to_owned())?;
+                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid --expect-room-member value {value:?}; expected <room_id>::<substring>"
+                        )
+                    })?;
+                    config.expect_room_members.push(ViewTextExpectation {
+                        room_id: room_id.to_owned(),
+                        substring: substring.to_owned(),
+                    });
+                }
+                "--expect-status-view" => {
+                    config.expect_status_views.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-status-view".to_owned())?,
+                    );
+                }
+                "--expect-no-status-view" => {
+                    config.expect_no_status_views.push(
+                        args.next().ok_or_else(|| {
+                            "missing value for --expect-no-status-view".to_owned()
+                        })?,
+                    );
+                }
+                "--expect-status-bar" => {
+                    config.expect_status_bars.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-status-bar".to_owned())?,
+                    );
+                }
+                "--expect-no-status-bar" => {
+                    config
+                        .expect_no_status_bars
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-no-status-bar".to_owned()
+                        })?);
+                }
+                "--expect-switchbar-item" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-switchbar-item".to_owned())?;
+                    let (identity, title_substring) = value.split_once("::").ok_or_else(|| {
+                        format!(
+                            "invalid --expect-switchbar-item value {value:?}; expected <identity>::<title-substring>"
+                        )
+                    })?;
+                    config
+                        .expect_switchbar_items
+                        .push(SwitchbarItemExpectation {
+                            identity: parse_view_identity_arg("--expect-switchbar-item", identity)?,
+                            title_substring: title_substring.to_owned(),
+                        });
+                }
+                "--expect-no-switchbar-item" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-no-switchbar-item".to_owned())?;
+                    config
+                        .expect_no_switchbar_items
+                        .push(parse_view_identity_arg(
+                            "--expect-no-switchbar-item",
+                            &value,
+                        )?);
+                }
+                "--expect-switchbar-active" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-switchbar-active".to_owned())?;
+                    config.expect_switchbar_active = Some(parse_view_identity_arg(
+                        "--expect-switchbar-active",
+                        &value,
+                    )?);
+                }
+                "--expect-switchbar-activity" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-switchbar-activity".to_owned()
+                    })?;
+                    config
+                        .expect_switchbar_activity
+                        .push(parse_view_identity_arg(
+                            "--expect-switchbar-activity",
+                            &value,
+                        )?);
+                }
+                "--expect-no-switchbar-activity" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-no-switchbar-activity".to_owned()
+                    })?;
+                    config
+                        .expect_no_switchbar_activity
+                        .push(parse_view_identity_arg(
+                            "--expect-no-switchbar-activity",
+                            &value,
+                        )?);
+                }
+                "--expect-no-navigation-text" => {
+                    config
+                        .expect_no_navigation_texts
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-no-navigation-text".to_owned()
+                        })?);
+                }
+                "--expect-navigation-text" => {
+                    config.expect_navigation_texts.push(
+                        args.next().ok_or_else(|| {
+                            "missing value for --expect-navigation-text".to_owned()
+                        })?,
+                    );
+                }
+                "--help" => {
+                    return Err(usage());
+                }
+                other => {
+                    return Err(format!("unknown argument: {other}\n{}", usage()));
+                }
+            }
+        }
+
+        Ok(config)
+    }
+
+    pub(crate) fn usage() -> String {
+        [
+            "usage: mmatrix-snapshot-driver [options]",
+            "  --find-timeout-ms <ms>",
+            "  --wait-idle-ms <ms>",
+            "  --select-view <identity> (repeatable)",
+            "  --append-events <path>",
+            "  --expect-selected <room_id>",
+            "  --expect-room <room_id>",
+            "  --expect-room-activity <room_id>::<substring>",
+            "  --expect-error <substring>",
+            "  --expect-verification <flow_id>",
+            "  --expect-verification-state <requested|accepted|ready|sas_ready|confirmed|done|cancelled>",
+            "  --expect-verification-text <substring>",
+            "  --expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>",
+            "  --expect-view <identity>::<substring>",
+            "  --expect-no-view <identity>::<substring>",
+            "  --expect-room-view <room_id>::<substring>",
+            "  --expect-room-member <room_id>::<substring>",
+            "  --expect-status-view <substring>",
+            "  --expect-no-status-view <substring>",
+            "  --expect-status-bar <substring>",
+            "  --expect-no-status-bar <substring>",
+            "  --expect-switchbar-item <identity>::<title-substring>",
+            "  <identity> is status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>",
+            "  --expect-no-switchbar-item <identity>",
+            "  --expect-switchbar-active <identity>",
+            "  --expect-switchbar-activity <identity>",
+            "  --expect-no-switchbar-activity <identity>",
+            "  --expect-navigation-text <substring>",
+            "  --expect-no-navigation-text <substring>",
+        ]
+        .join("\n")
+    }
+
+    pub(crate) fn parse_view_identity_arg(
+        flag_name: &str,
+        value: &str,
+    ) -> Result<ViewIdentity, String> {
+        if value == "status" {
+            return Ok(ViewIdentity::Status);
+        }
+        if let Some(room_id) = value.strip_prefix("room:") {
+            if room_id.is_empty() {
+                return Err(format!(
+                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    usage()
+                ));
+            }
+            return Ok(ViewIdentity::Room {
+                room_id: room_id.to_owned(),
+            });
+        }
+        if let Some(thread_identity) = value.strip_prefix("thread:") {
+            let Some((room_id, thread_root_event_id)) = thread_identity.split_once('|') else {
+                return Err(format!(
+                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    usage()
+                ));
+            };
+            if room_id.is_empty() || thread_root_event_id.is_empty() {
+                return Err(format!(
+                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    usage()
+                ));
+            }
+            return Ok(ViewIdentity::Thread {
+                room_id: room_id.to_owned(),
+                thread_root_event_id: thread_root_event_id.to_owned(),
+            });
+        }
+        Err(format!(
+            "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+            usage()
+        ))
+    }
+
+    pub(crate) fn parse_view_expectation(
+        flag_name: &str,
+        value: &str,
+    ) -> Result<ViewExpectation, String> {
+        let (identity, substring) = value.split_once("::").ok_or_else(|| {
+            format!("invalid {flag_name} value {value:?}; expected <identity>::<substring>")
+        })?;
+        Ok(ViewExpectation {
+            identity: parse_view_identity_arg(flag_name, identity)?,
+            substring: substring.to_owned(),
+        })
+    }
+
+    pub(crate) fn format_view_identity(identity: &ViewIdentity) -> String {
+        match identity {
+            ViewIdentity::Status => "status".to_owned(),
+            ViewIdentity::Room { room_id } => format!("room:{room_id}"),
+            ViewIdentity::Thread {
+                room_id,
+                thread_root_event_id,
+            } => format!("thread:{room_id}|{thread_root_event_id}"),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
+            parse_view_identity_arg, usage,
+        };
+        use mmatrix_testkit::ViewIdentity;
+        use std::time::Duration;
+
+        #[test]
+        fn usage_documents_thread_identity_format() {
+            assert!(usage().contains(
+                "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
+            ));
+            assert!(usage().contains("--select-view <identity> (repeatable)"));
+            assert!(usage().contains("--append-events <path>"));
+            assert!(usage().contains("--expect-view <identity>::<substring>"));
+            assert!(usage().contains("--expect-no-view <identity>::<substring>"));
+            assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
+        }
+
+        #[test]
+        fn parse_view_identity_arg_accepts_thread_identity() {
+            assert_eq!(
+                parse_view_identity_arg(
+                    "--expect-active-view",
+                    "thread:!room:example|$thread-root:example"
+                )
+                .unwrap(),
+                ViewIdentity::Thread {
+                    room_id: "!room:example".to_owned(),
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                }
+            );
+        }
+
+        #[test]
+        fn parse_view_identity_arg_rejects_missing_thread_components() {
+            for value in [
+                "thread:",
+                "thread:!room:example",
+                "thread:!room:example|",
+                "thread:|$thread-root:example",
+            ] {
+                assert!(
+                    parse_view_identity_arg("--expect-active-view", value).is_err(),
+                    "expected {value:?} to be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn format_view_identity_formats_thread_identity() {
+            assert_eq!(
+                format_view_identity(&ViewIdentity::Thread {
+                    room_id: "!room:example".to_owned(),
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                }),
+                "thread:!room:example|$thread-root:example"
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_select_view_thread_identity() {
+            let config = parse_args(
+                ["--select-view", "thread:!room:example|$thread-root:example"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.select_views,
+                vec![ViewIdentity::Thread {
+                    room_id: "!room:example".to_owned(),
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_preserves_repeated_select_view_order() {
+            let config = parse_args(
+                [
+                    "--select-view",
+                    "room:!room:example",
+                    "--select-view",
+                    "thread:!room:example|$thread-root:example",
+                    "--select-view",
+                    "status",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.select_views,
+                vec![
+                    ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    },
+                    ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    ViewIdentity::Status,
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_append_events_path() {
+            let config = parse_args(
+                ["--append-events", "C:\\snapshots\\thread-update.json"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.append_events,
+                Some("C:\\snapshots\\thread-update.json".to_owned())
+            );
+            assert_eq!(config.find_timeout, Duration::from_secs(10));
+            assert_eq!(config.wait_idle, Duration::from_secs(5));
+        }
+
+        #[test]
+        fn parse_args_reads_runtime_expectation_fields() {
+            let config = parse_args(
+                [
+                    "--expect-selected",
+                    "!ops:example",
+                    "--expect-room",
+                    "!work:example",
+                    "--expect-room-activity",
+                    "!ops:example::incident review",
+                    "--expect-error",
+                    "boom",
+                    "--expect-verification",
+                    "flow-1",
+                    "--expect-verification-state",
+                    "requested",
+                    "--expect-verification-text",
+                    "emoji",
+                    "--expect-active-view",
+                    "room:!ops:example",
+                    "--expect-room-view",
+                    "!ops:example::timeline",
+                    "--expect-room-member",
+                    "!ops:example::alice",
+                    "--expect-status-view",
+                    "status line",
+                    "--expect-no-status-view",
+                    "forbidden status",
+                    "--expect-status-bar",
+                    "connected",
+                    "--expect-no-status-bar",
+                    "disconnected",
+                    "--expect-switchbar-item",
+                    "thread:!ops:example|$thread-root::root msg",
+                    "--expect-no-switchbar-item",
+                    "status",
+                    "--expect-switchbar-active",
+                    "room:!ops:example",
+                    "--expect-switchbar-activity",
+                    "thread:!ops:example|$thread-root",
+                    "--expect-no-switchbar-activity",
+                    "room:!ops:example",
+                    "--expect-navigation-text",
+                    "Ops",
+                    "--expect-no-navigation-text",
+                    "plain",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(config.expect_selected, Some("!ops:example".to_owned()));
+            assert_eq!(config.expect_rooms, vec!["!work:example".to_owned()]);
+            assert_eq!(config.expect_room_activities.len(), 1);
+            assert_eq!(config.expect_room_activities[0].room_id, "!ops:example");
+            assert_eq!(
+                config.expect_room_activities[0].substring,
+                "incident review"
+            );
+            assert_eq!(config.expect_error, Some("boom".to_owned()));
+            assert_eq!(config.expect_verification, Some("flow-1".to_owned()));
+            assert_eq!(
+                config.expect_verification_state,
+                Some("requested".to_owned())
+            );
+            assert_eq!(config.expect_verification_texts, vec!["emoji".to_owned()]);
+            assert_eq!(
+                config.expect_active_view,
+                Some(ViewIdentity::Room {
+                    room_id: "!ops:example".to_owned(),
+                })
+            );
+            assert_eq!(config.expect_room_views.len(), 1);
+            assert_eq!(config.expect_room_views[0].room_id, "!ops:example");
+            assert_eq!(config.expect_room_views[0].substring, "timeline");
+            assert_eq!(config.expect_room_members.len(), 1);
+            assert_eq!(config.expect_room_members[0].room_id, "!ops:example");
+            assert_eq!(config.expect_room_members[0].substring, "alice");
+            assert_eq!(config.expect_status_views, vec!["status line".to_owned()]);
+            assert_eq!(
+                config.expect_no_status_views,
+                vec!["forbidden status".to_owned()]
+            );
+            assert_eq!(config.expect_status_bars, vec!["connected".to_owned()]);
+            assert_eq!(
+                config.expect_no_status_bars,
+                vec!["disconnected".to_owned()]
+            );
+            assert_eq!(config.expect_switchbar_items.len(), 1);
+            assert_eq!(
+                config.expect_switchbar_items[0].identity,
+                ViewIdentity::Thread {
+                    room_id: "!ops:example".to_owned(),
+                    thread_root_event_id: "$thread-root".to_owned(),
+                }
+            );
+            assert_eq!(config.expect_switchbar_items[0].title_substring, "root msg");
+            assert_eq!(config.expect_no_switchbar_items, vec![ViewIdentity::Status]);
+            assert_eq!(
+                config.expect_switchbar_active,
+                Some(ViewIdentity::Room {
+                    room_id: "!ops:example".to_owned(),
+                })
+            );
+            assert_eq!(
+                config.expect_switchbar_activity,
+                vec![ViewIdentity::Thread {
+                    room_id: "!ops:example".to_owned(),
+                    thread_root_event_id: "$thread-root".to_owned(),
+                }]
+            );
+            assert_eq!(
+                config.expect_no_switchbar_activity,
+                vec![ViewIdentity::Room {
+                    room_id: "!ops:example".to_owned(),
+                }]
+            );
+            assert_eq!(config.expect_navigation_texts, vec!["Ops".to_owned()]);
+            assert_eq!(config.expect_no_navigation_texts, vec!["plain".to_owned()]);
+        }
+
+        #[test]
+        fn parse_args_rejects_missing_append_events_value() {
+            assert_eq!(
+                parse_args(["--append-events"].into_iter().map(str::to_owned))
+                    .err()
+                    .unwrap(),
+                "missing value for --append-events"
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_generic_thread_view_expectation() {
+            let config = parse_args(
+                [
+                    "--expect-view",
+                    "thread:!room:example|$thread-root:example::needle",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_views,
+                vec![ViewExpectation {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    substring: "needle".to_owned(),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_generic_thread_negative_view_expectation() {
+            let config = parse_args(
+                [
+                    "--expect-no-view",
+                    "thread:!room:example|$thread-root:example::needle",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_no_views,
+                vec![ViewExpectation {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    substring: "needle".to_owned(),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_view_expectation_rejects_malformed_thread_identity() {
+            for value in [
+                "thread:::needle",
+                "thread:!room:example::needle",
+                "thread:!room:example|::needle",
+                "thread:|$thread-root:example::needle",
+            ] {
+                assert!(
+                    parse_view_expectation("--expect-view", value).is_err(),
+                    "expected {value:?} to be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn parse_args_rejects_malformed_thread_identity_for_view_flags() {
+            for args in [
+                vec!["--select-view", "thread:!room:example"],
+                vec!["--expect-view", "thread:!room:example::needle"],
+                vec!["--expect-no-view", "thread:!room:example::needle"],
+            ] {
+                assert!(
+                    parse_args(args.iter().copied().map(str::to_owned)).is_err(),
+                    "expected {:?} to be rejected",
+                    args
+                );
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
 mod windows_main {
     use std::collections::BTreeMap;
     use std::env;
     use std::fs;
     use std::process::ExitCode;
-    use std::time::Duration;
 
     use mmatrix_testkit::{
         MdiView, MmatrixApp, NavigationNode, RoomActivity, UiState, Verification,
         VerificationState, ViewIdentity,
     };
 
-    const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
-    const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
-
-    #[derive(Default)]
-    struct Config {
-        find_timeout: Duration,
-        wait_idle: Duration,
-        select_views: Vec<ViewIdentity>,
-        append_events: Option<String>,
-        expect_selected: Option<String>,
-        expect_rooms: Vec<String>,
-        expect_room_activities: Vec<RoomActivityExpectation>,
-        expect_error: Option<String>,
-        expect_verification: Option<String>,
-        expect_verification_state: Option<String>,
-        expect_verification_texts: Vec<String>,
-        expect_active_view: Option<ViewIdentity>,
-        expect_views: Vec<ViewExpectation>,
-        expect_no_views: Vec<ViewExpectation>,
-        expect_room_views: Vec<ViewTextExpectation>,
-        expect_room_members: Vec<ViewTextExpectation>,
-        expect_status_views: Vec<String>,
-        expect_no_status_views: Vec<String>,
-        expect_status_bars: Vec<String>,
-        expect_no_status_bars: Vec<String>,
-        expect_switchbar_items: Vec<SwitchbarItemExpectation>,
-        expect_no_switchbar_items: Vec<ViewIdentity>,
-        expect_switchbar_active: Option<ViewIdentity>,
-        expect_switchbar_activity: Vec<ViewIdentity>,
-        expect_no_switchbar_activity: Vec<ViewIdentity>,
-        expect_navigation_texts: Vec<String>,
-        expect_no_navigation_texts: Vec<String>,
-    }
-
-    struct RoomActivityExpectation {
-        room_id: String,
-        substring: String,
-    }
-
-    struct ViewTextExpectation {
-        room_id: String,
-        substring: String,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct ViewExpectation {
-        identity: ViewIdentity,
-        substring: String,
-    }
-
-    struct SwitchbarItemExpectation {
-        identity: ViewIdentity,
-        title_substring: String,
-    }
+    use crate::cli::{Config, ViewExpectation, format_view_identity, parse_args};
 
     impl Config {
         fn requires_ui_state(&self) -> bool {
@@ -506,366 +1219,6 @@ mod windows_main {
         Ok(())
     }
 
-    fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
-        let mut config = Config {
-            find_timeout: DEFAULT_FIND_TIMEOUT,
-            wait_idle: DEFAULT_WAIT_IDLE,
-            ..Config::default()
-        };
-        let mut args = args.peekable();
-
-        while let Some(flag) = args.next() {
-            match flag.as_str() {
-                "--find-timeout-ms" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --find-timeout-ms".to_owned())?;
-                    let millis = value
-                        .parse::<u64>()
-                        .map_err(|_| format!("invalid --find-timeout-ms value: {value}"))?;
-                    config.find_timeout = Duration::from_millis(millis);
-                }
-                "--wait-idle-ms" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --wait-idle-ms".to_owned())?;
-                    let millis = value
-                        .parse::<u64>()
-                        .map_err(|_| format!("invalid --wait-idle-ms value: {value}"))?;
-                    config.wait_idle = Duration::from_millis(millis);
-                }
-                "--select-view" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --select-view".to_owned())?;
-                    config
-                        .select_views
-                        .push(parse_view_identity_arg("--select-view", &value)?);
-                }
-                "--append-events" => {
-                    config.append_events = Some(
-                        args.next()
-                            .ok_or_else(|| "missing value for --append-events".to_owned())?,
-                    );
-                }
-                "--expect-selected" => {
-                    config.expect_selected = Some(
-                        args.next()
-                            .ok_or_else(|| "missing value for --expect-selected".to_owned())?,
-                    );
-                }
-                "--expect-room" => {
-                    config.expect_rooms.push(
-                        args.next()
-                            .ok_or_else(|| "missing value for --expect-room".to_owned())?,
-                    );
-                }
-                "--expect-room-activity" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for room activity expectation".to_owned())?;
-                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
-                        format!(
-                            "invalid room activity expectation {value:?}; expected <room_id>::<substring>"
-                        )
-                    })?;
-                    config.expect_room_activities.push(RoomActivityExpectation {
-                        room_id: room_id.to_owned(),
-                        substring: substring.to_owned(),
-                    });
-                }
-                "--expect-error" => {
-                    config.expect_error = Some(
-                        args.next()
-                            .ok_or_else(|| "missing value for --expect-error".to_owned())?,
-                    );
-                }
-                "--expect-verification" => {
-                    config.expect_verification = Some(
-                        args.next()
-                            .ok_or_else(|| "missing value for --expect-verification".to_owned())?,
-                    );
-                }
-                "--expect-verification-state" => {
-                    let value = args.next().ok_or_else(|| {
-                        "missing value for --expect-verification-state".to_owned()
-                    })?;
-                    match value.as_str() {
-                        "requested" | "accepted" | "ready" | "sas_ready" | "confirmed" | "done"
-                        | "cancelled" => {
-                            config.expect_verification_state = Some(value);
-                        }
-                        _ => {
-                            return Err(format!(
-                                "invalid --expect-verification-state value {value:?}; expected requested|accepted|ready|sas_ready|confirmed|done|cancelled\n{}",
-                                usage()
-                            ));
-                        }
-                    }
-                }
-                "--expect-verification-text" => {
-                    config
-                        .expect_verification_texts
-                        .push(args.next().ok_or_else(|| {
-                            "missing value for --expect-verification-text".to_owned()
-                        })?);
-                }
-                "--expect-active-view" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-active-view".to_owned())?;
-                    config.expect_active_view =
-                        Some(parse_view_identity_arg("--expect-active-view", &value)?);
-                }
-                "--expect-view" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-view".to_owned())?;
-                    config
-                        .expect_views
-                        .push(parse_view_expectation("--expect-view", &value)?);
-                }
-                "--expect-no-view" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-no-view".to_owned())?;
-                    config
-                        .expect_no_views
-                        .push(parse_view_expectation("--expect-no-view", &value)?);
-                }
-                "--expect-room-view" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-room-view".to_owned())?;
-                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
-                        format!(
-                            "invalid --expect-room-view value {value:?}; expected <room_id>::<substring>"
-                        )
-                    })?;
-                    config.expect_room_views.push(ViewTextExpectation {
-                        room_id: room_id.to_owned(),
-                        substring: substring.to_owned(),
-                    });
-                }
-                "--expect-room-member" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-room-member".to_owned())?;
-                    let (room_id, substring) = value.split_once("::").ok_or_else(|| {
-                        format!(
-                            "invalid --expect-room-member value {value:?}; expected <room_id>::<substring>"
-                        )
-                    })?;
-                    config.expect_room_members.push(ViewTextExpectation {
-                        room_id: room_id.to_owned(),
-                        substring: substring.to_owned(),
-                    });
-                }
-                "--expect-status-view" => {
-                    config.expect_status_views.push(
-                        args.next()
-                            .ok_or_else(|| "missing value for --expect-status-view".to_owned())?,
-                    );
-                }
-                "--expect-no-status-view" => {
-                    config.expect_no_status_views.push(
-                        args.next().ok_or_else(|| {
-                            "missing value for --expect-no-status-view".to_owned()
-                        })?,
-                    );
-                }
-                "--expect-status-bar" => {
-                    config.expect_status_bars.push(
-                        args.next()
-                            .ok_or_else(|| "missing value for --expect-status-bar".to_owned())?,
-                    );
-                }
-                "--expect-no-status-bar" => {
-                    config
-                        .expect_no_status_bars
-                        .push(args.next().ok_or_else(|| {
-                            "missing value for --expect-no-status-bar".to_owned()
-                        })?);
-                }
-                "--expect-switchbar-item" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-switchbar-item".to_owned())?;
-                    let (identity, title_substring) = value.split_once("::").ok_or_else(|| {
-                        format!(
-                            "invalid --expect-switchbar-item value {value:?}; expected <identity>::<title-substring>"
-                        )
-                    })?;
-                    config
-                        .expect_switchbar_items
-                        .push(SwitchbarItemExpectation {
-                            identity: parse_view_identity_arg("--expect-switchbar-item", identity)?,
-                            title_substring: title_substring.to_owned(),
-                        });
-                }
-                "--expect-no-switchbar-item" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-no-switchbar-item".to_owned())?;
-                    config
-                        .expect_no_switchbar_items
-                        .push(parse_view_identity_arg(
-                            "--expect-no-switchbar-item",
-                            &value,
-                        )?);
-                }
-                "--expect-switchbar-active" => {
-                    let value = args
-                        .next()
-                        .ok_or_else(|| "missing value for --expect-switchbar-active".to_owned())?;
-                    config.expect_switchbar_active = Some(parse_view_identity_arg(
-                        "--expect-switchbar-active",
-                        &value,
-                    )?);
-                }
-                "--expect-switchbar-activity" => {
-                    let value = args.next().ok_or_else(|| {
-                        "missing value for --expect-switchbar-activity".to_owned()
-                    })?;
-                    config
-                        .expect_switchbar_activity
-                        .push(parse_view_identity_arg(
-                            "--expect-switchbar-activity",
-                            &value,
-                        )?);
-                }
-                "--expect-no-switchbar-activity" => {
-                    let value = args.next().ok_or_else(|| {
-                        "missing value for --expect-no-switchbar-activity".to_owned()
-                    })?;
-                    config
-                        .expect_no_switchbar_activity
-                        .push(parse_view_identity_arg(
-                            "--expect-no-switchbar-activity",
-                            &value,
-                        )?);
-                }
-                "--expect-no-navigation-text" => {
-                    config
-                        .expect_no_navigation_texts
-                        .push(args.next().ok_or_else(|| {
-                            "missing value for --expect-no-navigation-text".to_owned()
-                        })?);
-                }
-                "--expect-navigation-text" => {
-                    config.expect_navigation_texts.push(
-                        args.next().ok_or_else(|| {
-                            "missing value for --expect-navigation-text".to_owned()
-                        })?,
-                    );
-                }
-                "--help" => {
-                    return Err(usage());
-                }
-                other => {
-                    return Err(format!("unknown argument: {other}\n{}", usage()));
-                }
-            }
-        }
-
-        Ok(config)
-    }
-
-    fn usage() -> String {
-        [
-            "usage: mmatrix-snapshot-driver [options]",
-            "  --find-timeout-ms <ms>",
-            "  --wait-idle-ms <ms>",
-            "  --select-view <identity> (repeatable)",
-            "  --append-events <path>",
-            "  --expect-selected <room_id>",
-            "  --expect-room <room_id>",
-            "  --expect-room-activity <room_id>::<substring>",
-            "  --expect-error <substring>",
-            "  --expect-verification <flow_id>",
-            "  --expect-verification-state <requested|accepted|ready|sas_ready|confirmed|done|cancelled>",
-            "  --expect-verification-text <substring>",
-            "  --expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>",
-            "  --expect-view <identity>::<substring>",
-            "  --expect-no-view <identity>::<substring>",
-            "  --expect-room-view <room_id>::<substring>",
-            "  --expect-room-member <room_id>::<substring>",
-            "  --expect-status-view <substring>",
-            "  --expect-no-status-view <substring>",
-            "  --expect-status-bar <substring>",
-            "  --expect-no-status-bar <substring>",
-            "  --expect-switchbar-item <identity>::<title-substring>",
-            "  <identity> is status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>",
-            "  --expect-no-switchbar-item <identity>",
-            "  --expect-switchbar-active <identity>",
-            "  --expect-switchbar-activity <identity>",
-            "  --expect-no-switchbar-activity <identity>",
-            "  --expect-navigation-text <substring>",
-            "  --expect-no-navigation-text <substring>",
-        ]
-        .join("\n")
-    }
-
-    fn parse_view_identity_arg(flag_name: &str, value: &str) -> Result<ViewIdentity, String> {
-        if value == "status" {
-            return Ok(ViewIdentity::Status);
-        }
-        if let Some(room_id) = value.strip_prefix("room:") {
-            if room_id.is_empty() {
-                return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
-                    usage()
-                ));
-            }
-            return Ok(ViewIdentity::Room {
-                room_id: room_id.to_owned(),
-            });
-        }
-        if let Some(thread_identity) = value.strip_prefix("thread:") {
-            let Some((room_id, thread_root_event_id)) = thread_identity.split_once('|') else {
-                return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
-                    usage()
-                ));
-            };
-            if room_id.is_empty() || thread_root_event_id.is_empty() {
-                return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
-                    usage()
-                ));
-            }
-            return Ok(ViewIdentity::Thread {
-                room_id: room_id.to_owned(),
-                thread_root_event_id: thread_root_event_id.to_owned(),
-            });
-        }
-        Err(format!(
-            "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
-            usage()
-        ))
-    }
-
-    fn parse_view_expectation(flag_name: &str, value: &str) -> Result<ViewExpectation, String> {
-        let (identity, substring) = value.split_once("::").ok_or_else(|| {
-            format!("invalid {flag_name} value {value:?}; expected <identity>::<substring>")
-        })?;
-        Ok(ViewExpectation {
-            identity: parse_view_identity_arg(flag_name, identity)?,
-            substring: substring.to_owned(),
-        })
-    }
-
-    fn format_view_identity(identity: &ViewIdentity) -> String {
-        match identity {
-            ViewIdentity::Status => "status".to_owned(),
-            ViewIdentity::Room { room_id } => format!("room:{room_id}"),
-            ViewIdentity::Thread {
-                room_id,
-                thread_root_event_id,
-            } => format!("thread:{room_id}|{thread_root_event_id}"),
-        }
-    }
-
     fn find_view<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> Option<&'a MdiView> {
         ui_state
             .mdi
@@ -974,223 +1327,6 @@ mod windows_main {
             Err(message) => {
                 eprintln!("{message}");
                 ExitCode::from(1)
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::{
-            ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
-            parse_view_identity_arg, usage,
-        };
-        use mmatrix_testkit::ViewIdentity;
-        use std::time::Duration;
-
-        #[test]
-        fn usage_documents_thread_identity_format() {
-            assert!(usage().contains(
-                "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
-            ));
-            assert!(usage().contains("--select-view <identity> (repeatable)"));
-            assert!(usage().contains("--append-events <path>"));
-            assert!(usage().contains("--expect-view <identity>::<substring>"));
-            assert!(usage().contains("--expect-no-view <identity>::<substring>"));
-            assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
-        }
-
-        #[test]
-        fn parse_view_identity_arg_accepts_thread_identity() {
-            assert_eq!(
-                parse_view_identity_arg(
-                    "--expect-active-view",
-                    "thread:!room:example|$thread-root:example"
-                )
-                .unwrap(),
-                ViewIdentity::Thread {
-                    room_id: "!room:example".to_owned(),
-                    thread_root_event_id: "$thread-root:example".to_owned(),
-                }
-            );
-        }
-
-        #[test]
-        fn parse_view_identity_arg_rejects_missing_thread_components() {
-            for value in [
-                "thread:",
-                "thread:!room:example",
-                "thread:!room:example|",
-                "thread:|$thread-root:example",
-            ] {
-                assert!(
-                    parse_view_identity_arg("--expect-active-view", value).is_err(),
-                    "expected {value:?} to be rejected"
-                );
-            }
-        }
-
-        #[test]
-        fn format_view_identity_formats_thread_identity() {
-            assert_eq!(
-                format_view_identity(&ViewIdentity::Thread {
-                    room_id: "!room:example".to_owned(),
-                    thread_root_event_id: "$thread-root:example".to_owned(),
-                }),
-                "thread:!room:example|$thread-root:example"
-            );
-        }
-
-        #[test]
-        fn parse_args_accepts_select_view_thread_identity() {
-            let config = parse_args(
-                ["--select-view", "thread:!room:example|$thread-root:example"]
-                    .into_iter()
-                    .map(str::to_owned),
-            )
-            .unwrap();
-
-            assert_eq!(
-                config.select_views,
-                vec![ViewIdentity::Thread {
-                    room_id: "!room:example".to_owned(),
-                    thread_root_event_id: "$thread-root:example".to_owned(),
-                }]
-            );
-        }
-
-        #[test]
-        fn parse_args_preserves_repeated_select_view_order() {
-            let config = parse_args(
-                [
-                    "--select-view",
-                    "room:!room:example",
-                    "--select-view",
-                    "thread:!room:example|$thread-root:example",
-                    "--select-view",
-                    "status",
-                ]
-                .into_iter()
-                .map(str::to_owned),
-            )
-            .unwrap();
-
-            assert_eq!(
-                config.select_views,
-                vec![
-                    ViewIdentity::Room {
-                        room_id: "!room:example".to_owned(),
-                    },
-                    ViewIdentity::Thread {
-                        room_id: "!room:example".to_owned(),
-                        thread_root_event_id: "$thread-root:example".to_owned(),
-                    },
-                    ViewIdentity::Status,
-                ]
-            );
-        }
-
-        #[test]
-        fn parse_args_accepts_append_events_path() {
-            let config = parse_args(
-                ["--append-events", "C:\\snapshots\\thread-update.json"]
-                    .into_iter()
-                    .map(str::to_owned),
-            )
-            .unwrap();
-
-            assert_eq!(
-                config.append_events,
-                Some("C:\\snapshots\\thread-update.json".to_owned())
-            );
-            assert_eq!(config.find_timeout, Duration::from_secs(10));
-            assert_eq!(config.wait_idle, Duration::from_secs(5));
-        }
-
-        #[test]
-        fn parse_args_rejects_missing_append_events_value() {
-            assert_eq!(
-                parse_args(["--append-events"].into_iter().map(str::to_owned))
-                    .err()
-                    .unwrap(),
-                "missing value for --append-events"
-            );
-        }
-
-        #[test]
-        fn parse_args_accepts_generic_thread_view_expectation() {
-            let config = parse_args(
-                [
-                    "--expect-view",
-                    "thread:!room:example|$thread-root:example::needle",
-                ]
-                .into_iter()
-                .map(str::to_owned),
-            )
-            .unwrap();
-
-            assert_eq!(
-                config.expect_views,
-                vec![ViewExpectation {
-                    identity: ViewIdentity::Thread {
-                        room_id: "!room:example".to_owned(),
-                        thread_root_event_id: "$thread-root:example".to_owned(),
-                    },
-                    substring: "needle".to_owned(),
-                }]
-            );
-        }
-
-        #[test]
-        fn parse_args_accepts_generic_thread_negative_view_expectation() {
-            let config = parse_args(
-                [
-                    "--expect-no-view",
-                    "thread:!room:example|$thread-root:example::needle",
-                ]
-                .into_iter()
-                .map(str::to_owned),
-            )
-            .unwrap();
-
-            assert_eq!(
-                config.expect_no_views,
-                vec![ViewExpectation {
-                    identity: ViewIdentity::Thread {
-                        room_id: "!room:example".to_owned(),
-                        thread_root_event_id: "$thread-root:example".to_owned(),
-                    },
-                    substring: "needle".to_owned(),
-                }]
-            );
-        }
-
-        #[test]
-        fn parse_view_expectation_rejects_malformed_thread_identity() {
-            for value in [
-                "thread:::needle",
-                "thread:!room:example::needle",
-                "thread:!room:example|::needle",
-                "thread:|$thread-root:example::needle",
-            ] {
-                assert!(
-                    parse_view_expectation("--expect-view", value).is_err(),
-                    "expected {value:?} to be rejected"
-                );
-            }
-        }
-
-        #[test]
-        fn parse_args_rejects_malformed_thread_identity_for_view_flags() {
-            for args in [
-                vec!["--select-view", "thread:!room:example"],
-                vec!["--expect-view", "thread:!room:example::needle"],
-                vec!["--expect-no-view", "thread:!room:example::needle"],
-            ] {
-                assert!(
-                    parse_args(args.iter().copied().map(str::to_owned)).is_err(),
-                    "expected {:?} to be rejected",
-                    args
-                );
             }
         }
     }
