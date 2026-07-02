@@ -46,11 +46,12 @@ use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
     STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
-    TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE,
-    TBBUTTON, TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET,
-    TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW,
-    TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
-    TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
+    TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE,
+    TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTATE_MARKED, TBSTYLE_EX_MIXEDBUTTONS,
+    TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
+    TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0,
+    TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -2515,7 +2516,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         0,
         TOOLBARCLASSNAMEW,
         null(),
-        WS_CHILD | WS_VISIBLE,
+        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT,
         0,
         0,
         0,
@@ -3901,11 +3902,26 @@ fn view_title(model: &UiModel, view_id: &ViewId) -> String {
 }
 
 fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
-    let mut text = view_title(&state.model, view_id);
-    if state.room_activity.contains(view_id) {
-        text.insert_str(0, "* ");
+    view_title(&state.model, view_id)
+}
+
+fn switchbar_button_state(state: &WindowState, view_id: &ViewId) -> u8 {
+    let mut button_state = TBSTATE_ENABLED as u8;
+    if state.active_view == *view_id {
+        button_state |= TBSTATE_CHECKED as u8;
     }
-    text
+    if state.room_activity.contains(view_id) {
+        button_state |= TBSTATE_MARKED as u8;
+    }
+    button_state
+}
+
+fn tree_item_state(state: &WindowState, view_id: &ViewId) -> u32 {
+    if state.room_activity.contains(view_id) {
+        TVIS_BOLD
+    } else {
+        0
+    }
 }
 
 fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
@@ -4260,6 +4276,7 @@ unsafe fn activate_view(
         state.active_view = view_id.clone();
     }
 
+    refresh_tree_item_activity_state(hwnd)?;
     refresh_view_content(hwnd, view_id)?;
     select_tree_item(hwnd, view_id, preferred_tree_item);
 
@@ -4491,6 +4508,30 @@ unsafe fn insert_tree_item(tree: HWND, parent: isize, text: &str) -> isize {
     ) as isize
 }
 
+unsafe fn insert_tree_item_with_state(tree: HWND, parent: isize, text: &str, state: u32) -> isize {
+    let mut text = wide_null(text);
+    let item = TVITEMEXW {
+        mask: TVIF_TEXT | TVIF_STATE,
+        state,
+        stateMask: TVIS_BOLD,
+        pszText: text.as_mut_ptr(),
+        cchTextMax: text.len() as i32,
+        ..zeroed()
+    };
+    let insert = TVINSERTSTRUCTW {
+        hParent: parent as _,
+        hInsertAfter: TVI_LAST as _,
+        Anonymous: TVINSERTSTRUCTW_0 { itemex: item },
+    };
+
+    SendMessageW(
+        tree,
+        TVM_INSERTITEMW,
+        0,
+        (&insert as *const TVINSERTSTRUCTW) as LPARAM,
+    ) as isize
+}
+
 unsafe fn expand_tree_item(tree: HWND, item: isize) {
     SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, item as LPARAM);
 }
@@ -4501,7 +4542,12 @@ unsafe fn insert_mapped_tree_item(
     label: &str,
     view_id: ViewId,
 ) -> isize {
-    let item = insert_tree_item(state.controls.tree, parent, label);
+    let item = insert_tree_item_with_state(
+        state.controls.tree,
+        parent,
+        label,
+        tree_item_state(state, &view_id),
+    );
     state.tree_items.insert(item, view_id.clone());
     state.primary_tree_items.entry(view_id).or_insert(item);
     item
@@ -5268,13 +5314,20 @@ unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
             .map(|view_id| wide_null(&switchbar_button_text(state, view_id)))
             .collect::<Vec<_>>()
     };
+    let button_states = {
+        let state = state_ref(hwnd);
+        view_ids
+            .iter()
+            .map(|view_id| switchbar_button_state(state, view_id))
+            .collect::<Vec<_>>()
+    };
     let buttons = view_ids
         .iter()
         .enumerate()
         .map(|(index, _)| TBBUTTON {
             iBitmap: I_IMAGENONE,
             idCommand: (SWITCHBAR_COMMAND_FIRST + index) as i32,
-            fsState: TBSTATE_ENABLED as u8,
+            fsState: button_states[index],
             fsStyle: (BTNS_CHECK | BTNS_SHOWTEXT) as u8,
             iString: labels[index].as_ptr() as isize,
             ..TBBUTTON::default()
@@ -5303,13 +5356,54 @@ unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
         return Err("switchbar control was not created".to_owned());
     }
 
-    let active_view = state_ref(hwnd).active_view.clone();
     let view_ids = state_ref(hwnd).switchbar_views.clone();
     for (index, view_id) in view_ids.iter().enumerate() {
         let command_id = SWITCHBAR_COMMAND_FIRST + index;
-        let checked = usize::from(*view_id == active_view);
-        if SendMessageW(switchbar, TB_CHECKBUTTON, command_id, checked as LPARAM) == 0 {
+        let button_state = {
+            let state = state_ref(hwnd);
+            switchbar_button_state(state, view_id)
+        };
+        if SendMessageW(switchbar, TB_SETSTATE, command_id, button_state as LPARAM) == 0 {
             return Err(format!("failed to refresh switchbar button {command_id}"));
+        }
+    }
+
+    Ok(())
+}
+
+unsafe fn refresh_tree_item_activity_state(hwnd: HWND) -> Result<(), String> {
+    let tree = state_ref(hwnd).controls.tree;
+    if tree.is_null() {
+        return Err("tree control was not created".to_owned());
+    }
+
+    let updates = {
+        let state = state_ref(hwnd);
+        state
+            .tree_items
+            .iter()
+            .map(|(tree_item, view_id)| (*tree_item, tree_item_state(state, view_id)))
+            .collect::<Vec<_>>()
+    };
+
+    for (tree_item, item_state) in updates {
+        let mut item = TVITEMEXW {
+            mask: TVIF_STATE,
+            hItem: tree_item as _,
+            state: item_state,
+            stateMask: TVIS_BOLD,
+            ..zeroed()
+        };
+        if SendMessageW(
+            tree,
+            TVM_SETITEMW,
+            0,
+            (&mut item as *mut TVITEMEXW) as LPARAM,
+        ) == 0
+        {
+            return Err(format!(
+                "failed to refresh tree item activity state for handle 0x{tree_item:x}"
+            ));
         }
     }
 
@@ -10069,7 +10163,7 @@ mod tests {
     }
 
     #[test]
-    fn switchbar_button_text_prefixes_activity_for_exact_view_identity() {
+    fn switchbar_button_text_keeps_plain_titles_for_exact_view_identity() {
         let mut state = test_state();
         state.model.rooms = vec![room("!room:example", "Room", true)];
         state.room_activity.insert(room_view_id("!room:example"));
@@ -10091,13 +10185,59 @@ mod tests {
 
         assert_eq!(
             switchbar_button_text(&state, &room_view_id("!room:example")),
-            "* Room [e2ee]"
+            "Room [e2ee]"
         );
         assert_eq!(
             switchbar_button_text(&state, &thread_view_id("!room:example", "$thread-root")),
-            "* Thread: root msg"
+            "Thread: root msg"
         );
         assert_eq!(switchbar_button_text(&state, &ViewId::Status), "Status");
+    }
+
+    #[test]
+    fn switchbar_button_state_tracks_checked_and_marked_bits() {
+        let mut state = test_state();
+        let room_view = room_view_id("!room:example");
+
+        state.room_activity.insert(room_view.clone());
+        assert_eq!(
+            switchbar_button_state(&state, &room_view),
+            (TBSTATE_ENABLED | TBSTATE_MARKED) as u8
+        );
+
+        state.room_activity.clear();
+        state.active_view = room_view.clone();
+        assert_eq!(
+            switchbar_button_state(&state, &room_view),
+            (TBSTATE_ENABLED | TBSTATE_CHECKED) as u8
+        );
+
+        state.room_activity.insert(room_view.clone());
+        assert_eq!(
+            switchbar_button_state(&state, &room_view),
+            (TBSTATE_ENABLED | TBSTATE_CHECKED | TBSTATE_MARKED) as u8
+        );
+    }
+
+    #[test]
+    fn tree_item_state_bolds_only_matching_exact_view() {
+        let mut state = test_state();
+        let room_view = room_view_id("!room:example");
+        let thread_view = thread_view_id("!room:example", "$thread-root");
+        let other_room_view = room_view_id("!other:example");
+
+        state.room_activity.insert(room_view.clone());
+        assert_eq!(tree_item_state(&state, &room_view), TVIS_BOLD);
+        assert_eq!(tree_item_state(&state, &thread_view), 0);
+        assert_eq!(tree_item_state(&state, &ViewId::Status), 0);
+        assert_eq!(tree_item_state(&state, &other_room_view), 0);
+
+        state.room_activity.clear();
+        state.room_activity.insert(thread_view.clone());
+        assert_eq!(tree_item_state(&state, &room_view), 0);
+        assert_eq!(tree_item_state(&state, &thread_view), TVIS_BOLD);
+        assert_eq!(tree_item_state(&state, &ViewId::Status), 0);
+        assert_eq!(tree_item_state(&state, &other_room_view), 0);
     }
 
     #[test]

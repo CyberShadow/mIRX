@@ -1065,7 +1065,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
             .iter()
             .map(|item| item.title.as_str())
             .collect::<Vec<_>>(),
-        vec!["Status", "Beta [e2ee]", "* Alpha"]
+        vec!["Status", "Beta [e2ee]", "Alpha"]
     );
     assert_active_switchbar_item(&ui_state, &ui_state.mdi.active);
     assert_switchbar_activity(&ui_state, &ViewIdentity::Status, false);
@@ -2717,6 +2717,74 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
     assert!(view_contains(thread_view, "pending threaded draft"));
     assert!(!view_contains(thread_view, "lobby"));
     assert!(!view_contains(thread_view, "plain"));
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivated()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let room_view_identity = room_identity("!ops:example");
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+
+    app.select_view(thread_view_identity.clone())?;
+    app.select_room("!ops:example")?;
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        message_event_with_event_id_and_relation(
+            "!ops:example",
+            "$thread-activity-2",
+            "@erin:example",
+            1_700_000_300_000,
+            Some(CoreRoomActivityRelation::Thread {
+                thread_root_event_id: "$thread-root".to_owned(),
+                in_reply_to_event_id: Some("$thread-1".to_owned()),
+                is_falling_back: false,
+            }),
+            CoreRoomMessagePresentationKind::Text,
+            "thread follow-up",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let inactive_thread_state = app.dump_ui_state()?;
+    assert_eq!(inactive_thread_state.mdi.active, room_view_identity);
+    assert_eq!(
+        inactive_thread_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| item.identity.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            ViewIdentity::Status,
+            room_view_identity.clone(),
+            thread_view_identity.clone(),
+        ]
+    );
+    assert_active_switchbar_item(&inactive_thread_state, &room_view_identity);
+    assert_switchbar_activity(&inactive_thread_state, &room_view_identity, false);
+    assert_switchbar_activity(&inactive_thread_state, &thread_view_identity, true);
+    assert_eq!(
+        find_switchbar_item(&inactive_thread_state, &thread_view_identity).title,
+        "Thread: root msg"
+    );
+
+    app.select_view(thread_view_identity.clone())?;
+    let reactivated_thread_state = app.dump_ui_state()?;
+    assert_eq!(reactivated_thread_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&reactivated_thread_state, &thread_view_identity);
+    assert_switchbar_activity(&reactivated_thread_state, &room_view_identity, false);
+    assert_switchbar_activity(&reactivated_thread_state, &thread_view_identity, false);
 
     Ok(())
 }
