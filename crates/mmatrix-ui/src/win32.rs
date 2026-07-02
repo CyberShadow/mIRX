@@ -7342,7 +7342,11 @@ mod tests {
         )))
     }
 
-    fn outgoing_queued_in_thread(room_id: &str, transaction_id: &str, root_event_id: &str) -> Event {
+    fn outgoing_queued_in_thread(
+        room_id: &str,
+        transaction_id: &str,
+        root_event_id: &str,
+    ) -> Event {
         Event::RoomActivity(Box::new(
             pending_message_activity_with_relation_and_presentation(
                 room_id,
