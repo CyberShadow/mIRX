@@ -11,8 +11,9 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, E2eeRecoveryOperation, E2eeRecoverySucceeded, Event,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest,
-    RoomMembers, RoomReadState, RoomSummary, VerificationFlowId,
+    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RestoreSessionRequest, RoomMembers, RoomReadState, RoomSummary,
+    VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -103,6 +104,7 @@ enum WorkerState {
         sync_task: Option<TokioJoinHandle<()>>,
         session_update_task: TokioJoinHandle<()>,
         send_queue_update_task: TokioJoinHandle<()>,
+        room_list_update_task: TokioJoinHandle<()>,
         room_read_state_update_task: TokioJoinHandle<()>,
         e2ee_recovery_state_task: TokioJoinHandle<()>,
         e2ee_backup_state_task: TokioJoinHandle<()>,
@@ -183,6 +185,8 @@ async fn handle_command(
             handle_restore_session(config, event_tx, state, request).await
         }
         Command::StartSync => handle_start_sync(event_tx, state),
+        Command::JoinRoom(request) => handle_join_room(event_tx, state, request).await,
+        Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
@@ -269,6 +273,7 @@ async fn handle_login(
     }
     let room_read_state_update_task =
         start_room_read_state_update_task_or_placeholder(&client, event_tx);
+    let room_list_update_task = start_room_list_update_task_or_placeholder(&client, event_tx);
     match matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await {
         Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
         Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
@@ -283,6 +288,7 @@ async fn handle_login(
         sync_task: None,
         session_update_task,
         send_queue_update_task,
+        room_list_update_task,
         room_read_state_update_task,
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
@@ -353,6 +359,7 @@ async fn handle_restore_session(
     }
     let room_read_state_update_task =
         start_room_read_state_update_task_or_placeholder(&client, event_tx);
+    let room_list_update_task = start_room_list_update_task_or_placeholder(&client, event_tx);
     match matrix::summarize_e2ee_status(&client, BackupServerStatusMode::Fetch).await {
         Ok(status) => emit_event(event_tx, Event::E2eeStatus(status)),
         Err(err) => emit_matrix_error(event_tx, Operation::E2eeStatus, err),
@@ -367,6 +374,7 @@ async fn handle_restore_session(
         sync_task: None,
         session_update_task,
         send_queue_update_task,
+        room_list_update_task,
         room_read_state_update_task,
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
@@ -403,6 +411,58 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
 
     *sync_task = Some(matrix::start_sync_task(client.clone(), event_tx.clone()));
     emit_event(event_tx, Event::SyncStarted);
+    false
+}
+
+async fn handle_join_room(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: JoinRoomRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::JoinRoom,
+            "join room requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::join_room(client, &request.room_or_alias).await {
+        emit_matrix_error(event_tx, Operation::JoinRoom, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::JoinRoom, err);
+    }
+
+    false
+}
+
+async fn handle_leave_room(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: LeaveRoomRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::LeaveRoom,
+            "leave room requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::leave_joined_room(client, &request.room_id).await {
+        emit_matrix_error(event_tx, Operation::LeaveRoom, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::LeaveRoom, err);
+    }
+
     false
 }
 
@@ -596,6 +656,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
         sync_task,
         session_update_task,
         send_queue_update_task,
+        room_list_update_task,
         room_read_state_update_task,
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
@@ -613,6 +674,7 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     abort_sync_task(sync_task);
     session_update_task.abort();
     send_queue_update_task.abort();
+    room_list_update_task.abort();
     room_read_state_update_task.abort();
     e2ee_recovery_state_task.abort();
     e2ee_backup_state_task.abort();
@@ -633,6 +695,7 @@ fn shutdown_state(state: &mut WorkerState) {
         sync_task,
         session_update_task,
         send_queue_update_task,
+        room_list_update_task,
         room_read_state_update_task,
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
@@ -643,6 +706,7 @@ fn shutdown_state(state: &mut WorkerState) {
         abort_sync_task(sync_task);
         session_update_task.abort();
         send_queue_update_task.abort();
+        room_list_update_task.abort();
         room_read_state_update_task.abort();
         e2ee_recovery_state_task.abort();
         e2ee_backup_state_task.abort();
@@ -760,6 +824,27 @@ fn start_room_read_state_update_task_or_placeholder(
     }
 }
 
+fn start_room_list_update_task_or_placeholder(
+    client: &Client,
+    event_tx: &EventSender,
+) -> TokioJoinHandle<()> {
+    match matrix::start_room_list_update_task(client.clone(), event_tx.clone()) {
+        Ok(task) => task,
+        Err(err) => {
+            emit_event(
+                event_tx,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::RoomList,
+                    message: format!(
+                        "failed to subscribe Matrix event cache for room-list updates: {err}"
+                    ),
+                }),
+            );
+            tokio::task::spawn_local(async {})
+        }
+    }
+}
+
 pub(crate) fn emit_event(event_tx: &EventSender, event: Event) {
     let _ = event_tx.send(event);
 }
@@ -859,6 +944,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 sync_task: Some(existing_task),
+                room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
@@ -882,6 +968,7 @@ mod tests {
 
             if let WorkerState::Ready {
                 sync_task,
+                room_list_update_task,
                 room_read_state_update_task,
                 e2ee_recovery_state_task,
                 e2ee_backup_state_task,
@@ -893,6 +980,7 @@ mod tests {
                 if let Some(task) = sync_task.take() {
                     task.abort();
                 }
+                room_list_update_task.abort();
                 room_read_state_update_task.abort();
                 e2ee_recovery_state_task.abort();
                 e2ee_backup_state_task.abort();
@@ -986,6 +1074,7 @@ mod tests {
             let mut state = WorkerState::Ready {
                 client,
                 sync_task: None,
+                room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_recovery_state_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 e2ee_backup_state_task: tokio::task::spawn_local(std::future::pending::<()>()),

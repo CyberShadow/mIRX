@@ -20,7 +20,7 @@ use matrix_sdk::{
     },
     room::Receipts,
     ruma::{
-        EventId, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId, RoomId,
+        EventId, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId, RoomId, RoomOrAliasId,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
             key::verification::{
@@ -280,6 +280,43 @@ pub(crate) async fn summarize_joined_rooms(
     Ok(rooms)
 }
 
+pub(crate) async fn join_room(client: &Client, room_or_alias: &str) -> Result<(), MatrixCoreError> {
+    let room_or_alias = <&RoomOrAliasId>::try_from(room_or_alias)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id or alias: {err}")))?;
+
+    client
+        .join_room_by_id_or_alias(room_or_alias, &[])
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to join Matrix room: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn leave_joined_room(client: &Client, room_id: &str) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(room_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+
+    let room = client
+        .joined_rooms()
+        .into_iter()
+        .find(|room| room.room_id().as_str() == room_id.as_str())
+        .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))?;
+
+    room.leave()
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to leave Matrix room: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn emit_joined_room_snapshot(
+    client: &Client,
+    event_tx: &EventSender,
+) -> Result<(), MatrixCoreError> {
+    emit_event(event_tx, Event::SyncedRooms(summarize_joined_rooms(client).await?));
+    Ok(())
+}
+
 fn room_member_display_label(member: &RoomMemberSummary) -> &str {
     match member.display_name.as_deref() {
         Some(display_name) if !display_name.is_empty() => display_name,
@@ -365,6 +402,12 @@ pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons
         RoomInfoNotableUpdateReasons::READ_RECEIPT
             | RoomInfoNotableUpdateReasons::FULLY_READ
             | RoomInfoNotableUpdateReasons::UNREAD_MARKER,
+    )
+}
+
+pub(crate) fn room_list_update_is_relevant(reasons: RoomInfoNotableUpdateReasons) -> bool {
+    reasons.intersects(
+        RoomInfoNotableUpdateReasons::MEMBERSHIP | RoomInfoNotableUpdateReasons::DISPLAY_NAME,
     )
 }
 
@@ -1229,6 +1272,44 @@ pub(crate) fn start_room_read_state_update_task(
     }))
 }
 
+pub(crate) fn start_room_list_update_task(
+    client: Client,
+    events: EventSender,
+) -> Result<JoinHandle<()>, matrix_sdk::event_cache::EventCacheError> {
+    client.event_cache().subscribe()?;
+    let mut updates = client.room_info_notable_update_receiver();
+
+    Ok(tokio::task::spawn_local(async move {
+        loop {
+            match updates.recv().await {
+                Ok(update) => {
+                    if !room_list_update_is_relevant(update.reasons) {
+                        continue;
+                    }
+
+                    if let Err(err) = emit_joined_room_snapshot(&client, &events).await {
+                        emit_event(
+                            &events,
+                            Event::Error(CoreErrorEvent {
+                                operation: Operation::RoomList,
+                                message: err.to_string(),
+                            }),
+                        );
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
+                    &events,
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::RoomList,
+                        message: "missed Matrix room-list update".to_owned(),
+                    }),
+                ),
+            }
+        }
+    }))
+}
+
 pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> JoinHandle<()> {
     let mut session_changes = client.subscribe_to_session_changes();
 
@@ -1629,9 +1710,10 @@ mod tests {
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_members_from_parts, room_message_event_content,
-        room_read_state_from_parts, room_read_update_is_relevant, room_typing_from_sync_typing,
-        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        room_list_update_is_relevant, room_read_state_from_parts, room_read_update_is_relevant,
+        room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
+        verification_flow_id_from_to_device, verification_request_from_to_device,
+        verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
@@ -2539,6 +2621,35 @@ mod tests {
         assert!(!room_read_update_is_relevant(
             RoomInfoNotableUpdateReasons::DISPLAY_NAME
         ));
+    }
+
+    #[test]
+    fn room_list_update_relevance_tracks_membership_and_display_name() {
+        for reasons in [
+            RoomInfoNotableUpdateReasons::MEMBERSHIP,
+            RoomInfoNotableUpdateReasons::DISPLAY_NAME,
+        ] {
+            assert!(
+                room_list_update_is_relevant(reasons),
+                "{reasons:?} should be relevant"
+            );
+        }
+    }
+
+    #[test]
+    fn room_list_update_relevance_ignores_non_room_list_reasons() {
+        for reasons in [
+            RoomInfoNotableUpdateReasons::READ_RECEIPT,
+            RoomInfoNotableUpdateReasons::UNREAD_MARKER,
+            RoomInfoNotableUpdateReasons::RECENCY_STAMP,
+            RoomInfoNotableUpdateReasons::LATEST_EVENT,
+            RoomInfoNotableUpdateReasons::NONE,
+        ] {
+            assert!(
+                !room_list_update_is_relevant(reasons),
+                "{reasons:?} should be ignored"
+            );
+        }
     }
 
     #[test]

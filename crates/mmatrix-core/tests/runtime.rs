@@ -3,13 +3,14 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CoreConfig, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo,
-    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
+    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -60,6 +61,53 @@ fn assert_invalid_verification_command(command: Command) {
             );
         }
         other => panic!("expected verification error, got {other:?}"),
+    }
+
+    handle
+        .command_sender()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stopped event"),
+        Event::Stopped
+    );
+    handle.join().expect("join worker");
+}
+
+fn assert_invalid_authenticated_command(
+    command: Command,
+    expected_operation: Operation,
+    expected_message: &str,
+) {
+    let (_temp_dir, config) = test_config();
+    let handle = start(config).expect("start core");
+
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("started event"),
+        Event::Started
+    );
+
+    handle
+        .command_sender()
+        .send(command)
+        .expect("send authenticated command");
+
+    match handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("authenticated command error")
+    {
+        Event::Error(err) => {
+            assert_eq!(err.operation, expected_operation);
+            assert_eq!(err.message, expected_message);
+        }
+        other => panic!("expected authenticated command error, got {other:?}"),
     }
 
     handle
@@ -195,6 +243,28 @@ fn invalid_command_ordering_emits_typed_error_events() {
         Event::Stopped
     );
     handle.join().expect("join worker");
+}
+
+#[test]
+fn join_room_before_login_emits_join_room_error() {
+    assert_invalid_authenticated_command(
+        Command::JoinRoom(JoinRoomRequest {
+            room_or_alias: "#ops:example.org".to_owned(),
+        }),
+        Operation::JoinRoom,
+        "join room requires an authenticated session",
+    );
+}
+
+#[test]
+fn leave_room_before_login_emits_leave_room_error() {
+    assert_invalid_authenticated_command(
+        Command::LeaveRoom(LeaveRoomRequest {
+            room_id: "!ops:example.org".to_owned(),
+        }),
+        Operation::LeaveRoom,
+        "leave room requires an authenticated session",
+    );
 }
 
 #[test]
@@ -416,6 +486,34 @@ fn stored_session_rejects_unknown_fields() {
         .is_err(),
         "stored session must reject unknown fields"
     );
+}
+
+#[test]
+fn join_room_request_round_trips_through_serde() {
+    let request = JoinRoomRequest {
+        room_or_alias: "#ops:example.org".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize join room request");
+    assert_eq!(json, r##"{"room_or_alias":"#ops:example.org"}"##);
+
+    let restored: JoinRoomRequest =
+        serde_json::from_str(&json).expect("deserialize join room request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn leave_room_request_round_trips_through_serde() {
+    let request = LeaveRoomRequest {
+        room_id: "!ops:example.org".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize leave room request");
+    assert_eq!(json, r#"{"room_id":"!ops:example.org"}"#);
+
+    let restored: LeaveRoomRequest =
+        serde_json::from_str(&json).expect("deserialize leave room request");
+    assert_eq!(restored, request);
 }
 
 #[test]
@@ -1089,6 +1187,28 @@ fn e2ee_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "e2ee cross-signing status must reject unknown fields"
+    );
+}
+
+#[test]
+fn join_room_request_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<JoinRoomRequest>(
+            r##"{"room_or_alias":"#ops:example.org","unexpected":"value"}"##
+        )
+        .is_err(),
+        "join room request must reject unknown fields"
+    );
+}
+
+#[test]
+fn leave_room_request_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<LeaveRoomRequest>(
+            r#"{"room_id":"!ops:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "leave room request must reject unknown fields"
     );
 }
 

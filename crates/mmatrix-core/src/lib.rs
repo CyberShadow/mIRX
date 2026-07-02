@@ -8,14 +8,15 @@ pub const FOUNDATION_PHASE: &str = "bootstrap";
 pub use api::{
     Command, CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
+    RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

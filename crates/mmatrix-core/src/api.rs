@@ -12,6 +12,8 @@ pub enum Command {
     Login(LoginRequest),
     RestoreSession(RestoreSessionRequest),
     StartSync,
+    JoinRoom(JoinRoomRequest),
+    LeaveRoom(LeaveRoomRequest),
     SendMessage(SendMessageRequest),
     MarkRoomRead(MarkRoomReadRequest),
     RefreshE2eeStatus,
@@ -59,6 +61,18 @@ pub struct SendMessageRequest {
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub thread: Option<SendMessageThreadTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JoinRoomRequest {
+    pub room_or_alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaveRoomRequest {
+    pub room_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -439,8 +453,11 @@ pub enum Operation {
     RestoreSession,
     SessionUpdate,
     StartSync,
+    JoinRoom,
+    LeaveRoom,
     SendMessage,
     MarkRoomRead,
+    RoomList,
     RoomReadState,
     E2eeStatus,
     RecoverE2ee,
