@@ -2,7 +2,8 @@
 set -euo pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-exe_path="$root_dir/target/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"
+target_dir="${CARGO_TARGET_DIR:-$root_dir/target}"
+exe_path="$target_dir/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"
 objdump_bin=${OBJDUMP:-x86_64-w64-mingw32-objdump}
 
 cd "$root_dir"
