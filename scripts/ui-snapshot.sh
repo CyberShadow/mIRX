@@ -164,6 +164,10 @@ configure_case_expectations() {
   local case_name=$1
   room_activity_expect_args=()
   room_expect_args=()
+  room_direct_expect_args=()
+  room_tag_expect_args=()
+  room_read_target_expect_args=()
+  room_unread_expect_args=()
   room_view_expect_args=()
   view_expect_args=()
   view_forbid_args=()
@@ -248,6 +252,13 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
+      )
+      room_direct_expect_args=(
+        --expect-direct-room '!direct:example'
+      )
+      room_tag_expect_args=(
+        --expect-room-tag '!direct:example::m.favourite::0.25'
+        --expect-room-tag '!direct:example::u.work::null'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -778,6 +789,14 @@ configure_case_expectations() {
         --expect-room '!beta:example'
         --expect-room '!alpha:example'
       )
+      room_read_target_expect_args=(
+        --expect-room-read-target '!alpha:example::$alpha-latest'
+        --expect-room-read-target '!beta:example::null'
+      )
+      room_unread_expect_args=(
+        --expect-room-unread '!alpha:example::1::2::1::true'
+        --expect-room-unread '!beta:example::0::0::0::false'
+      )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!beta:example::Beta'
@@ -891,6 +910,10 @@ run_case() {
     --wait-idle-ms 5000
     --expect-active-view "$expect_active_view"
     "${room_expect_args[@]}"
+    "${room_direct_expect_args[@]}"
+    "${room_tag_expect_args[@]}"
+    "${room_read_target_expect_args[@]}"
+    "${room_unread_expect_args[@]}"
     "${room_activity_expect_args[@]}"
     "${view_expect_args[@]}"
     "${view_forbid_args[@]}"

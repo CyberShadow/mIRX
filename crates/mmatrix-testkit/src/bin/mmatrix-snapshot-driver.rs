@@ -42,6 +42,10 @@ mod cli {
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
         pub(crate) expect_navigation_texts: Vec<String>,
         pub(crate) expect_no_navigation_texts: Vec<String>,
+        pub(crate) expect_direct_rooms: Vec<String>,
+        pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
+        pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
+        pub(crate) expect_room_unreads: Vec<RoomUnreadExpectation>,
     }
 
     pub(crate) struct RoomActivityExpectation {
@@ -63,6 +67,28 @@ mod cli {
     pub(crate) struct SwitchbarItemExpectation {
         pub(crate) identity: ViewIdentity,
         pub(crate) title_substring: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct RoomTagExpectation {
+        pub(crate) room_id: String,
+        pub(crate) tag: String,
+        pub(crate) order: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct RoomReadTargetExpectation {
+        pub(crate) room_id: String,
+        pub(crate) read_target_event_id: Option<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct RoomUnreadExpectation {
+        pub(crate) room_id: String,
+        pub(crate) num_unread: u64,
+        pub(crate) num_notifications: u64,
+        pub(crate) num_mentions: u64,
+        pub(crate) marked_unread: bool,
     }
 
     pub(crate) fn parse_args(args: impl Iterator<Item = String>) -> Result<Config, String> {
@@ -118,6 +144,36 @@ mod cli {
                         args.next()
                             .ok_or_else(|| "missing value for --expect-room".to_owned())?,
                     );
+                }
+                "--expect-direct-room" => {
+                    config.expect_direct_rooms.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-direct-room".to_owned())?,
+                    );
+                }
+                "--expect-room-tag" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-tag".to_owned())?;
+                    config
+                        .expect_room_tags
+                        .push(parse_room_tag_expectation(&value)?);
+                }
+                "--expect-room-read-target" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-room-read-target".to_owned()
+                    })?;
+                    config
+                        .expect_room_read_targets
+                        .push(parse_room_read_target_expectation(&value)?);
+                }
+                "--expect-room-unread" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-unread".to_owned())?;
+                    config
+                        .expect_room_unreads
+                        .push(parse_room_unread_expectation(&value)?);
                 }
                 "--expect-room-activity" => {
                     let value = args
@@ -339,6 +395,10 @@ mod cli {
             "  --append-events <path>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
+            "  --expect-direct-room <room_id>",
+            "  --expect-room-tag <room_id>::<tag>::<order-or-null>",
+            "  --expect-room-read-target <room_id>::<event-id-or-null>",
+            "  --expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>",
             "  --expect-room-activity <room_id>::<substring>",
             "  --expect-error <substring>",
             "  --expect-verification <flow_id>",
@@ -420,6 +480,88 @@ mod cli {
         })
     }
 
+    pub(crate) fn parse_room_tag_expectation(value: &str) -> Result<RoomTagExpectation, String> {
+        let parts: Vec<_> = value.split("::").collect();
+        if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+            return Err(format!(
+                "invalid --expect-room-tag value {value:?}; expected <room_id>::<tag>::<order-or-null>"
+            ));
+        }
+        Ok(RoomTagExpectation {
+            room_id: parts[0].to_owned(),
+            tag: parts[1].to_owned(),
+            order: parse_optional_null(parts[2]),
+        })
+    }
+
+    pub(crate) fn parse_room_read_target_expectation(
+        value: &str,
+    ) -> Result<RoomReadTargetExpectation, String> {
+        let parts: Vec<_> = value.split("::").collect();
+        if parts.len() != 2 || parts.iter().any(|part| part.is_empty()) {
+            return Err(format!(
+                "invalid --expect-room-read-target value {value:?}; expected <room_id>::<event-id-or-null>"
+            ));
+        }
+        Ok(RoomReadTargetExpectation {
+            room_id: parts[0].to_owned(),
+            read_target_event_id: parse_optional_null(parts[1]),
+        })
+    }
+
+    pub(crate) fn parse_room_unread_expectation(
+        value: &str,
+    ) -> Result<RoomUnreadExpectation, String> {
+        let parts: Vec<_> = value.split("::").collect();
+        if parts.len() != 5 || parts.iter().any(|part| part.is_empty()) {
+            return Err(format!(
+                "invalid --expect-room-unread value {value:?}; expected <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>"
+            ));
+        }
+
+        Ok(RoomUnreadExpectation {
+            room_id: parts[0].to_owned(),
+            num_unread: parts[1].parse::<u64>().map_err(|_| {
+                format!(
+                    "invalid --expect-room-unread num_unread {value:?}; expected u64"
+                )
+            })?,
+            num_notifications: parts[2].parse::<u64>().map_err(|_| {
+                format!(
+                    "invalid --expect-room-unread num_notifications {value:?}; expected u64"
+                )
+            })?,
+            num_mentions: parts[3].parse::<u64>().map_err(|_| {
+                format!(
+                    "invalid --expect-room-unread num_mentions {value:?}; expected u64"
+                )
+            })?,
+            marked_unread: parse_strict_bool_arg("--expect-room-unread", value, parts[4])?,
+        })
+    }
+
+    fn parse_optional_null(value: &str) -> Option<String> {
+        if value == "null" {
+            None
+        } else {
+            Some(value.to_owned())
+        }
+    }
+
+    fn parse_strict_bool_arg(
+        flag_name: &str,
+        full_value: &str,
+        value: &str,
+    ) -> Result<bool, String> {
+        match value {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(format!(
+                "invalid {flag_name} marked_unread {full_value:?}; expected true or false"
+            )),
+        }
+    }
+
     pub(crate) fn format_view_identity(identity: &ViewIdentity) -> String {
         match identity {
             ViewIdentity::Status => "status".to_owned(),
@@ -434,6 +576,7 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
+            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation,
             ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
             parse_view_identity_arg, usage,
         };
@@ -449,6 +592,14 @@ mod cli {
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains("--expect-view <identity>::<substring>"));
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
+            assert!(usage().contains("--expect-direct-room <room_id>"));
+            assert!(usage().contains("--expect-room-tag <room_id>::<tag>::<order-or-null>"));
+            assert!(
+                usage().contains("--expect-room-read-target <room_id>::<event-id-or-null>")
+            );
+            assert!(usage().contains(
+                "--expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>"
+            ));
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
         }
 
@@ -768,6 +919,198 @@ mod cli {
                 );
             }
         }
+
+        #[test]
+        fn parse_args_accepts_direct_room_expectation() {
+            let config = parse_args(
+                ["--expect-direct-room", "!direct:example"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(config.expect_direct_rooms, vec!["!direct:example".to_owned()]);
+        }
+
+        #[test]
+        fn parse_args_accepts_room_tag_with_string_order() {
+            let config = parse_args(
+                ["--expect-room-tag", "!direct:example::m.favourite::0.25"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_tags,
+                vec![RoomTagExpectation {
+                    room_id: "!direct:example".to_owned(),
+                    tag: "m.favourite".to_owned(),
+                    order: Some("0.25".to_owned()),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_room_tag_with_null_order() {
+            let config = parse_args(
+                ["--expect-room-tag", "!direct:example::u.work::null"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_tags,
+                vec![RoomTagExpectation {
+                    room_id: "!direct:example".to_owned(),
+                    tag: "u.work".to_owned(),
+                    order: None,
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_malformed_room_tag_expectation() {
+            let error = parse_args(
+                ["--expect-room-tag", "!direct:example::m.favourite"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert_eq!(
+                error,
+                "invalid --expect-room-tag value \"!direct:example::m.favourite\"; expected <room_id>::<tag>::<order-or-null>"
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_room_read_target_string() {
+            let config = parse_args(
+                ["--expect-room-read-target", "!alpha:example::$alpha-latest"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_read_targets,
+                vec![RoomReadTargetExpectation {
+                    room_id: "!alpha:example".to_owned(),
+                    read_target_event_id: Some("$alpha-latest".to_owned()),
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_room_read_target_null() {
+            let config = parse_args(
+                ["--expect-room-read-target", "!beta:example::null"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_read_targets,
+                vec![RoomReadTargetExpectation {
+                    room_id: "!beta:example".to_owned(),
+                    read_target_event_id: None,
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_malformed_room_read_target_expectation() {
+            let error = parse_args(
+                ["--expect-room-read-target", "!beta:example"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert_eq!(
+                error,
+                "invalid --expect-room-read-target value \"!beta:example\"; expected <room_id>::<event-id-or-null>"
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_room_unread_expectation() {
+            let config = parse_args(
+                ["--expect-room-unread", "!alpha:example::1::2::1::true"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_unreads,
+                vec![RoomUnreadExpectation {
+                    room_id: "!alpha:example".to_owned(),
+                    num_unread: 1,
+                    num_notifications: 2,
+                    num_mentions: 1,
+                    marked_unread: true,
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_room_unread_expectation_with_marked_unread_false() {
+            let config = parse_args(
+                ["--expect-room-unread", "!beta:example::4::0::0::false"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_unreads,
+                vec![RoomUnreadExpectation {
+                    room_id: "!beta:example".to_owned(),
+                    num_unread: 4,
+                    num_notifications: 0,
+                    num_mentions: 0,
+                    marked_unread: false,
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_malformed_room_unread_counter() {
+            let error = parse_args(
+                ["--expect-room-unread", "!alpha:example::x::2::1::true"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert_eq!(
+                error,
+                "invalid --expect-room-unread num_unread \"!alpha:example::x::2::1::true\"; expected u64"
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_invalid_room_unread_boolean() {
+            let error = parse_args(
+                ["--expect-room-unread", "!alpha:example::1::2::1::yes"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert_eq!(
+                error,
+                "invalid --expect-room-unread marked_unread \"!alpha:example::1::2::1::yes\"; expected true or false"
+            );
+        }
     }
 }
 
@@ -803,6 +1146,10 @@ mod windows_main {
                 || !self.expect_no_switchbar_activity.is_empty()
                 || !self.expect_navigation_texts.is_empty()
                 || !self.expect_no_navigation_texts.is_empty()
+                || !self.expect_direct_rooms.is_empty()
+                || !self.expect_room_tags.is_empty()
+                || !self.expect_room_read_targets.is_empty()
+                || !self.expect_room_unreads.is_empty()
         }
     }
 
@@ -1214,6 +1561,108 @@ mod windows_main {
                 }
                 println!("PASS navigation excludes {:?}", substring);
             }
+
+            for expected_room_id in &config.expect_direct_rooms {
+                let room = find_room_state(&ui_state, expected_room_id).ok_or_else(|| {
+                    format!("direct room assertion failed: missing room {expected_room_id}")
+                })?;
+                if !room.is_direct {
+                    return Err(format!(
+                        "direct room assertion failed: room {expected_room_id} is not direct"
+                    ));
+                }
+                println!("PASS direct room {expected_room_id}");
+            }
+
+            for expectation in &config.expect_room_tags {
+                let room = find_room_state(&ui_state, &expectation.room_id).ok_or_else(|| {
+                    format!(
+                        "room tag assertion failed: missing room {}",
+                        expectation.room_id
+                    )
+                })?;
+                let found = room
+                    .tags
+                    .iter()
+                    .any(|tag| tag.tag == expectation.tag && tag.order == expectation.order);
+                if !found {
+                    return Err(format!(
+                        "room tag assertion failed: room {} missing tag {} with order {:?}",
+                        expectation.room_id, expectation.tag, expectation.order
+                    ));
+                }
+                let order = expectation.order.as_deref().unwrap_or("null");
+                println!(
+                    "PASS room tag {} {} {}",
+                    expectation.room_id, expectation.tag, order
+                );
+            }
+
+            for expectation in &config.expect_room_read_targets {
+                let room = find_room_state(&ui_state, &expectation.room_id).ok_or_else(|| {
+                    format!(
+                        "room read target assertion failed: missing room {}",
+                        expectation.room_id
+                    )
+                })?;
+                if room.read_target_event_id != expectation.read_target_event_id {
+                    return Err(format!(
+                        "room read target assertion failed: room {} expected {:?}, found {:?}",
+                        expectation.room_id,
+                        expectation.read_target_event_id,
+                        room.read_target_event_id
+                    ));
+                }
+                let read_target = expectation
+                    .read_target_event_id
+                    .as_deref()
+                    .unwrap_or("null");
+                println!(
+                    "PASS room read target {} {}",
+                    expectation.room_id, read_target
+                );
+            }
+
+            for expectation in &config.expect_room_unreads {
+                let room = find_room_state(&ui_state, &expectation.room_id).ok_or_else(|| {
+                    format!(
+                        "room unread assertion failed: missing room {}",
+                        expectation.room_id
+                    )
+                })?;
+                let read_state = room.read_state.as_ref().ok_or_else(|| {
+                    format!(
+                        "room unread assertion failed: room {} has no read state",
+                        expectation.room_id
+                    )
+                })?;
+                if read_state.num_unread != expectation.num_unread
+                    || read_state.num_notifications != expectation.num_notifications
+                    || read_state.num_mentions != expectation.num_mentions
+                    || read_state.marked_unread != expectation.marked_unread
+                {
+                    return Err(format!(
+                        "room unread assertion failed: room {} expected unread={}, notifications={}, mentions={}, marked_unread={}, found unread={}, notifications={}, mentions={}, marked_unread={}",
+                        expectation.room_id,
+                        expectation.num_unread,
+                        expectation.num_notifications,
+                        expectation.num_mentions,
+                        expectation.marked_unread,
+                        read_state.num_unread,
+                        read_state.num_notifications,
+                        read_state.num_mentions,
+                        read_state.marked_unread
+                    ));
+                }
+                println!(
+                    "PASS room unread {} {} {} {} {}",
+                    expectation.room_id,
+                    expectation.num_unread,
+                    expectation.num_notifications,
+                    expectation.num_mentions,
+                    expectation.marked_unread
+                );
+            }
         }
 
         Ok(())
@@ -1225,6 +1674,13 @@ mod windows_main {
             .views
             .iter()
             .find(|view| &view.identity == identity)
+    }
+
+    fn find_room_state<'a>(
+        ui_state: &'a UiState,
+        room_id: &str,
+    ) -> Option<&'a mmatrix_testkit::UiRoomState> {
+        ui_state.rooms.iter().find(|room| room.room_id == room_id)
     }
 
     fn assert_view_contains(
