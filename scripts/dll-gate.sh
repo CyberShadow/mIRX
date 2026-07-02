@@ -2,8 +2,22 @@
 set -euo pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-exe_path=${1:-"$root_dir/target/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"}
 objdump_bin=${OBJDUMP:-x86_64-w64-mingw32-objdump}
+tmpdir=
+
+cleanup() {
+  if [[ -n "${tmpdir:-}" ]]; then
+    rm -rf "$tmpdir"
+  fi
+}
+
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-dll-gate.XXXXXX")
+  trap cleanup EXIT
+  export CARGO_TARGET_DIR="$tmpdir/cargo-target"
+fi
+
+exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"}
 
 cd "$root_dir"
 

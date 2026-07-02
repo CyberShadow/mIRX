@@ -2,14 +2,25 @@
 set -euo pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-exe_path=${1:-"$root_dir/target/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"}
+tmpdir=
+exe_path=
 
 die() {
   echo "wine-smoke: $*" >&2
   exit 1
 }
 
+cleanup() {
+  if [[ -n "${tmpdir:-}" ]]; then
+    rm -rf "$tmpdir"
+  fi
+}
+
 ensure_wineprefix() {
+  export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
+  export WINEARCH="${WINEARCH:-win64}"
+  export WINEDLLOVERRIDES=mscoree,mshtml=
+
   mkdir -p "$WINEPREFIX"
   if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
     wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
@@ -18,14 +29,20 @@ ensure_wineprefix() {
 
 cd "$root_dir"
 
-export WINEPREFIX="${WINEPREFIX:-$root_dir/.wine-mmatrix-smoke}"
-export WINEARCH="${WINEARCH:-win64}"
-export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-wine-smoke.XXXXXX")
+trap cleanup EXIT
+
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  export CARGO_TARGET_DIR="$tmpdir/cargo-target"
+fi
+
+exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"}
 
 ensure_wineprefix
 
 if command -v xvfb-run >/dev/null 2>&1; then
-  exec xvfb-run -a wine "$exe_path" --self-test
+  xvfb-run -a wine "$exe_path" --self-test
+  exit $?
 fi
 
-exec wine "$exe_path" --self-test
+wine "$exe_path" --self-test

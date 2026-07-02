@@ -115,9 +115,9 @@ ensure_xvfb() {
 }
 
 ensure_wineprefix() {
-  export WINEPREFIX="${WINEPREFIX:-$root_dir/.wine-mmatrix-tests}"
+  export WINEPREFIX="${WINEPREFIX:-$runner_tmpdir/wineprefix}"
   export WINEARCH="${WINEARCH:-win64}"
-  export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+  export WINEDLLOVERRIDES=mscoree,mshtml=
   export WINEDEBUG="${WINEDEBUG:--all}"
 
   mkdir -p "$WINEPREFIX"

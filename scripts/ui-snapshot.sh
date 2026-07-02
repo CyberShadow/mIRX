@@ -2,16 +2,16 @@
 set -euo pipefail
 
 root_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-target_dir="$root_dir/target/x86_64-pc-windows-gnu/debug"
-ui_exe="$target_dir/mmatrix-ui.exe"
-driver_exe="$target_dir/mmatrix-snapshot-driver.exe"
 states_dir="$root_dir/tests/ui-states"
-artifacts_dir="$root_dir/artifacts/ui-snapshots"
+baseline_dir="$root_dir/artifacts/ui-snapshots"
 
 started_xvfb=0
 xvfb_pid=
 tmpdir=
 app_pid=
+target_dir=
+ui_exe=
+driver_exe=
 generated_dir=
 diff_dir=
 keep_tmpdir=0
@@ -110,15 +110,22 @@ ensure_xvfb() {
 }
 
 ensure_wineprefix() {
-  export WINEPREFIX="${WINEPREFIX:-$root_dir/.wine-mmatrix-snapshots}"
-  export WINEARCH=win64
+  export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
+  export WINEARCH="${WINEARCH:-win64}"
   export WINEDLLOVERRIDES=mscoree,mshtml=
-  export WINEDEBUG=-all
+  export WINEDEBUG="${WINEDEBUG:--all}"
 
   mkdir -p "$WINEPREFIX"
   if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
     wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
   fi
+}
+
+resolve_binaries() {
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$tmpdir/cargo-target}"
+  target_dir="$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/debug"
+  ui_exe="$target_dir/mmatrix-ui.exe"
+  driver_exe="$target_dir/mmatrix-snapshot-driver.exe"
 }
 
 unix_to_wine_path() {
@@ -813,7 +820,7 @@ run_case() {
   local state_path_win
   local case_name=${state_path##*/}
   case_name=${case_name%.json}
-  local baseline_png="$artifacts_dir/$case_name.png"
+  local baseline_png="$baseline_dir/$case_name.png"
   local generated_png="$generated_dir/$case_name.png"
   local diff_png="$diff_dir/$case_name.diff.png"
   local driver_stdout="$tmpdir/$case_name.driver.stdout"
@@ -946,6 +953,7 @@ main() {
 
   cd "$root_dir"
   ensure_xvfb
+  resolve_binaries
   ensure_wineprefix
   ensure_binaries
 
