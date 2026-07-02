@@ -1,13 +1,16 @@
-use std::ffi::OsString;
-use std::path::PathBuf;
 use std::time::Duration;
+
+#[cfg(not(windows))]
+use std::ffi::OsString;
+#[cfg(not(windows))]
+use std::path::PathBuf;
 
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event as CoreEvent, RoomReadState,
 };
 use mmatrix_testkit::{
-    ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MmatrixApp, Model, NavigationNode,
+    ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource,
     RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
@@ -16,6 +19,9 @@ use mmatrix_testkit::{
     UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
     VerificationEmoji, VerificationState, ViewIdentity,
 };
+
+#[cfg(not(windows))]
+use mmatrix_testkit::MmatrixApp;
 
 fn stored_session() -> StoredSession {
     StoredSession {

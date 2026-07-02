@@ -947,6 +947,16 @@ mod windows_main {
                 .any(|child| navigation_contains(child, substring))
     }
 
+    pub(crate) fn main() -> ExitCode {
+        match run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::from(1)
+            }
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::{
@@ -1100,16 +1110,6 @@ mod windows_main {
                     "expected {:?} to be rejected",
                     args
                 );
-            }
-        }
-    }
-
-    pub(crate) fn main() -> ExitCode {
-        match run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
-                eprintln!("{message}");
-                ExitCode::from(1)
             }
         }
     }
