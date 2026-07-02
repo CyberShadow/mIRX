@@ -183,7 +183,8 @@ configure_case_expectations() {
   expect_verification=
   expect_verification_state=
   expect_active_view=
-  select_view=
+  select_views=()
+  append_events_path=
   expect_switchbar_active=
   verification_text_expect_args=()
 
@@ -287,7 +288,7 @@ configure_case_expectations() {
     thread-hierarchy)
       expect_selected='!ops:example'
       expect_active_view='thread:!ops:example|$thread-root'
-      select_view='thread:!ops:example|$thread-root'
+      select_views=('thread:!ops:example|$thread-root')
       room_expect_args=(
         --expect-room '!work:example'
         --expect-room '!ops:example'
@@ -827,6 +828,7 @@ run_case() {
   local driver_stderr="$tmpdir/$case_name.driver.stderr"
   local driver_status=0
   local driver_args=()
+  local append_events_path_win=
 
   configure_case_expectations "$case_name"
   cleanup_app
@@ -856,8 +858,15 @@ run_case() {
   if [[ -n "${expect_selected:-}" ]]; then
     driver_args+=(--expect-selected "$expect_selected")
   fi
-  if [[ -n "${select_view:-}" ]]; then
-    driver_args+=(--select-view "$select_view")
+  if [[ ${#select_views[@]} -gt 0 ]]; then
+    local select_view=
+    for select_view in "${select_views[@]}"; do
+      driver_args+=(--select-view "$select_view")
+    done
+  fi
+  if [[ -n "${append_events_path:-}" ]]; then
+    append_events_path_win=$(unix_to_wine_path "$append_events_path")
+    driver_args+=(--append-events "$append_events_path_win")
   fi
   if [[ -n "${expect_error:-}" ]]; then
     driver_args+=(--expect-error "$expect_error")

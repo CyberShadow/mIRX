@@ -4,10 +4,11 @@ fn main() {
     std::process::exit(1);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 mod windows_main {
     use std::collections::BTreeMap;
     use std::env;
+    use std::fs;
     use std::process::ExitCode;
     use std::time::Duration;
 
@@ -23,7 +24,8 @@ mod windows_main {
     struct Config {
         find_timeout: Duration,
         wait_idle: Duration,
-        select_view: Option<ViewIdentity>,
+        select_views: Vec<ViewIdentity>,
+        append_events: Option<String>,
         expect_selected: Option<String>,
         expect_rooms: Vec<String>,
         expect_room_activities: Vec<RoomActivityExpectation>,
@@ -99,11 +101,21 @@ mod windows_main {
         app.wait_idle(config.wait_idle)
             .map_err(|error| format!("WAIT_IDLE failed: {error}"))?;
 
-        if let Some(view) = config.select_view.as_ref() {
+        for view in &config.select_views {
             app.select_view(view.clone())
                 .map_err(|error| format!("SELECT_VIEW failed: {error}"))?;
             app.wait_idle(config.wait_idle)
                 .map_err(|error| format!("WAIT_IDLE after SELECT_VIEW failed: {error}"))?;
+        }
+
+        if let Some(path) = config.append_events.as_deref() {
+            let json_text = fs::read_to_string(path)
+                .map_err(|error| format!("failed to read append-events file {path:?}: {error}"))?;
+            app.append_synthetic_events(&json_text)
+                .map_err(|error| format!("APPEND_SYNTHETIC_EVENTS failed: {error}"))?;
+            app.wait_idle(config.wait_idle).map_err(|error| {
+                format!("WAIT_IDLE after APPEND_SYNTHETIC_EVENTS failed: {error}")
+            })?;
         }
 
         let model = app
@@ -526,7 +538,15 @@ mod windows_main {
                     let value = args
                         .next()
                         .ok_or_else(|| "missing value for --select-view".to_owned())?;
-                    config.select_view = Some(parse_view_identity_arg("--select-view", &value)?);
+                    config
+                        .select_views
+                        .push(parse_view_identity_arg("--select-view", &value)?);
+                }
+                "--append-events" => {
+                    config.append_events = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --append-events".to_owned())?,
+                    );
                 }
                 "--expect-selected" => {
                     config.expect_selected = Some(
@@ -756,7 +776,8 @@ mod windows_main {
             "usage: mmatrix-snapshot-driver [options]",
             "  --find-timeout-ms <ms>",
             "  --wait-idle-ms <ms>",
-            "  --select-view <identity>",
+            "  --select-view <identity> (repeatable)",
+            "  --append-events <path>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
             "  --expect-room-activity <room_id>::<substring>",
@@ -964,13 +985,15 @@ mod windows_main {
             parse_view_identity_arg, usage,
         };
         use mmatrix_testkit::ViewIdentity;
+        use std::time::Duration;
 
         #[test]
         fn usage_documents_thread_identity_format() {
             assert!(usage().contains(
                 "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
             ));
-            assert!(usage().contains("--select-view <identity>"));
+            assert!(usage().contains("--select-view <identity> (repeatable)"));
+            assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains("--expect-view <identity>::<substring>"));
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
@@ -1027,11 +1050,69 @@ mod windows_main {
             .unwrap();
 
             assert_eq!(
-                config.select_view,
-                Some(ViewIdentity::Thread {
+                config.select_views,
+                vec![ViewIdentity::Thread {
                     room_id: "!room:example".to_owned(),
                     thread_root_event_id: "$thread-root:example".to_owned(),
-                })
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_preserves_repeated_select_view_order() {
+            let config = parse_args(
+                [
+                    "--select-view",
+                    "room:!room:example",
+                    "--select-view",
+                    "thread:!room:example|$thread-root:example",
+                    "--select-view",
+                    "status",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.select_views,
+                vec![
+                    ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    },
+                    ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                    },
+                    ViewIdentity::Status,
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_append_events_path() {
+            let config = parse_args(
+                ["--append-events", "C:\\snapshots\\thread-update.json"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.append_events,
+                Some("C:\\snapshots\\thread-update.json".to_owned())
+            );
+            assert_eq!(config.find_timeout, Duration::from_secs(10));
+            assert_eq!(config.wait_idle, Duration::from_secs(5));
+        }
+
+        #[test]
+        fn parse_args_rejects_missing_append_events_value() {
+            assert_eq!(
+                parse_args(["--append-events"].into_iter().map(str::to_owned))
+                    .err()
+                    .unwrap(),
+                "missing value for --append-events"
             );
         }
 
