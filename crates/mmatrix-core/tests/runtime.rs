@@ -128,6 +128,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
             room_id: "!room:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
+            thread: None,
         }))
         .expect("send message");
     handle

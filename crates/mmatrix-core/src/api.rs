@@ -48,10 +48,17 @@ pub struct StoredSession {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendMessageThreadTarget {
+    pub thread_root_event_id: String,
+    pub latest_event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendMessageRequest {
     pub room_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
+    pub thread: Option<SendMessageThreadTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

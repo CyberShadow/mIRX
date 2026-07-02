@@ -26,12 +26,13 @@ use matrix_sdk::{
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
+            relation::Thread,
             room::{
                 ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{
-                    MessageType, OriginalSyncRoomMessageEvent, Relation as MessageRelation,
-                    RoomMessageEventContent,
+                    MessageType, OriginalSyncRoomMessageEvent, Relation as MessageContentRelation,
+                    Relation as MessageRelation, RoomMessageEventContent,
                 },
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
@@ -53,9 +54,9 @@ use crate::api::{
     RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
     RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -1500,6 +1501,25 @@ fn room_message_event_content(
     }
 }
 
+fn attach_thread_relation(
+    content: &mut RoomMessageEventContent,
+    thread: SendMessageThreadTarget,
+) -> Result<(), MatrixCoreError> {
+    let thread_root_event_id = <&EventId>::try_from(thread.thread_root_event_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
+        .to_owned();
+    let latest_event_id = <&EventId>::try_from(thread.latest_event_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
+        .to_owned();
+
+    content.relates_to = Some(MessageContentRelation::Thread(Thread::plain(
+        thread_root_event_id,
+        latest_event_id,
+    )));
+
+    Ok(())
+}
+
 pub(crate) async fn send_message(
     client: &Client,
     request: SendMessageRequest,
@@ -1512,7 +1532,10 @@ pub(crate) async fn send_message(
             MatrixCoreError::new(format!("joined room not found: {}", request.room_id))
         })?;
 
-    let content = room_message_event_content(request.presentation, request.body);
+    let mut content = room_message_event_content(request.presentation, request.body);
+    if let Some(thread) = request.thread {
+        attach_thread_relation(&mut content, thread)?;
+    }
 
     room.send_queue()
         .send(AnyMessageLikeEventContent::RoomMessage(content))
@@ -1570,9 +1593,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        cancelled_state, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
-        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string,
-        map_local_message_activity, map_send_queue_update,
+        attach_thread_relation, cancelled_state, map_cross_signing_status, map_decimals,
+        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_members_from_parts, room_message_event_content,
@@ -1586,8 +1609,8 @@ mod tests {
         RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
         RoomMemberSummary, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
         RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
-        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         encryption::{
@@ -2840,5 +2863,57 @@ mod tests {
         assert_eq!(text["msgtype"], "m.text");
         assert_eq!(notice["msgtype"], "m.notice");
         assert_eq!(emote["msgtype"], "m.emote");
+    }
+
+    #[test]
+    fn threaded_room_message_content_serializes_plain_thread_relation() {
+        let mut content =
+            room_message_event_content(RoomMessagePresentationKind::Text, "hello".to_owned());
+        attach_thread_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "$latest-thread:example.org".to_owned(),
+            },
+        )
+        .expect("attach thread relation");
+
+        let serialized = serde_json::to_value(content).expect("serialize threaded content");
+
+        assert_eq!(serialized["msgtype"], "m.text");
+        assert_eq!(serialized["body"], "hello");
+        assert_eq!(serialized["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(
+            serialized["m.relates_to"]["event_id"],
+            "$thread-root:example.org"
+        );
+        assert_eq!(
+            serialized["m.relates_to"]["m.in_reply_to"]["event_id"],
+            "$latest-thread:example.org"
+        );
+        assert_eq!(serialized["m.relates_to"]["is_falling_back"], true);
+    }
+
+    #[test]
+    fn unthreaded_room_message_content_omits_relation_for_all_presentations() {
+        let text = serde_json::to_value(room_message_event_content(
+            RoomMessagePresentationKind::Text,
+            "hello".to_owned(),
+        ))
+        .expect("serialize text content");
+        let notice = serde_json::to_value(room_message_event_content(
+            RoomMessagePresentationKind::Notice,
+            "heads up".to_owned(),
+        ))
+        .expect("serialize notice content");
+        let emote = serde_json::to_value(room_message_event_content(
+            RoomMessagePresentationKind::Emote,
+            "waves".to_owned(),
+        ))
+        .expect("serialize emote content");
+
+        assert!(text.get("m.relates_to").is_none());
+        assert!(notice.get("m.relates_to").is_none());
+        assert!(emote.get("m.relates_to").is_none());
     }
 }

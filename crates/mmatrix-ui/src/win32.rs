@@ -6172,6 +6172,7 @@ fn submit_compose_with_history_entry(
         room_id: room_id.clone(),
         presentation,
         body: send_body,
+        thread: None,
     });
     sender
         .send(command.clone())
@@ -10660,11 +10661,13 @@ mod tests {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    thread: None,
                 }),
                 Command::SendMessage(SendMessageRequest {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
+                    thread: None,
                 }),
             ]
         );
@@ -10700,6 +10703,7 @@ mod tests {
                 room_id: "!beta:example".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "/status".to_owned(),
+                thread: None,
             })]
         );
 
