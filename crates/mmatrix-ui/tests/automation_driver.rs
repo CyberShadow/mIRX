@@ -19,13 +19,14 @@ use mmatrix_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
-    ComposeKey, LaunchOptions, MdiView, MmatrixApp, NavigationNode, NavigationPathSegment, Room,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo,
-    RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild,
-    StoredSession, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    ComposeKey, LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp, NavigationNode,
+    NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild, StoredSession,
+    SubmittedMembershipCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError,
+    UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -4082,6 +4083,264 @@ fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
             .contains("unknown window target: Missing")
     );
     assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_join_records_submitted_membership_without_creating_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before = app.dump_ui_state()?;
+    assert_eq!(before.mdi.active, room_identity("!beta:example"));
+    assert!(app.dump_model()?.submitted_membership_commands.is_empty());
+
+    app.set_compose_text("/join #ops:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "join submitted: #ops:example.org");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Join,
+            target: "#ops:example.org".to_owned(),
+        }]
+    );
+    assert!(
+        model
+            .rooms
+            .iter()
+            .all(|room| room.room_id != "#ops:example.org")
+    );
+    assert!(
+        model
+            .rooms
+            .iter()
+            .all(|room| room.display_name != "#ops:example.org")
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert!(
+        ui_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("#ops:example.org"))
+    );
+    assert!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.title != "#ops:example.org")
+    );
+    assert!(!serde_json::to_string(&ui_state.navigation)?.contains("#ops:example.org"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_part_active_room_waits_for_synced_rooms_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before = app.dump_ui_state()?;
+    assert_eq!(before.mdi.active, room_identity("!beta:example"));
+
+    app.set_compose_text("/part")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "part submitted: !beta:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Leave,
+            target: "!beta:example".to_owned(),
+        }]
+    );
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
+        text_event(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_180_000,
+            "alpha after part",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let replaced_model = app.dump_model()?;
+    assert_eq!(
+        replaced_model
+            .rooms
+            .iter()
+            .map(|room| room.room_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["!alpha:example"]
+    );
+    let replaced_state = app.dump_ui_state()?;
+    assert_eq!(replaced_state.mdi.active, room_identity("!alpha:example"));
+    assert_active_switchbar_item(&replaced_state, &room_identity("!alpha:example"));
+    assert!(
+        replaced_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("!beta:example"))
+    );
+    assert!(
+        replaced_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!beta:example"))
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_part_from_status_reports_no_room_selected()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_status_view()?;
+
+    app.set_compose_text("/part")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "no room selected");
+    assert!(model.submitted_membership_commands.is_empty());
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    app.select_view(thread_view_identity.clone())?;
+
+    app.set_compose_text("/part")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "part submitted: !ops:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Leave,
+            target: "!ops:example".to_owned(),
+        }]
+    );
+    assert_eq!(app.dump_ui_state()?.mdi.active, thread_view_identity);
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
+        text_event(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_180_000,
+            "alpha after thread part",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let replaced_model = app.dump_model()?;
+    assert_eq!(
+        replaced_model
+            .rooms
+            .iter()
+            .map(|room| room.room_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["!alpha:example"]
+    );
+    let replaced_state = app.dump_ui_state()?;
+    assert_eq!(replaced_state.mdi.active, room_identity("!alpha:example"));
+    assert_active_switchbar_item(&replaced_state, &room_identity("!alpha:example"));
+    assert!(
+        replaced_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("!ops:example")
+                && view.identity != thread_identity("!ops:example", "$thread-root"))
+    );
+    assert!(
+        replaced_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!ops:example")
+                && item.identity != thread_identity("!ops:example", "$thread-root"))
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

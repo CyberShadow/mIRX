@@ -157,9 +157,25 @@ pub struct Model {
     pub e2ee_status: Option<E2eeStatus>,
     pub last_verification: Option<Verification>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedMembershipCommand {
+    pub action: MembershipCommandAction,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipCommandAction {
+    Join,
+    Leave,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

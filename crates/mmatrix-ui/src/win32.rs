@@ -78,10 +78,11 @@ use crate::{
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityResponse,
-        DumpRoomMessageActivityLine, DumpSubmittedVerificationAction, DumpVerificationActionKind,
-        FailureEnvelope, GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse,
-        MdiState, MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
+        DumpRoomActivityResponse, DumpRoomMessageActivityLine, DumpSubmittedMembershipCommand,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
         ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
         SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
@@ -3395,12 +3396,22 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.lifecycle_state = LifecycleState::Syncing;
         }
         Event::Error(error) => {
-            state.model.status = format!("error during {}", operation_name(error.operation));
+            if !preserves_membership_submission_status(&state.model.status, error.operation) {
+                state.model.status = format!("error during {}", operation_name(error.operation));
+            }
             state.model.lifecycle_state = LifecycleState::Error;
             state.model.last_error = Some(error);
         }
     }
     Ok(())
+}
+
+fn preserves_membership_submission_status(status: &str, operation: Operation) -> bool {
+    match operation {
+        Operation::JoinRoom => status.starts_with("join submitted: "),
+        Operation::LeaveRoom => status.starts_with("part submitted: "),
+        _ => false,
+    }
 }
 
 fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMessageSendState {
@@ -6487,7 +6498,6 @@ fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue join room command: {err}"))?;
-    #[cfg(test)]
     state.recorded_commands.push(command);
     Ok(format!("join submitted: {target}"))
 }
@@ -6507,7 +6517,6 @@ fn submit_part_slash_command(
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue leave room command: {err}"))?;
-    #[cfg(test)]
     state.recorded_commands.push(command);
     Ok(format!("part submitted: {room_id}"))
 }
@@ -6751,6 +6760,30 @@ unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: 
     }
 }
 
+fn dump_submitted_membership_command(command: &Command) -> Option<DumpSubmittedMembershipCommand> {
+    match command {
+        Command::JoinRoom(request) => Some(DumpSubmittedMembershipCommand {
+            action: DumpMembershipCommandAction::Join,
+            target: request.room_or_alias.clone(),
+        }),
+        Command::LeaveRoom(request) => Some(DumpSubmittedMembershipCommand {
+            action: DumpMembershipCommandAction::Leave,
+            target: request.room_id.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn submitted_membership_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedMembershipCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_membership_command)
+        .collect()
+}
+
 fn dump_submitted_verification_action(
     command: &Command,
 ) -> Option<DumpSubmittedVerificationAction> {
@@ -6793,6 +6826,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .last_verification
             .as_ref()
             .map(dump_verification_from_state_event),
+        submitted_membership_commands: submitted_membership_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
@@ -9250,6 +9284,52 @@ mod tests {
         assert_eq!(
             frame_status_text(&state.model),
             "error during send text | error: send text: message send failed"
+        );
+    }
+
+    #[test]
+    fn membership_submission_status_survives_matching_error_event() {
+        let mut state = test_state();
+        state.model.status = "join submitted: #ops:example.org".to_owned();
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::JoinRoom,
+                message: "join room requires an authenticated session".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.status, "join submitted: #ops:example.org");
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+        assert_eq!(
+            state.model.last_error,
+            Some(CoreErrorEvent {
+                operation: Operation::JoinRoom,
+                message: "join room requires an authenticated session".to_owned(),
+            })
+        );
+
+        state.model.status = "part submitted: !beta:example".to_owned();
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::LeaveRoom,
+                message: "leave room requires an authenticated session".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.status, "part submitted: !beta:example");
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+        assert_eq!(
+            state.model.last_error,
+            Some(CoreErrorEvent {
+                operation: Operation::LeaveRoom,
+                message: "leave room requires an authenticated session".to_owned(),
+            })
         );
     }
 

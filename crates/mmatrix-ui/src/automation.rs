@@ -713,9 +713,25 @@ pub(crate) struct DumpModel {
     pub(crate) e2ee_status: Option<E2eeStatus>,
     pub(crate) last_verification: Option<DumpVerification>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_membership_commands: Vec<DumpSubmittedMembershipCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedMembershipCommand {
+    pub(crate) action: DumpMembershipCommandAction,
+    pub(crate) target: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpMembershipCommandAction {
+    Join,
+    Leave,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2657,6 +2673,7 @@ mod tests {
                     last_activity: None,
                     e2ee_status: Some(sample_e2ee_status()),
                     last_verification: None,
+                    submitted_membership_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
@@ -3138,6 +3155,7 @@ mod tests {
             last_activity: None,
             e2ee_status: Some(sample_e2ee_status()),
             last_verification: None,
+            submitted_membership_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,
