@@ -17,13 +17,13 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, E2eeBackupState,
-    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomImageInfo, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget, StoredSession,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, JoinRoomRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
+    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
 };
 use serde::Serialize;
@@ -1079,6 +1079,8 @@ enum ComposeSubmission<'a> {
 enum LocalSlashCommand<'a> {
     Status,
     Window { target: &'a str },
+    Join { target: String },
+    Part { target: Option<String> },
     Clear,
     E2ee(E2eeSlashCommand),
     Verify { action: VerificationAction },
@@ -6115,6 +6117,16 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "window" => LocalSlashCommand::Invalid {
             feedback: "usage: /window <room-id-or-display-name>".to_owned(),
         },
+        "join" if !argument.is_empty() => LocalSlashCommand::Join {
+            target: argument.to_owned(),
+        },
+        "join" => LocalSlashCommand::Invalid {
+            feedback: "usage: /join <room-id-or-alias>".to_owned(),
+        },
+        "part" if argument.is_empty() => LocalSlashCommand::Part { target: None },
+        "part" => LocalSlashCommand::Part {
+            target: Some(argument.to_owned()),
+        },
         "clear" if argument.is_empty() => LocalSlashCommand::Clear,
         "clear" => LocalSlashCommand::Invalid {
             feedback: "usage: /clear".to_owned(),
@@ -6302,8 +6314,7 @@ unsafe fn execute_local_slash_command(
             set_local_command_status(hwnd, "status window active".to_owned())
         }
         LocalSlashCommand::Window { target } => {
-            let room_id = match resolve_window_command_target(&state_ref(hwnd).model.rooms, target)
-            {
+            let room_id = match resolve_room_command_target(&state_ref(hwnd).model.rooms, target) {
                 Ok(room_id) => room_id,
                 Err(WindowTargetError::Unknown) => {
                     return set_local_command_status(
@@ -6320,6 +6331,24 @@ unsafe fn execute_local_slash_command(
             };
             activate_view(hwnd, &ViewId::Room(room_id), None)?;
             set_local_command_status(hwnd, format!("window active: {target}"))
+        }
+        LocalSlashCommand::Join { target } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_join_slash_command(state, target)
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
+        LocalSlashCommand::Part { target } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_part_slash_command(state, target.as_deref())
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
         }
         LocalSlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
             ViewId::Room(room_id) => {
@@ -6408,7 +6437,7 @@ unsafe fn set_local_command_status(hwnd: HWND, message: String) -> Result<(), St
     Ok(())
 }
 
-fn resolve_window_command_target(
+fn resolve_room_command_target(
     rooms: &[RoomSummary],
     target: &str,
 ) -> Result<String, WindowTargetError> {
@@ -6426,6 +6455,61 @@ fn resolve_window_command_target(
         return Err(WindowTargetError::Ambiguous);
     }
     Ok(room.room_id.clone())
+}
+
+fn resolve_part_slash_command_room_id(
+    state: &WindowState,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let Some(target) = target else {
+        return match &state.active_view {
+            ViewId::Room(room_id) => Ok(room_id.clone()),
+            ViewId::Thread { room_id, .. } => Ok(room_id.clone()),
+            ViewId::Status => Err("no room selected".to_owned()),
+        };
+    };
+
+    match resolve_room_command_target(&state.model.rooms, target) {
+        Ok(room_id) => Ok(room_id),
+        Err(WindowTargetError::Unknown) => Err(format!("unknown part target: {target}")),
+        Err(WindowTargetError::Ambiguous) => Err(format!("ambiguous part target: {target}")),
+    }
+}
+
+fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<String, String> {
+    let command = Command::JoinRoom(JoinRoomRequest {
+        room_or_alias: target.clone(),
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue join room command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    Ok(format!("join submitted: {target}"))
+}
+
+fn submit_part_slash_command(
+    state: &mut WindowState,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let room_id = resolve_part_slash_command_room_id(state, target)?;
+    let command = Command::LeaveRoom(LeaveRoomRequest {
+        room_id: room_id.clone(),
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue leave room command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    Ok(format!("part submitted: {room_id}"))
 }
 
 unsafe fn navigate_compose_history(
@@ -7797,6 +7881,21 @@ mod tests {
             store_passphrase: "mmatrix-ui-win32-tests".to_owned(),
         })
         .expect("test core must start")
+    }
+
+    fn test_state_with_command_sender() -> (WindowState, CoreHandle) {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        (state, handle)
+    }
+
+    fn stop_test_core(handle: CoreHandle) {
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
     }
 
     #[test]
@@ -11138,7 +11237,43 @@ mod tests {
     }
 
     #[test]
-    fn resolve_window_command_target_accepts_room_id_and_unique_display_name() {
+    fn parse_slash_command_accepts_join_and_part_forms() {
+        assert_eq!(
+            parse_slash_command("/join #ops:example.org"),
+            LocalSlashCommand::Join {
+                target: "#ops:example.org".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/join !room:example.org"),
+            LocalSlashCommand::Join {
+                target: "!room:example.org".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/part"),
+            LocalSlashCommand::Part { target: None }
+        );
+        assert_eq!(
+            parse_slash_command("/part !room:example.org"),
+            LocalSlashCommand::Part {
+                target: Some("!room:example.org".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_slash_command_rejects_join_without_target() {
+        assert_eq!(
+            parse_slash_command("/join"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /join <room-id-or-alias>".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_room_command_target_accepts_room_id_and_unique_display_name() {
         let rooms = vec![
             room("!alpha:example", "Alpha", false),
             room("!beta:example", "Beta", false),
@@ -11146,17 +11281,17 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_window_command_target(&rooms, "!alpha:example"),
+            resolve_room_command_target(&rooms, "!alpha:example"),
             Ok("!alpha:example".to_owned())
         );
         assert_eq!(
-            resolve_window_command_target(&rooms, "Beta"),
+            resolve_room_command_target(&rooms, "Beta"),
             Ok("!beta:example".to_owned())
         );
     }
 
     #[test]
-    fn resolve_window_command_target_rejects_unknown_spaces_and_ambiguous_display_names() {
+    fn resolve_room_command_target_rejects_unknown_spaces_and_ambiguous_display_names() {
         let rooms = vec![
             space("!work:example", "Work"),
             room("!shared-one:example", "Shared", false),
@@ -11165,21 +11300,121 @@ mod tests {
         ];
 
         assert_eq!(
-            resolve_window_command_target(&rooms, "!work:example"),
+            resolve_room_command_target(&rooms, "!work:example"),
             Err(WindowTargetError::Unknown)
         );
         assert_eq!(
-            resolve_window_command_target(&rooms, "Work"),
+            resolve_room_command_target(&rooms, "Work"),
             Err(WindowTargetError::Unknown)
         );
         assert_eq!(
-            resolve_window_command_target(&rooms, "Missing"),
+            resolve_room_command_target(&rooms, "Missing"),
             Err(WindowTargetError::Unknown)
         );
         assert_eq!(
-            resolve_window_command_target(&rooms, "Shared"),
+            resolve_room_command_target(&rooms, "Shared"),
             Err(WindowTargetError::Ambiguous)
         );
+    }
+
+    #[test]
+    fn submit_join_slash_command_records_typed_join_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+
+        let status = submit_join_slash_command(&mut state, "#ops:example.org".to_owned()).unwrap();
+
+        assert_eq!(status, "join submitted: #ops:example.org");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::JoinRoom(JoinRoomRequest {
+                room_or_alias: "#ops:example.org".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_part_slash_command_from_active_room_records_typed_leave_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = room_view_id("!room:example");
+
+        let status = submit_part_slash_command(&mut state, None).unwrap();
+
+        assert_eq!(status, "part submitted: !room:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::LeaveRoom(LeaveRoomRequest {
+                room_id: "!room:example".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_part_slash_command_from_thread_targets_parent_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = thread_view_id("!room:example", "$thread-root");
+
+        let status = submit_part_slash_command(&mut state, None).unwrap();
+
+        assert_eq!(status, "part submitted: !room:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::LeaveRoom(LeaveRoomRequest {
+                room_id: "!room:example".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_part_slash_command_from_status_returns_no_room_selected() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_part_slash_command(&mut state, None),
+            Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_part_slash_command_resolves_explicit_room_target_like_window() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![
+            room("!alpha:example", "Alpha", false),
+            room("!beta:example", "Beta", false),
+        ];
+
+        let status = submit_part_slash_command(&mut state, Some("Beta")).unwrap();
+
+        assert_eq!(status, "part submitted: !beta:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::LeaveRoom(LeaveRoomRequest {
+                room_id: "!beta:example".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_part_slash_command_rejects_ambiguous_display_name_without_recording() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!shared-one:example", "Shared", false),
+            room("!shared-two:example", "Shared", false),
+        ];
+
+        assert_eq!(
+            submit_part_slash_command(&mut state, Some("Shared")),
+            Err("ambiguous part target: Shared".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
     }
 
     #[test]
