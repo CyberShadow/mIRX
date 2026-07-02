@@ -2470,7 +2470,10 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
                             vec![nav("Ops [e2ee]", vec![]), nav("Shared", vec![])],
                         ),
                         nav("Social", vec![nav("Shared", vec![]), nav("Random", vec![])],),
-                        nav("unspaced rooms: 1", vec![nav("Direct [e2ee]", vec![])]),
+                        nav(
+                            "unspaced rooms: 1",
+                            vec![nav("Direct [query: @alice:example] [e2ee]", vec![])],
+                        ),
                     ],
                 ),
             ],
@@ -2545,6 +2548,19 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             read_state: None,
         }
     );
+    assert_eq!(
+        find_view(&initial_state, &room_identity("!direct:example")).title,
+        "Direct [query: @alice:example] [e2ee]"
+    );
+    assert!(
+        find_view(&initial_state, &room_identity("!direct:example"))
+            .lines
+            .contains(&"Room: Direct [query: @alice:example] [e2ee] (!direct:example)".to_owned())
+    );
+    assert_eq!(
+        find_switchbar_item(&initial_state, &room_identity("!direct:example")).title,
+        "Direct [query: @alice:example] [e2ee]"
+    );
     assert_switchbar_activity(&initial_state, &room_identity("!ops:example"), false);
     assert_switchbar_activity(&initial_state, &room_identity("!shared:example"), true);
     assert_switchbar_activity(&initial_state, &room_identity("!random:example"), true);
@@ -2564,6 +2580,23 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert_eq!(
         app.dump_model()?.selected_room.as_deref(),
         Some("!ops:example")
+    );
+    assert!(navigation_contains(
+        &work_state.navigation,
+        "Direct [query: @alice:example] [e2ee]"
+    ));
+    assert_eq!(
+        find_view(&work_state, &room_identity("!direct:example")).title,
+        "Direct [query: @alice:example] [e2ee]"
+    );
+    assert!(
+        find_view(&work_state, &room_identity("!direct:example"))
+            .lines
+            .contains(&"Room: Direct [query: @alice:example] [e2ee] (!direct:example)".to_owned())
+    );
+    assert_eq!(
+        find_switchbar_item(&work_state, &room_identity("!direct:example")).title,
+        "Direct [query: @alice:example] [e2ee]"
     );
 
     app.select_navigation_labels(&["mmatrix", "rooms: 4", "Social", "Shared"])?;

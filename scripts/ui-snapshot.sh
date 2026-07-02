@@ -252,6 +252,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
+        --expect-room-view '!direct:example::Room: Direct [query: @alice:example] [e2ee] (!direct:example)'
       )
       room_direct_expect_args=(
         --expect-direct-room '!direct:example'
@@ -265,7 +266,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!ops:example::Ops'
         --expect-switchbar-item 'room:!shared:example::Shared'
         --expect-switchbar-item 'room:!random:example::Random'
-        --expect-switchbar-item 'room:!direct:example::Direct'
+        --expect-switchbar-item 'room:!direct:example::Direct [query: @alice:example] [e2ee]'
       )
       switchbar_no_item_expect_args=(
         --expect-no-switchbar-item 'room:!work:example'
@@ -288,7 +289,7 @@ configure_case_expectations() {
         --expect-navigation-text 'Ops [e2ee]'
         --expect-navigation-text 'Shared'
         --expect-navigation-text 'Random'
-        --expect-navigation-text 'Direct [e2ee]'
+        --expect-navigation-text 'Direct [query: @alice:example] [e2ee]'
       )
       navigation_forbid_args=(
         --expect-no-navigation-text 'ops workspace is ready'

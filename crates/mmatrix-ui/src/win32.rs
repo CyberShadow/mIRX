@@ -3433,11 +3433,24 @@ fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMes
     }
 }
 
+fn append_room_label_markers(label: &mut String, room: &RoomSummary) {
+    if room.is_direct {
+        if room.direct_user_ids.is_empty() {
+            label.push_str(" [query]");
+        } else {
+            label.push_str(" [query: ");
+            label.push_str(&room.direct_user_ids.join(", "));
+            label.push(']');
+        }
+    }
+    if room.encrypted {
+        label.push_str(" [e2ee]");
+    }
+}
+
 fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
     let mut header = format!("Room: {}", room.display_name);
-    if room.encrypted {
-        header.push_str(" [e2ee]");
-    }
+    append_room_label_markers(&mut header, room);
     header.push_str(&format!(" ({})", room.room_id));
     TimelineRow {
         kind: TimelineRowKind::Header,
@@ -3880,9 +3893,7 @@ fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
 
 fn room_tree_label(room: &RoomSummary) -> String {
     let mut label = room.display_name.clone();
-    if room.encrypted {
-        label.push_str(" [e2ee]");
-    }
+    append_room_label_markers(&mut label, room);
     label
 }
 
@@ -9070,6 +9081,61 @@ mod tests {
     }
 
     #[test]
+    fn room_tree_label_marks_direct_rooms_as_queries_before_e2ee() {
+        let mut direct_room = room("!direct:example", "Direct", true);
+        direct_room.is_direct = true;
+        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+
+        assert_eq!(
+            room_tree_label(&direct_room),
+            "Direct [query: @alice:example] [e2ee]"
+        );
+    }
+
+    #[test]
+    fn room_tree_label_uses_query_fallback_for_direct_rooms_without_user_ids() {
+        let mut direct_room = room("!direct:example", "Direct", true);
+        direct_room.is_direct = true;
+
+        assert_eq!(room_tree_label(&direct_room), "Direct [query] [e2ee]");
+    }
+
+    #[test]
+    fn room_tree_label_ignores_direct_user_ids_when_room_is_not_direct() {
+        let mut room = room("!ops:example", "Ops", true);
+        room.direct_user_ids = vec!["@alice:example".to_owned()];
+
+        assert_eq!(room_tree_label(&room), "Ops [e2ee]");
+    }
+
+    #[test]
+    fn render_room_lines_include_query_marker_for_direct_rooms() {
+        let mut state = test_state();
+        let mut direct_room = room("!direct:example", "Direct", true);
+        direct_room.is_direct = true;
+        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+        state.model.rooms = vec![direct_room];
+
+        assert_eq!(
+            render_room_lines(&state.model, "!direct:example"),
+            vec!["Room: Direct [query: @alice:example] [e2ee] (!direct:example)".to_owned()]
+        );
+    }
+
+    #[test]
+    fn render_room_lines_use_query_fallback_for_direct_rooms_without_user_ids() {
+        let mut state = test_state();
+        let mut direct_room = room("!direct:example", "Direct", true);
+        direct_room.is_direct = true;
+        state.model.rooms = vec![direct_room];
+
+        assert_eq!(
+            render_room_lines(&state.model, "!direct:example"),
+            vec!["Room: Direct [query] [e2ee] (!direct:example)".to_owned()]
+        );
+    }
+
+    #[test]
     fn render_room_lines_include_unsupported_message_placeholder() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -10235,7 +10301,10 @@ mod tests {
     #[test]
     fn switchbar_button_text_keeps_plain_titles_for_exact_view_identity() {
         let mut state = test_state();
-        state.model.rooms = vec![room("!room:example", "Room", true)];
+        let mut direct_room = room("!room:example", "Room", true);
+        direct_room.is_direct = true;
+        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+        state.model.rooms = vec![direct_room];
         state.room_activity.insert(room_view_id("!room:example"));
         state.model.room_views.insert(
             "!room:example".to_owned(),
@@ -10254,8 +10323,12 @@ mod tests {
             .insert(thread_view_id("!room:example", "$thread-root"));
 
         assert_eq!(
+            view_title(&state.model, &room_view_id("!room:example")),
+            "Room [query: @alice:example] [e2ee]"
+        );
+        assert_eq!(
             switchbar_button_text(&state, &room_view_id("!room:example")),
-            "Room [e2ee]"
+            "Room [query: @alice:example] [e2ee]"
         );
         assert_eq!(
             switchbar_button_text(&state, &thread_view_id("!room:example", "$thread-root")),
