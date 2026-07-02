@@ -2595,6 +2595,24 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
                 }),
                 "thread rep",
             ),
+            RoomActivity {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "txn:thread-pending-1".to_owned(),
+                timestamp_ms: 1_700_000_240_000,
+                relation: Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$thread-1".to_owned()),
+                    is_falling_back: false,
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("thread-pending-1".to_owned()),
+                    sender: "@alice:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "pending threaded draft".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            },
         ]
     );
 
@@ -2618,6 +2636,7 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
     assert!(view_contains(parent_view, "root msg"));
     assert!(view_contains(parent_view, "plain"));
     assert!(view_contains(parent_view, "thread rep"));
+    assert!(view_contains(parent_view, "pending threaded draft"));
 
     app.select_navigation_path(&thread_path)?;
     assert_eq!(app.selected_navigation_path()?, thread_path);
@@ -2643,6 +2662,7 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
     let thread_view = find_view(&thread_state, &thread_view_identity);
     assert!(view_contains(thread_view, "root msg"));
     assert!(view_contains(thread_view, "thread rep"));
+    assert!(view_contains(thread_view, "pending threaded draft"));
     assert!(!view_contains(thread_view, "lobby"));
     assert!(!view_contains(thread_view, "plain"));
 
@@ -2656,6 +2676,114 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
         find_view(&reactivated_room_state, &room_identity("!ops:example")).lines,
         parent_lines
     );
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_send_text_target_none_uses_active_thread_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    app.select_view(thread_view_identity.clone())?;
+    let thread_state = app.dump_ui_state()?;
+    assert_eq!(thread_state.mdi.active, thread_view_identity);
+    assert_switchbar_activity(&thread_state, &room_identity("!ops:example"), false);
+    assert_switchbar_activity(&thread_state, &thread_view_identity, false);
+
+    assert_eq!(
+        app.send_text_target(None, "queued threaded automation send")?,
+        "!ops:example"
+    );
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+
+    let post_send_state = app.dump_ui_state()?;
+    assert_eq!(post_send_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&post_send_state, &thread_view_identity);
+    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), false);
+    assert_switchbar_activity(&post_send_state, &thread_view_identity, false);
+    let thread_view = find_view(&post_send_state, &thread_view_identity);
+    assert!(view_contains(thread_view, "root msg"));
+    assert!(view_contains(thread_view, "thread rep"));
+    assert!(view_contains(thread_view, "pending threaded draft"));
+    assert!(!view_contains(thread_view, "lobby"));
+    assert!(!view_contains(thread_view, "plain"));
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_thread_me_submission_preserves_active_thread_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    app.select_view(thread_view_identity.clone())?;
+
+    app.set_compose_text("/me waves")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+
+    let post_send_state = app.dump_ui_state()?;
+    assert_eq!(post_send_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&post_send_state, &thread_view_identity);
+    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), false);
+    assert_switchbar_activity(&post_send_state, &thread_view_identity, false);
+    let thread_view = find_view(&post_send_state, &thread_view_identity);
+    assert!(view_contains(thread_view, "root msg"));
+    assert!(view_contains(thread_view, "thread rep"));
+    assert!(view_contains(thread_view, "pending threaded draft"));
+    assert!(!view_contains(thread_view, "lobby"));
+    assert!(!view_contains(thread_view, "plain"));
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "/me waves");
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    app.select_view(thread_view_identity.clone())?;
+
+    assert_eq!(
+        app.send_text_target(Some("!ops:example"), "explicit parent room send")?,
+        "!ops:example"
+    );
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+
+    let post_send_state = app.dump_ui_state()?;
+    assert_eq!(post_send_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&post_send_state, &thread_view_identity);
+    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), false);
+    assert_switchbar_activity(&post_send_state, &thread_view_identity, false);
 
     Ok(())
 }

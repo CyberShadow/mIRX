@@ -288,15 +288,18 @@ configure_case_expectations() {
       room_activity_expect_args=(
         --expect-room-activity '!ops:example::"type":"thread"'
         --expect-room-activity '!ops:example::$thread-root'
+        --expect-room-activity '!ops:example::pending threaded draft'
       )
       room_view_expect_args=(
         --expect-room-view '!ops:example::lobby'
         --expect-room-view '!ops:example::root msg'
         --expect-room-view '!ops:example::thread rep'
+        --expect-room-view '!ops:example::pending threaded draft'
       )
       view_expect_args=(
         --expect-view 'thread:!ops:example|$thread-root::root msg'
         --expect-view 'thread:!ops:example|$thread-root::thread rep'
+        --expect-view 'thread:!ops:example|$thread-root::pending threaded draft'
       )
       view_forbid_args=(
         --expect-no-view 'thread:!ops:example|$thread-root::lobby'

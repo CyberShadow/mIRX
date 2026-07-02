@@ -107,5 +107,29 @@
         }
       }
     }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "txn:thread-pending-1",
+      "timestamp_ms": 1700000240000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$thread-root",
+        "in_reply_to_event_id": "$thread-1",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": null,
+        "transaction_id": "thread-pending-1",
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "pending threaded draft",
+        "send_state": {
+          "state": "pending"
+        }
+      }
+    }
   }
 ]
