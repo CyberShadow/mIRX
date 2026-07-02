@@ -790,7 +790,7 @@ configure_case_expectations() {
         --expect-room '!alpha:example'
       )
       room_read_target_expect_args=(
-        --expect-room-read-target '!alpha:example::$alpha-latest'
+        --expect-room-read-target '!alpha:example::null'
         --expect-room-read-target '!beta:example::null'
       )
       room_unread_expect_args=(
