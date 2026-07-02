@@ -1446,6 +1446,13 @@ fn outgoing_events_from_local_echo_event(
     Ok(events)
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LocalEchoMessageDetails {
+    presentation: RoomMessagePresentationKind,
+    body: String,
+    relation: Option<RoomActivityRelation>,
+}
+
 fn map_local_message_activity(
     room_id: String,
     transaction_id: String,
@@ -1453,8 +1460,11 @@ fn map_local_message_activity(
     created_at: MilliSecondsSinceUnixEpoch,
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
-    let Some((presentation, body)) =
-        message_presentation_and_body_from_serialized_event(serialized_event)?
+    let Some(LocalEchoMessageDetails {
+        presentation,
+        body,
+        relation,
+    }) = message_presentation_and_body_from_serialized_event(serialized_event)?
     else {
         return Ok(None);
     };
@@ -1463,7 +1473,7 @@ fn map_local_message_activity(
         room_id,
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms: created_at.get().into(),
-        relation: None,
+        relation,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id),
@@ -1477,7 +1487,7 @@ fn map_local_message_activity(
 
 fn message_presentation_and_body_from_serialized_event(
     serialized_event: &SerializableEventContent,
-) -> Result<Option<(RoomMessagePresentationKind, String)>, MatrixCoreError> {
+) -> Result<Option<LocalEchoMessageDetails>, MatrixCoreError> {
     let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
         .deserialize()
         .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
@@ -1485,9 +1495,29 @@ fn message_presentation_and_body_from_serialized_event(
         return Ok(None);
     };
 
-    Ok(room_message_presentation_and_body_from_message_type(
-        &content.msgtype,
-    ))
+    let Some((presentation, body)) =
+        room_message_presentation_and_body_from_message_type(&content.msgtype)
+    else {
+        return Ok(None);
+    };
+
+    let relation = match content.relates_to.as_ref() {
+        Some(MessageContentRelation::Thread(thread)) => Some(RoomActivityRelation::Thread {
+            thread_root_event_id: thread.event_id.to_string(),
+            in_reply_to_event_id: thread
+                .in_reply_to
+                .as_ref()
+                .map(|in_reply_to| in_reply_to.event_id.to_string()),
+            is_falling_back: thread.is_falling_back,
+        }),
+        _ => None,
+    };
+
+    Ok(Some(LocalEchoMessageDetails {
+        presentation,
+        body,
+        relation,
+    }))
 }
 
 fn room_message_event_content(
@@ -1593,8 +1623,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        attach_thread_relation, cancelled_state, map_cross_signing_status, map_decimals,
-        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        LocalEchoMessageDetails, attach_thread_relation, cancelled_state, map_cross_signing_status,
+        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
         map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
@@ -2673,6 +2703,85 @@ mod tests {
     }
 
     #[test]
+    fn threaded_local_echo_message_extracts_thread_relation() {
+        let mut content = RoomMessageEventContent::text_plain("hello from thread");
+        attach_thread_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "$thread-1:example.org".to_owned(),
+            },
+        )
+        .expect("attach thread relation");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize threaded text event");
+
+        assert_eq!(
+            message_presentation_and_body_from_serialized_event(&serialized_event)
+                .expect("read local echo body"),
+            Some(LocalEchoMessageDetails {
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello from thread".to_owned(),
+                relation: Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root:example.org".to_owned(),
+                    in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
+                    is_falling_back: true,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn local_threaded_queue_mapping_preserves_thread_relation() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let mut content = RoomMessageEventContent::text_plain("hello from thread");
+        attach_thread_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "$thread-1:example.org".to_owned(),
+            },
+        )
+        .expect("attach thread relation");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize threaded text event");
+
+        let activity = map_local_message_activity(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+        )
+        .expect("map local threaded text")
+        .expect("threaded text local echo");
+
+        assert_eq!(
+            activity,
+            RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                relation: Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root:example.org".to_owned(),
+                    in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
+                    is_falling_back: true,
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello from thread".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            }
+        );
+    }
+
+    #[test]
     fn unsupported_local_echo_message_is_ignored() {
         let serialized_event =
             SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(
@@ -2749,6 +2858,55 @@ mod tests {
                     sender: "@alice:example.org".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            }))]
+        );
+    }
+
+    #[test]
+    fn restored_threaded_local_echo_hydrates_to_pending_room_activity() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let mut content = RoomMessageEventContent::text_plain("hello from thread");
+        attach_thread_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "$thread-1:example.org".to_owned(),
+            },
+        )
+        .expect("attach thread relation");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize threaded text event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+            None,
+        )
+        .expect("map restored local echo");
+
+        assert_eq!(
+            events,
+            vec![Event::RoomActivity(Box::new(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                relation: Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root:example.org".to_owned(),
+                    in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
+                    is_falling_back: true,
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello from thread".to_owned(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }))]
