@@ -292,7 +292,10 @@ pub(crate) async fn join_room(client: &Client, room_or_alias: &str) -> Result<()
     Ok(())
 }
 
-pub(crate) async fn leave_joined_room(client: &Client, room_id: &str) -> Result<(), MatrixCoreError> {
+pub(crate) async fn leave_joined_room(
+    client: &Client,
+    room_id: &str,
+) -> Result<(), MatrixCoreError> {
     let room_id = <&RoomId>::try_from(room_id)
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
 
@@ -313,7 +316,10 @@ pub(crate) async fn emit_joined_room_snapshot(
     client: &Client,
     event_tx: &EventSender,
 ) -> Result<(), MatrixCoreError> {
-    emit_event(event_tx, Event::SyncedRooms(summarize_joined_rooms(client).await?));
+    emit_event(
+        event_tx,
+        Event::SyncedRooms(summarize_joined_rooms(client).await?),
+    );
     Ok(())
 }
 
@@ -1709,8 +1715,8 @@ mod tests {
         map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_members_from_parts, room_message_event_content,
-        room_list_update_is_relevant, room_read_state_from_parts, room_read_update_is_relevant,
+        room_activity_from_sync_topic, room_list_update_is_relevant, room_members_from_parts,
+        room_message_event_content, room_read_state_from_parts, room_read_update_is_relevant,
         room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
         verification_flow_id_from_to_device, verification_request_from_to_device,
         verification_requested_state_event,
