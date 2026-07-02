@@ -1,0 +1,135 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!work:example",
+        "display_name": "Work",
+        "encrypted": false,
+        "is_space": true,
+        "space_children": [
+          {
+            "room_id": "!ops:example",
+            "suggested": true,
+            "order": "a"
+          }
+        ]
+      },
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "encrypted": false,
+        "is_space": false,
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-room-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-room-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "lobby",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$thread-root",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$thread-root",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "root msg",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$reply-1",
+      "timestamp_ms": 1700000120000,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$ops-room-1"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$reply-1",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "presentation": "text",
+        "body": "plain",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$thread-1",
+      "timestamp_ms": 1700000180000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$thread-root",
+        "in_reply_to_event_id": "$thread-root",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$thread-1",
+        "transaction_id": null,
+        "sender": "@dave:example",
+        "presentation": "text",
+        "body": "thread rep",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "txn:thread-pending-1",
+      "timestamp_ms": 1700000240000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$thread-root",
+        "in_reply_to_event_id": "$thread-1",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": null,
+        "transaction_id": "thread-pending-1",
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "pending threaded draft",
+        "send_state": {
+          "state": "pending"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$thread-activity-2",
+      "timestamp_ms": 1700000300000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$thread-root",
+        "in_reply_to_event_id": "$thread-1",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$thread-activity-2",
+        "transaction_id": null,
+        "sender": "@erin:example",
+        "presentation": "text",
+        "body": "fresh thread activity",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

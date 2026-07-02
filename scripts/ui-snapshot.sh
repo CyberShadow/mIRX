@@ -336,6 +336,59 @@ configure_case_expectations() {
         --expect-no-navigation-text 'plain'
       )
       ;;
+    thread-activity-indicators)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      select_views=('thread:!ops:example|$thread-root' 'room:!ops:example')
+      append_events_path="$root_dir/tests/ui-state-updates/thread-activity-indicators.json"
+      room_expect_args=(
+        --expect-room '!work:example'
+        --expect-room '!ops:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!ops:example::"type":"thread"'
+        --expect-room-activity '!ops:example::$thread-root'
+        --expect-room-activity '!ops:example::fresh thread activity'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::lobby'
+        --expect-room-view '!ops:example::root msg'
+        --expect-room-view '!ops:example::thread rep'
+        --expect-room-view '!ops:example::fresh thread activity'
+      )
+      view_expect_args=(
+        --expect-view 'thread:!ops:example|$thread-root::root msg'
+        --expect-view 'thread:!ops:example|$thread-root::thread rep'
+        --expect-view 'thread:!ops:example|$thread-root::fresh thread activity'
+      )
+      view_forbid_args=(
+        --expect-no-view 'thread:!ops:example|$thread-root::lobby'
+        --expect-no-view 'thread:!ops:example|$thread-root::plain'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'thread:!ops:example|$thread-root::root msg'
+      )
+      switchbar_no_item_expect_args=(
+        --expect-no-switchbar-item 'room:!work:example'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'thread:!ops:example|$thread-root'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ops:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'Ops'
+        --expect-navigation-text 'root msg'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'plain'
+      )
+      ;;
     verification-error)
       expect_selected='!verify:example'
       expect_active_view='room:!verify:example'
@@ -761,7 +814,7 @@ configure_case_expectations() {
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!alpha:example.org::Alpha'
-        --expect-switchbar-item 'room:!media:example.org::* Media'
+        --expect-switchbar-item 'room:!media:example.org::Media'
       )
       switchbar_activity_expect_args=(
         --expect-switchbar-activity 'room:!media:example.org'
