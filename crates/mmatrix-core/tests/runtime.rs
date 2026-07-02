@@ -7,10 +7,10 @@ use mmatrix_core::{
     RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -600,6 +600,9 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             display_name: "Space".to_owned(),
             encrypted: false,
             is_space: true,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: vec![
                 SpaceChildSummary {
                     room_id: "!alpha:example.org".to_owned(),
@@ -618,6 +621,9 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             display_name: "Alpha".to_owned(),
             encrypted: true,
             is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: Vec::new(),
         },
         RoomSummary {
@@ -625,6 +631,9 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             display_name: "Beta".to_owned(),
             encrypted: false,
             is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: Vec::new(),
         },
         RoomSummary {
@@ -632,6 +641,9 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
             display_name: "Lobby".to_owned(),
             encrypted: false,
             is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: Vec::new(),
         },
     ]);
@@ -639,7 +651,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
     let json = serde_json::to_string(&event).expect("serialize synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}]},{"room_id":"!alpha:example.org","display_name":"Alpha","encrypted":true,"is_space":false,"space_children":[]},{"room_id":"!beta:example.org","display_name":"Beta","encrypted":false,"is_space":false,"space_children":[]},{"room_id":"!lobby:example.org","display_name":"Lobby","encrypted":false,"is_space":false,"space_children":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}]},{"room_id":"!alpha:example.org","display_name":"Alpha","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]},{"room_id":"!beta:example.org","display_name":"Beta","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]},{"room_id":"!lobby:example.org","display_name":"Lobby","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");
@@ -649,18 +661,18 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
 #[test]
 fn room_summary_and_space_child_reject_unknown_fields() {
     let room_error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"space_children":[],"unexpected":true}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}"#,
     )
     .expect_err("room summary must reject unknown fields");
     assert!(
         room_error
             .to_string()
-            .contains("unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`, `is_space`, `space_children`"),
+            .contains("unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"),
         "unexpected room summary error: {room_error}"
     );
 
     let child_error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}]}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}]}]}"#,
     )
     .expect_err("space child summary must reject unknown fields");
     assert!(
@@ -678,16 +690,51 @@ fn flat_room_summary_payload_round_trips_with_explicit_space_defaults() {
         display_name: "Ops".to_owned(),
         encrypted: true,
         is_space: false,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
         space_children: Vec::new(),
     }]);
 
     let json = serde_json::to_string(&event).expect("serialize flat synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","encrypted":true,"is_space":false,"space_children":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize flat synced rooms");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn synced_rooms_event_round_trips_account_data_metadata_payload() {
+    let event = Event::SyncedRooms(vec![RoomSummary {
+        room_id: "!dm:example.org".to_owned(),
+        display_name: "Alice".to_owned(),
+        encrypted: true,
+        is_space: false,
+        is_direct: true,
+        direct_user_ids: vec!["@alice:example.org".to_owned()],
+        tags: vec![
+            RoomTagSummary {
+                tag: "m.favourite".to_owned(),
+                order: Some("0.25".to_owned()),
+            },
+            RoomTagSummary {
+                tag: "u.work".to_owned(),
+                order: None,
+            },
+        ],
+        space_children: Vec::new(),
+    }]);
+
+    let json = serde_json::to_string(&event).expect("serialize synced rooms");
+    assert_eq!(
+        json,
+        r#"{"SyncedRooms":[{"room_id":"!dm:example.org","display_name":"Alice","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example.org"],"tags":[{"tag":"m.favourite","order":"0.25"},{"tag":"u.work","order":null}],"space_children":[]}]}"#
+    );
+
+    let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");
     assert_eq!(restored, event);
 }
 

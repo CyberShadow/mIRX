@@ -106,11 +106,21 @@ pub struct SpaceChildSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomTagSummary {
+    pub tag: String,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomSummary {
     pub room_id: String,
     pub display_name: String,
     pub encrypted: bool,
     pub is_space: bool,
+    pub is_direct: bool,
+    pub direct_user_ids: Vec<String>,
+    pub tags: Vec<RoomTagSummary>,
     pub space_children: Vec<SpaceChildSummary>,
 }
 

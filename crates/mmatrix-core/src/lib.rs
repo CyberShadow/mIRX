@@ -13,10 +13,10 @@ pub use api::{
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
     RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
+    SendMessageThreadTarget, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

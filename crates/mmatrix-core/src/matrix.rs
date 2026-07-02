@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
@@ -23,6 +23,7 @@ use matrix_sdk::{
         EventId, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId, RoomId, RoomOrAliasId,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
+            direct::{DirectEvent, DirectEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
@@ -37,6 +38,7 @@ use matrix_sdk::{
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
             space::child::{SpaceChildEventContent, SpaceChildOrd},
+            tag::{TagEvent, TagEventContent, Tags},
             typing::SyncTypingEvent,
         },
     },
@@ -53,8 +55,8 @@ use crate::api::{
     RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
     RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomTyping, SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
     UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
@@ -244,9 +246,57 @@ pub(crate) async fn recover_e2ee(
     summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await
 }
 
+fn direct_user_ids_by_room_from_content(
+    content: Option<&DirectEventContent>,
+) -> BTreeMap<String, Vec<String>> {
+    let Some(content) = content else {
+        return BTreeMap::new();
+    };
+
+    let mut direct_user_ids_by_room = BTreeMap::new();
+    for (direct_user_id, room_ids) in content.iter() {
+        for room_id in room_ids {
+            direct_user_ids_by_room
+                .entry(room_id.to_string())
+                .or_insert_with(Vec::new)
+                .push(direct_user_id.to_string());
+        }
+    }
+
+    for direct_user_ids in direct_user_ids_by_room.values_mut() {
+        direct_user_ids.sort();
+        direct_user_ids.dedup();
+    }
+
+    direct_user_ids_by_room
+}
+
+fn room_tag_summaries_from_tags(tags: Option<Tags>) -> Vec<RoomTagSummary> {
+    tags.unwrap_or_default()
+        .into_iter()
+        .map(|(tag, info)| RoomTagSummary {
+            tag: tag.to_string(),
+            order: info.order.map(|order| order.to_string()),
+        })
+        .collect()
+}
+
 pub(crate) async fn summarize_joined_rooms(
     client: &Client,
 ) -> Result<Vec<RoomSummary>, MatrixCoreError> {
+    let direct_content = client
+        .account()
+        .account_data::<DirectEventContent>()
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to read direct-room account data: {err}"))
+        })?
+        .map(|event| event.deserialize())
+        .transpose()
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to decode direct-room account data: {err}"))
+        })?;
+    let direct_user_ids_by_room = direct_user_ids_by_room_from_content(direct_content.as_ref());
     let joined_rooms = client.joined_rooms();
     let joined_room_ids = joined_rooms
         .iter()
@@ -267,12 +317,27 @@ pub(crate) async fn summarize_joined_rooms(
         } else {
             Vec::new()
         };
+        let tag_content = room
+            .account_data_static::<TagEventContent>()
+            .await
+            .map_err(|err| MatrixCoreError::new(format!("failed to read room tags: {err}")))?
+            .map(|event| event.deserialize().map(|event| event.content.tags))
+            .transpose()
+            .map_err(|err| MatrixCoreError::new(format!("failed to decode room tags: {err}")))?;
+        let direct_user_ids = direct_user_ids_by_room
+            .get(room.room_id().as_str())
+            .cloned()
+            .unwrap_or_default();
+        let tags = room_tag_summaries_from_tags(tag_content);
 
         rooms.push(RoomSummary {
             room_id: room.room_id().to_string(),
             display_name: display_name.to_string(),
             encrypted: encrypted.is_encrypted(),
             is_space,
+            is_direct: !direct_user_ids.is_empty(),
+            direct_user_ids,
+            tags,
             space_children,
         });
     }
@@ -321,6 +386,18 @@ pub(crate) async fn emit_joined_room_snapshot(
         Event::SyncedRooms(summarize_joined_rooms(client).await?),
     );
     Ok(())
+}
+
+async fn emit_joined_room_snapshot_or_room_list_error(client: &Client, events: &EventSender) {
+    if let Err(err) = emit_joined_room_snapshot(client, events).await {
+        emit_event(
+            events,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::RoomList,
+                message: err.to_string(),
+            }),
+        );
+    }
 }
 
 fn room_member_display_label(member: &RoomMemberSummary) -> &str {
@@ -542,6 +619,22 @@ async fn summarize_space_children(
 }
 
 pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
+    let direct_account_data_events = events.clone();
+    client.add_event_handler(move |_event: DirectEvent, client: Client| {
+        let events = direct_account_data_events.clone();
+        async move {
+            emit_joined_room_snapshot_or_room_list_error(&client, &events).await;
+        }
+    });
+
+    let tag_account_data_events = events.clone();
+    client.add_event_handler(move |_event: TagEvent, _room: Room, client: Client| {
+        let events = tag_account_data_events.clone();
+        async move {
+            emit_joined_room_snapshot_or_room_list_error(&client, &events).await;
+        }
+    });
+
     let timeline_events = events.clone();
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
@@ -1293,15 +1386,7 @@ pub(crate) fn start_room_list_update_task(
                         continue;
                     }
 
-                    if let Err(err) = emit_joined_room_snapshot(&client, &events).await {
-                        emit_event(
-                            &events,
-                            Event::Error(CoreErrorEvent {
-                                operation: Operation::RoomList,
-                                message: err.to_string(),
-                            }),
-                        );
-                    }
+                    emit_joined_room_snapshot_or_room_list_error(&client, &events).await;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
@@ -1707,6 +1792,7 @@ pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> Stor
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use super::{
@@ -1717,16 +1803,18 @@ mod tests {
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_list_update_is_relevant, room_members_from_parts,
         room_message_event_content, room_read_state_from_parts, room_read_update_is_relevant,
-        room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
-        verification_flow_id_from_to_device, verification_request_from_to_device,
-        verification_requested_state_event,
+        room_tag_summaries_from_tags, room_typing_from_sync_typing,
+        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
+        direct_user_ids_by_room_from_content,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         Operation, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
         RoomMemberSummary, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-        RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTyping,
+        RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary,
+        RoomTyping,
         SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
@@ -1738,14 +1826,17 @@ mod tests {
         },
         ruma::{
             MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
+            OwnedUserId,
             events::{
                 AnyMessageLikeEventContent, ToDeviceEvent,
+                direct::DirectEventContent,
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 room::{
                     member::OriginalSyncRoomMemberEvent,
                     message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
                     topic::OriginalSyncRoomTopicEvent,
                 },
+                tag::{TagInfo, TagName, Tags},
                 typing::SyncTypingEvent,
             },
         },
@@ -2659,7 +2750,91 @@ mod tests {
     }
 
     #[test]
-    fn room_read_state_from_parts_maps_all_public_fields() {
+    fn direct_user_ids_by_room_from_content_inverts_m_direct() {
+        let content = DirectEventContent::from_iter([
+            (
+                OwnedUserId::try_from("@bob:example.org")
+                    .expect("valid user id")
+                    .into(),
+                vec![
+                    OwnedRoomId::try_from("!shared:example.org").expect("valid room id"),
+                    OwnedRoomId::try_from("!bob:example.org").expect("valid room id"),
+                ],
+            ),
+            (
+                OwnedUserId::try_from("@alice:example.org")
+                    .expect("valid user id")
+                    .into(),
+                vec![
+                    OwnedRoomId::try_from("!shared:example.org").expect("valid room id"),
+                    OwnedRoomId::try_from("!shared:example.org").expect("valid room id"),
+                    OwnedRoomId::try_from("!alice:example.org").expect("valid room id"),
+                ],
+            ),
+        ]);
+
+        assert_eq!(
+            direct_user_ids_by_room_from_content(Some(&content)),
+            BTreeMap::from([
+                (
+                    "!alice:example.org".to_owned(),
+                    vec!["@alice:example.org".to_owned()],
+                ),
+                (
+                    "!bob:example.org".to_owned(),
+                    vec!["@bob:example.org".to_owned()],
+                ),
+                (
+                    "!shared:example.org".to_owned(),
+                    vec![
+                        "@alice:example.org".to_owned(),
+                        "@bob:example.org".to_owned(),
+                    ],
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn room_tag_summaries_from_tags_preserve_name_and_order() {
+        let tags: Tags = BTreeMap::from([
+            (
+                TagName::Favorite,
+                serde_json::from_value(serde_json::json!({ "order": 0.25 }))
+                    .expect("favorite tag info"),
+            ),
+            (
+                TagName::LowPriority,
+                TagInfo::new(),
+            ),
+            (
+                TagName::from("u.work"),
+                serde_json::from_value(serde_json::json!({ "order": 0.75 }))
+                    .expect("user tag info"),
+            ),
+        ]);
+
+        assert_eq!(
+            room_tag_summaries_from_tags(Some(tags)),
+            vec![
+                RoomTagSummary {
+                    tag: "m.favourite".to_owned(),
+                    order: Some("0.25".to_owned()),
+                },
+                RoomTagSummary {
+                    tag: "m.lowpriority".to_owned(),
+                    order: None,
+                },
+                RoomTagSummary {
+                    tag: "u.work".to_owned(),
+                    order: Some("0.75".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn room_read_state_from_parts_preserves_fully_read_and_unread_reconciliation() {
         let receipts = RoomReadReceipts {
             num_unread: 7,
             num_notifications: 3,

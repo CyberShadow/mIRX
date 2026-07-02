@@ -892,6 +892,9 @@ mod tests {
             display_name: display_name.to_owned(),
             encrypted: true,
             is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: Vec::new(),
         }
     }
