@@ -7,6 +7,9 @@
         "display_name": "Beta",
         "encrypted": false,
         "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": []
       },
       {
@@ -14,6 +17,16 @@
         "display_name": "Alpha",
         "encrypted": false,
         "is_space": false,
+        "is_direct": true,
+        "direct_user_ids": [
+          "@alice:example"
+        ],
+        "tags": [
+          {
+            "tag": "m.favourite",
+            "order": "0.25"
+          }
+        ],
         "space_children": []
       }
     ]
@@ -21,19 +34,19 @@
   {
     "RoomReadState": {
       "room_id": "!alpha:example",
-      "latest_active_event_id": null,
-      "fully_read_event_id": null,
-      "marked_unread": false,
+      "latest_active_event_id": "$alpha-latest",
+      "fully_read_event_id": "$alpha-fully-read",
+      "marked_unread": true,
       "num_unread": 1,
-      "num_notifications": 0,
-      "num_mentions": 0
+      "num_notifications": 2,
+      "num_mentions": 1
     }
   },
   {
     "RoomReadState": {
       "room_id": "!beta:example",
-      "latest_active_event_id": null,
-      "fully_read_event_id": null,
+      "latest_active_event_id": "$beta-latest",
+      "fully_read_event_id": "$beta-latest",
       "marked_unread": false,
       "num_unread": 0,
       "num_notifications": 0,

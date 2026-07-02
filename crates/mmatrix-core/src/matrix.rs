@@ -1796,8 +1796,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        LocalEchoMessageDetails, attach_thread_relation, cancelled_state, map_cross_signing_status,
-        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        LocalEchoMessageDetails, attach_thread_relation, cancelled_state,
+        direct_user_ids_by_room_from_content, map_cross_signing_status, map_decimals,
+        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
         map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
@@ -1806,15 +1807,13 @@ mod tests {
         room_tag_summaries_from_tags, room_typing_from_sync_typing,
         sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
-        direct_user_ids_by_room_from_content,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         Operation, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
         RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
         RoomMemberSummary, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-        RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary,
-        RoomTyping,
+        RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
@@ -1825,8 +1824,7 @@ mod tests {
             verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
         },
         ruma::{
-            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
-            OwnedUserId,
+            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId,
             events::{
                 AnyMessageLikeEventContent, ToDeviceEvent,
                 direct::DirectEventContent,
@@ -2803,10 +2801,7 @@ mod tests {
                 serde_json::from_value(serde_json::json!({ "order": 0.25 }))
                     .expect("favorite tag info"),
             ),
-            (
-                TagName::LowPriority,
-                TagInfo::new(),
-            ),
+            (TagName::LowPriority, TagInfo::new()),
             (
                 TagName::from("u.work"),
                 serde_json::from_value(serde_json::json!({ "order": 0.75 }))

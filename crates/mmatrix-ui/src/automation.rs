@@ -5,9 +5,9 @@ use std::fmt;
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationState, VerificationStateEvent,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -498,6 +498,34 @@ pub(crate) struct UiState {
     pub(crate) mdi: MdiState,
     pub(crate) status_bar: StatusBarState,
     pub(crate) switchbar: SwitchbarState,
+    pub(crate) rooms: Vec<UiRoomState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiRoomState {
+    pub(crate) room_id: String,
+    pub(crate) display_name: String,
+    pub(crate) encrypted: bool,
+    pub(crate) is_space: bool,
+    pub(crate) is_direct: bool,
+    pub(crate) direct_user_ids: Vec<String>,
+    pub(crate) tags: Vec<DumpRoomTag>,
+    pub(crate) space_children: Vec<DumpSpaceChild>,
+    pub(crate) has_activity: bool,
+    pub(crate) read_target_event_id: Option<String>,
+    pub(crate) read_state: Option<UiRoomReadState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiRoomReadState {
+    pub(crate) latest_active_event_id: Option<String>,
+    pub(crate) fully_read_event_id: Option<String>,
+    pub(crate) marked_unread: bool,
+    pub(crate) num_unread: u64,
+    pub(crate) num_notifications: u64,
+    pub(crate) num_mentions: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -761,11 +789,21 @@ pub(crate) struct DumpSpaceChild {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomTag {
+    pub(crate) tag: String,
+    pub(crate) order: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct DumpRoom {
     pub(crate) room_id: String,
     pub(crate) display_name: String,
     pub(crate) encrypted: bool,
     pub(crate) is_space: bool,
+    pub(crate) is_direct: bool,
+    pub(crate) direct_user_ids: Vec<String>,
+    pub(crate) tags: Vec<DumpRoomTag>,
     pub(crate) space_children: Vec<DumpSpaceChild>,
 }
 
@@ -940,6 +978,9 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
         display_name: room.display_name.clone(),
         encrypted: room.encrypted,
         is_space: room.is_space,
+        is_direct: room.is_direct,
+        direct_user_ids: room.direct_user_ids.clone(),
+        tags: room.tags.iter().map(dump_room_tag_from_summary).collect(),
         space_children: room
             .space_children
             .iter()
@@ -949,6 +990,24 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
                 order: child.order.clone(),
             })
             .collect(),
+    }
+}
+
+fn dump_room_tag_from_summary(tag: &RoomTagSummary) -> DumpRoomTag {
+    DumpRoomTag {
+        tag: tag.tag.clone(),
+        order: tag.order.clone(),
+    }
+}
+
+pub(crate) fn dump_ui_room_read_state_from_core(read_state: &RoomReadState) -> UiRoomReadState {
+    UiRoomReadState {
+        latest_active_event_id: read_state.latest_active_event_id.clone(),
+        fully_read_event_id: read_state.fully_read_event_id.clone(),
+        marked_unread: read_state.marked_unread,
+        num_unread: read_state.num_unread,
+        num_notifications: read_state.num_notifications,
+        num_mentions: read_state.num_mentions,
     }
 }
 
@@ -1376,8 +1435,9 @@ mod tests {
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomSummary, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomSummary, RoomTagSummary, SpaceChildSummary, StoredSession,
+        UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1403,8 +1463,8 @@ mod tests {
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
         SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
         SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2119,6 +2179,24 @@ mod tests {
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[]}]}]}}"#,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({
+                "id":"load",
+                "ok":false,
+                "err":{
+                    "code":"invalid_args",
+                    "message":"invalid command args: unknown field `unexpected`, expected `tag` or `order`"
+                }
+            })
+        );
+
+        let error = parse_command_request(
+            COMMAND_ID_LOAD_SYNTHETIC_STATE,
             br#"{"id":"load","args":{"events":[{"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1,"unexpected":true}}]}}"#,
         )
         .unwrap_err();
@@ -2674,6 +2752,12 @@ mod tests {
                         display_name: "Room".to_owned(),
                         encrypted: true,
                         is_space: false,
+                        is_direct: true,
+                        direct_user_ids: vec!["@alice:example".to_owned()],
+                        tags: vec![super::DumpRoomTag {
+                            tag: "m.favourite".to_owned(),
+                            order: Some("0.25".to_owned()),
+                        }],
                         space_children: Vec::new(),
                     }],
                     last_activity: None,
@@ -2692,7 +2776,7 @@ mod tests {
                 "json":{
                     "status":"ready",
                     "lifecycle_state":"ready",
-                    "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}],
+                    "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}],
                     "last_activity":null,
                     "e2ee_status":{
                         "recovery":"incomplete",
@@ -2890,6 +2974,12 @@ mod tests {
                         display_name: "Room".to_owned(),
                         encrypted: true,
                         is_space: false,
+                        is_direct: true,
+                        direct_user_ids: vec!["@alice:example".to_owned()],
+                        tags: vec![super::DumpRoomTag {
+                            tag: "m.favourite".to_owned(),
+                            order: Some("0.25".to_owned()),
+                        }],
                         space_children: Vec::new(),
                     }],
                 },
@@ -2898,7 +2988,7 @@ mod tests {
             json!({
                 "id":"rooms",
                 "ok":true,
-                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"space_children":[]}]}
+                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}]}
             })
         );
         assert_eq!(
@@ -3059,6 +3149,29 @@ mod tests {
                             },
                         ],
                     },
+                    rooms: vec![UiRoomState {
+                        room_id: "!room:example".to_owned(),
+                        display_name: "Room".to_owned(),
+                        encrypted: true,
+                        is_space: false,
+                        is_direct: true,
+                        direct_user_ids: vec!["@alice:example".to_owned()],
+                        tags: vec![super::DumpRoomTag {
+                            tag: "m.favourite".to_owned(),
+                            order: Some("0.25".to_owned()),
+                        }],
+                        space_children: Vec::new(),
+                        has_activity: true,
+                        read_target_event_id: Some("$event:example".to_owned()),
+                        read_state: Some(UiRoomReadState {
+                            latest_active_event_id: Some("$latest:example".to_owned()),
+                            fully_read_event_id: Some("$fully-read:example".to_owned()),
+                            marked_unread: true,
+                            num_unread: 7,
+                            num_notifications: 3,
+                            num_mentions: 1,
+                        }),
+                    }],
                 },
             ))
             .unwrap(),
@@ -3129,7 +3242,34 @@ mod tests {
                                 "has_activity":true
                             }
                         ]
-                    }
+                    },
+                    "rooms":[
+                        {
+                            "room_id":"!room:example",
+                            "display_name":"Room",
+                            "encrypted":true,
+                            "is_space":false,
+                            "is_direct":true,
+                            "direct_user_ids":["@alice:example"],
+                            "tags":[
+                                {
+                                    "tag":"m.favourite",
+                                    "order":"0.25"
+                                }
+                            ],
+                            "space_children":[],
+                            "has_activity":true,
+                            "read_target_event_id":"$event:example",
+                            "read_state":{
+                                "latest_active_event_id":"$latest:example",
+                                "fully_read_event_id":"$fully-read:example",
+                                "marked_unread":true,
+                                "num_unread":7,
+                                "num_notifications":3,
+                                "num_mentions":1
+                            }
+                        }
+                    ]
                 }
             })
         );
@@ -3231,9 +3371,18 @@ mod tests {
                 display_name: "Room".to_owned(),
                 encrypted: true,
                 is_space: true,
-                is_direct: false,
-                direct_user_ids: Vec::new(),
-                tags: Vec::new(),
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example".to_owned()],
+                tags: vec![
+                    RoomTagSummary {
+                        tag: "m.favourite".to_owned(),
+                        order: Some("0.25".to_owned()),
+                    },
+                    RoomTagSummary {
+                        tag: "u.work".to_owned(),
+                        order: None,
+                    },
+                ],
                 space_children: vec![SpaceChildSummary {
                     room_id: "!child:example".to_owned(),
                     suggested: true,
@@ -3245,12 +3394,32 @@ mod tests {
                 display_name: "Room".to_owned(),
                 encrypted: true,
                 is_space: true,
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example".to_owned()],
+                tags: vec![
+                    super::DumpRoomTag {
+                        tag: "m.favourite".to_owned(),
+                        order: Some("0.25".to_owned()),
+                    },
+                    super::DumpRoomTag {
+                        tag: "u.work".to_owned(),
+                        order: None,
+                    },
+                ],
                 space_children: vec![super::DumpSpaceChild {
                     room_id: "!child:example".to_owned(),
                     suggested: true,
                     order: Some("aaa".to_owned()),
                 }],
             }
+        );
+        assert!(
+            serde_json::from_value::<super::DumpRoomTag>(json!({
+                "tag":"m.favourite",
+                "order":"0.25",
+                "unexpected":true
+            }))
+            .is_err()
         );
         assert!(
             serde_json::from_value::<super::DumpSpaceChild>(json!({
@@ -3260,6 +3429,73 @@ mod tests {
                 "unexpected":true
             }))
             .is_err()
+        );
+        assert!(
+            serde_json::from_value::<super::UiState>(json!({
+                "navigation":{"text":"mmatrix","children":[]},
+                "mdi":{"active":{"kind":"status"},"views":[]},
+                "status_bar":{"text":"ready"},
+                "switchbar":{"items":[]},
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<super::UiState>(json!({
+                "navigation":{"text":"mmatrix","children":[]},
+                "mdi":{"active":{"kind":"status"},"views":[]},
+                "status_bar":{"text":"ready"},
+                "switchbar":{"items":[]}
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<super::UiRoomState>(json!({
+                "room_id":"!room:example",
+                "display_name":"Room",
+                "encrypted":true,
+                "is_space":false,
+                "is_direct":false,
+                "direct_user_ids":[],
+                "tags":[],
+                "space_children":[],
+                "has_activity":false,
+                "read_target_event_id":null,
+                "read_state":null,
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<super::UiRoomReadState>(json!({
+                "latest_active_event_id":null,
+                "fully_read_event_id":null,
+                "marked_unread":false,
+                "num_unread":0,
+                "num_notifications":0,
+                "num_mentions":0,
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            super::dump_ui_room_read_state_from_core(&RoomReadState {
+                room_id: "!room:example".to_owned(),
+                latest_active_event_id: Some("$latest:example".to_owned()),
+                fully_read_event_id: Some("$fully-read:example".to_owned()),
+                marked_unread: true,
+                num_unread: 7,
+                num_notifications: 3,
+                num_mentions: 1,
+            }),
+            super::UiRoomReadState {
+                latest_active_event_id: Some("$latest:example".to_owned()),
+                fully_read_event_id: Some("$fully-read:example".to_owned()),
+                marked_unread: true,
+                num_unread: 7,
+                num_notifications: 3,
+                num_mentions: 1,
+            }
         );
         let activity = RoomActivity {
             room_id: "!room:example".to_owned(),

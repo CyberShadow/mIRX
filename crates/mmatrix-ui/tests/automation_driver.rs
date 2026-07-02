@@ -23,10 +23,10 @@ use mmatrix_testkit::{
     NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, SpaceChild, StoredSession,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
     SubmittedMembershipCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError,
-    UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionKind, VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -194,11 +194,32 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
 }
 
 fn listed_room(room_id: &str, display_name: &str, encrypted: bool) -> Room {
+    listed_room_with_metadata(
+        room_id,
+        display_name,
+        encrypted,
+        false,
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn listed_room_with_metadata(
+    room_id: &str,
+    display_name: &str,
+    encrypted: bool,
+    is_direct: bool,
+    direct_user_ids: Vec<&str>,
+    tags: Vec<RoomTag>,
+) -> Room {
     Room {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
         encrypted,
         is_space: false,
+        is_direct,
+        direct_user_ids: direct_user_ids.into_iter().map(str::to_owned).collect(),
+        tags,
         space_children: Vec::new(),
     }
 }
@@ -209,7 +230,17 @@ fn listed_space(room_id: &str, display_name: &str, children: Vec<SpaceChild>) ->
         display_name: display_name.to_owned(),
         encrypted: false,
         is_space: true,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
         space_children: children,
+    }
+}
+
+fn room_tag(tag: &str, order: Option<&str>) -> RoomTag {
+    RoomTag {
+        tag: tag.to_owned(),
+        order: order.map(str::to_owned),
     }
 }
 
@@ -817,6 +848,14 @@ fn find_switchbar_item<'a>(ui_state: &'a UiState, identity: &ViewIdentity) -> &'
         .iter()
         .find(|item| &item.identity == identity)
         .unwrap_or_else(|| panic!("missing switchbar item for {identity:?}"))
+}
+
+fn find_ui_room<'a>(ui_state: &'a UiState, room_id: &str) -> &'a UiRoomState {
+    ui_state
+        .rooms
+        .iter()
+        .find(|room| room.room_id == room_id)
+        .unwrap_or_else(|| panic!("missing dumped room state for {room_id}"))
 }
 
 fn assert_active_switchbar_item(ui_state: &UiState, identity: &ViewIdentity) {
@@ -2402,7 +2441,17 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             listed_room("!ops:example", "Ops", true),
             listed_room("!shared:example", "Shared", false),
             listed_room("!random:example", "Random", false),
-            listed_room("!direct:example", "Direct", true),
+            listed_room_with_metadata(
+                "!direct:example",
+                "Direct",
+                true,
+                true,
+                vec!["@alice:example"],
+                vec![
+                    room_tag("m.favourite", Some("0.25")),
+                    room_tag("u.work", None),
+                ],
+            ),
         ]
     );
 
@@ -2461,6 +2510,40 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert_eq!(
         app.dump_model()?.selected_room.as_deref(),
         Some("!ops:example")
+    );
+    assert_eq!(
+        initial_state
+            .rooms
+            .iter()
+            .map(|room| room.room_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "!work:example",
+            "!social:example",
+            "!ops:example",
+            "!shared:example",
+            "!random:example",
+            "!direct:example",
+        ]
+    );
+    assert_eq!(
+        find_ui_room(&initial_state, "!direct:example"),
+        &UiRoomState {
+            room_id: "!direct:example".to_owned(),
+            display_name: "Direct".to_owned(),
+            encrypted: true,
+            is_space: false,
+            is_direct: true,
+            direct_user_ids: vec!["@alice:example".to_owned()],
+            tags: vec![
+                room_tag("m.favourite", Some("0.25")),
+                room_tag("u.work", None),
+            ],
+            space_children: Vec::new(),
+            has_activity: false,
+            read_target_event_id: None,
+            read_state: None,
+        }
     );
     assert_switchbar_activity(&initial_state, &room_identity("!ops:example"), false);
     assert_switchbar_activity(&initial_state, &room_identity("!shared:example"), true);
@@ -3482,6 +3565,21 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     let app = MmatrixApp::launch(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
+    assert_eq!(
+        app.list_rooms()?,
+        vec![
+            listed_room("!beta:example", "Beta", false),
+            listed_room_with_metadata(
+                "!alpha:example",
+                "Alpha",
+                false,
+                true,
+                vec!["@alice:example"],
+                vec![room_tag("m.favourite", Some("0.25"))],
+            ),
+        ]
+    );
+
     let initial_state = app.dump_ui_state()?;
     assert_eq!(initial_state.mdi.active, room_identity("!beta:example"));
     assert_active_switchbar_item(&initial_state, &room_identity("!beta:example"));
@@ -3491,6 +3589,52 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     );
     assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), false);
     assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
+    assert_eq!(
+        find_ui_room(&initial_state, "!beta:example"),
+        &UiRoomState {
+            room_id: "!beta:example".to_owned(),
+            display_name: "Beta".to_owned(),
+            encrypted: false,
+            is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
+            space_children: Vec::new(),
+            has_activity: false,
+            read_target_event_id: None,
+            read_state: Some(UiRoomReadState {
+                latest_active_event_id: Some("$beta-latest".to_owned()),
+                fully_read_event_id: Some("$beta-latest".to_owned()),
+                marked_unread: false,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
+            }),
+        }
+    );
+    assert_eq!(
+        find_ui_room(&initial_state, "!alpha:example"),
+        &UiRoomState {
+            room_id: "!alpha:example".to_owned(),
+            display_name: "Alpha".to_owned(),
+            encrypted: false,
+            is_space: false,
+            is_direct: true,
+            direct_user_ids: vec!["@alice:example".to_owned()],
+            tags: vec![room_tag("m.favourite", Some("0.25"))],
+            space_children: Vec::new(),
+            has_activity: true,
+            read_target_event_id: None,
+            read_state: Some(UiRoomReadState {
+                latest_active_event_id: Some("$alpha-latest".to_owned()),
+                fully_read_event_id: Some("$alpha-fully-read".to_owned()),
+                marked_unread: true,
+                num_unread: 1,
+                num_notifications: 2,
+                num_mentions: 1,
+            }),
+        }
+    );
 
     app.select_room("!alpha:example")?;
     let activated_state = app.dump_ui_state()?;
@@ -3501,6 +3645,29 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         Some("!alpha:example")
     );
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
+    assert_eq!(
+        find_ui_room(&activated_state, "!alpha:example"),
+        &UiRoomState {
+            room_id: "!alpha:example".to_owned(),
+            display_name: "Alpha".to_owned(),
+            encrypted: false,
+            is_space: false,
+            is_direct: true,
+            direct_user_ids: vec!["@alice:example".to_owned()],
+            tags: vec![room_tag("m.favourite", Some("0.25"))],
+            space_children: Vec::new(),
+            has_activity: false,
+            read_target_event_id: None,
+            read_state: Some(UiRoomReadState {
+                latest_active_event_id: Some("$alpha-latest".to_owned()),
+                fully_read_event_id: Some("$alpha-fully-read".to_owned()),
+                marked_unread: true,
+                num_unread: 1,
+                num_notifications: 2,
+                num_mentions: 1,
+            }),
+        }
+    );
 
     Ok(())
 }

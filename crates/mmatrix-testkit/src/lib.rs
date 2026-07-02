@@ -205,11 +205,21 @@ pub struct SpaceChild {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomTag {
+    pub tag: String,
+    pub order: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Room {
     pub room_id: String,
     pub display_name: String,
     pub encrypted: bool,
     pub is_space: bool,
+    pub is_direct: bool,
+    pub direct_user_ids: Vec<String>,
+    pub tags: Vec<RoomTag>,
     pub space_children: Vec<SpaceChild>,
 }
 
@@ -461,6 +471,34 @@ pub struct UiState {
     pub mdi: MdiState,
     pub status_bar: StatusBarState,
     pub switchbar: SwitchbarState,
+    pub rooms: Vec<UiRoomState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiRoomState {
+    pub room_id: String,
+    pub display_name: String,
+    pub encrypted: bool,
+    pub is_space: bool,
+    pub is_direct: bool,
+    pub direct_user_ids: Vec<String>,
+    pub tags: Vec<RoomTag>,
+    pub space_children: Vec<SpaceChild>,
+    pub has_activity: bool,
+    pub read_target_event_id: Option<String>,
+    pub read_state: Option<UiRoomReadState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiRoomReadState {
+    pub latest_active_event_id: Option<String>,
+    pub fully_read_event_id: Option<String>,
+    pub marked_unread: bool,
+    pub num_unread: u64,
+    pub num_notifications: u64,
+    pub num_mentions: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

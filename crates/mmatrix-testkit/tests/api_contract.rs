@@ -15,10 +15,11 @@ use mmatrix_testkit::{
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo,
     RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
     RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, SpaceChild, StatusBarState, StoredSession, SubmittedMembershipCommand,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiState, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewIdentity,
+    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
+    SubmittedMembershipCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -104,6 +105,9 @@ fn data_models_round_trip_through_json() {
                 display_name: "Space".to_owned(),
                 encrypted: false,
                 is_space: true,
+                is_direct: false,
+                direct_user_ids: Vec::new(),
+                tags: Vec::new(),
                 space_children: vec![
                     SpaceChild {
                         room_id: "!alpha:example".to_owned(),
@@ -122,6 +126,18 @@ fn data_models_round_trip_through_json() {
                 display_name: "Alpha".to_owned(),
                 encrypted: true,
                 is_space: false,
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example".to_owned()],
+                tags: vec![
+                    RoomTag {
+                        tag: "m.favourite".to_owned(),
+                        order: Some("0.25".to_owned()),
+                    },
+                    RoomTag {
+                        tag: "u.work".to_owned(),
+                        order: None,
+                    },
+                ],
                 space_children: vec![],
             },
             mmatrix_testkit::Room {
@@ -129,6 +145,9 @@ fn data_models_round_trip_through_json() {
                 display_name: "Beta".to_owned(),
                 encrypted: false,
                 is_space: false,
+                is_direct: false,
+                direct_user_ids: Vec::new(),
+                tags: Vec::new(),
                 space_children: vec![],
             },
             mmatrix_testkit::Room {
@@ -136,6 +155,9 @@ fn data_models_round_trip_through_json() {
                 display_name: "Lobby".to_owned(),
                 encrypted: false,
                 is_space: false,
+                is_direct: false,
+                direct_user_ids: Vec::new(),
+                tags: Vec::new(),
                 space_children: vec![],
             },
         ],
@@ -279,6 +301,29 @@ fn data_models_round_trip_through_json() {
                 },
             ],
         },
+        rooms: vec![UiRoomState {
+            room_id: "!room:example".to_owned(),
+            display_name: "Room".to_owned(),
+            encrypted: true,
+            is_space: false,
+            is_direct: true,
+            direct_user_ids: vec!["@alice:example".to_owned()],
+            tags: vec![RoomTag {
+                tag: "m.favourite".to_owned(),
+                order: Some("0.25".to_owned()),
+            }],
+            space_children: vec![],
+            has_activity: true,
+            read_target_event_id: Some("$event:example".to_owned()),
+            read_state: Some(UiRoomReadState {
+                latest_active_event_id: Some("$latest:example".to_owned()),
+                fully_read_event_id: Some("$fully-read:example".to_owned()),
+                marked_unread: true,
+                num_unread: 7,
+                num_notifications: 3,
+                num_mentions: 1,
+            }),
+        }],
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mmatrix"),
@@ -296,6 +341,9 @@ fn data_models_round_trip_through_json() {
                     "display_name": "Space",
                     "encrypted": false,
                     "is_space": true,
+                    "is_direct": false,
+                    "direct_user_ids": [],
+                    "tags": [],
                     "space_children": [
                         {
                             "room_id": "!alpha:example",
@@ -314,6 +362,18 @@ fn data_models_round_trip_through_json() {
                     "display_name": "Alpha",
                     "encrypted": true,
                     "is_space": false,
+                    "is_direct": true,
+                    "direct_user_ids": ["@alice:example"],
+                    "tags": [
+                        {
+                            "tag": "m.favourite",
+                            "order": "0.25"
+                        },
+                        {
+                            "tag": "u.work",
+                            "order": null
+                        }
+                    ],
                     "space_children": []
                 },
                 {
@@ -321,6 +381,9 @@ fn data_models_round_trip_through_json() {
                     "display_name": "Beta",
                     "encrypted": false,
                     "is_space": false,
+                    "is_direct": false,
+                    "direct_user_ids": [],
+                    "tags": [],
                     "space_children": []
                 },
                 {
@@ -328,6 +391,9 @@ fn data_models_round_trip_through_json() {
                     "display_name": "Lobby",
                     "encrypted": false,
                     "is_space": false,
+                    "is_direct": false,
+                    "direct_user_ids": [],
+                    "tags": [],
                     "space_children": []
                 }
             ]
@@ -469,6 +535,33 @@ fn data_models_round_trip_through_json() {
                     }
                 ],
             },
+            "rooms": [
+                {
+                    "room_id": "!room:example",
+                    "display_name": "Room",
+                    "encrypted": true,
+                    "is_space": false,
+                    "is_direct": true,
+                    "direct_user_ids": ["@alice:example"],
+                    "tags": [
+                        {
+                            "tag": "m.favourite",
+                            "order": "0.25",
+                        }
+                    ],
+                    "space_children": [],
+                    "has_activity": true,
+                    "read_target_event_id": "$event:example",
+                    "read_state": {
+                        "latest_active_event_id": "$latest:example",
+                        "fully_read_event_id": "$fully-read:example",
+                        "marked_unread": true,
+                        "num_unread": 7u64,
+                        "num_notifications": 3u64,
+                        "num_mentions": 1u64,
+                    },
+                }
+            ],
         })
     );
     assert_eq!(
@@ -479,6 +572,52 @@ fn data_models_round_trip_through_json() {
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&events_json).expect("deserialize events"),
         events
+    );
+}
+
+#[test]
+fn room_summary_metadata_serializes_to_expected_json_shape() {
+    let room = mmatrix_testkit::Room {
+        room_id: "!alpha:example".to_owned(),
+        display_name: "Alpha".to_owned(),
+        encrypted: true,
+        is_space: false,
+        is_direct: true,
+        direct_user_ids: vec!["@alice:example.org".to_owned()],
+        tags: vec![
+            RoomTag {
+                tag: "m.favourite".to_owned(),
+                order: Some("0.25".to_owned()),
+            },
+            RoomTag {
+                tag: "u.work".to_owned(),
+                order: None,
+            },
+        ],
+        space_children: vec![],
+    };
+
+    assert_eq!(
+        serde_json::to_value(&room).expect("serialize room metadata"),
+        serde_json::json!({
+            "room_id": "!alpha:example",
+            "display_name": "Alpha",
+            "encrypted": true,
+            "is_space": false,
+            "is_direct": true,
+            "direct_user_ids": ["@alice:example.org"],
+            "tags": [
+                {
+                    "tag": "m.favourite",
+                    "order": "0.25",
+                },
+                {
+                    "tag": "u.work",
+                    "order": null,
+                }
+            ],
+            "space_children": [],
+        })
     );
 }
 
@@ -1416,7 +1555,20 @@ fn data_models_reject_unknown_fields() {
             "display_name":"Room",
             "encrypted":true,
             "is_space":false,
+            "is_direct":false,
+            "direct_user_ids":[],
+            "tags":[],
             "space_children":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomTag>(
+            r#"{
+            "tag":"m.favourite",
+            "order":"0.25",
             "unexpected":true
         }"#
         )
@@ -1667,6 +1819,51 @@ fn data_models_reject_unknown_fields() {
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
+            "rooms":[],
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<UiState>(
+            r#"{
+            "navigation":{"text":"mmatrix","children":[]},
+            "mdi":{"active":{"kind":"status"},"views":[]},
+            "status_bar":{"text":"ready"},
+            "switchbar":{"items":[]}
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<UiRoomState>(
+            r#"{
+            "room_id":"!room:example",
+            "display_name":"Room",
+            "encrypted":true,
+            "is_space":false,
+            "is_direct":false,
+            "direct_user_ids":[],
+            "tags":[],
+            "space_children":[],
+            "has_activity":false,
+            "read_target_event_id":null,
+            "read_state":null,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<UiRoomReadState>(
+            r#"{
+            "latest_active_event_id":null,
+            "fully_read_event_id":null,
+            "marked_unread":false,
+            "num_unread":0,
+            "num_notifications":0,
+            "num_mentions":0,
             "unexpected":true
         }"#
         )
@@ -2111,6 +2308,7 @@ fn switchbar_helpers_find_items_and_active_item() {
                 },
             ],
         },
+        rooms: vec![],
     };
 
     let identity = ViewIdentity::Room {

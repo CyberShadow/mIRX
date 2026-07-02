@@ -7,6 +7,9 @@
         "display_name": "Work",
         "encrypted": false,
         "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": [
           {
             "room_id": "!ops:example",
@@ -25,6 +28,9 @@
         "display_name": "Social",
         "encrypted": false,
         "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": [
           {
             "room_id": "!shared:example",
@@ -43,6 +49,9 @@
         "display_name": "Ops",
         "encrypted": true,
         "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": []
       },
       {
@@ -50,6 +59,9 @@
         "display_name": "Shared",
         "encrypted": false,
         "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": []
       },
       {
@@ -57,6 +69,9 @@
         "display_name": "Random",
         "encrypted": false,
         "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": []
       },
       {
@@ -64,6 +79,20 @@
         "display_name": "Direct",
         "encrypted": true,
         "is_space": false,
+        "is_direct": true,
+        "direct_user_ids": [
+          "@alice:example"
+        ],
+        "tags": [
+          {
+            "tag": "m.favourite",
+            "order": "0.25"
+          },
+          {
+            "tag": "u.work",
+            "order": null
+          }
+        ],
         "space_children": []
       }
     ]

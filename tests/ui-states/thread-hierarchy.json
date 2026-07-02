@@ -7,6 +7,9 @@
         "display_name": "Work",
         "encrypted": false,
         "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": [
           {
             "room_id": "!ops:example",
@@ -20,6 +23,9 @@
         "display_name": "Ops",
         "encrypted": false,
         "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": []
       }
     ]

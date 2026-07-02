@@ -86,10 +86,11 @@ use crate::{
         MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
         ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_verification_from_state_event,
-        failure_response, parse_command_request, success_response,
+        SwitchbarState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -271,6 +272,7 @@ struct UiModel {
     status: String,
     lifecycle_state: LifecycleState,
     rooms: Vec<RoomSummary>,
+    room_read_states: BTreeMap<String, RoomReadState>,
     selected_room: Option<String>,
     room_views: BTreeMap<String, RoomViewModel>,
     last_activity: Option<LastMessageActivity>,
@@ -854,18 +856,21 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
 }
 
 fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadState) {
-    let RoomReadState {
-        room_id,
-        latest_active_event_id,
-        fully_read_event_id,
-        marked_unread,
-        num_unread,
-        num_notifications,
-        num_mentions,
-    } = read_state;
+    let room_id = read_state.room_id.clone();
     if actionable_room_by_id(&state.model.rooms, &room_id).is_none() {
         return;
     }
+    state
+        .model
+        .room_read_states
+        .insert(room_id.clone(), read_state.clone());
+
+    let latest_active_event_id = read_state.latest_active_event_id;
+    let fully_read_event_id = read_state.fully_read_event_id;
+    let marked_unread = read_state.marked_unread;
+    let num_unread = read_state.num_unread;
+    let num_notifications = read_state.num_notifications;
+    let num_mentions = read_state.num_mentions;
 
     let has_unread_state =
         marked_unread || num_unread > 0 || num_notifications > 0 || num_mentions > 0;
@@ -3349,6 +3354,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                     room_view.members.clear();
                 }
             }
+            state
+                .model
+                .room_read_states
+                .retain(|room_id, _| actionable_room_by_id(&rooms, room_id).is_some());
             state.model.rooms = rooms;
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
@@ -3385,6 +3394,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.last_e2ee_status = None;
             state.model.last_verification = None;
             state.model.last_error = None;
+            state.model.room_read_states.clear();
             state.room_activity.clear();
             state.room_activity_read_targets.clear();
         }
@@ -5722,11 +5732,59 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
 }
 
 unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
+    let navigation = dump_navigation_tree(hwnd)?;
+    let mdi = dump_mdi_state(hwnd)?;
+    let status_bar = dump_status_bar_state(hwnd)?;
+    let switchbar = dump_switchbar_state(hwnd)?;
+    let state = state_ref(hwnd);
+
     Ok(UiState {
-        navigation: dump_navigation_tree(hwnd)?,
-        mdi: dump_mdi_state(hwnd)?,
-        status_bar: dump_status_bar_state(hwnd)?,
-        switchbar: dump_switchbar_state(hwnd)?,
+        navigation,
+        mdi,
+        status_bar,
+        switchbar,
+        rooms: state
+            .model
+            .rooms
+            .iter()
+            .map(|room| UiRoomState {
+                room_id: room.room_id.clone(),
+                display_name: room.display_name.clone(),
+                encrypted: room.encrypted,
+                is_space: room.is_space,
+                is_direct: room.is_direct,
+                direct_user_ids: room.direct_user_ids.clone(),
+                tags: room
+                    .tags
+                    .iter()
+                    .map(|tag| crate::automation::DumpRoomTag {
+                        tag: tag.tag.clone(),
+                        order: tag.order.clone(),
+                    })
+                    .collect(),
+                space_children: room
+                    .space_children
+                    .iter()
+                    .map(|child| crate::automation::DumpSpaceChild {
+                        room_id: child.room_id.clone(),
+                        suggested: child.suggested,
+                        order: child.order.clone(),
+                    })
+                    .collect(),
+                has_activity: state
+                    .room_activity
+                    .contains(&ViewId::Room(room.room_id.clone())),
+                read_target_event_id: state
+                    .room_activity_read_targets
+                    .get(&ViewId::Room(room.room_id.clone()))
+                    .cloned(),
+                read_state: state
+                    .model
+                    .room_read_states
+                    .get(&room.room_id)
+                    .map(dump_ui_room_read_state_from_core),
+            })
+            .collect(),
     })
 }
 
@@ -10736,6 +10794,18 @@ mod tests {
                 .room_activity_read_targets
                 .contains_key(&thread_view_id("!room:example", "$thread-root"))
         );
+        assert_eq!(
+            state.model.room_read_states.get("!room:example"),
+            Some(&RoomReadState {
+                room_id: "!room:example".to_owned(),
+                latest_active_event_id: Some("$event".to_owned()),
+                fully_read_event_id: None,
+                marked_unread: false,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
+            })
+        );
         assert!(state.recorded_commands.is_empty());
     }
 
@@ -10879,6 +10949,7 @@ mod tests {
         assert!(state.room_activity.is_empty());
         assert!(state.room_activity_read_targets.is_empty());
         assert!(state.model.rooms.is_empty());
+        assert!(state.model.room_read_states.is_empty());
         assert!(state.model.room_views.is_empty());
         assert!(state.views.is_empty());
     }
@@ -10955,6 +11026,72 @@ mod tests {
                 .room_activity_read_targets
                 .contains_key(&room_view_id("!stale:example"))
         );
+    }
+
+    #[test]
+    fn synced_rooms_prune_stale_room_read_states() {
+        let mut state = test_state();
+        state.model.room_read_states.insert(
+            "!keep:example".to_owned(),
+            RoomReadState {
+                room_id: "!keep:example".to_owned(),
+                latest_active_event_id: Some("$keep:example".to_owned()),
+                fully_read_event_id: None,
+                marked_unread: true,
+                num_unread: 1,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+        state.model.room_read_states.insert(
+            "!stale:example".to_owned(),
+            RoomReadState {
+                room_id: "!stale:example".to_owned(),
+                latest_active_event_id: Some("$stale:example".to_owned()),
+                fully_read_event_id: None,
+                marked_unread: false,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                room("!keep:example", "Keep", false),
+                space("!space:example", "Space"),
+            ]),
+        )
+        .unwrap();
+
+        assert!(state.model.room_read_states.contains_key("!keep:example"));
+        assert!(!state.model.room_read_states.contains_key("!stale:example"));
+    }
+
+    #[test]
+    fn synced_rooms_prune_room_read_states_when_room_becomes_space() {
+        let mut state = test_state();
+        state.model.room_read_states.insert(
+            "!room:example".to_owned(),
+            RoomReadState {
+                room_id: "!room:example".to_owned(),
+                latest_active_event_id: Some("$room:example".to_owned()),
+                fully_read_event_id: None,
+                marked_unread: true,
+                num_unread: 1,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![space("!room:example", "Room Space")]),
+        )
+        .unwrap();
+
+        assert!(!state.model.room_read_states.contains_key("!room:example"));
     }
 
     #[test]
@@ -11059,6 +11196,36 @@ mod tests {
         });
 
         assert!(state.room_activity.is_empty());
+    }
+
+    #[test]
+    fn logged_out_clears_room_read_states_before_same_room_id_returns() {
+        let mut state = test_state();
+        state.model.room_read_states.insert(
+            "!room:example".to_owned(),
+            RoomReadState {
+                room_id: "!room:example".to_owned(),
+                latest_active_event_id: Some("$room:example".to_owned()),
+                fully_read_event_id: Some("$fully-read:example".to_owned()),
+                marked_unread: true,
+                num_unread: 1,
+                num_notifications: 2,
+                num_mentions: 1,
+            },
+        );
+
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut)
+                .expect("logged out event must apply successfully");
+        });
+        apply_core_event(&mut state, Event::Started).unwrap();
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![room("!room:example", "Room", false)]),
+        )
+        .unwrap();
+
+        assert!(!state.model.room_read_states.contains_key("!room:example"));
     }
 
     #[test]

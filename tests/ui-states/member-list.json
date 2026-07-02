@@ -7,6 +7,9 @@
         "display_name": "Members",
         "encrypted": false,
         "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
         "space_children": []
       }
     ]
