@@ -22,8 +22,9 @@ use mmatrix_core::{
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomImageInfo, RoomMemberSummary, RoomMembers, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendMessageRequest, StoredSession, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget, StoredSession,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -712,6 +713,11 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
         RoomActivityKind::StateNotice(_) => None,
     }
+}
+
+fn room_activity_belongs_to_thread(activity: &RoomActivity, thread_root_event_id: &str) -> bool {
+    room_activity_event_id(activity) == Some(thread_root_event_id)
+        || room_activity_thread_root_event_id(activity) == Some(thread_root_event_id)
 }
 
 fn room_activity_update_marks_inactive_room(update: &RoomActivityUpdate) -> bool {
@@ -3534,9 +3540,7 @@ fn build_thread_timeline_rows(
     let mut rows = Vec::new();
     push_room_context_rows(&mut rows, room, Some(room_view));
     for activity in &room_view.activities {
-        if room_activity_event_id(activity) == Some(thread_root_event_id)
-            || room_activity_thread_root_event_id(activity) == Some(thread_root_event_id)
-        {
+        if room_activity_belongs_to_thread(activity, thread_root_event_id) {
             push_room_activity_row(&mut rows, activity);
         }
     }
@@ -6150,18 +6154,7 @@ fn submit_compose_with_history_entry(
         return Err("message body must not be empty".to_owned());
     }
 
-    let room_id = match explicit_room_id {
-        Some(room_id) => room_id.to_owned(),
-        None => state
-            .model
-            .selected_room
-            .clone()
-            .ok_or_else(|| "no room selected".to_owned())?,
-    };
-
-    if actionable_room_by_id(&state.model.rooms, &room_id).is_none() {
-        return Err(format!("unknown room id: {room_id}"));
-    }
+    let destination = resolve_compose_destination(state, explicit_room_id)?;
 
     let sender = state
         .command_sender
@@ -6169,10 +6162,10 @@ fn submit_compose_with_history_entry(
         .ok_or_else(|| "core command sender is not available".to_owned())?;
     let send_body = body.clone();
     let command = Command::SendMessage(SendMessageRequest {
-        room_id: room_id.clone(),
+        room_id: destination.room_id.clone(),
         presentation,
         body: send_body,
-        thread: None,
+        thread: destination.thread,
     });
     sender
         .send(command.clone())
@@ -6181,7 +6174,81 @@ fn submit_compose_with_history_entry(
     state.recorded_commands.push(command);
     state.compose_history.record_submission(history_entry);
 
-    Ok(room_id)
+    Ok(destination.room_id)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposeDestination {
+    room_id: String,
+    thread: Option<SendMessageThreadTarget>,
+}
+
+fn resolve_compose_destination(
+    state: &WindowState,
+    explicit_room_id: Option<&str>,
+) -> Result<ComposeDestination, String> {
+    if let Some(room_id) = explicit_room_id {
+        if actionable_room_by_id(&state.model.rooms, room_id).is_none() {
+            return Err(format!("unknown room id: {room_id}"));
+        }
+        return Ok(ComposeDestination {
+            room_id: room_id.to_owned(),
+            thread: None,
+        });
+    }
+
+    match &state.active_view {
+        ViewId::Room(room_id) => {
+            actionable_room_by_id(&state.model.rooms, room_id)
+                .expect("active room compose must target an existing actionable room");
+            Ok(ComposeDestination {
+                room_id: room_id.clone(),
+                thread: None,
+            })
+        }
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => {
+            projected_thread_by_id(&state.model, room_id, thread_root_event_id)
+                .expect("active thread compose must target an existing projected thread");
+            Ok(ComposeDestination {
+                room_id: room_id.clone(),
+                thread: Some(SendMessageThreadTarget {
+                    thread_root_event_id: thread_root_event_id.clone(),
+                    latest_event_id: latest_durable_thread_event_id(
+                        &state.model,
+                        room_id,
+                        thread_root_event_id,
+                    ),
+                }),
+            })
+        }
+        ViewId::Status => Err("no room selected".to_owned()),
+    }
+}
+
+fn latest_durable_thread_event_id(
+    model: &UiModel,
+    room_id: &str,
+    thread_root_event_id: &str,
+) -> String {
+    let room_view = model
+        .room_views
+        .get(room_id)
+        .expect("thread compose must target an existing room view");
+    let mut latest_event_id = thread_root_event_id;
+
+    for activity in &room_view.activities {
+        if room_activity_belongs_to_thread(activity, thread_root_event_id)
+            && let Some(event_id) = room_activity_event_id(activity)
+            && !event_id.starts_with("txn:")
+        {
+            latest_event_id = event_id;
+        }
+    }
+
+    latest_event_id.to_owned()
 }
 
 unsafe fn execute_local_slash_command(
@@ -7231,6 +7298,19 @@ mod tests {
         }
     }
 
+    fn pending_message_activity_with_relation_and_presentation(
+        room_id: &str,
+        transaction_id: &str,
+        relation: Option<RoomActivityRelation>,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+    ) -> RoomActivity {
+        let mut activity =
+            pending_message_activity_with_presentation(room_id, transaction_id, presentation, body);
+        activity.relation = relation;
+        activity
+    }
+
     fn pending_message_activity(room_id: &str, transaction_id: &str, body: &str) -> RoomActivity {
         pending_message_activity_with_presentation(
             room_id,
@@ -7260,6 +7340,18 @@ mod tests {
             presentation,
             body,
         )))
+    }
+
+    fn outgoing_queued_in_thread(room_id: &str, transaction_id: &str, root_event_id: &str) -> Event {
+        Event::RoomActivity(Box::new(
+            pending_message_activity_with_relation_and_presentation(
+                room_id,
+                transaction_id,
+                Some(thread_relation(root_event_id)),
+                RoomMessagePresentationKind::Text,
+                "pending thread reply",
+            ),
+        ))
     }
 
     fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
@@ -9534,6 +9626,68 @@ mod tests {
     }
 
     #[test]
+    fn latest_durable_thread_event_id_falls_back_to_root_when_root_is_only_durable_event() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root:example",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_durable_thread_event_id(&state.model, "!ops:example", "$thread-root:example"),
+            "$thread-root:example"
+        );
+    }
+
+    #[test]
+    fn latest_durable_thread_event_id_ignores_newer_pending_local_thread_activity() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root:example",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$thread-1:example",
+                None,
+                Some(thread_relation("$thread-root:example")),
+                RoomMessagePresentationKind::Text,
+                "durable reply",
+                1_700_000_120_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_queued_in_thread("!ops:example", "thread-pending-1", "$thread-root:example"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_durable_thread_event_id(&state.model, "!ops:example", "$thread-root:example"),
+            "$thread-1:example"
+        );
+    }
+
+    #[test]
     fn ordered_view_ids_place_threads_after_parent_rooms() {
         let mut state = test_state();
         state.model.rooms = vec![
@@ -10632,6 +10786,7 @@ mod tests {
         state.command_sender = Some(handle.command_sender().clone());
         state.model.rooms = vec![room("!selected:example", "Selected", false)];
         state.model.selected_room = Some("!selected:example".to_owned());
+        state.active_view = ViewId::Room("!selected:example".to_owned());
 
         let selected_room_id = submit_compose(
             &mut state,
@@ -10686,6 +10841,7 @@ mod tests {
         state.command_sender = Some(handle.command_sender().clone());
         state.model.rooms = vec![room("!beta:example", "Beta", false)];
         state.model.selected_room = Some("!beta:example".to_owned());
+        state.active_view = ViewId::Room("!beta:example".to_owned());
 
         let room_id = submit_compose_with_history_entry(
             &mut state,
@@ -10715,7 +10871,139 @@ mod tests {
     }
 
     #[test]
-    fn submit_compose_rejects_text_and_emote_for_empty_body_invalid_room_and_missing_selection() {
+    fn submit_compose_uses_active_thread_view_for_text_and_emote_messages() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root:example",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$thread-1:example",
+                None,
+                Some(thread_relation("$thread-root:example")),
+                RoomMessagePresentationKind::Text,
+                "durable reply",
+                1_700_000_120_000,
+            ),
+        )
+        .unwrap();
+        state.active_view = ViewId::Thread {
+            room_id: "!ops:example".to_owned(),
+            thread_root_event_id: "$thread-root:example".to_owned(),
+        };
+
+        let room_id = submit_compose(
+            &mut state,
+            RoomMessagePresentationKind::Text,
+            "hello".to_owned(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(room_id, "!ops:example");
+        let emote_room_id = submit_compose_with_history_entry(
+            &mut state,
+            RoomMessagePresentationKind::Emote,
+            "waves".to_owned(),
+            "/me waves".to_owned(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(emote_room_id, "!ops:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::SendMessage(SendMessageRequest {
+                    room_id: "!ops:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello".to_owned(),
+                    thread: Some(SendMessageThreadTarget {
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                        latest_event_id: "$thread-1:example".to_owned(),
+                    }),
+                }),
+                Command::SendMessage(SendMessageRequest {
+                    room_id: "!ops:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "waves".to_owned(),
+                    thread: Some(SendMessageThreadTarget {
+                        thread_root_event_id: "$thread-root:example".to_owned(),
+                        latest_event_id: "$thread-1:example".to_owned(),
+                    }),
+                }),
+            ]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_compose_with_explicit_room_id_ignores_active_thread_view() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$thread-1:example",
+                None,
+                Some(thread_relation("$thread-root:example")),
+                RoomMessagePresentationKind::Text,
+                "durable reply",
+                1_700_000_120_000,
+            ),
+        )
+        .unwrap();
+        state.active_view = ViewId::Thread {
+            room_id: "!ops:example".to_owned(),
+            thread_root_event_id: "$thread-root:example".to_owned(),
+        };
+
+        let room_id = submit_compose(
+            &mut state,
+            RoomMessagePresentationKind::Text,
+            "hello".to_owned(),
+            Some("!ops:example"),
+        )
+        .unwrap();
+        assert_eq!(room_id, "!ops:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SendMessage(SendMessageRequest {
+                room_id: "!ops:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello".to_owned(),
+                thread: None,
+            })]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_compose_rejects_text_and_emote_for_empty_body_invalid_room_and_missing_active_view() {
         let mut state = test_state();
         state.model.rooms = vec![
             room("!room:example", "Room", false),
@@ -10732,6 +11020,7 @@ mod tests {
             Err("message body must not be empty".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
+        state.model.selected_room = Some("!room:example".to_owned());
         assert_eq!(
             submit_compose(
                 &mut state,
@@ -11033,6 +11322,7 @@ mod tests {
         let mut state = test_state();
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.model.selected_room = Some("!room:example".to_owned());
+        state.active_view = ViewId::Room("!room:example".to_owned());
 
         assert_eq!(
             submit_compose(
