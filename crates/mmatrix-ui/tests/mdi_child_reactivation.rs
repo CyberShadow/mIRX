@@ -81,6 +81,9 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         display_name: display_name.to_owned(),
         encrypted,
         is_space: false,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
         space_children: Vec::new(),
     }
 }

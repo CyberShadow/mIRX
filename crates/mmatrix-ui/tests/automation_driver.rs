@@ -186,6 +186,9 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         display_name: display_name.to_owned(),
         encrypted,
         is_space: false,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
         space_children: Vec::new(),
     }
 }
@@ -1415,6 +1418,9 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
                 display_name: "Space".to_owned(),
                 encrypted: false,
                 is_space: true,
+                is_direct: false,
+                direct_user_ids: Vec::new(),
+                tags: Vec::new(),
                 space_children: vec![SpaceChildSummary {
                     room_id: "!room:example".to_owned(),
                     suggested: true,

@@ -52,6 +52,9 @@ fn space(room_id: &str, display_name: &str, children: Vec<&str>) -> RoomSummary 
         display_name: display_name.to_owned(),
         encrypted: false,
         is_space: true,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
         space_children: children
             .into_iter()
             .map(|room_id| SpaceChildSummary {
@@ -69,6 +72,9 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
         display_name: display_name.to_owned(),
         encrypted: false,
         is_space: false,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
         space_children: Vec::new(),
     }
 }

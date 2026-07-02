@@ -5832,6 +5832,9 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 display_name: "One".to_owned(),
                 encrypted: false,
                 is_space: false,
+                is_direct: false,
+                direct_user_ids: Vec::new(),
+                tags: Vec::new(),
                 space_children: Vec::new(),
             },
             RoomSummary {
@@ -5839,6 +5842,9 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 display_name: "Two".to_owned(),
                 encrypted: true,
                 is_space: false,
+                is_direct: false,
+                direct_user_ids: Vec::new(),
+                tags: Vec::new(),
                 space_children: Vec::new(),
             },
         ]),
@@ -7359,6 +7365,9 @@ mod tests {
             display_name: display_name.to_owned(),
             encrypted,
             is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: Vec::new(),
         }
     }
@@ -7369,6 +7378,9 @@ mod tests {
             display_name: display_name.to_owned(),
             encrypted: false,
             is_space: true,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
             space_children: Vec::new(),
         }
     }
