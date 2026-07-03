@@ -24,10 +24,10 @@ use mmatrix_testkit::{
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -756,6 +756,29 @@ fn topic_entry_with_event_id(
             },
         }),
     }
+}
+
+fn topic_event_with_event_id(
+    room_id: &str,
+    event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    topic: &str,
+) -> Event {
+    Event::RoomActivity(Box::new(CoreRoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("state:{event_id}"),
+        timestamp_ms,
+        relation: None,
+        kind: CoreRoomActivityKind::StateNotice(mmatrix_core::RoomStateNoticeActivity {
+            event_id: event_id.to_owned(),
+            sender: sender.to_owned(),
+            state_key: String::new(),
+            content: mmatrix_core::RoomStateNoticeContent::Topic {
+                topic: topic.to_owned(),
+            },
+        }),
+    }))
 }
 
 fn member_entry_with_event_id(
@@ -4994,6 +5017,94 @@ fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
             .all(|item| item.identity != room_identity("!ops:example")
                 && item.identity != thread_identity("!ops:example", "$thread-root"))
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_event()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before = app.room_activity(Some("!beta:example"))?;
+    assert!(app.dump_model()?.submitted_room_topic_commands.is_empty());
+
+    app.set_compose_text("/topic incident review")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "topic change submitted for !beta:example");
+    assert_eq!(
+        model.submitted_room_topic_commands,
+        vec![SubmittedRoomTopicCommand {
+            room_id: "!beta:example".to_owned(),
+            topic: "incident review".to_owned(),
+        }]
+    );
+    assert_eq!(app.room_activity(Some("!beta:example"))?, before);
+
+    let before_topic_state = app.dump_ui_state()?;
+    let beta_view = find_view(&before_topic_state, &room_identity("!beta:example"));
+    assert!(!view_contains(beta_view, "Topic: incident review"));
+    assert!(!view_contains(
+        beta_view,
+        "* [22:16] @alice:example set topic: incident review"
+    ));
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![topic_event_with_event_id(
+        "!beta:example",
+        "$beta-topic-1",
+        "@alice:example",
+        1_700_000_180_000,
+        "incident review",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!beta:example"))?,
+        vec![
+            text_entry(
+                "!beta:example",
+                "@bob:example",
+                1_700_000_060_000,
+                "beta first",
+            ),
+            text_entry(
+                "!beta:example",
+                "@bob:example",
+                1_700_000_120_000,
+                "beta second",
+            ),
+            topic_entry_with_event_id(
+                "!beta:example",
+                "$beta-topic-1",
+                "@alice:example",
+                1_700_000_180_000,
+                "incident review",
+            ),
+        ]
+    );
+
+    let after_topic_state = app.dump_ui_state()?;
+    let beta_view = find_view(&after_topic_state, &room_identity("!beta:example"));
+    assert!(view_contains(beta_view, "Topic: incident review"));
+    assert!(view_contains(
+        beta_view,
+        "* [22:16] @alice:example set topic: incident review"
+    ));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

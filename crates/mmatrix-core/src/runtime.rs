@@ -13,7 +13,7 @@ use crate::api::{
     Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation,
     E2eeRecoverySucceeded, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomMembers,
-    RoomReadState, RoomSummary, VerificationFlowId,
+    RoomReadState, RoomSummary, SetRoomTopicRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -190,6 +190,7 @@ async fn handle_command(
             handle_create_direct_room(event_tx, state, request).await
         }
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
+        Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
@@ -511,6 +512,27 @@ async fn handle_send_message(
 
     if let Err(err) = matrix::send_message(client, request).await {
         emit_matrix_error(event_tx, Operation::SendMessage, err);
+    }
+
+    false
+}
+
+async fn handle_set_room_topic(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: SetRoomTopicRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SetRoomTopic,
+            "set room topic requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::set_room_topic(client, request).await {
+        emit_matrix_error(event_tx, Operation::SetRoomTopic, err);
     }
 
     false

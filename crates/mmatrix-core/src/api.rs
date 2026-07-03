@@ -15,6 +15,7 @@ pub enum Command {
     JoinRoom(JoinRoomRequest),
     CreateDirectRoom(CreateDirectRoomRequest),
     LeaveRoom(LeaveRoomRequest),
+    SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
     MarkRoomRead(MarkRoomReadRequest),
     RefreshE2eeStatus,
@@ -80,6 +81,13 @@ pub struct CreateDirectRoomRequest {
 #[serde(deny_unknown_fields)]
 pub struct LeaveRoomRequest {
     pub room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRoomTopicRequest {
+    pub room_id: String,
+    pub topic: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -473,6 +481,7 @@ pub enum Operation {
     JoinRoom,
     CreateDirectRoom,
     LeaveRoom,
+    SetRoomTopic,
     SendMessage,
     MarkRoomRead,
     RoomList,

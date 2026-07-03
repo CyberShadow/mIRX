@@ -8,7 +8,7 @@ use mmatrix_core::{
     RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
     RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, SendMessageRequest, SpaceChildSummary, StoredSession,
+    RoomTyping, SendMessageRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
     UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
@@ -295,6 +295,18 @@ fn leave_room_before_login_emits_leave_room_error() {
         }),
         Operation::LeaveRoom,
         "leave room requires an authenticated session",
+    );
+}
+
+#[test]
+fn set_room_topic_before_login_emits_set_room_topic_error() {
+    assert_invalid_authenticated_command(
+        Command::SetRoomTopic(SetRoomTopicRequest {
+            room_id: "!ops:example.org".to_owned(),
+            topic: "incident review".to_owned(),
+        }),
+        Operation::SetRoomTopic,
+        "set room topic requires an authenticated session",
     );
 }
 
@@ -1312,6 +1324,41 @@ fn leave_room_request_rejects_unknown_fields() {
         )
         .is_err(),
         "leave room request must reject unknown fields"
+    );
+}
+
+#[test]
+fn set_room_topic_request_round_trips_through_json() {
+    let request = SetRoomTopicRequest {
+        room_id: "!ops:example.org".to_owned(),
+        topic: "incident review".to_owned(),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&request).expect("serialize set room topic request"),
+        serde_json::json!({
+            "room_id": "!ops:example.org",
+            "topic": "incident review"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<SetRoomTopicRequest>(serde_json::json!({
+            "room_id": "!ops:example.org",
+            "topic": "incident review"
+        }))
+        .expect("deserialize set room topic request"),
+        request
+    );
+}
+
+#[test]
+fn set_room_topic_request_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<SetRoomTopicRequest>(
+            r#"{"room_id":"!ops:example.org","topic":"incident review","unexpected":"value"}"#
+        )
+        .is_err(),
+        "set room topic request must reject unknown fields"
     );
 }
 

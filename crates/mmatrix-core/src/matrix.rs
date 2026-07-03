@@ -57,9 +57,10 @@ use crate::api::{
     RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
     RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomTyping, SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -388,6 +389,26 @@ pub(crate) async fn leave_joined_room(
     room.leave()
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to leave Matrix room: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn set_room_topic(
+    client: &Client,
+    request: SetRoomTopicRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+
+    let room = client
+        .joined_rooms()
+        .into_iter()
+        .find(|room| room.room_id().as_str() == room_id.as_str())
+        .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))?;
+
+    room.set_room_topic(&request.topic)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix room topic: {err}")))?;
 
     Ok(())
 }

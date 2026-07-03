@@ -745,6 +745,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_direct_room_commands: Vec<DumpSubmittedDirectRoomCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_room_topic_commands: Vec<DumpSubmittedRoomTopicCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
@@ -761,6 +763,13 @@ pub(crate) struct DumpSubmittedMembershipCommand {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedDirectRoomCommand {
     pub(crate) user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedRoomTopicCommand {
+    pub(crate) room_id: String,
+    pub(crate) topic: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -962,6 +971,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::JoinRoom => "join_room",
         Operation::CreateDirectRoom => "create_direct_room",
         Operation::LeaveRoom => "leave_room",
+        Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
         Operation::MarkRoomRead => "mark_room_read",
         Operation::RoomList => "room_list",
@@ -1465,15 +1475,16 @@ mod tests {
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
         DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
-        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
-        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
-        WaitIdleResponse, failure_response, parse_command_request, success_response,
+        DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
+        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
+        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiRoomReadState, UiRoomState, UiState,
+        VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2774,6 +2785,7 @@ mod tests {
                     last_verification: None,
                     submitted_membership_commands: Vec::new(),
                     submitted_direct_room_commands: Vec::new(),
+                    submitted_room_topic_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
@@ -3313,6 +3325,7 @@ mod tests {
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
+            submitted_room_topic_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,
@@ -3367,6 +3380,52 @@ mod tests {
         ] {
             assert!(serde_json::from_value::<DumpModel>(invalid_json).is_err());
         }
+    }
+
+    #[test]
+    fn dump_model_round_trips_submitted_room_topic_commands_and_rejects_unknown_nested_fields() {
+        let model = DumpModel {
+            status: "ready".to_owned(),
+            lifecycle_state: LifecycleState::Ready,
+            rooms: Vec::new(),
+            last_activity: None,
+            e2ee_status: None,
+            last_verification: None,
+            submitted_membership_commands: Vec::new(),
+            submitted_direct_room_commands: Vec::new(),
+            submitted_room_topic_commands: vec![DumpSubmittedRoomTopicCommand {
+                room_id: "!ops:example".to_owned(),
+                topic: "incident review".to_owned(),
+            }],
+            submitted_verification_actions: Vec::new(),
+            last_error: None,
+            selected_room: Some("!ops:example".to_owned()),
+        };
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(serde_json::from_value::<DumpModel>(json).unwrap(), model);
+
+        let error = serde_json::from_value::<DumpModel>(json!({
+            "status":"ready",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":null,
+            "last_verification":null,
+            "submitted_membership_commands":[],
+            "submitted_direct_room_commands":[],
+            "submitted_room_topic_commands":[
+                {
+                    "room_id":"!ops:example",
+                    "topic":"incident review",
+                    "unexpected":true
+                }
+            ],
+            "last_error":null,
+            "selected_room":"!ops:example"
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field `unexpected`"));
     }
 
     #[test]

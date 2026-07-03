@@ -14,9 +14,9 @@ pub use api::{
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

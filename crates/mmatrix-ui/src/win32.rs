@@ -23,8 +23,8 @@ use mmatrix_core::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo, RoomMemberSummary, RoomMembers,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -81,17 +81,17 @@ use crate::{
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
         DumpRoomActivityResponse, DumpRoomMessageActivityLine, DumpSubmittedDirectRoomCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedVerificationAction,
-        DumpVerificationActionKind, FailureEnvelope, GetVersionResponse, LifecycleState,
-        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
-        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
-        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
-        StatusBarState, SwitchbarItem, SwitchbarState, UiRoomState, UiState,
-        VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        DumpSubmittedMembershipCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
+        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -1090,6 +1090,7 @@ enum LocalSlashCommand<'a> {
     Join { target: String },
     Query { user_id: String },
     Part { target: Option<String> },
+    Topic { topic: String },
     Clear,
     E2ee(E2eeSlashCommand),
     Verify { action: VerificationAction },
@@ -3416,7 +3417,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.lifecycle_state = LifecycleState::Syncing;
         }
         Event::Error(error) => {
-            if !preserves_membership_submission_status(&state.model.status, error.operation) {
+            if !preserves_submission_status(&state.model.status, error.operation) {
                 state.model.status = format!("error during {}", operation_name(error.operation));
             }
             state.model.lifecycle_state = LifecycleState::Error;
@@ -3426,11 +3427,12 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
     Ok(())
 }
 
-fn preserves_membership_submission_status(status: &str, operation: Operation) -> bool {
+fn preserves_submission_status(status: &str, operation: Operation) -> bool {
     match operation {
         Operation::JoinRoom => status.starts_with("join submitted: "),
         Operation::CreateDirectRoom => status.starts_with("query submitted: "),
         Operation::LeaveRoom => status.starts_with("part submitted: "),
+        Operation::SetRoomTopic => status.starts_with("topic change submitted for "),
         _ => false,
     }
 }
@@ -6323,6 +6325,12 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "part" => LocalSlashCommand::Part {
             target: Some(argument.to_owned()),
         },
+        "topic" if !argument.is_empty() => LocalSlashCommand::Topic {
+            topic: argument.to_owned(),
+        },
+        "topic" => LocalSlashCommand::Invalid {
+            feedback: "usage: /topic <text>".to_owned(),
+        },
         "clear" if argument.is_empty() => LocalSlashCommand::Clear,
         "clear" => LocalSlashCommand::Invalid {
             feedback: "usage: /clear".to_owned(),
@@ -6566,6 +6574,15 @@ unsafe fn execute_local_slash_command(
                 Ok(message) | Err(message) => set_local_command_status(hwnd, message),
             }
         }
+        LocalSlashCommand::Topic { topic } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_topic_slash_command(state, topic)
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
         LocalSlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
             ViewId::Room(room_id) => {
                 if let Some(view) = state_mut(hwnd).model.room_views.get_mut(&room_id) {
@@ -6753,6 +6770,23 @@ fn submit_part_slash_command(
         .map_err(|err| format!("failed to enqueue leave room command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("part submitted: {room_id}"))
+}
+
+fn submit_topic_slash_command(state: &mut WindowState, topic: String) -> Result<String, String> {
+    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let command = Command::SetRoomTopic(SetRoomTopicRequest {
+        room_id: room_id.clone(),
+        topic,
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue set room topic command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("topic change submitted for {room_id}"))
 }
 
 unsafe fn navigate_compose_history(
@@ -7017,6 +7051,16 @@ fn dump_submitted_direct_room_command(command: &Command) -> Option<DumpSubmitted
     }
 }
 
+fn dump_submitted_room_topic_command(command: &Command) -> Option<DumpSubmittedRoomTopicCommand> {
+    match command {
+        Command::SetRoomTopic(request) => Some(DumpSubmittedRoomTopicCommand {
+            room_id: request.room_id.clone(),
+            topic: request.topic.clone(),
+        }),
+        _ => None,
+    }
+}
+
 fn submitted_membership_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMembershipCommand> {
@@ -7034,6 +7078,16 @@ fn submitted_direct_room_commands_from_state(
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_direct_room_command)
+        .collect()
+}
+
+fn submitted_room_topic_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedRoomTopicCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_room_topic_command)
         .collect()
 }
 
@@ -7081,6 +7135,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .map(dump_verification_from_state_event),
         submitted_membership_commands: submitted_membership_commands_from_state(state),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
+        submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
@@ -7432,6 +7487,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::JoinRoom => "join room",
         Operation::CreateDirectRoom => "create direct room",
         Operation::LeaveRoom => "leave room",
+        Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
         Operation::MarkRoomRead => "mark room read",
         Operation::RoomList => "room list",
@@ -9604,7 +9660,7 @@ mod tests {
     }
 
     #[test]
-    fn membership_submission_status_survives_matching_error_event() {
+    fn submission_status_survives_matching_error_event() {
         let mut state = test_state();
         state.model.status = "join submitted: #ops:example.org".to_owned();
 
@@ -9666,6 +9722,30 @@ mod tests {
             Some(CoreErrorEvent {
                 operation: Operation::CreateDirectRoom,
                 message: "create direct room requires an authenticated session".to_owned(),
+            })
+        );
+
+        state.model.status = "topic change submitted for !ops:example.org".to_owned();
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::SetRoomTopic,
+                message: "set room topic requires an authenticated session".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.model.status,
+            "topic change submitted for !ops:example.org"
+        );
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+        assert_eq!(
+            state.model.last_error,
+            Some(CoreErrorEvent {
+                operation: Operation::SetRoomTopic,
+                message: "set room topic requires an authenticated session".to_owned(),
             })
         );
     }
@@ -11851,6 +11931,18 @@ mod tests {
                 target: Some("!room:example.org".to_owned()),
             }
         );
+        assert_eq!(
+            parse_slash_command("/topic incident review"),
+            LocalSlashCommand::Topic {
+                topic: "incident review".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/topic   incident review   "),
+            LocalSlashCommand::Topic {
+                topic: "incident review".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -11871,6 +11963,18 @@ mod tests {
             parse_slash_command("/query   "),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /query <mxid>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/topic"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /topic <text>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/topic   "),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /topic <text>".to_owned(),
             }
         );
     }
@@ -12077,6 +12181,120 @@ mod tests {
             Err("ambiguous part target: Shared".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_topic_slash_command_from_active_room_records_typed_request_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = room_view_id("!room:example");
+
+        let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
+
+        assert_eq!(status, "topic change submitted for !room:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SetRoomTopic(SetRoomTopicRequest {
+                room_id: "!room:example".to_owned(),
+                topic: "incident review".to_owned(),
+            })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_room_topic_commands,
+            vec![DumpSubmittedRoomTopicCommand {
+                room_id: "!room:example".to_owned(),
+                topic: "incident review".to_owned(),
+            }]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_topic_slash_command_from_thread_targets_parent_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = thread_view_id("!room:example", "$thread-root");
+
+        let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
+
+        assert_eq!(status, "topic change submitted for !room:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SetRoomTopic(SetRoomTopicRequest {
+                room_id: "!room:example".to_owned(),
+                topic: "incident review".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_topic_slash_command_from_status_returns_no_room_selected() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_topic_slash_command(&mut state, "incident review".to_owned()),
+            Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_topic_slash_command_does_not_mutate_local_topic_or_activity_before_inbound_event() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.active_view = room_view_id("!room:example");
+        apply_core_event(&mut state, topic_state("!room:example", "existing topic")).unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!room:example",
+                "$event:example",
+                None,
+                "hello",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+
+        let before_activities = state
+            .model
+            .room_views
+            .get("!room:example")
+            .expect("room view must exist")
+            .activities
+            .clone();
+
+        let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
+
+        assert_eq!(status, "topic change submitted for !room:example");
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .and_then(|view| view.topic.as_deref()),
+            Some("existing topic")
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|view| view.activities.clone()),
+            Some(before_activities)
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!room:example"),
+            vec![
+                "Room: Room (!room:example)".to_owned(),
+                "Topic: existing topic".to_owned(),
+                "* [22:14] @alice:example set topic: existing topic".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+            ]
+        );
+
+        stop_test_core(handle);
     }
 
     #[test]
