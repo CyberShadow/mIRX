@@ -18,30 +18,39 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, JoinRoomRequest,
-    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
-    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    FetchRoomImageMediaRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest, StoredSession,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, RECT, WPARAM,
+    CloseHandle, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+    LRESULT, RECT, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_WINDOW, EndPaint, FillRect, HBRUSH, InvalidateRect, PAINTSTRUCT, SetBkMode,
-    SetTextColor, TRANSPARENT, TextOutW,
+    BeginPaint, COLOR_WINDOW, CreateSolidBrush, DeleteObject, EndPaint, FillRect, HBRUSH,
+    InvalidateRect, PAINTSTRUCT, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+};
+use windows_sys::Win32::Graphics::GdiPlus::{
+    GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
+    GdipGetImageHeight, GdipGetImageWidth, GdipLoadImageFromStream, GdiplusShutdown,
+    GdiplusStartup, GdiplusStartupInput, GpGraphics, GpImage,
 };
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{
-    CreateFileMappingW, FILE_MAP_ALL_ACCESS, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile,
-    PAGE_READWRITE, UnmapViewOfFile,
+    CreateFileMappingW, FILE_MAP_ALL_ACCESS, GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
+    MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
@@ -58,20 +67,20 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
-    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
-    GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW,
-    MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
-    WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
-    WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, FrameRect, GWL_STYLE, GWLP_USERDATA,
+    GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU,
+    IDC_ARROW, IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT,
+    LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN,
+    SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT,
+    SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW,
+    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE,
+    WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
+    WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL,
+    WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -145,6 +154,10 @@ const ROOM_TIMELINE_MIN_WIDTH: i32 = 240;
 const TIMELINE_ROW_HEIGHT: i32 = 20;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_VERTICAL_PADDING: i32 = 6;
+const TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH: i32 = 160;
+const TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT: i32 = 120;
+const TIMELINE_IMAGE_MEDIA_SLOT_LINES: usize = 7;
+const TIMELINE_IMAGE_LEFT_INDENT: i32 = 24;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
@@ -216,6 +229,7 @@ struct RoomContentState {
 struct TimelineRow {
     kind: TimelineRowKind,
     text: String,
+    image_state: Option<TimelineImageState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,9 +255,18 @@ enum TimelineMessageSendState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum TimelineImageState {
+    Pending,
+    Loaded { key: String, width: u32, height: u32 },
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct TimelinePaintLine {
     kind: TimelineRowKind,
     text: String,
+    image_state: Option<TimelineImageState>,
+    image_slot_index: Option<usize>,
 }
 
 struct TimelineState {
@@ -287,6 +310,7 @@ struct RoomViewModel {
     topic: Option<String>,
     activities: Vec<RoomActivity>,
     threads: BTreeMap<String, ThreadViewModel>,
+    image_media: BTreeMap<String, RoomImageMediaState>,
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
 }
@@ -294,6 +318,67 @@ struct RoomViewModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ThreadViewModel {
     label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoomImageMediaState {
+    Pending {
+        event_id: String,
+        format: RoomImageMediaFormat,
+    },
+    Loaded {
+        event_id: String,
+        format: RoomImageMediaFormat,
+        image_key: String,
+        width: u32,
+        height: u32,
+    },
+    Failed {
+        event_id: String,
+        format: RoomImageMediaFormat,
+        message: String,
+    },
+}
+
+struct GdiplusSession {
+    token: usize,
+}
+
+impl GdiplusSession {
+    fn startup() -> Result<Self, String> {
+        let input = GdiplusStartupInput {
+            GdiplusVersion: 1,
+            DebugEventCallback: 0,
+            SuppressBackgroundThread: 0,
+            SuppressExternalCodecs: 0,
+        };
+        let mut token = 0usize;
+        let status = unsafe { GdiplusStartup(&mut token, &input, null_mut()) };
+        if status != 0 {
+            return Err(format_gdiplus_status("GdiplusStartup", status));
+        }
+        Ok(Self { token })
+    }
+}
+
+impl Drop for GdiplusSession {
+    fn drop(&mut self) {
+        unsafe { GdiplusShutdown(self.token) };
+    }
+}
+
+struct GdiplusImage {
+    raw: *mut GpImage,
+    width: u32,
+    height: u32,
+}
+
+impl Drop for GdiplusImage {
+    fn drop(&mut self) {
+        unsafe {
+            GdipDisposeImage(self.raw);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -319,6 +404,7 @@ impl RoomViewModel {
                 })
             )
         });
+        self.retain_image_media_for_visible_activities();
         self.rebuild_threads();
     }
 
@@ -371,6 +457,88 @@ impl RoomViewModel {
 
     fn replace_members(&mut self, members: RoomMembers) {
         self.members = members.members;
+    }
+
+    fn projected_image_state(
+        &self,
+        activity_id: &str,
+        event_id: &str,
+        format: &RoomImageMediaFormat,
+    ) -> TimelineImageState {
+        match self.image_media.get(activity_id) {
+            Some(RoomImageMediaState::Pending {
+                event_id: stored_event_id,
+                format: stored_format,
+            }) if stored_event_id == event_id && stored_format == format => TimelineImageState::Pending,
+            Some(RoomImageMediaState::Loaded {
+                event_id: stored_event_id,
+                format: stored_format,
+                image_key,
+                width,
+                height,
+            }) if stored_event_id == event_id && stored_format == format => TimelineImageState::Loaded {
+                key: image_key.clone(),
+                width: *width,
+                height: *height,
+            },
+            Some(RoomImageMediaState::Failed {
+                event_id: stored_event_id,
+                format: stored_format,
+                message,
+            }) if stored_event_id == event_id && stored_format == format => TimelineImageState::Failed {
+                message: message.clone(),
+            },
+            _ => TimelineImageState::Pending,
+        }
+    }
+
+    fn should_request_image_media(
+        &self,
+        activity_id: &str,
+        event_id: &str,
+        format: &RoomImageMediaFormat,
+    ) -> bool {
+        match self.image_media.get(activity_id) {
+            Some(RoomImageMediaState::Pending {
+                event_id: stored_event_id,
+                format: stored_format,
+            })
+            | Some(RoomImageMediaState::Loaded {
+                event_id: stored_event_id,
+                format: stored_format,
+                ..
+            })
+            | Some(RoomImageMediaState::Failed {
+                event_id: stored_event_id,
+                format: stored_format,
+                ..
+            }) => stored_event_id != event_id || stored_format != format,
+            None => true,
+        }
+    }
+
+    fn mark_image_media_pending(
+        &mut self,
+        activity_id: String,
+        event_id: String,
+        format: RoomImageMediaFormat,
+    ) -> Option<RoomImageMediaState> {
+        self.image_media.insert(
+            activity_id,
+            RoomImageMediaState::Pending { event_id, format },
+        )
+    }
+
+    fn remove_image_media(&mut self, activity_id: &str) -> Option<RoomImageMediaState> {
+        self.image_media.remove(activity_id)
+    }
+
+    fn insert_image_media(
+        &mut self,
+        activity_id: String,
+        image_media: RoomImageMediaState,
+    ) -> Option<RoomImageMediaState> {
+        self.image_media.insert(activity_id, image_media)
     }
 
     fn upsert_message_activity(
@@ -595,6 +763,14 @@ impl RoomViewModel {
             .map(|_| ())
             .ok_or_else(|| error_message.to_owned())
     }
+
+    fn retain_image_media_for_visible_activities(&mut self) {
+        self.image_media.retain(|activity_id, _| {
+            self.activities
+                .iter()
+                .any(|activity| activity.activity_id == *activity_id)
+        });
+    }
 }
 
 fn validate_synthetic_room_activity_events(
@@ -626,6 +802,112 @@ fn validate_synthetic_room_activity_events(
     }
 
     Ok(())
+}
+
+fn initialize_gdiplus_state() -> (Option<GdiplusSession>, Option<String>) {
+    match GdiplusSession::startup() {
+        Ok(session) => (Some(session), None),
+        Err(message) => (None, Some(message)),
+    }
+}
+
+fn timeline_thumbnail_format() -> RoomImageMediaFormat {
+    RoomImageMediaFormat::Thumbnail {
+        width: TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH as u32,
+        height: TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT as u32,
+    }
+}
+
+fn room_image_media_storage_key(
+    room_id: &str,
+    activity_id: &str,
+    event_id: &str,
+    format: &RoomImageMediaFormat,
+) -> String {
+    match format {
+        RoomImageMediaFormat::Thumbnail { width, height } => {
+            format!("{room_id}|{activity_id}|{event_id}|thumbnail:{width}x{height}")
+        }
+        RoomImageMediaFormat::File => {
+            format!("{room_id}|{activity_id}|{event_id}|file")
+        }
+    }
+}
+
+fn format_gdiplus_status(operation: &str, status: i32) -> String {
+    format!("{operation} failed with GDI+ status {status}")
+}
+
+unsafe fn release_com_interface(ptr: *mut c_void) {
+    if ptr.is_null() {
+        return;
+    }
+    let vtable = *(ptr as *mut *mut windows_sys::core::IUnknown_Vtbl);
+    ((*vtable).Release)(ptr);
+}
+
+fn decode_image_bytes(bytes: &[u8]) -> Result<GdiplusImage, String> {
+    unsafe {
+        let hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+        if hglobal.is_null() {
+            return Err(last_os_error("GlobalAlloc"));
+        }
+
+        let mut stream = null_mut();
+        let copy_result = (|| -> Result<GdiplusImage, String> {
+            let locked = GlobalLock(hglobal);
+            if locked.is_null() {
+                return Err(last_os_error("GlobalLock"));
+            }
+            copy_nonoverlapping(bytes.as_ptr(), locked.cast::<u8>(), bytes.len());
+            GlobalUnlock(hglobal);
+
+            let hr = CreateStreamOnHGlobal(hglobal, 1, &mut stream);
+            if hr < 0 {
+                return Err(format!(
+                    "CreateStreamOnHGlobal failed with HRESULT 0x{:08x}",
+                    hr as u32
+                ));
+            }
+
+            let decode_result = (|| -> Result<GdiplusImage, String> {
+                let mut image = null_mut::<GpImage>();
+                let status = GdipLoadImageFromStream(stream, &mut image);
+                if status != 0 {
+                    return Err(format_gdiplus_status("GdipLoadImageFromStream", status));
+                }
+
+                let mut width = 0u32;
+                let status = GdipGetImageWidth(image, &mut width);
+                if status != 0 {
+                    GdipDisposeImage(image);
+                    return Err(format_gdiplus_status("GdipGetImageWidth", status));
+                }
+
+                let mut height = 0u32;
+                let status = GdipGetImageHeight(image, &mut height);
+                if status != 0 {
+                    GdipDisposeImage(image);
+                    return Err(format_gdiplus_status("GdipGetImageHeight", status));
+                }
+
+                if width == 0 || height == 0 {
+                    GdipDisposeImage(image);
+                    return Err("decoded image reported zero width or height".to_owned());
+                }
+
+                Ok(GdiplusImage { raw: image, width, height })
+            })();
+
+            release_com_interface(stream);
+            decode_result
+        })();
+
+        if copy_result.is_err() && stream.is_null() {
+            GlobalFree(hglobal);
+        }
+        copy_result
+    }
 }
 
 fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessageActivity> {
@@ -773,6 +1055,112 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
         | RoomActivityKind::StateNotice(_) => room_activity_event_id(activity),
         _ => None,
     }
+}
+
+fn room_image_media_loaded_key(image_media: &RoomImageMediaState) -> Option<&str> {
+    match image_media {
+        RoomImageMediaState::Loaded { image_key, .. } => Some(image_key.as_str()),
+        _ => None,
+    }
+}
+
+fn prune_decoded_images(state: &mut WindowState) {
+    let referenced_keys = state
+        .model
+        .room_views
+        .values()
+        .flat_map(|room_view| room_view.image_media.values())
+        .filter_map(room_image_media_loaded_key)
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    state
+        .decoded_images
+        .retain(|image_key, _| referenced_keys.contains(image_key));
+}
+
+fn decoded_image_from_loaded_media(
+    state: &mut WindowState,
+    room_id: &str,
+    activity_id: &str,
+    event_id: &str,
+    format: &RoomImageMediaFormat,
+    bytes: &[u8],
+) -> Result<RoomImageMediaState, String> {
+    let Some(_session) = state.gdiplus_session.as_ref() else {
+        return Err(
+            state
+                .gdiplus_startup_error
+                .clone()
+                .unwrap_or_else(|| "GDI+ startup did not complete".to_owned()),
+        );
+    };
+    let image = decode_image_bytes(bytes)?;
+    let key = room_image_media_storage_key(room_id, activity_id, event_id, format);
+    let width = image.width;
+    let height = image.height;
+    state.decoded_images.insert(key.clone(), image);
+    Ok(RoomImageMediaState::Loaded {
+        event_id: event_id.to_owned(),
+        format: format.clone(),
+        image_key: key,
+        width,
+        height,
+    })
+}
+
+fn apply_room_image_media_event(state: &mut WindowState, media: RoomImageMedia) {
+    let previous = {
+        let Some(room_view) = state.model.room_views.get_mut(&media.room_id) else {
+            return;
+        };
+        room_view.remove_image_media(&media.activity_id)
+    };
+    if let Some(image_key) = previous
+        .as_ref()
+        .and_then(room_image_media_loaded_key)
+        .map(str::to_owned)
+    {
+        state.decoded_images.remove(&image_key);
+    }
+
+    let RoomImageMedia {
+        room_id,
+        activity_id,
+        event_id,
+        kind,
+    } = media;
+    let next_state = match kind {
+        RoomImageMediaKind::Failed { format, message } => RoomImageMediaState::Failed {
+            event_id,
+            format,
+            message,
+        },
+        RoomImageMediaKind::Loaded { format, bytes } => {
+            match decoded_image_from_loaded_media(
+                state,
+                &room_id,
+                &activity_id,
+                &event_id,
+                &format,
+                &bytes,
+            ) {
+                Ok(image_media) => image_media,
+                Err(message) => RoomImageMediaState::Failed {
+                    event_id,
+                    format,
+                    message,
+                },
+            }
+        }
+    };
+
+    state.model.status = format!("image media update from {room_id}");
+    state
+        .model
+        .room_views
+        .get_mut(&room_id)
+        .expect("room image media updates require an existing room view")
+        .insert_image_media(activity_id, next_state);
 }
 
 fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
@@ -1147,7 +1535,16 @@ struct WindowState {
     compose_history: ComposeHistory,
     edit_window_proc: WNDPROC,
     model: UiModel,
+    decoded_images: BTreeMap<String, GdiplusImage>,
+    gdiplus_session: Option<GdiplusSession>,
+    gdiplus_startup_error: Option<String>,
     recorded_commands: Vec<Command>,
+}
+
+impl Drop for WindowState {
+    fn drop(&mut self) {
+        self.decoded_images.clear();
+    }
 }
 
 struct CoreBridge {
@@ -1192,6 +1589,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
+    let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
 
     let state = Box::new(WindowState {
         controls: Controls::default(),
@@ -1215,6 +1613,9 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         compose_history: ComposeHistory::default(),
         edit_window_proc: None,
         model: initial_model(),
+        decoded_images: BTreeMap::new(),
+        gdiplus_session,
+        gdiplus_startup_error,
         recorded_commands: Vec::new(),
     });
 
@@ -2118,6 +2519,8 @@ fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintLine> {
         .map(|text| TimelinePaintLine {
             kind: TimelineRowKind::Plain,
             text,
+            image_state: None,
+            image_slot_index: None,
         })
         .collect()
 }
@@ -2129,7 +2532,19 @@ fn timeline_row_paint_lines(rows: &[TimelineRow]) -> Vec<TimelinePaintLine> {
             paint_lines.push(TimelinePaintLine {
                 kind: row.kind.clone(),
                 text,
+                image_state: None,
+                image_slot_index: None,
             });
+        }
+        if let Some(image_state) = &row.image_state {
+            for image_slot_index in 0..TIMELINE_IMAGE_MEDIA_SLOT_LINES {
+                paint_lines.push(TimelinePaintLine {
+                    kind: row.kind.clone(),
+                    text: String::new(),
+                    image_state: Some(image_state.clone()),
+                    image_slot_index: Some(image_slot_index),
+                });
+            }
         }
     }
     paint_lines
@@ -2165,6 +2580,7 @@ unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
         lines,
         paint_lines
             .iter()
+            .filter(|line| line.image_slot_index.is_none())
             .map(|line| line.text.clone())
             .collect::<Vec<_>>()
     );
@@ -2221,20 +2637,21 @@ fn clamped_timeline_top_line(top_line: usize, line_count: usize, visible_rows: u
 unsafe fn clamp_timeline_top_line(hwnd: HWND) {
     let visible_rows = timeline_visible_rows(hwnd);
     let state = timeline_state_mut(hwnd);
-    state.top_line = clamped_timeline_top_line(state.top_line, state.lines.len(), visible_rows);
+    state.top_line =
+        clamped_timeline_top_line(state.top_line, state.paint_lines.len(), visible_rows);
 }
 
 unsafe fn update_timeline_scrollbar(hwnd: HWND) {
     let visible_rows = timeline_visible_rows(hwnd);
     let state = timeline_state_ref(hwnd);
-    let expected_max = state.lines.len().saturating_sub(1) as i32;
-    let expected_page = visible_rows.max(1).min(state.lines.len().max(1)) as u32;
+    let expected_max = state.paint_lines.len().saturating_sub(1) as i32;
+    let expected_page = visible_rows.max(1).min(state.paint_lines.len().max(1)) as u32;
     let scroll_info = SCROLLINFO {
         cbSize: size_of::<SCROLLINFO>() as u32,
         fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
         nMin: 0,
         nMax: expected_max,
-        nPage: visible_rows as u32,
+        nPage: expected_page,
         nPos: state.top_line as i32,
         nTrackPos: 0,
     };
@@ -2264,7 +2681,7 @@ unsafe fn update_timeline_scrollbar(hwnd: HWND) {
             hwnd as usize,
             rect.right - rect.left,
             rect.bottom - rect.top,
-            state.lines.len(),
+            state.paint_lines.len(),
             visible_rows,
             expected_max,
             expected_page,
@@ -2284,7 +2701,7 @@ unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     let visible_rows = timeline_visible_rows(hwnd);
     let max_top_line = {
         let state = timeline_state_ref(hwnd);
-        timeline_max_top_line(state.lines.len(), visible_rows)
+        timeline_max_top_line(state.paint_lines.len(), visible_rows)
     };
     let current = timeline_state_ref(hwnd).top_line;
 
@@ -2336,12 +2753,20 @@ unsafe fn paint_timeline(hwnd: HWND) {
         .take(visible_rows)
         .enumerate()
     {
+        let line_y = state.vertical_padding + row as i32 * state.line_height;
+        if let Some(image_slot_index) = line.image_slot_index {
+            if let Some(image_state) = line.image_state.as_ref() {
+                paint_timeline_image_slot(hwnd, hdc, line_y, image_slot_index, image_state);
+            }
+            continue;
+        }
+
         let text = wide_null(&line.text);
         SetTextColor(hdc, timeline_row_color(&line.kind));
         TextOutW(
             hdc,
             TIMELINE_LEFT_PADDING,
-            state.vertical_padding + row as i32 * state.line_height,
+            line_y,
             text.as_ptr(),
             text.len() as i32 - 1,
         );
@@ -2380,6 +2805,123 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
         TimelineRowKind::StateNotice => rgb(0x3D, 0x67, 0x35),
     }
+}
+
+fn timeline_image_slot_rect(line_y: i32, image_slot_index: usize) -> RECT {
+    let slot_height = TIMELINE_IMAGE_MEDIA_SLOT_LINES as i32 * TIMELINE_ROW_HEIGHT;
+    let top = line_y + (slot_height - TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT) / 2
+        - image_slot_index as i32 * TIMELINE_ROW_HEIGHT;
+    let left = TIMELINE_LEFT_PADDING + TIMELINE_IMAGE_LEFT_INDENT;
+    RECT {
+        left,
+        top,
+        right: left + TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH,
+        bottom: top + TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT,
+    }
+}
+
+unsafe fn paint_timeline_image_slot(
+    hwnd: HWND,
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    line_y: i32,
+    image_slot_index: usize,
+    image_state: &TimelineImageState,
+) {
+    let rect = timeline_image_slot_rect(line_y, image_slot_index);
+    match image_state {
+        TimelineImageState::Pending => {
+            paint_timeline_image_placeholder(hdc, &rect, "loading image...");
+        }
+        TimelineImageState::Loaded { key, width, height } => {
+            paint_timeline_loaded_image(hwnd, hdc, &rect, key, *width, *height);
+        }
+        TimelineImageState::Failed { .. } => {
+            paint_timeline_image_placeholder(hdc, &rect, "image unavailable");
+        }
+    }
+}
+
+unsafe fn paint_timeline_image_placeholder(
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    rect: &RECT,
+    message: &str,
+) {
+    let border = CreateSolidBrush(rgb(0x7A, 0x7A, 0x7A));
+    if !border.is_null() {
+        FrameRect(hdc, rect, border);
+        DeleteObject(border as _);
+    }
+    let text = wide_null(message);
+    SetTextColor(hdc, rgb(0x5E, 0x5E, 0x5E));
+    TextOutW(
+        hdc,
+        rect.left + 8,
+        rect.top + 8,
+        text.as_ptr(),
+        text.len() as i32 - 1,
+    );
+}
+
+unsafe fn paint_timeline_loaded_image(
+    hwnd: HWND,
+    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
+    rect: &RECT,
+    key: &str,
+    width: u32,
+    height: u32,
+) {
+    let window_state = timeline_window_state(hwnd);
+    let Some(image) = window_state.decoded_images.get(key) else {
+        paint_timeline_image_placeholder(hdc, rect, "image unavailable");
+        return;
+    };
+    let (draw_width, draw_height) =
+        scaled_thumbnail_dimensions(width, height, TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH, TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT);
+    let draw_x = rect.left + (TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH - draw_width) / 2;
+    let draw_y = rect.top + (TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT - draw_height) / 2;
+
+    let border = CreateSolidBrush(rgb(0x7A, 0x7A, 0x7A));
+    if !border.is_null() {
+        FrameRect(hdc, rect, border);
+        DeleteObject(border as _);
+    }
+
+    let mut graphics = null_mut::<GpGraphics>();
+    if GdipCreateFromHDC(hdc, &mut graphics) != 0 {
+        paint_timeline_image_placeholder(hdc, rect, "image unavailable");
+        return;
+    }
+    let status = GdipDrawImageRectI(graphics, image.raw, draw_x, draw_y, draw_width, draw_height);
+    GdipDeleteGraphics(graphics);
+    if status != 0 {
+        paint_timeline_image_placeholder(hdc, rect, "image unavailable");
+    }
+}
+
+unsafe fn timeline_window_state(hwnd: HWND) -> &'static WindowState {
+    let room_content = GetParent(hwnd);
+    assert!(!room_content.is_null(), "timeline control must have a room content parent");
+    let mdi_child = GetParent(room_content);
+    assert!(!mdi_child.is_null(), "room content must have an mdi child parent");
+    let mdi_client = GetParent(mdi_child);
+    assert!(!mdi_client.is_null(), "mdi child must have an mdi client parent");
+    let frame = GetParent(mdi_client);
+    assert!(!frame.is_null(), "mdi client must have a frame parent");
+    state_ref(frame)
+}
+
+fn scaled_thumbnail_dimensions(
+    width: u32,
+    height: u32,
+    max_width: i32,
+    max_height: i32,
+) -> (i32, i32) {
+    let width = width as f64;
+    let height = height as f64;
+    let scale = f64::min(1.0, f64::min(max_width as f64 / width, max_height as f64 / height));
+    let draw_width = (width * scale).round() as i32;
+    let draw_height = (height * scale).round() as i32;
+    (draw_width.max(1), draw_height.max(1))
 }
 
 unsafe extern "system" fn login_dialog_window_proc(
@@ -3372,6 +3914,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
+        Event::RoomImageMedia(media) => apply_room_image_media_event(state, media),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
@@ -3407,6 +3950,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.room_read_states.clear();
             state.room_activity.clear();
             state.room_activity_read_targets.clear();
+            state.decoded_images.clear();
         }
         Event::Stopped => {
             state.model.status = "core stopped".to_owned();
@@ -3467,6 +4011,7 @@ fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
     TimelineRow {
         kind: TimelineRowKind::Header,
         text: header,
+        image_state: None,
     }
 }
 
@@ -3481,6 +4026,7 @@ fn push_room_context_rows(
         rows.push(TimelineRow {
             kind: TimelineRowKind::Topic,
             text: format!("Topic: {topic}"),
+            image_state: None,
         });
     }
 
@@ -3496,11 +4042,16 @@ fn push_room_context_rows(
         rows.push(TimelineRow {
             kind: TimelineRowKind::Typing,
             text: format!("* {users} {verb} typing"),
+            image_state: None,
         });
     }
 }
 
-fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) {
+fn push_room_activity_row(
+    rows: &mut Vec<TimelineRow>,
+    room_view: Option<&RoomViewModel>,
+    activity: &RoomActivity,
+) {
     match &activity.kind {
         RoomActivityKind::Message(message) => {
             let base = match message.presentation {
@@ -3534,11 +4085,16 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                     send_state: timeline_message_send_state(&message.send_state),
                 },
                 text: format!("{base}{suffix}"),
+                image_state: None,
             });
         }
         RoomActivityKind::Image(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
+            let format = timeline_thumbnail_format();
+            let image_state = room_view.map(|view| {
+                view.projected_image_state(&activity.activity_id, &message.event_id, &format)
+            });
             rows.push(TimelineRow {
                 kind: TimelineRowKind::Image,
                 text: format!(
@@ -3546,6 +4102,7 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                     format_timestamp_hhmm_utc(activity.timestamp_ms),
                     message.sender,
                 ),
+                image_state,
             });
         }
         RoomActivityKind::UnsupportedMessage(message) => rows.push(TimelineRow {
@@ -3557,6 +4114,7 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                 message.msgtype,
                 message.body
             ),
+            image_state: None,
         }),
         RoomActivityKind::StateNotice(notice) => match &notice.content {
             RoomStateNoticeContent::Topic { topic } => rows.push(TimelineRow {
@@ -3566,6 +4124,7 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                     format_timestamp_hhmm_utc(activity.timestamp_ms),
                     notice.sender,
                 ),
+                image_state: None,
             }),
             RoomStateNoticeContent::Member {
                 membership,
@@ -3578,6 +4137,7 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                         rows.push(TimelineRow {
                             kind: TimelineRowKind::StateNotice,
                             text: format!("* [{timestamp}] {member} joined"),
+                            image_state: None,
                         });
                     }
                     "leave" => {
@@ -3585,6 +4145,7 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                         rows.push(TimelineRow {
                             kind: TimelineRowKind::StateNotice,
                             text: format!("* [{timestamp}] {member} left"),
+                            image_state: None,
                         });
                     }
                     membership => rows.push(TimelineRow {
@@ -3593,6 +4154,7 @@ fn push_room_activity_row(rows: &mut Vec<TimelineRow>, activity: &RoomActivity) 
                             "* [{timestamp}] {} membership: {membership}",
                             notice.state_key
                         ),
+                        image_state: None,
                     }),
                 }
             }
@@ -3608,7 +4170,7 @@ fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> 
 
     if let Some(room_view) = room_view {
         for activity in &room_view.activities {
-            push_room_activity_row(&mut rows, activity);
+            push_room_activity_row(&mut rows, Some(room_view), activity);
         }
     }
 
@@ -3629,7 +4191,7 @@ fn build_thread_timeline_rows(
     push_room_context_rows(&mut rows, room, Some(room_view));
     for activity in &room_view.activities {
         if room_activity_belongs_to_thread(activity, thread_root_event_id) {
-            push_room_activity_row(&mut rows, activity);
+            push_room_activity_row(&mut rows, Some(room_view), activity);
         }
     }
     rows
@@ -4202,6 +4764,108 @@ unsafe fn destroy_stale_room_views(hwnd: HWND) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoomImageMediaDispatch {
+    activity_id: String,
+    event_id: String,
+    source: RoomMediaSource,
+    format: RoomImageMediaFormat,
+}
+
+fn collect_lazy_room_image_media_requests<'a>(
+    room_view: &RoomViewModel,
+    activities: impl IntoIterator<Item = &'a RoomActivity>,
+) -> Vec<RoomImageMediaDispatch> {
+    let format = timeline_thumbnail_format();
+    activities
+        .into_iter()
+        .filter_map(|activity| {
+            let RoomActivityKind::Image(message) = &activity.kind else {
+                return None;
+            };
+            if !matches!(message.source, RoomMediaSource::Plain { .. }) {
+                return None;
+            }
+            if !room_view.should_request_image_media(
+                &activity.activity_id,
+                &message.event_id,
+                &format,
+            ) {
+                return None;
+            }
+            Some(RoomImageMediaDispatch {
+                activity_id: activity.activity_id.clone(),
+                event_id: message.event_id.clone(),
+                source: message.source.clone(),
+                format: format.clone(),
+            })
+        })
+        .collect()
+}
+
+fn dispatch_lazy_room_image_media_requests(
+    state: &mut WindowState,
+    room_id: &str,
+    requests: Vec<RoomImageMediaDispatch>,
+) -> Result<(), String> {
+    if state.synthetic_load_in_progress || requests.is_empty() {
+        return Ok(());
+    }
+
+    for request in requests {
+        let previous = state
+            .model
+            .room_views
+            .get_mut(room_id)
+            .expect("image media dispatch requires an existing room view")
+            .mark_image_media_pending(
+                request.activity_id.clone(),
+                request.event_id.clone(),
+                request.format.clone(),
+            );
+        if let Some(image_key) = previous
+            .as_ref()
+            .and_then(room_image_media_loaded_key)
+            .map(str::to_owned)
+        {
+            state.decoded_images.remove(&image_key);
+        }
+
+        let command = Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+            room_id: room_id.to_owned(),
+            activity_id: request.activity_id.clone(),
+            event_id: request.event_id.clone(),
+            source: request.source.clone(),
+            format: request.format.clone(),
+        });
+        let sender = match state.command_sender.as_ref().cloned() {
+            Some(sender) => sender,
+            None => {
+                state
+                    .model
+                    .room_views
+                    .get_mut(room_id)
+                    .expect("image media dispatch requires an existing room view")
+                    .remove_image_media(&request.activity_id);
+                return Err("core command sender is not available".to_owned());
+            }
+        };
+        if let Err(err) = sender.send(command.clone()) {
+            state
+                .model
+                .room_views
+                .get_mut(room_id)
+                .expect("image media dispatch requires an existing room view")
+                .remove_image_media(&request.activity_id);
+            return Err(format!("failed to enqueue fetch room image media command: {err}"));
+        }
+        #[cfg(test)]
+        state.recorded_commands.push(command);
+    }
+
+    Ok(())
+}
+
 unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
     let (child, content, title) = {
         let state = state_ref(hwnd);
@@ -4224,19 +4888,23 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             set_edit_text(content, &text);
         }
         ViewId::Room(room_id) => {
-            let (rows, member_rows) = {
+            let (rows, member_rows, image_requests) = {
                 let state = state_ref(hwnd);
+                let room_view = state.model.room_views.get(room_id);
                 let rows = build_room_timeline_rows(&state.model, room_id);
+                let image_requests = room_view
+                    .map(|room_view| {
+                        collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+                    })
+                    .unwrap_or_default();
                 let member_rows = room_member_view_rows(
-                    state
-                        .model
-                        .room_views
-                        .get(room_id)
+                    room_view
                         .map(|room_view| room_view.members.as_slice())
                         .unwrap_or_default(),
                 );
-                (rows, member_rows)
+                (rows, member_rows, image_requests)
             };
+            dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
             set_timeline_rows(room_content_timeline(content), &rows);
             set_room_member_list(room_content_member_list(content), &member_rows);
             InvalidateRect(content, null(), 1);
@@ -4247,19 +4915,29 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             room_id,
             thread_root_event_id,
         } => {
-            let (rows, member_rows) = {
+            let (rows, member_rows, image_requests) = {
                 let state = state_ref(hwnd);
+                let room_view = state
+                    .model
+                    .room_views
+                    .get(room_id)
+                    .expect("thread view must target an existing room view");
                 let rows = build_thread_timeline_rows(&state.model, room_id, thread_root_event_id);
-                let member_rows = room_member_view_rows(
-                    state
-                        .model
-                        .room_views
-                        .get(room_id)
-                        .map(|room_view| room_view.members.as_slice())
-                        .unwrap_or_default(),
+                let image_requests = collect_lazy_room_image_media_requests(
+                    room_view,
+                    room_view
+                        .activities
+                        .iter()
+                        .filter(|activity| {
+                            room_activity_belongs_to_thread(activity, thread_root_event_id)
+                        }),
                 );
-                (rows, member_rows)
+                let member_rows = room_member_view_rows(
+                    room_view.members.as_slice(),
+                );
+                (rows, member_rows, image_requests)
             };
+            dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
             set_timeline_rows(room_content_timeline(content), &rows);
             set_room_member_list(room_content_member_list(content), &member_rows);
             InvalidateRect(content, null(), 1);
@@ -6097,6 +6775,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.room_activity.clear();
         state.room_activity_read_targets.clear();
         state.model = initial_model();
+        state.decoded_images.clear();
     }
 
     apply_synthetic_events_and_refresh(hwnd, events)?;
@@ -6585,8 +7264,12 @@ unsafe fn execute_local_slash_command(
         }
         LocalSlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
             ViewId::Room(room_id) => {
-                if let Some(view) = state_mut(hwnd).model.room_views.get_mut(&room_id) {
-                    view.clear_visible_entries();
+                {
+                    let state = state_mut(hwnd);
+                    if let Some(view) = state.model.room_views.get_mut(&room_id) {
+                        view.clear_visible_entries();
+                    }
+                    prune_decoded_images(state);
                 }
                 refresh_view_content(hwnd, &ViewId::Room(room_id.clone()))?;
                 set_local_command_status(hwnd, format!("cleared window: {room_id}"))
@@ -8080,6 +8763,54 @@ mod tests {
         )))
     }
 
+    fn encrypted_image_activity(
+        room_id: &str,
+        event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        body: &str,
+    ) -> RoomActivity {
+        RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{event_id}"),
+            timestamp_ms,
+            relation: None,
+            kind: RoomActivityKind::Image(mmatrix_core::RoomImageActivity {
+                event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                body: body.to_owned(),
+                filename: None,
+                source: mmatrix_core::RoomMediaSource::Encrypted {
+                    url: "mxc://example.org/encrypted".to_owned(),
+                },
+                info: None,
+            }),
+        }
+    }
+
+    fn room_image_media_event(
+        room_id: &str,
+        activity_id: &str,
+        event_id: &str,
+        kind: RoomImageMediaKind,
+    ) -> Event {
+        Event::RoomImageMedia(RoomImageMedia {
+            room_id: room_id.to_owned(),
+            activity_id: activity_id.to_owned(),
+            event_id: event_id.to_owned(),
+            kind,
+        })
+    }
+
+    fn tiny_png_bytes() -> Vec<u8> {
+        vec![
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0,
+            1, 8, 4, 0, 0, 0, 181, 28, 12, 2, 0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 252,
+            255, 31, 0, 3, 3, 2, 0, 239, 191, 107, 212, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
+            96, 130,
+        ]
+    }
+
     fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
         Event::RoomTyping(RoomTyping {
             room_id: room_id.to_owned(),
@@ -8174,6 +8905,7 @@ mod tests {
     }
 
     fn test_state() -> WindowState {
+        let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
         WindowState {
             controls: Controls::default(),
             event_queue: Arc::new(Mutex::new(VecDeque::new())),
@@ -8196,6 +8928,9 @@ mod tests {
             compose_history: ComposeHistory::default(),
             edit_window_proc: None,
             model: initial_model(),
+            decoded_images: BTreeMap::new(),
+            gdiplus_session,
+            gdiplus_startup_error,
             #[cfg(test)]
             recorded_commands: Vec::new(),
         }
@@ -8873,6 +9608,62 @@ mod tests {
     }
 
     #[test]
+    fn clear_room_timeline_removes_stale_image_media_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "unavailable".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            outgoing_queued("!ops:example", "txn-1", "hello"),
+        )
+        .unwrap();
+
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view must exist after timeline update")
+            .clear_visible_entries();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist after clearing");
+        assert_eq!(
+            room_view.activities,
+            vec![pending_message_activity("!ops:example", "txn-1", "hello")]
+        );
+        assert!(room_view.image_media.is_empty());
+    }
+
+    #[test]
     #[should_panic(expected = "outgoing sent requires an existing queued timeline row")]
     fn room_activity_update_sent_without_existing_queued_row_panics() {
         let mut state = test_state();
@@ -9363,6 +10154,495 @@ mod tests {
                 "Room: Ops (!ops:example)".to_owned(),
                 "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn image_rows_project_pending_media_state_without_media_event() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let image_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .expect("image row must be present");
+
+        assert_eq!(image_row.image_state, Some(TimelineImageState::Pending));
+        assert!(!render_room_lines(&state.model, "!ops:example")
+            .join("\n")
+            .contains("loading image..."));
+    }
+
+    #[test]
+    fn failed_room_image_media_event_projects_failed_image_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "unavailable".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .cloned(),
+            Some(RoomImageMediaState::Failed {
+                event_id: "$image1:example.org".to_owned(),
+                format: timeline_thumbnail_format(),
+                message: "unavailable".to_owned(),
+            })
+        );
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let image_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .expect("image row must be present");
+        assert_eq!(
+            image_row.image_state,
+            Some(TimelineImageState::Failed {
+                message: "unavailable".to_owned(),
+            })
+        );
+        assert!(!render_room_lines(&state.model, "!ops:example")
+            .join("\n")
+            .contains("image unavailable"));
+    }
+
+    #[test]
+    fn invalid_loaded_room_image_media_event_projects_failed_image_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Loaded {
+                    format: timeline_thumbnail_format(),
+                    bytes: vec![0, 1, 2, 3],
+                },
+            ),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let image_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .expect("image row must be present");
+        assert!(matches!(
+            image_row.image_state,
+            Some(TimelineImageState::Failed { .. })
+        ));
+    }
+
+    #[test]
+    fn loaded_room_image_media_event_projects_loaded_image_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Loaded {
+                    format: timeline_thumbnail_format(),
+                    bytes: tiny_png_bytes(),
+                },
+            ),
+        )
+        .unwrap();
+
+        let image_key = room_image_media_storage_key(
+            "!ops:example",
+            "event:$image1:example.org",
+            "$image1:example.org",
+            &timeline_thumbnail_format(),
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .cloned(),
+            Some(RoomImageMediaState::Loaded {
+                event_id: "$image1:example.org".to_owned(),
+                format: timeline_thumbnail_format(),
+                image_key: image_key.clone(),
+                width: 1,
+                height: 1,
+            })
+        );
+        assert!(state.decoded_images.contains_key(&image_key));
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let image_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .expect("image row must be present");
+        assert_eq!(
+            image_row.image_state,
+            Some(TimelineImageState::Loaded {
+                key: image_key,
+                width: 1,
+                height: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn thread_image_rows_use_room_backed_image_media_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let mut activity = image_activity(
+            "!ops:example",
+            "$thread-image:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "diagram.png",
+            None,
+            None,
+        );
+        activity.relation = Some(thread_relation("$thread-root:example.org"));
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$thread-image:example.org",
+                "$thread-image:example.org",
+                RoomImageMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "unavailable".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root:example.org",
+        );
+        let image_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .expect("thread image row must be present");
+        assert_eq!(
+            image_row.image_state,
+            Some(TimelineImageState::Failed {
+                message: "unavailable".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn room_image_media_dispatch_records_one_thumbnail_fetch_and_dedupes_pending() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "event:$image1:example.org".to_owned(),
+                event_id: "$image1:example.org".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/diagram".to_owned(),
+                },
+                format: timeline_thumbnail_format(),
+            })]
+        );
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        assert!(requests.is_empty());
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn thread_image_media_dispatch_uses_room_backed_pending_state() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let mut activity = image_activity(
+            "!ops:example",
+            "$thread-image:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "diagram.png",
+            None,
+            None,
+        );
+        activity.relation = Some(thread_relation("$thread-root:example.org"));
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(
+                room_view,
+                room_view.activities.iter().filter(|activity| {
+                    room_activity_belongs_to_thread(activity, "$thread-root:example.org")
+                }),
+            )
+        };
+        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        assert_eq!(state.recorded_commands.len(), 1);
+
+        let room_requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        assert!(room_requests.is_empty());
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn loaded_or_failed_image_media_state_skips_additional_fetch_dispatch() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view must exist")
+            .insert_image_media(
+                "event:$image1:example.org".to_owned(),
+                RoomImageMediaState::Loaded {
+                    event_id: "$image1:example.org".to_owned(),
+                    format: timeline_thumbnail_format(),
+                    image_key: "loaded-key".to_owned(),
+                    width: 64,
+                    height: 48,
+                },
+            );
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        assert!(requests.is_empty());
+
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "unavailable".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        assert!(requests.is_empty());
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn encrypted_image_rows_are_not_lazily_requested() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        state
+            .model
+            .room_views
+            .entry("!ops:example".to_owned())
+            .or_default()
+            .apply_activity(encrypted_image_activity(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+            ));
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        let requests = collect_lazy_room_image_media_requests(room_view, room_view.activities.iter());
+        assert!(requests.is_empty());
+    }
+
+    #[test]
+    fn timeline_row_paint_lines_expand_image_slots_without_changing_logical_text_rows() {
+        let rows = vec![
+            TimelineRow {
+                kind: TimelineRowKind::Image,
+                text: "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
+                image_state: Some(TimelineImageState::Pending),
+            },
+            TimelineRow {
+                kind: TimelineRowKind::Unsupported,
+                text: "* [16:01] @alice:example.org sent unsupported m.audio: voice-note.ogg"
+                    .to_owned(),
+                image_state: None,
+            },
+        ];
+
+        let logical_lines = project_timeline_rows(&rows);
+        let paint_lines = timeline_row_paint_lines(&rows);
+
+        assert_eq!(
+            logical_lines,
+            vec![
+                "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported m.audio: voice-note.ogg"
+                    .to_owned(),
+            ]
+        );
+        assert_eq!(
+            paint_lines
+                .iter()
+                .filter(|line| line.image_slot_index.is_none())
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>(),
+            logical_lines
+        );
+        assert_eq!(
+            paint_lines
+                .iter()
+                .filter(|line| line.image_slot_index.is_some())
+                .count(),
+            TIMELINE_IMAGE_MEDIA_SLOT_LINES
+        );
+        assert_eq!(
+            clamped_timeline_top_line(6, paint_lines.len(), 3),
+            6
         );
     }
 

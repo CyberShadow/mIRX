@@ -34,6 +34,7 @@ declare -a allowlist=(
   comdlg32.dll
   crypt32.dll
   gdi32.dll
+  gdiplus.dll
   kernel32.dll
   msvcrt.dll
   ntdll.dll
