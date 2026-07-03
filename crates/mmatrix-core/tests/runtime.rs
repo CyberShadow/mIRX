@@ -707,8 +707,7 @@ fn room_media_source_and_image_info_round_trip_through_serde() {
         r#"{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":{"type":"encrypted","url":"mxc://example.org/encrypted-thumb","key":{"kty":"oct","key_ops":["decrypt","encrypt"],"alg":"A256CTR","k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ext":true},"iv":"AgICAgICAgICAgICAgICAg","hashes":{"sha256":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"},"v":"v2"}}"#
     );
 
-    let restored: RoomImageInfo =
-        serde_json::from_str(&json).expect("deserialize room image info");
+    let restored: RoomImageInfo = serde_json::from_str(&json).expect("deserialize room image info");
     assert_eq!(restored, info);
 }
 
@@ -1012,7 +1011,7 @@ fn room_activity_events_round_trip_through_serde() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
         relation: None,
-        kind: RoomActivityKind::Image(RoomImageActivity {
+        kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
             body: "diagram.png".to_owned(),
@@ -1030,14 +1029,14 @@ fn room_activity_events_round_trip_through_serde() {
                     url: "mxc://example.org/thumb".to_owned(),
                 }),
             }),
-        }),
+        })),
     }));
     let encrypted_image_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image2:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_004,
         relation: None,
-        kind: RoomActivityKind::Image(RoomImageActivity {
+        kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
             event_id: "$image2:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
             body: "secret.png".to_owned(),
@@ -1051,7 +1050,7 @@ fn room_activity_events_round_trip_through_serde() {
                 is_animated: Some(false),
                 thumbnail_source: Some(encrypted_media_source("mxc://example.org/encrypted-thumb")),
             }),
-        }),
+        })),
     }));
     let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
@@ -1134,7 +1133,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_003,
         relation: None,
-        kind: RoomActivityKind::Image(RoomImageActivity {
+        kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
             event_id: "$image1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
             body: "diagram.png".to_owned(),
@@ -1150,7 +1149,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
                 is_animated: Some(false),
                 thumbnail_source: None,
             }),
-        }),
+        })),
     }));
     let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),

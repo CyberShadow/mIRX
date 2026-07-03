@@ -184,7 +184,7 @@ pub enum RoomActivityRelation {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityKind {
     Message(RoomMessageActivity),
-    Image(RoomImageActivity),
+    Image(Box<RoomImageActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     StateNotice(RoomStateNoticeActivity),
 }
@@ -238,7 +238,9 @@ pub struct RoomEncryptedFileHashes {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomMediaSource {
-    Plain { url: String },
+    Plain {
+        url: String,
+    },
     Encrypted {
         url: String,
         key: RoomEncryptedFileKey,

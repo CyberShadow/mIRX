@@ -56,15 +56,14 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
-    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
-    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
-    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
+    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
+    SendMessageThreadTarget, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -918,14 +917,14 @@ fn room_activity_from_sync_message(
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
             relation: relation.clone(),
-            kind: RoomActivityKind::Image(RoomImageActivity {
+            kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                 event_id: event.event_id.to_string(),
                 sender: event.sender.to_string(),
                 body: image.body.clone(),
                 filename: image.filename.clone(),
                 source: room_media_source_from_matrix(&image.source),
                 info: image.info.as_deref().map(room_image_info_from_matrix),
-            }),
+            })),
         });
     }
 
@@ -993,7 +992,10 @@ fn room_image_info_from_matrix(info: &ImageInfo) -> RoomImageInfo {
         width: info.width.map(u64::from),
         height: info.height.map(u64::from),
         is_animated: info.is_animated,
-        thumbnail_source: info.thumbnail_source.as_ref().map(room_media_source_from_matrix),
+        thumbnail_source: info
+            .thumbnail_source
+            .as_ref()
+            .map(room_media_source_from_matrix),
     }
 }
 
@@ -1992,13 +1994,13 @@ mod tests {
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         FetchRoomImageMediaRequest, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
-        RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
-        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomEncryptedFileHashes,
+        RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMediaFormat,
+        RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+        RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageThreadTarget,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client,
@@ -2677,7 +2679,7 @@ mod tests {
                     in_reply_to_event_id: None,
                     is_falling_back: false,
                 }),
-                kind: RoomActivityKind::Image(RoomImageActivity {
+                kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image-thread:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
                     body: "diagram.png".to_owned(),
@@ -2686,7 +2688,7 @@ mod tests {
                         url: "mxc://example.org/image".to_owned(),
                     },
                     info: None,
-                }),
+                })),
             })
         );
     }
@@ -2720,7 +2722,7 @@ mod tests {
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
                 relation: None,
-                kind: RoomActivityKind::Image(RoomImageActivity {
+                kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$event:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
                     body: "diagram.png".to_owned(),
@@ -2736,7 +2738,7 @@ mod tests {
                         is_animated: Some(true),
                         thumbnail_source: None,
                     }),
-                }),
+                })),
             })
         );
     }
@@ -2764,7 +2766,7 @@ mod tests {
                 activity_id: "event:$image:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_050,
                 relation: None,
-                kind: RoomActivityKind::Image(RoomImageActivity {
+                kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
                     body: "Quarterly diagram".to_owned(),
@@ -2773,7 +2775,7 @@ mod tests {
                         url: "mxc://example.org/image".to_owned(),
                     },
                     info: None,
-                }),
+                })),
             })
         );
     }
@@ -2831,7 +2833,7 @@ mod tests {
                 activity_id: "event:$encrypted:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_060,
                 relation: None,
-                kind: RoomActivityKind::Image(RoomImageActivity {
+                kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$encrypted:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
                     body: "secret.png".to_owned(),
@@ -2873,7 +2875,7 @@ mod tests {
                             v: "v2".to_owned(),
                         }),
                     }),
-                }),
+                })),
             })
         );
     }
@@ -2903,7 +2905,7 @@ mod tests {
                 activity_id: "event:$image-thumb:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_070,
                 relation: None,
-                kind: RoomActivityKind::Image(RoomImageActivity {
+                kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image-thumb:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
                     body: "diagram.png".to_owned(),
@@ -2921,7 +2923,7 @@ mod tests {
                             url: "mxc://example.org/thumb".to_owned(),
                         }),
                     }),
-                }),
+                })),
             })
         );
     }
