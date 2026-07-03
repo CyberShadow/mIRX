@@ -4912,15 +4912,7 @@ fn dispatch_lazy_room_image_media_requests(
         });
         let sender = match state.command_sender.as_ref().cloned() {
             Some(sender) => sender,
-            None => {
-                state
-                    .model
-                    .room_views
-                    .get_mut(room_id)
-                    .expect("image media dispatch requires an existing room view")
-                    .remove_image_media(&request.activity_id);
-                return Err("core command sender is not available".to_owned());
-            }
+            None => continue,
         };
         if let Err(err) = sender.send(command.clone()) {
             state
@@ -10658,6 +10650,49 @@ mod tests {
         assert!(requests.is_empty());
 
         stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_image_media_dispatch_without_command_sender_keeps_pending_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .cloned(),
+            Some(RoomImageMediaState::Pending {
+                event_id: "$image1:example.org".to_owned(),
+                format: timeline_thumbnail_format(),
+            })
+        );
+        assert!(state.recorded_commands.is_empty());
     }
 
     #[test]
