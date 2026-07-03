@@ -865,7 +865,7 @@ pub(crate) enum DumpRoomActivityRelation {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DumpRoomActivityKind {
     Message(DumpRoomMessageActivity),
-    Image(DumpRoomImageActivity),
+    Image(Box<DumpRoomImageActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     StateNotice(DumpRoomStateNoticeActivity),
 }
@@ -1124,7 +1124,7 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
             DumpRoomActivityKind::Message(dump_room_message_activity_from_core(message))
         }
         RoomActivityKind::Image(image) => {
-            DumpRoomActivityKind::Image(dump_room_image_activity_from_core(image))
+            DumpRoomActivityKind::Image(Box::new(dump_room_image_activity_from_core(image)))
         }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
@@ -2990,7 +2990,7 @@ mod tests {
                             activity_id: "event:$image:example".to_owned(),
                             timestamp_ms: 1_700_000_030_000,
                             relation: None,
-                            kind: DumpRoomActivityKind::Image(DumpRoomImageActivity {
+                            kind: DumpRoomActivityKind::Image(Box::new(DumpRoomImageActivity {
                                 event_id: "$image:example".to_owned(),
                                 sender: "@alice:example".to_owned(),
                                 body: "diagram.png".to_owned(),
@@ -3007,7 +3007,7 @@ mod tests {
                                     thumbnail_source: None,
                                 }),
                                 media_state: None,
-                            }),
+                            })),
                         },
                         DumpRoomActivity {
                             room_id: "!room:example".to_owned(),
@@ -3811,7 +3811,7 @@ mod tests {
                 activity_id: "event:$image1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_010_000,
                 relation: None,
-                kind: DumpRoomActivityKind::Image(DumpRoomImageActivity {
+                kind: DumpRoomActivityKind::Image(Box::new(DumpRoomImageActivity {
                     event_id: "$image1:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
                     body: "diagram.png".to_owned(),
@@ -3828,7 +3828,7 @@ mod tests {
                         )),
                     }),
                     media_state: None,
-                }),
+                })),
             }
         );
         assert_eq!(

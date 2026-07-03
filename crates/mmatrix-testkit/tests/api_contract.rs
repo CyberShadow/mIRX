@@ -1037,7 +1037,7 @@ fn room_activity_image_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(sample_room_image_activity(None)),
+        kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(None))),
     };
 
     let json = serde_json::json!({
@@ -1084,9 +1084,9 @@ fn room_activity_image_pending_media_state_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(sample_room_image_activity(Some(
+        kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
             RoomImageMediaState::Pending,
-        ))),
+        )))),
     };
 
     let json = serde_json::json!({
@@ -1136,12 +1136,12 @@ fn room_activity_image_loaded_media_state_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(sample_room_image_activity(Some(
+        kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
             RoomImageMediaState::Loaded {
                 width: 320,
                 height: 240,
             },
-        ))),
+        )))),
     };
 
     let json = serde_json::json!({
@@ -1193,11 +1193,11 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(sample_room_image_activity(Some(
+        kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
             RoomImageMediaState::Failed {
                 message: "download failed".to_owned(),
             },
-        ))),
+        )))),
     };
 
     let json = serde_json::json!({
@@ -1913,7 +1913,7 @@ fn room_activity_contains_matches_image_fields() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(sample_room_image_activity(None)),
+        kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(None))),
     };
 
     assert!(activity.contains("\"type\":\"image\""));

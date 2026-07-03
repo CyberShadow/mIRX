@@ -839,7 +839,7 @@ fn image_entry_with_event_id(
         activity_id: format!("event:{}", activity.event_id),
         timestamp_ms,
         relation: None,
-        kind: RoomActivityKind::Image(activity),
+        kind: RoomActivityKind::Image(Box::new(activity)),
     }
 }
 
@@ -858,6 +858,7 @@ fn fixture_image_activity(media_state: Option<RoomImageMediaState>) -> RoomImage
             width: Some(640),
             height: Some(480),
             is_animated: Some(false),
+            thumbnail_source: None,
         }),
         media_state,
     }
@@ -1364,7 +1365,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 15);
+    assert_eq!(version.protocol_version, 16);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
