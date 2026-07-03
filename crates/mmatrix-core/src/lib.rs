@@ -10,14 +10,15 @@ pub use api::{
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState,
     E2eeRecoverySucceeded, E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
     LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
+    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

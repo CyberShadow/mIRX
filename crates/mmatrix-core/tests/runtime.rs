@@ -5,13 +5,14 @@ use mmatrix_core::{
     E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
     E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
+    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -29,6 +30,32 @@ fn verification_flow_id() -> VerificationFlowId {
     VerificationFlowId {
         flow_id: "txn-123".to_owned(),
         user_id: "@alice:example.org".to_owned(),
+    }
+}
+
+fn encrypted_file_key() -> RoomEncryptedFileKey {
+    RoomEncryptedFileKey {
+        kty: "oct".to_owned(),
+        key_ops: vec!["decrypt".to_owned(), "encrypt".to_owned()],
+        alg: "A256CTR".to_owned(),
+        k: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+        ext: true,
+    }
+}
+
+fn encrypted_file_hashes() -> RoomEncryptedFileHashes {
+    RoomEncryptedFileHashes {
+        sha256: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".to_owned(),
+    }
+}
+
+fn encrypted_media_source(url: &str) -> RoomMediaSource {
+    RoomMediaSource::Encrypted {
+        url: url.to_owned(),
+        key: encrypted_file_key(),
+        iv: "AgICAgICAgICAgICAgICAg".to_owned(),
+        hashes: encrypted_file_hashes(),
+        v: "v2".to_owned(),
     }
 }
 
@@ -614,28 +641,75 @@ fn mark_room_read_request_round_trips_through_serde() {
 
 #[test]
 fn fetch_room_image_media_request_round_trips_through_serde() {
-    let request = FetchRoomImageMediaRequest {
-        room_id: "!room:example.org".to_owned(),
-        activity_id: "event:$image:example.org".to_owned(),
-        event_id: "$image:example.org".to_owned(),
-        source: RoomMediaSource::Plain {
-            url: "mxc://example.org/image".to_owned(),
+    for (request, json) in [
+        (
+            FetchRoomImageMediaRequest {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$image:example.org".to_owned(),
+                event_id: "$image:example.org".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/image".to_owned(),
+                },
+                format: RoomImageMediaFormat::Thumbnail {
+                    width: 160,
+                    height: 120,
+                },
+            },
+            r#"{"room_id":"!room:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"plain","url":"mxc://example.org/image"},"format":{"type":"thumbnail","width":160,"height":120}}"#,
+        ),
+        (
+            FetchRoomImageMediaRequest {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$image:example.org".to_owned(),
+                event_id: "$image:example.org".to_owned(),
+                source: encrypted_media_source("mxc://example.org/encrypted-image"),
+                format: RoomImageMediaFormat::File,
+            },
+            r#"{"room_id":"!room:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"encrypted","url":"mxc://example.org/encrypted-image","key":{"kty":"oct","key_ops":["decrypt","encrypt"],"alg":"A256CTR","k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ext":true},"iv":"AgICAgICAgICAgICAgICAg","hashes":{"sha256":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"},"v":"v2"},"format":{"type":"file"}}"#,
+        ),
+    ] {
+        let serialized =
+            serde_json::to_string(&request).expect("serialize fetch room image media request");
+        assert_eq!(serialized, json);
+
+        let restored: FetchRoomImageMediaRequest =
+            serde_json::from_str(json).expect("deserialize fetch room image media request");
+        assert_eq!(restored, request);
+    }
+}
+
+#[test]
+fn room_media_source_and_image_info_round_trip_through_serde() {
+    for source in [
+        RoomMediaSource::Plain {
+            url: "mxc://example.org/plain-image".to_owned(),
         },
-        format: RoomImageMediaFormat::Thumbnail {
-            width: 160,
-            height: 120,
-        },
+        encrypted_media_source("mxc://example.org/encrypted-image"),
+    ] {
+        let json = serde_json::to_string(&source).expect("serialize room media source");
+        let restored: RoomMediaSource =
+            serde_json::from_str(&json).expect("deserialize room media source");
+        assert_eq!(restored, source);
+    }
+
+    let info = RoomImageInfo {
+        mimetype: Some("image/png".to_owned()),
+        size: Some(4096),
+        width: Some(800),
+        height: Some(600),
+        is_animated: Some(false),
+        thumbnail_source: Some(encrypted_media_source("mxc://example.org/encrypted-thumb")),
     };
 
-    let json = serde_json::to_string(&request).expect("serialize fetch room image media request");
+    let json = serde_json::to_string(&info).expect("serialize room image info");
     assert_eq!(
         json,
-        r#"{"room_id":"!room:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"plain","url":"mxc://example.org/image"},"format":{"type":"thumbnail","width":160,"height":120}}"#
+        r#"{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":{"type":"encrypted","url":"mxc://example.org/encrypted-thumb","key":{"kty":"oct","key_ops":["decrypt","encrypt"],"alg":"A256CTR","k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ext":true},"iv":"AgICAgICAgICAgICAgICAg","hashes":{"sha256":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"},"v":"v2"}}"#
     );
 
-    let restored: FetchRoomImageMediaRequest =
-        serde_json::from_str(&json).expect("deserialize fetch room image media request");
-    assert_eq!(restored, request);
+    let restored: RoomImageInfo =
+        serde_json::from_str(&json).expect("deserialize room image info");
+    assert_eq!(restored, info);
 }
 
 #[test]
@@ -952,13 +1026,37 @@ fn room_activity_events_round_trip_through_serde() {
                 width: Some(800),
                 height: Some(600),
                 is_animated: Some(false),
+                thumbnail_source: Some(RoomMediaSource::Plain {
+                    url: "mxc://example.org/thumb".to_owned(),
+                }),
+            }),
+        }),
+    }));
+    let encrypted_image_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$image2:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_004,
+        relation: None,
+        kind: RoomActivityKind::Image(RoomImageActivity {
+            event_id: "$image2:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            body: "secret.png".to_owned(),
+            filename: None,
+            source: encrypted_media_source("mxc://example.org/encrypted-image"),
+            info: Some(RoomImageInfo {
+                mimetype: Some("image/png".to_owned()),
+                size: Some(2048),
+                width: Some(320),
+                height: Some(240),
+                is_animated: Some(false),
+                thumbnail_source: Some(encrypted_media_source("mxc://example.org/encrypted-thumb")),
             }),
         }),
     }));
     let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
-        timestamp_ms: 1_700_000_000_004,
+        timestamp_ms: 1_700_000_000_005,
         relation: None,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
@@ -989,6 +1087,7 @@ fn room_activity_events_round_trip_through_serde() {
         state_notice_event,
         member_notice_event,
         image_event,
+        encrypted_image_event,
         unsupported_message_event,
         sent_update_event,
         failed_update_event,
@@ -1049,6 +1148,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
                 width: Some(800),
                 height: Some(600),
                 is_animated: Some(false),
+                thumbnail_source: None,
             }),
         }),
     }));
@@ -1083,7 +1183,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     );
     assert_eq!(
         serde_json::to_string(&image_event).expect("serialize image room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"relation":null,"kind":{"type":"image","event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"relation":null,"kind":{"type":"image","event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":null}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&unsupported_message_event)
@@ -1426,6 +1526,14 @@ fn fetch_room_image_media_dtos_reject_unknown_fields() {
         .is_err(),
         "room image media kind must reject unknown fields"
     );
+
+    assert!(
+        serde_json::from_str::<RoomMediaSource>(
+            r#"{"type":"encrypted","url":"mxc://example.org/image"}"#
+        )
+        .is_err(),
+        "encrypted room media source must reject the old url-only shape"
+    );
 }
 
 #[test]
@@ -1541,6 +1649,22 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "room image info must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomMediaSource>(
+            r#"{"type":"encrypted","url":"mxc://example.org/image","key":{"kty":"oct","key_ops":["decrypt","encrypt"],"alg":"A256CTR","k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ext":true,"unexpected":"value"},"iv":"AgICAgICAgICAgICAgICAg","hashes":{"sha256":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"},"v":"v2"}"#
+        )
+        .is_err(),
+        "encrypted room media source key must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageInfo>(
+            r#"{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":{"type":"encrypted","url":"mxc://example.org/image","key":{"kty":"oct","key_ops":["decrypt","encrypt"],"alg":"A256CTR","k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ext":true},"iv":"AgICAgICAgICAgICAgICAg","hashes":{"sha256":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE","unexpected":"value"},"v":"v2"}}"#
+        )
+        .is_err(),
+        "encrypted room image info hashes must reject unknown fields"
     );
 
     assert!(

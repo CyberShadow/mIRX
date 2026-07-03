@@ -32,7 +32,7 @@ use matrix_sdk::{
             },
             relation::Thread,
             room::{
-                ImageInfo, MediaSource,
+                EncryptedFile, ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{
                     MessageType, OriginalSyncRoomMessageEvent, Relation as MessageContentRelation,
@@ -56,6 +56,7 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
     RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
     RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
@@ -87,6 +88,16 @@ impl Display for MatrixCoreError {
 }
 
 impl Error for MatrixCoreError {}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MatrixEncryptedFileDto {
+    url: String,
+    key: RoomEncryptedFileKey,
+    iv: String,
+    hashes: RoomEncryptedFileHashes,
+    v: String,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackupServerStatusMode {
@@ -673,19 +684,7 @@ fn room_image_media_request_parameters(
     source: &RoomMediaSource,
     format: &RoomImageMediaFormat,
 ) -> Result<MediaRequestParameters, MatrixCoreError> {
-    let source = match source {
-        RoomMediaSource::Plain { url } => {
-            let uri = <&MxcUri>::from(url.as_str());
-            uri.validate()
-                .map_err(|err| MatrixCoreError::new(format!("invalid media MXC URI: {err}")))?;
-            MediaSource::Plain(uri.to_owned())
-        }
-        RoomMediaSource::Encrypted { .. } => {
-            return Err(MatrixCoreError::new(
-                "encrypted image media is not supported by this API shape",
-            ));
-        }
-    };
+    let source = media_source_from_room_media_source(source)?;
 
     let format = match format {
         RoomImageMediaFormat::Thumbnail { width, height } => {
@@ -710,6 +709,47 @@ fn room_image_media_request_parameters(
     };
 
     Ok(MediaRequestParameters { source, format })
+}
+
+fn media_source_from_room_media_source(
+    source: &RoomMediaSource,
+) -> Result<MediaSource, MatrixCoreError> {
+    match source {
+        RoomMediaSource::Plain { url } => {
+            let uri = <&MxcUri>::from(url.as_str());
+            uri.validate()
+                .map_err(|err| MatrixCoreError::new(format!("invalid media MXC URI: {err}")))?;
+            Ok(MediaSource::Plain(uri.to_owned()))
+        }
+        RoomMediaSource::Encrypted {
+            url,
+            key,
+            iv,
+            hashes,
+            v,
+        } => {
+            let file: EncryptedFile = serde_json::from_value(serde_json::json!({
+                "url": url,
+                "key": {
+                    "kty": key.kty,
+                    "key_ops": key.key_ops,
+                    "alg": key.alg,
+                    "k": key.k,
+                    "ext": key.ext,
+                },
+                "iv": iv,
+                "hashes": {
+                    "sha256": hashes.sha256,
+                },
+                "v": v,
+            }))
+            .map_err(|err| {
+                MatrixCoreError::new(format!("invalid encrypted media metadata: {err}"))
+            })?;
+
+            Ok(MediaSource::Encrypted(Box::new(file)))
+        }
+    }
 }
 
 async fn summarize_space_children(
@@ -929,9 +969,20 @@ fn room_media_source_from_matrix(source: &MediaSource) -> RoomMediaSource {
         MediaSource::Plain(url) => RoomMediaSource::Plain {
             url: url.as_str().to_owned(),
         },
-        MediaSource::Encrypted(file) => RoomMediaSource::Encrypted {
-            url: file.url.as_str().to_owned(),
-        },
+        MediaSource::Encrypted(file) => {
+            let file: MatrixEncryptedFileDto = serde_json::from_value(
+                serde_json::to_value(file).expect("serialize Matrix encrypted file"),
+            )
+            .expect("deserialize Matrix encrypted file into core DTO");
+
+            RoomMediaSource::Encrypted {
+                url: file.url,
+                key: file.key,
+                iv: file.iv,
+                hashes: file.hashes,
+                v: file.v,
+            }
+        }
     }
 }
 
@@ -942,6 +993,7 @@ fn room_image_info_from_matrix(info: &ImageInfo) -> RoomImageInfo {
         width: info.width.map(u64::from),
         height: info.height.map(u64::from),
         is_animated: info.is_animated,
+        thumbnail_source: info.thumbnail_source.as_ref().map(room_media_source_from_matrix),
     }
 }
 
@@ -1940,10 +1992,11 @@ mod tests {
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         FetchRoomImageMediaRequest, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
-        RoomImageInfo, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
-        RoomMemberSummary, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-        RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
+        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
+        RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
@@ -2096,6 +2149,32 @@ mod tests {
         }
     }
 
+    fn encrypted_file_key() -> RoomEncryptedFileKey {
+        RoomEncryptedFileKey {
+            kty: "oct".to_owned(),
+            key_ops: vec!["decrypt".to_owned(), "encrypt".to_owned()],
+            alg: "A256CTR".to_owned(),
+            k: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            ext: true,
+        }
+    }
+
+    fn encrypted_file_hashes() -> RoomEncryptedFileHashes {
+        RoomEncryptedFileHashes {
+            sha256: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".to_owned(),
+        }
+    }
+
+    fn encrypted_media_source(url: &str) -> RoomMediaSource {
+        RoomMediaSource::Encrypted {
+            url: url.to_owned(),
+            key: encrypted_file_key(),
+            iv: "AgICAgICAgICAgICAgICAg".to_owned(),
+            hashes: encrypted_file_hashes(),
+            v: "v2".to_owned(),
+        }
+    }
+
     #[test]
     fn e2ee_recovery_state_mapping_covers_all_sdk_variants() {
         for (state, expected) in [
@@ -2199,35 +2278,86 @@ mod tests {
     }
 
     #[test]
-    fn fetch_room_image_media_returns_typed_failure_for_encrypted_sources() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build tokio runtime");
-        let client = build_test_client();
+    fn room_image_media_request_parameters_map_encrypted_thumbnail_requests() {
+        let params = room_image_media_request_parameters(
+            &encrypted_media_source("mxc://example.org/image"),
+            &RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        )
+        .expect("build encrypted media request parameters");
 
-        let media = runtime.block_on(async {
-            fetch_room_image_media(
-                &client,
-                room_image_media_request(RoomMediaSource::Encrypted {
-                    url: "mxc://example.org/image".to_owned(),
-                }),
-            )
-            .await
-        });
-
-        assert_eq!(media.room_id, "!room:example.org");
-        assert_eq!(media.activity_id, "event:$image:example.org");
-        assert_eq!(media.event_id, "$image:example.org");
-        assert_eq!(
-            media.kind,
-            RoomImageMediaKind::Failed {
-                format: RoomImageMediaFormat::Thumbnail {
-                    width: 160,
-                    height: 120,
-                },
-                message: "encrypted image media is not supported by this API shape".to_owned(),
+        match params.source {
+            MediaSource::Encrypted(file) => {
+                let json = serde_json::to_value(file.as_ref())
+                    .expect("serialize encrypted media request source");
+                assert_eq!(json["url"], "mxc://example.org/image");
+                assert_eq!(json["v"], "v2");
+                assert_eq!(json["key"]["kty"], "oct");
+                assert_eq!(
+                    json["hashes"]["sha256"],
+                    "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+                );
             }
+            other => panic!("expected encrypted media source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn room_image_media_request_parameters_reject_zero_thumbnail_dimensions() {
+        for format in [
+            RoomImageMediaFormat::Thumbnail {
+                width: 0,
+                height: 120,
+            },
+            RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 0,
+            },
+        ] {
+            let err = room_image_media_request_parameters(
+                &RoomMediaSource::Plain {
+                    url: "mxc://example.org/image".to_owned(),
+                },
+                &format,
+            )
+            .expect_err("reject zero thumbnail dimensions");
+
+            assert_eq!(
+                err.to_string(),
+                "thumbnail width and height must be greater than zero"
+            );
+        }
+    }
+
+    #[test]
+    fn encrypted_media_request_parameters_reject_invalid_metadata() {
+        let err = room_image_media_request_parameters(
+            &RoomMediaSource::Encrypted {
+                url: "mxc://example.org/image".to_owned(),
+                key: RoomEncryptedFileKey {
+                    kty: "oct".to_owned(),
+                    key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
+                    alg: "A256CTR".to_owned(),
+                    k: "not-valid-base64".to_owned(),
+                    ext: true,
+                },
+                iv: "AgICAgICAgICAgICAgICAg".to_owned(),
+                hashes: encrypted_file_hashes(),
+                v: "v2".to_owned(),
+            },
+            &RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        )
+        .expect_err("reject invalid encrypted media metadata");
+
+        assert!(
+            err.to_string()
+                .starts_with("invalid encrypted media metadata:"),
+            "unexpected error message: {err}"
         );
     }
 
@@ -2604,6 +2734,7 @@ mod tests {
                         width: Some(800),
                         height: Some(600),
                         is_animated: Some(true),
+                        thumbnail_source: None,
                     }),
                 }),
             })
@@ -2642,6 +2773,154 @@ mod tests {
                         url: "mxc://example.org/image".to_owned(),
                     },
                     info: None,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn encrypted_sync_image_mapping_preserves_file_and_thumbnail_metadata() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.image",
+                "body": "secret.png",
+                "file": {
+                    "url": "mxc://example.org/full",
+                    "key": {
+                        "kty": "oct",
+                        "key_ops": ["decrypt", "encrypt"],
+                        "alg": "A256CTR",
+                        "k": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                        "ext": true
+                    },
+                    "iv": "AgICAgICAgICAgICAgICAg",
+                    "hashes": {
+                        "sha256": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+                    },
+                    "v": "v2"
+                },
+                "info": {
+                    "thumbnail_file": {
+                        "url": "mxc://example.org/thumb",
+                        "key": {
+                            "kty": "oct",
+                            "key_ops": ["decrypt", "encrypt"],
+                            "alg": "A256CTR",
+                            "k": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM",
+                            "ext": true
+                        },
+                        "iv": "BAQEBAQEBAQEBAQEBAQEBA",
+                        "hashes": {
+                            "sha256": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ"
+                        },
+                        "v": "v2"
+                    }
+                }
+            },
+            "event_id": "$encrypted:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000060u64
+        }))
+        .expect("deserialize encrypted sync image event");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$encrypted:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_060,
+                relation: None,
+                kind: RoomActivityKind::Image(RoomImageActivity {
+                    event_id: "$encrypted:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "secret.png".to_owned(),
+                    filename: None,
+                    source: RoomMediaSource::Encrypted {
+                        url: "mxc://example.org/full".to_owned(),
+                        key: RoomEncryptedFileKey {
+                            kty: "oct".to_owned(),
+                            key_ops: vec!["decrypt".to_owned(), "encrypt".to_owned()],
+                            alg: "A256CTR".to_owned(),
+                            k: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                            ext: true,
+                        },
+                        iv: "AgICAgICAgICAgICAgICAg".to_owned(),
+                        hashes: RoomEncryptedFileHashes {
+                            sha256: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE".to_owned(),
+                        },
+                        v: "v2".to_owned(),
+                    },
+                    info: Some(RoomImageInfo {
+                        mimetype: None,
+                        size: None,
+                        width: None,
+                        height: None,
+                        is_animated: None,
+                        thumbnail_source: Some(RoomMediaSource::Encrypted {
+                            url: "mxc://example.org/thumb".to_owned(),
+                            key: RoomEncryptedFileKey {
+                                kty: "oct".to_owned(),
+                                key_ops: vec!["decrypt".to_owned(), "encrypt".to_owned()],
+                                alg: "A256CTR".to_owned(),
+                                k: "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM".to_owned(),
+                                ext: true,
+                            },
+                            iv: "BAQEBAQEBAQEBAQEBAQEBA".to_owned(),
+                            hashes: RoomEncryptedFileHashes {
+                                sha256: "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ".to_owned(),
+                            },
+                            v: "v2".to_owned(),
+                        }),
+                    }),
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn plain_sync_image_mapping_preserves_thumbnail_source() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.image",
+                "body": "diagram.png",
+                "url": "mxc://example.org/image",
+                "info": {
+                    "thumbnail_url": "mxc://example.org/thumb"
+                }
+            },
+            "event_id": "$image-thumb:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000070u64
+        }))
+        .expect("deserialize sync image event with thumbnail");
+
+        assert_eq!(
+            room_activity_from_sync_message("!room:example.org", &event),
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$image-thumb:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_070,
+                relation: None,
+                kind: RoomActivityKind::Image(RoomImageActivity {
+                    event_id: "$image-thumb:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "diagram.png".to_owned(),
+                    filename: None,
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/image".to_owned(),
+                    },
+                    info: Some(RoomImageInfo {
+                        mimetype: None,
+                        size: None,
+                        width: None,
+                        height: None,
+                        is_animated: None,
+                        thumbnail_source: Some(RoomMediaSource::Plain {
+                            url: "mxc://example.org/thumb".to_owned(),
+                        }),
+                    }),
                 }),
             })
         );
