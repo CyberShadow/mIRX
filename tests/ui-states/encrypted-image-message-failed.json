@@ -1,0 +1,87 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!images:example.org",
+        "display_name": "Images",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!images:example.org",
+      "activity_id": "event:$image-typed:example.org",
+      "timestamp_ms": 1710000000000,
+      "kind": {
+        "type": "image",
+        "event_id": "$image-typed:example.org",
+        "sender": "@alice:example.org",
+        "body": "diagram.png",
+        "filename": "diagram.png",
+        "source": {
+          "type": "encrypted",
+          "url": "mxc://example.org/encrypted-diagram-full",
+          "key": {
+            "kty": "oct",
+            "key_ops": ["encrypt", "decrypt"],
+            "alg": "A256CTR",
+            "k": "base64url-key",
+            "ext": true
+          },
+          "iv": "base64-iv",
+          "hashes": {
+            "sha256": "base64-sha256"
+          },
+          "v": "v2"
+        },
+        "info": {
+          "mimetype": "image/png",
+          "size": 12345,
+          "width": 640,
+          "height": 480,
+          "is_animated": false,
+          "thumbnail_source": {
+            "type": "encrypted",
+            "url": "mxc://example.org/encrypted-diagram-thumb",
+            "key": {
+              "kty": "oct",
+              "key_ops": ["encrypt", "decrypt"],
+              "alg": "A256CTR",
+              "k": "base64url-key",
+              "ext": true
+            },
+            "iv": "base64-iv",
+            "hashes": {
+              "sha256": "base64-sha256"
+            },
+            "v": "v2"
+          }
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomImageMedia": {
+      "room_id": "!images:example.org",
+      "activity_id": "event:$image-typed:example.org",
+      "event_id": "$image-typed:example.org",
+      "kind": {
+        "type": "failed",
+        "format": {
+          "type": "thumbnail",
+          "width": 160,
+          "height": 120
+        },
+        "message": "failed to fetch room image media: unavailable"
+      }
+    }
+  }
+]
