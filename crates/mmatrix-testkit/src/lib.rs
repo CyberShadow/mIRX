@@ -327,10 +327,34 @@ pub enum RoomImageMediaState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomEncryptedFileKey {
+    pub kty: String,
+    pub key_ops: Vec<String>,
+    pub alg: String,
+    pub k: String,
+    pub ext: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomEncryptedFileHashes {
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomMediaSource {
-    Plain { url: String },
-    Encrypted { url: String },
+    Plain {
+        url: String,
+    },
+    Encrypted {
+        url: String,
+        key: RoomEncryptedFileKey,
+        iv: String,
+        hashes: RoomEncryptedFileHashes,
+        v: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -358,6 +382,7 @@ pub struct RoomImageInfo {
     pub width: Option<u64>,
     pub height: Option<u64>,
     pub is_animated: Option<bool>,
+    pub thumbnail_source: Option<RoomMediaSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

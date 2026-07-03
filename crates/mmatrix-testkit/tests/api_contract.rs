@@ -56,6 +56,32 @@ fn sample_e2ee_status() -> E2eeStatus {
     }
 }
 
+fn sample_room_encrypted_file_key() -> mmatrix_testkit::RoomEncryptedFileKey {
+    mmatrix_testkit::RoomEncryptedFileKey {
+        kty: "oct".to_owned(),
+        key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
+        alg: "A256CTR".to_owned(),
+        k: "base64url-key".to_owned(),
+        ext: true,
+    }
+}
+
+fn sample_room_encrypted_file_hashes() -> mmatrix_testkit::RoomEncryptedFileHashes {
+    mmatrix_testkit::RoomEncryptedFileHashes {
+        sha256: "base64-sha256".to_owned(),
+    }
+}
+
+fn sample_encrypted_room_media_source(url: &str) -> RoomMediaSource {
+    RoomMediaSource::Encrypted {
+        url: url.to_owned(),
+        key: sample_room_encrypted_file_key(),
+        iv: "base64-iv".to_owned(),
+        hashes: sample_room_encrypted_file_hashes(),
+        v: "v2".to_owned(),
+    }
+}
+
 fn sample_room_image_activity(media_state: Option<RoomImageMediaState>) -> RoomImageActivity {
     RoomImageActivity {
         event_id: "$image1:example.org".to_owned(),
@@ -71,6 +97,7 @@ fn sample_room_image_activity(media_state: Option<RoomImageMediaState>) -> RoomI
             width: Some(640),
             height: Some(480),
             is_animated: Some(false),
+            thumbnail_source: None,
         }),
         media_state,
     }
@@ -1033,7 +1060,8 @@ fn room_activity_image_round_trips_through_json() {
                 "size": 12345u64,
                 "width": 640u64,
                 "height": 480u64,
-                "is_animated": false
+                "is_animated": false,
+                "thumbnail_source": null
             },
             "media_state": null
         }
@@ -1081,7 +1109,8 @@ fn room_activity_image_pending_media_state_round_trips_through_json() {
                 "size": 12345u64,
                 "width": 640u64,
                 "height": 480u64,
-                "is_animated": false
+                "is_animated": false,
+                "thumbnail_source": null
             },
             "media_state": {
                 "type": "pending"
@@ -1135,7 +1164,8 @@ fn room_activity_image_loaded_media_state_round_trips_through_json() {
                 "size": 12345u64,
                 "width": 640u64,
                 "height": 480u64,
-                "is_animated": false
+                "is_animated": false,
+                "thumbnail_source": null
             },
             "media_state": {
                 "type": "loaded",
@@ -1190,7 +1220,8 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
                 "size": 12345u64,
                 "width": 640u64,
                 "height": 480u64,
-                "is_animated": false
+                "is_animated": false,
+                "thumbnail_source": null
             },
             "media_state": {
                 "type": "failed",
@@ -1498,6 +1529,115 @@ fn fetch_room_image_media_request_round_trips_through_json() {
 }
 
 #[test]
+fn encrypted_room_media_source_round_trips_through_json() {
+    let source = sample_encrypted_room_media_source("mxc://example.org/encrypted-image");
+    let json = serde_json::json!({
+        "type": "encrypted",
+        "url": "mxc://example.org/encrypted-image",
+        "key": {
+            "kty": "oct",
+            "key_ops": ["encrypt", "decrypt"],
+            "alg": "A256CTR",
+            "k": "base64url-key",
+            "ext": true
+        },
+        "iv": "base64-iv",
+        "hashes": {
+            "sha256": "base64-sha256"
+        },
+        "v": "v2"
+    });
+
+    assert_eq!(
+        serde_json::to_value(&source).expect("serialize encrypted room media source"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomMediaSource>(json)
+            .expect("deserialize encrypted room media source"),
+        source
+    );
+}
+
+#[test]
+fn encrypted_fetch_room_image_media_request_round_trips_through_json() {
+    let request = FetchRoomImageMediaRequest {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image:example".to_owned(),
+        event_id: "$image:example".to_owned(),
+        source: sample_encrypted_room_media_source("mxc://example.org/encrypted-image"),
+        format: RoomImageMediaFormat::Thumbnail {
+            width: 160,
+            height: 120,
+        },
+    };
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image:example",
+        "event_id": "$image:example",
+        "source": {
+            "type": "encrypted",
+            "url": "mxc://example.org/encrypted-image",
+            "key": {
+                "kty": "oct",
+                "key_ops": ["encrypt", "decrypt"],
+                "alg": "A256CTR",
+                "k": "base64url-key",
+                "ext": true
+            },
+            "iv": "base64-iv",
+            "hashes": {
+                "sha256": "base64-sha256"
+            },
+            "v": "v2"
+        },
+        "format": {
+            "type": "thumbnail",
+            "width": 160,
+            "height": 120
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&request).expect("serialize encrypted image media request"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<FetchRoomImageMediaRequest>(json.clone())
+            .expect("deserialize encrypted image media request"),
+        request
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreFetchRoomImageMediaRequest>(json)
+            .expect("deserialize core encrypted image media request"),
+        CoreFetchRoomImageMediaRequest {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$image:example".to_owned(),
+            event_id: "$image:example".to_owned(),
+            source: CoreRoomMediaSource::Encrypted {
+                url: "mxc://example.org/encrypted-image".to_owned(),
+                key: mmatrix_core::RoomEncryptedFileKey {
+                    kty: "oct".to_owned(),
+                    key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
+                    alg: "A256CTR".to_owned(),
+                    k: "base64url-key".to_owned(),
+                    ext: true,
+                },
+                iv: "base64-iv".to_owned(),
+                hashes: mmatrix_core::RoomEncryptedFileHashes {
+                    sha256: "base64-sha256".to_owned(),
+                },
+                v: "v2".to_owned(),
+            },
+            format: CoreRoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        }
+    );
+}
+
+#[test]
 fn room_image_media_round_trips_through_json() {
     let loaded = RoomImageMedia {
         room_id: "!room:example".to_owned(),
@@ -1637,6 +1777,78 @@ fn room_image_media_dtos_reject_unknown_fields() {
         serde_json::from_str::<RoomImageMediaKind>(
             r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":true}"#
         )
+        .is_err()
+    );
+}
+
+#[test]
+fn encrypted_room_media_source_rejects_malformed_nested_metadata() {
+    assert!(
+        serde_json::from_value::<RoomMediaSource>(serde_json::json!({
+            "type": "encrypted",
+            "url": "mxc://example.org/encrypted-image",
+            "iv": "base64-iv",
+            "hashes": {"sha256": "base64-sha256"},
+            "v": "v2"
+        }))
+        .is_err()
+    );
+
+    assert!(
+        serde_json::from_value::<RoomMediaSource>(serde_json::json!({
+            "type": "encrypted",
+            "url": "mxc://example.org/encrypted-image",
+            "key": {
+                "kty": "oct",
+                "key_ops": ["encrypt", "decrypt"],
+                "alg": "A256CTR",
+                "k": "base64url-key",
+                "ext": true
+            },
+            "iv": "base64-iv",
+            "hashes": {},
+            "v": "v2"
+        }))
+        .is_err()
+    );
+
+    assert!(
+        serde_json::from_value::<RoomMediaSource>(serde_json::json!({
+            "type": "encrypted",
+            "url": "mxc://example.org/encrypted-image",
+            "key": {
+                "kty": "oct",
+                "key_ops": ["encrypt", "decrypt"],
+                "alg": "A256CTR",
+                "k": "base64url-key",
+                "ext": true,
+                "unexpected": true
+            },
+            "iv": "base64-iv",
+            "hashes": {"sha256": "base64-sha256"},
+            "v": "v2"
+        }))
+        .is_err()
+    );
+
+    assert!(
+        serde_json::from_value::<RoomMediaSource>(serde_json::json!({
+            "type": "encrypted",
+            "url": "mxc://example.org/encrypted-image",
+            "key": {
+                "kty": "oct",
+                "key_ops": ["encrypt", "decrypt"],
+                "alg": "A256CTR",
+                "k": "base64url-key",
+                "ext": true
+            },
+            "iv": "base64-iv",
+            "hashes": {
+                "sha256": "base64-sha256",
+                "unexpected": true
+            },
+            "v": "v2"
+        }))
         .is_err()
     );
 }

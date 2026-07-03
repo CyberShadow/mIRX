@@ -4834,6 +4834,23 @@ struct RoomImageMediaDispatch {
     format: RoomImageMediaFormat,
 }
 
+fn timeline_image_thumbnail_source(
+    message: &mmatrix_core::RoomImageActivity,
+) -> Option<&RoomMediaSource> {
+    if let Some(thumbnail_source) = message
+        .info
+        .as_ref()
+        .and_then(|info| info.thumbnail_source.as_ref())
+    {
+        return Some(thumbnail_source);
+    }
+
+    match &message.source {
+        RoomMediaSource::Plain { .. } => Some(&message.source),
+        RoomMediaSource::Encrypted { .. } => None,
+    }
+}
+
 fn collect_lazy_room_image_media_requests<'a>(
     room_view: &RoomViewModel,
     activities: impl IntoIterator<Item = &'a RoomActivity>,
@@ -4845,9 +4862,6 @@ fn collect_lazy_room_image_media_requests<'a>(
             let RoomActivityKind::Image(message) = &activity.kind else {
                 return None;
             };
-            if !matches!(message.source, RoomMediaSource::Plain { .. }) {
-                return None;
-            }
             if !room_view.should_request_image_media(
                 &activity.activity_id,
                 &message.event_id,
@@ -4855,10 +4869,11 @@ fn collect_lazy_room_image_media_requests<'a>(
             ) {
                 return None;
             }
+            let source = timeline_image_thumbnail_source(message)?;
             Some(RoomImageMediaDispatch {
                 activity_id: activity.activity_id.clone(),
                 event_id: message.event_id.clone(),
-                source: message.source.clone(),
+                source: source.clone(),
                 format: format.clone(),
             })
         })
@@ -8851,7 +8866,7 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::Image(mmatrix_core::RoomImageActivity {
+            kind: RoomActivityKind::Image(Box::new(mmatrix_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 body: body.to_owned(),
@@ -8860,7 +8875,7 @@ mod tests {
                     url: "mxc://example.org/diagram".to_owned(),
                 },
                 info,
-            }),
+            })),
         }
     }
 
@@ -8890,22 +8905,46 @@ mod tests {
         sender: &str,
         timestamp_ms: u64,
         body: &str,
+        thumbnail_source: Option<RoomMediaSource>,
     ) -> RoomActivity {
         RoomActivity {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::Image(mmatrix_core::RoomImageActivity {
+            kind: RoomActivityKind::Image(Box::new(mmatrix_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 body: body.to_owned(),
                 filename: None,
-                source: mmatrix_core::RoomMediaSource::Encrypted {
-                    url: "mxc://example.org/encrypted".to_owned(),
-                },
-                info: None,
-            }),
+                source: encrypted_media_source("mxc://example.org/encrypted"),
+                info: Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                    thumbnail_source,
+                }),
+            })),
+        }
+    }
+
+    fn encrypted_media_source(url: &str) -> RoomMediaSource {
+        RoomMediaSource::Encrypted {
+            url: url.to_owned(),
+            key: mmatrix_core::RoomEncryptedFileKey {
+                kty: "oct".to_owned(),
+                key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
+                alg: "A256CTR".to_owned(),
+                k: "base64url-key".to_owned(),
+                ext: true,
+            },
+            iv: "base64-iv".to_owned(),
+            hashes: mmatrix_core::RoomEncryptedFileHashes {
+                sha256: "base64-sha256".to_owned(),
+            },
+            v: "v2".to_owned(),
         }
     }
 
@@ -9696,6 +9735,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     is_animated: Some(false),
+                    thumbnail_source: None,
                 }),
             ),
         )
@@ -9968,6 +10008,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     is_animated: Some(false),
+                    thumbnail_source: None,
                 }),
             ),
         )
@@ -10233,6 +10274,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     is_animated: Some(false),
+                    thumbnail_source: None,
                 }),
             ),
         )
@@ -10848,7 +10890,49 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_image_rows_are_not_lazily_requested() {
+    fn encrypted_image_with_thumbnail_source_queues_thumbnail_request() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        state
+            .model
+            .room_views
+            .entry("!ops:example".to_owned())
+            .or_default()
+            .apply_activity(encrypted_image_activity(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                Some(encrypted_media_source("mxc://example.org/encrypted-thumb")),
+            ));
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "event:$image1:example.org".to_owned(),
+                event_id: "$image1:example.org".to_owned(),
+                source: encrypted_media_source("mxc://example.org/encrypted-thumb"),
+                format: timeline_thumbnail_format(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn encrypted_image_without_thumbnail_source_queues_no_request() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         state
@@ -10862,6 +10946,7 @@ mod tests {
                 "@alice:example.org",
                 1_710_000_000_000,
                 "diagram.png",
+                None,
             ));
 
         let room_view = state
@@ -10872,6 +10957,110 @@ mod tests {
         let requests =
             collect_lazy_room_image_media_requests(room_view, room_view.activities.iter());
         assert!(requests.is_empty());
+    }
+
+    #[test]
+    fn plain_image_without_thumbnail_source_queues_original_source_request() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                    thumbnail_source: None,
+                }),
+            ),
+        )
+        .unwrap();
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "event:$image1:example.org".to_owned(),
+                event_id: "$image1:example.org".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/diagram".to_owned(),
+                },
+                format: timeline_thumbnail_format(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn plain_image_with_thumbnail_source_queues_thumbnail_request() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "diagram.png",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                    thumbnail_source: Some(RoomMediaSource::Plain {
+                        url: "mxc://example.org/diagram-thumb".to_owned(),
+                    }),
+                }),
+            ),
+        )
+        .unwrap();
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+        };
+        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "event:$image1:example.org".to_owned(),
+                event_id: "$image1:example.org".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/diagram-thumb".to_owned(),
+                },
+                format: timeline_thumbnail_format(),
+            })]
+        );
+
+        stop_test_core(handle);
     }
 
     #[test]
@@ -12299,6 +12488,7 @@ mod tests {
                     width: Some(640),
                     height: Some(480),
                     is_animated: Some(false),
+                    thumbnail_source: None,
                 }),
             ),
         )
@@ -12547,6 +12737,7 @@ mod tests {
                 width: Some(640),
                 height: Some(480),
                 is_animated: Some(false),
+                thumbnail_source: None,
             }),
         );
 

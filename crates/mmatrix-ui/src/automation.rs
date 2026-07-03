@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 15;
+pub(crate) const PROTOCOL_VERSION: u32 = 16;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -904,8 +904,32 @@ pub(crate) enum DumpRoomImageMediaState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DumpRoomMediaSource {
-    Plain { url: String },
-    Encrypted { url: String },
+    Plain {
+        url: String,
+    },
+    Encrypted {
+        url: String,
+        key: DumpRoomEncryptedFileKey,
+        iv: String,
+        hashes: DumpRoomEncryptedFileHashes,
+        v: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomEncryptedFileKey {
+    pub(crate) kty: String,
+    pub(crate) key_ops: Vec<String>,
+    pub(crate) alg: String,
+    pub(crate) k: String,
+    pub(crate) ext: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomEncryptedFileHashes {
+    pub(crate) sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -916,6 +940,7 @@ pub(crate) struct DumpRoomImageInfo {
     pub(crate) width: Option<u64>,
     pub(crate) height: Option<u64>,
     pub(crate) is_animated: Option<bool>,
+    pub(crate) thumbnail_source: Option<DumpRoomMediaSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1156,7 +1181,27 @@ pub(crate) fn dump_room_image_activity_from_core(
 pub(crate) fn dump_room_media_source_from_core(source: &RoomMediaSource) -> DumpRoomMediaSource {
     match source {
         RoomMediaSource::Plain { url } => DumpRoomMediaSource::Plain { url: url.clone() },
-        RoomMediaSource::Encrypted { url } => DumpRoomMediaSource::Encrypted { url: url.clone() },
+        RoomMediaSource::Encrypted {
+            url,
+            key,
+            iv,
+            hashes,
+            v,
+        } => DumpRoomMediaSource::Encrypted {
+            url: url.clone(),
+            key: DumpRoomEncryptedFileKey {
+                kty: key.kty.clone(),
+                key_ops: key.key_ops.clone(),
+                alg: key.alg.clone(),
+                k: key.k.clone(),
+                ext: key.ext,
+            },
+            iv: iv.clone(),
+            hashes: DumpRoomEncryptedFileHashes {
+                sha256: hashes.sha256.clone(),
+            },
+            v: v.clone(),
+        },
     }
 }
 
@@ -1167,6 +1212,10 @@ pub(crate) fn dump_room_image_info_from_core(info: &RoomImageInfo) -> DumpRoomIm
         width: info.width,
         height: info.height,
         is_animated: info.is_animated,
+        thumbnail_source: info
+            .thumbnail_source
+            .as_ref()
+            .map(dump_room_media_source_from_core),
     }
 }
 
@@ -1463,10 +1512,10 @@ mod tests {
     use mmatrix_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomSummary, RoomTagSummary, SpaceChildSummary, StoredSession,
-        UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
+        RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
+        RoomImageInfo, RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind,
+        RoomMessageSendState, RoomReadState, RoomSummary, RoomTagSummary, SpaceChildSummary,
+        StoredSession, UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
         VerificationStateEvent,
     };
     use serde_json::{Value, json};
@@ -1484,9 +1533,10 @@ mod tests {
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource,
-        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
+        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
         DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
@@ -1524,9 +1574,53 @@ mod tests {
         }
     }
 
+    fn sample_encrypted_file_key() -> RoomEncryptedFileKey {
+        RoomEncryptedFileKey {
+            kty: "oct".to_owned(),
+            key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
+            alg: "A256CTR".to_owned(),
+            k: "base64url-key".to_owned(),
+            ext: true,
+        }
+    }
+
+    fn sample_encrypted_file_hashes() -> RoomEncryptedFileHashes {
+        RoomEncryptedFileHashes {
+            sha256: "base64-sha256".to_owned(),
+        }
+    }
+
+    fn sample_encrypted_room_media_source(url: &str) -> RoomMediaSource {
+        RoomMediaSource::Encrypted {
+            url: url.to_owned(),
+            key: sample_encrypted_file_key(),
+            iv: "base64-iv".to_owned(),
+            hashes: sample_encrypted_file_hashes(),
+            v: "v2".to_owned(),
+        }
+    }
+
+    fn sample_dump_encrypted_room_media_source(url: &str) -> DumpRoomMediaSource {
+        DumpRoomMediaSource::Encrypted {
+            url: url.to_owned(),
+            key: DumpRoomEncryptedFileKey {
+                kty: "oct".to_owned(),
+                key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
+                alg: "A256CTR".to_owned(),
+                k: "base64url-key".to_owned(),
+                ext: true,
+            },
+            iv: "base64-iv".to_owned(),
+            hashes: DumpRoomEncryptedFileHashes {
+                sha256: "base64-sha256".to_owned(),
+            },
+            v: "v2".to_owned(),
+        }
+    }
+
     #[test]
-    fn protocol_version_is_15() {
-        assert_eq!(PROTOCOL_VERSION, 15);
+    fn protocol_version_is_16() {
+        assert_eq!(PROTOCOL_VERSION, 16);
     }
 
     #[test]
@@ -2745,7 +2839,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":15,
+                    "protocol_version":16,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -2910,6 +3004,7 @@ mod tests {
                                     width: Some(640),
                                     height: Some(480),
                                     is_animated: Some(false),
+                                    thumbnail_source: None,
                                 }),
                                 media_state: None,
                             }),
@@ -2978,7 +3073,8 @@ mod tests {
                                     "size":12345u64,
                                     "width":640u64,
                                     "height":480u64,
-                                    "is_animated":false
+                                    "is_animated":false,
+                                    "thumbnail_source":null
                                 },
                                 "media_state":null
                             }
@@ -3690,22 +3786,23 @@ mod tests {
             activity_id: "event:$image1:example.org".to_owned(),
             timestamp_ms: 1_710_000_010_000,
             relation: None,
-            kind: RoomActivityKind::Image(RoomImageActivity {
+            kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                 event_id: "$image1:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),
                 body: "diagram.png".to_owned(),
                 filename: Some("diagram.png".to_owned()),
-                source: RoomMediaSource::Encrypted {
-                    url: "mxc://example.org/diagram".to_owned(),
-                },
+                source: sample_encrypted_room_media_source("mxc://example.org/diagram"),
                 info: Some(RoomImageInfo {
                     mimetype: Some("image/png".to_owned()),
                     size: Some(12_345),
                     width: Some(640),
                     height: Some(480),
                     is_animated: Some(false),
+                    thumbnail_source: Some(sample_encrypted_room_media_source(
+                        "mxc://example.org/diagram-thumb",
+                    )),
                 }),
-            }),
+            })),
         };
         assert_eq!(
             super::dump_room_activity_from_activity(&image_activity),
@@ -3719,15 +3816,16 @@ mod tests {
                     sender: "@alice:example.org".to_owned(),
                     body: "diagram.png".to_owned(),
                     filename: Some("diagram.png".to_owned()),
-                    source: DumpRoomMediaSource::Encrypted {
-                        url: "mxc://example.org/diagram".to_owned(),
-                    },
+                    source: sample_dump_encrypted_room_media_source("mxc://example.org/diagram"),
                     info: Some(DumpRoomImageInfo {
                         mimetype: Some("image/png".to_owned()),
                         size: Some(12_345),
                         width: Some(640),
                         height: Some(480),
                         is_animated: Some(false),
+                        thumbnail_source: Some(sample_dump_encrypted_room_media_source(
+                            "mxc://example.org/diagram-thumb",
+                        )),
                     }),
                     media_state: None,
                 }),
@@ -3749,14 +3847,42 @@ mod tests {
                     "filename":"diagram.png",
                     "source":{
                         "type":"encrypted",
-                        "url":"mxc://example.org/diagram"
+                        "url":"mxc://example.org/diagram",
+                        "key":{
+                            "kty":"oct",
+                            "key_ops":["encrypt","decrypt"],
+                            "alg":"A256CTR",
+                            "k":"base64url-key",
+                            "ext":true
+                        },
+                        "iv":"base64-iv",
+                        "hashes":{
+                            "sha256":"base64-sha256"
+                        },
+                        "v":"v2"
                     },
                     "info":{
                         "mimetype":"image/png",
                         "size":12345u64,
                         "width":640u64,
                         "height":480u64,
-                        "is_animated":false
+                        "is_animated":false,
+                        "thumbnail_source":{
+                            "type":"encrypted",
+                            "url":"mxc://example.org/diagram-thumb",
+                            "key":{
+                                "kty":"oct",
+                                "key_ops":["encrypt","decrypt"],
+                                "alg":"A256CTR",
+                                "k":"base64url-key",
+                                "ext":true
+                            },
+                            "iv":"base64-iv",
+                            "hashes":{
+                                "sha256":"base64-sha256"
+                            },
+                            "v":"v2"
+                        }
                     },
                     "media_state":null
                 }
