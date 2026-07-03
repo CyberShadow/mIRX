@@ -17,13 +17,14 @@ use mmatrix_testkit::{
     MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
     RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
+    StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
+    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -52,6 +53,26 @@ fn sample_e2ee_status() -> E2eeStatus {
             has_user_signing: false,
             complete: false,
         }),
+    }
+}
+
+fn sample_room_image_activity(media_state: Option<RoomImageMediaState>) -> RoomImageActivity {
+    RoomImageActivity {
+        event_id: "$image1:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        body: "diagram.png".to_owned(),
+        filename: Some("diagram.png".to_owned()),
+        source: RoomMediaSource::Plain {
+            url: "mxc://example.org/diagram".to_owned(),
+        },
+        info: Some(RoomImageInfo {
+            mimetype: Some("image/png".to_owned()),
+            size: Some(12_345),
+            width: Some(640),
+            height: Some(480),
+            is_animated: Some(false),
+        }),
+        media_state,
     }
 }
 
@@ -989,22 +1010,7 @@ fn room_activity_image_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(RoomImageActivity {
-            event_id: "$image1:example.org".to_owned(),
-            sender: "@alice:example.org".to_owned(),
-            body: "diagram.png".to_owned(),
-            filename: Some("diagram.png".to_owned()),
-            source: RoomMediaSource::Plain {
-                url: "mxc://example.org/diagram".to_owned(),
-            },
-            info: Some(RoomImageInfo {
-                mimetype: Some("image/png".to_owned()),
-                size: Some(12_345),
-                width: Some(640),
-                height: Some(480),
-                is_animated: Some(false),
-            }),
-        }),
+        kind: RoomActivityKind::Image(sample_room_image_activity(None)),
     };
 
     let json = serde_json::json!({
@@ -1028,7 +1034,8 @@ fn room_activity_image_round_trips_through_json() {
                 "width": 640u64,
                 "height": 480u64,
                 "is_animated": false
-            }
+            },
+            "media_state": null
         }
     });
 
@@ -1038,6 +1045,167 @@ fn room_activity_image_round_trips_through_json() {
     );
     assert_eq!(
         serde_json::from_value::<RoomActivity>(json).expect("deserialize image activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_image_pending_media_state_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        relation: None,
+        kind: RoomActivityKind::Image(sample_room_image_activity(Some(
+            RoomImageMediaState::Pending,
+        ))),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image1:example.org",
+        "timestamp_ms": 1710000000000u64,
+        "relation": null,
+        "kind": {
+            "type": "image",
+            "event_id": "$image1:example.org",
+            "sender": "@alice:example.org",
+            "body": "diagram.png",
+            "filename": "diagram.png",
+            "source": {
+                "type": "plain",
+                "url": "mxc://example.org/diagram"
+            },
+            "info": {
+                "mimetype": "image/png",
+                "size": 12345u64,
+                "width": 640u64,
+                "height": 480u64,
+                "is_animated": false
+            },
+            "media_state": {
+                "type": "pending"
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize image activity with pending media"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json)
+            .expect("deserialize image activity with pending media"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_image_loaded_media_state_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        relation: None,
+        kind: RoomActivityKind::Image(sample_room_image_activity(Some(
+            RoomImageMediaState::Loaded {
+                width: 320,
+                height: 240,
+            },
+        ))),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image1:example.org",
+        "timestamp_ms": 1710000000000u64,
+        "relation": null,
+        "kind": {
+            "type": "image",
+            "event_id": "$image1:example.org",
+            "sender": "@alice:example.org",
+            "body": "diagram.png",
+            "filename": "diagram.png",
+            "source": {
+                "type": "plain",
+                "url": "mxc://example.org/diagram"
+            },
+            "info": {
+                "mimetype": "image/png",
+                "size": 12345u64,
+                "width": 640u64,
+                "height": 480u64,
+                "is_animated": false
+            },
+            "media_state": {
+                "type": "loaded",
+                "width": 320u64,
+                "height": 240u64
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize image activity with loaded media"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json)
+            .expect("deserialize image activity with loaded media"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_image_failed_media_state_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        relation: None,
+        kind: RoomActivityKind::Image(sample_room_image_activity(Some(
+            RoomImageMediaState::Failed {
+                message: "download failed".to_owned(),
+            },
+        ))),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image1:example.org",
+        "timestamp_ms": 1710000000000u64,
+        "relation": null,
+        "kind": {
+            "type": "image",
+            "event_id": "$image1:example.org",
+            "sender": "@alice:example.org",
+            "body": "diagram.png",
+            "filename": "diagram.png",
+            "source": {
+                "type": "plain",
+                "url": "mxc://example.org/diagram"
+            },
+            "info": {
+                "mimetype": "image/png",
+                "size": 12345u64,
+                "width": 640u64,
+                "height": 480u64,
+                "is_animated": false
+            },
+            "media_state": {
+                "type": "failed",
+                "message": "download failed"
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize image activity with failed media"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json)
+            .expect("deserialize image activity with failed media"),
         activity
     );
 }
@@ -1533,22 +1701,7 @@ fn room_activity_contains_matches_image_fields() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
-        kind: RoomActivityKind::Image(RoomImageActivity {
-            event_id: "$image1:example.org".to_owned(),
-            sender: "@alice:example.org".to_owned(),
-            body: "diagram.png".to_owned(),
-            filename: Some("diagram.png".to_owned()),
-            source: RoomMediaSource::Plain {
-                url: "mxc://example.org/diagram".to_owned(),
-            },
-            info: Some(RoomImageInfo {
-                mimetype: Some("image/png".to_owned()),
-                size: Some(12_345),
-                width: Some(640),
-                height: Some(480),
-                is_animated: Some(false),
-            }),
-        }),
+        kind: RoomActivityKind::Image(sample_room_image_activity(None)),
     };
 
     assert!(activity.contains("\"type\":\"image\""));
@@ -1558,6 +1711,47 @@ fn room_activity_contains_matches_image_fields() {
     assert!(activity.contains("640"));
     assert!(activity.contains("480"));
     assert!(activity.contains("12345"));
+}
+
+#[test]
+fn room_image_activity_rejects_unknown_fields() {
+    let error = serde_json::from_value::<RoomImageActivity>(serde_json::json!({
+        "event_id": "$image1:example.org",
+        "sender": "@alice:example.org",
+        "body": "diagram.png",
+        "filename": "diagram.png",
+        "source": {
+            "type": "plain",
+            "url": "mxc://example.org/diagram"
+        },
+        "info": {
+            "mimetype": "image/png",
+            "size": 12345u64,
+            "width": 640u64,
+            "height": 480u64,
+            "is_animated": false
+        },
+        "media_state": {
+            "type": "pending"
+        },
+        "unexpected": true
+    }))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `unexpected`"));
+}
+
+#[test]
+fn room_image_media_state_rejects_unknown_fields() {
+    let error = serde_json::from_value::<RoomImageMediaState>(serde_json::json!({
+        "type": "loaded",
+        "width": 320u64,
+        "height": 240u64,
+        "unexpected": true
+    }))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `unexpected`"));
 }
 
 #[test]

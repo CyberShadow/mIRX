@@ -844,6 +844,10 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       expect_switchbar_active='room:!alpha:example.org'
+      view_forbid_args=(
+        --expect-no-view 'room:!media:example.org::loading image...'
+        --expect-no-view 'room:!media:example.org::image unavailable'
+      )
       navigation_forbid_args=(
         --expect-no-navigation-text 'voice-note.ogg'
       )
@@ -857,6 +861,7 @@ configure_case_expectations() {
       room_activity_expect_args=(
         --expect-room-activity '!images:example.org::"type":"image"'
         --expect-room-activity '!images:example.org::diagram.png'
+        --expect-room-activity '!images:example.org::"media_state":{"type":"pending"}'
         --expect-room-activity '!images:example.org::mxc://example.org/diagram'
         --expect-room-activity '!images:example.org::image/png'
         --expect-room-activity '!images:example.org::640'
@@ -869,6 +874,72 @@ configure_case_expectations() {
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !images:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!images:example.org::Images'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!images:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!images:example.org'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'diagram.png'
+      )
+      ;;
+    image-message-loaded)
+      expect_selected='!images:example.org'
+      expect_active_view='room:!images:example.org'
+      room_expect_args=(
+        --expect-room '!images:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!images:example.org::"type":"image"'
+        --expect-room-activity '!images:example.org::diagram.png'
+        --expect-room-activity '!images:example.org::"media_state":{"type":"loaded","width":64,"height":48}'
+        --expect-room-activity '!images:example.org::mxc://example.org/diagram'
+        --expect-room-activity '!images:example.org::image/png'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'image media update from !images:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!images:example.org::Images'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!images:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!images:example.org'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'diagram.png'
+      )
+      ;;
+    image-message-failed)
+      expect_selected='!images:example.org'
+      expect_active_view='room:!images:example.org'
+      room_expect_args=(
+        --expect-room '!images:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!images:example.org::"type":"image"'
+        --expect-room-activity '!images:example.org::diagram.png'
+        --expect-room-activity '!images:example.org::"media_state":{"type":"failed","message":"failed to fetch room image media: unavailable"}'
+        --expect-room-activity '!images:example.org::mxc://example.org/diagram'
+        --expect-room-activity '!images:example.org::image/png'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'image media update from !images:example.org'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'

@@ -315,6 +315,15 @@ pub struct RoomImageActivity {
     pub filename: Option<String>,
     pub source: RoomMediaSource,
     pub info: Option<RoomImageInfo>,
+    pub media_state: Option<RoomImageMediaState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomImageMediaState {
+    Pending,
+    Loaded { width: u32, height: u32 },
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

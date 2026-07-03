@@ -890,6 +890,15 @@ pub(crate) struct DumpRoomImageActivity {
     pub(crate) filename: Option<String>,
     pub(crate) source: DumpRoomMediaSource,
     pub(crate) info: Option<DumpRoomImageInfo>,
+    pub(crate) media_state: Option<DumpRoomImageMediaState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum DumpRoomImageMediaState {
+    Pending,
+    Loaded { width: u32, height: u32 },
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1140,6 +1149,7 @@ pub(crate) fn dump_room_image_activity_from_core(
         filename: image.filename.clone(),
         source: dump_room_media_source_from_core(&image.source),
         info: image.info.as_ref().map(dump_room_image_info_from_core),
+        media_state: None,
     }
 }
 
@@ -1474,9 +1484,9 @@ mod tests {
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
+        DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource,
+        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
+        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
         DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
@@ -2901,6 +2911,7 @@ mod tests {
                                     height: Some(480),
                                     is_animated: Some(false),
                                 }),
+                                media_state: None,
                             }),
                         },
                         DumpRoomActivity {
@@ -2968,7 +2979,8 @@ mod tests {
                                     "width":640u64,
                                     "height":480u64,
                                     "is_animated":false
-                                }
+                                },
+                                "media_state":null
                             }
                         },
                         {
@@ -3717,6 +3729,7 @@ mod tests {
                         height: Some(480),
                         is_animated: Some(false),
                     }),
+                    media_state: None,
                 }),
             }
         );
@@ -3744,7 +3757,8 @@ mod tests {
                         "width":640u64,
                         "height":480u64,
                         "is_animated":false
-                    }
+                    },
+                    "media_state":null
                 }
             })
         );
@@ -3778,6 +3792,14 @@ mod tests {
                 "filename":"diagram.png",
                 "source":{"type":"plain","url":"mxc://example.org/diagram"},
                 "info":{"mimetype":"image/png","size":12345u64,"width":640u64,"height":480u64,"is_animated":false},
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomImageMediaState>(json!({
+                "type":"failed",
+                "message":"unavailable",
                 "unexpected":true
             }))
             .is_err()

@@ -89,7 +89,8 @@ use crate::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
-        DumpRoomActivityResponse, DumpRoomMessageActivityLine, DumpSubmittedDirectRoomCommand,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
+        DumpRoomMessageActivityLine, DumpSubmittedDirectRoomCommand,
         DumpSubmittedMembershipCommand, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
@@ -5692,7 +5693,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     room_view
                         .activities
                         .iter()
-                        .map(dump_room_activity_entry_from_room_entry)
+                        .map(|activity| {
+                            dump_room_activity_entry_from_room_entry(room_view, activity)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -8182,8 +8185,62 @@ fn submit_reject_verification_sas(state: &mut WindowState) -> Result<(), String>
     submit_reject_verification_sas_flow(state, flow)
 }
 
-fn dump_room_activity_entry_from_room_entry(activity: &RoomActivity) -> DumpRoomActivity {
-    dump_room_activity_from_activity(activity)
+fn dump_room_activity_entry_from_room_entry(
+    room_view: &RoomViewModel,
+    activity: &RoomActivity,
+) -> DumpRoomActivity {
+    let mut dump = dump_room_activity_from_activity(activity);
+    let RoomActivityKind::Image(image) = &activity.kind else {
+        return dump;
+    };
+    let DumpRoomActivityKind::Image(dump_image) = &mut dump.kind else {
+        return dump;
+    };
+    dump_image.media_state = dump_room_image_media_state(
+        room_view,
+        &activity.activity_id,
+        &image.event_id,
+        &timeline_thumbnail_format(),
+    );
+    dump
+}
+
+fn dump_room_image_media_state(
+    room_view: &RoomViewModel,
+    activity_id: &str,
+    event_id: &str,
+    format: &RoomImageMediaFormat,
+) -> Option<DumpRoomImageMediaState> {
+    match room_view.image_media.get(activity_id) {
+        Some(RoomImageMediaState::Pending {
+            event_id: stored_event_id,
+            format: stored_format,
+        }) if stored_event_id == event_id && stored_format == format => {
+            Some(DumpRoomImageMediaState::Pending)
+        }
+        Some(RoomImageMediaState::Loaded {
+            event_id: stored_event_id,
+            format: stored_format,
+            width,
+            height,
+            ..
+        }) if stored_event_id == event_id && stored_format == format => {
+            Some(DumpRoomImageMediaState::Loaded {
+                width: *width,
+                height: *height,
+            })
+        }
+        Some(RoomImageMediaState::Failed {
+            event_id: stored_event_id,
+            format: stored_format,
+            message,
+        }) if stored_event_id == event_id && stored_format == format => {
+            Some(DumpRoomImageMediaState::Failed {
+                message: message.clone(),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn dump_room_message_activity_line_from_last_activity(
