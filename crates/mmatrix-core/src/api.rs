@@ -13,6 +13,7 @@ pub enum Command {
     RestoreSession(RestoreSessionRequest),
     StartSync,
     JoinRoom(JoinRoomRequest),
+    CreateDirectRoom(CreateDirectRoomRequest),
     LeaveRoom(LeaveRoomRequest),
     SendMessage(SendMessageRequest),
     MarkRoomRead(MarkRoomReadRequest),
@@ -67,6 +68,12 @@ pub struct SendMessageRequest {
 #[serde(deny_unknown_fields)]
 pub struct JoinRoomRequest {
     pub room_or_alias: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateDirectRoomRequest {
+    pub user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -464,6 +471,7 @@ pub enum Operation {
     SessionUpdate,
     StartSync,
     JoinRoom,
+    CreateDirectRoom,
     LeaveRoom,
     SendMessage,
     MarkRoomRead,

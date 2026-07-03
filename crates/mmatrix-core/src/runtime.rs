@@ -10,10 +10,10 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
-    Command, CoreConfig, CoreErrorEvent, E2eeRecoveryOperation, E2eeRecoverySucceeded, Event,
-    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RestoreSessionRequest, RoomMembers, RoomReadState, RoomSummary,
-    VerificationFlowId,
+    Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation,
+    E2eeRecoverySucceeded, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomMembers,
+    RoomReadState, RoomSummary, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -186,6 +186,9 @@ async fn handle_command(
         }
         Command::StartSync => handle_start_sync(event_tx, state),
         Command::JoinRoom(request) => handle_join_room(event_tx, state, request).await,
+        Command::CreateDirectRoom(request) => {
+            handle_create_direct_room(event_tx, state, request).await
+        }
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
@@ -435,6 +438,32 @@ async fn handle_join_room(
 
     if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
         emit_matrix_error(event_tx, Operation::JoinRoom, err);
+    }
+
+    false
+}
+
+async fn handle_create_direct_room(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: CreateDirectRoomRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::CreateDirectRoom,
+            "create direct room requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::create_direct_room(client, &request.user_id).await {
+        emit_matrix_error(event_tx, Operation::CreateDirectRoom, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::CreateDirectRoom, err);
     }
 
     false

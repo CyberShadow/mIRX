@@ -6,17 +6,17 @@ pub const APP_NAME: &str = "mmatrix";
 pub const FOUNDATION_PHASE: &str = "bootstrap";
 
 pub use api::{
-    Command, CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
-    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
-    RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SendMessageThreadTarget, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeBackupState,
+    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState,
+    E2eeRecoverySucceeded, E2eeStatus, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageRequest, SendMessageThreadTarget, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

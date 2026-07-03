@@ -1,16 +1,16 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CoreConfig, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, Event,
-    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
+    E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
+    E2eeStatus, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
+    Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomTyping, SendMessageRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -188,6 +188,12 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .expect("send mark room read");
     handle
         .command_sender()
+        .send(Command::CreateDirectRoom(CreateDirectRoomRequest {
+            user_id: "@alice:example.org".to_owned(),
+        }))
+        .expect("send create direct room");
+    handle
+        .command_sender()
         .send(Command::Logout)
         .expect("send logout");
 
@@ -203,6 +209,10 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .events()
         .recv_timeout(Duration::from_secs(2))
         .expect("mark room read error");
+    let create_direct_room_error = handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("create direct room error");
     let logout_error = handle
         .events()
         .recv_timeout(Duration::from_secs(2))
@@ -225,6 +235,16 @@ fn invalid_command_ordering_emits_typed_error_events() {
             );
         }
         other => panic!("expected mark room read error, got {other:?}"),
+    }
+    match create_direct_room_error {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::CreateDirectRoom);
+            assert_eq!(
+                err.message,
+                "create direct room requires an authenticated session"
+            );
+        }
+        other => panic!("expected create direct room error, got {other:?}"),
     }
     match logout_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::Logout),
@@ -253,6 +273,17 @@ fn join_room_before_login_emits_join_room_error() {
         }),
         Operation::JoinRoom,
         "join room requires an authenticated session",
+    );
+}
+
+#[test]
+fn create_direct_room_before_login_emits_create_direct_room_error() {
+    assert_invalid_authenticated_command(
+        Command::CreateDirectRoom(CreateDirectRoomRequest {
+            user_id: "@alice:example.org".to_owned(),
+        }),
+        Operation::CreateDirectRoom,
+        "create direct room requires an authenticated session",
     );
 }
 
@@ -499,6 +530,20 @@ fn join_room_request_round_trips_through_serde() {
 
     let restored: JoinRoomRequest =
         serde_json::from_str(&json).expect("deserialize join room request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn create_direct_room_request_round_trips_through_serde() {
+    let request = CreateDirectRoomRequest {
+        user_id: "@alice:example.org".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize create direct room request");
+    assert_eq!(json, r#"{"user_id":"@alice:example.org"}"#);
+
+    let restored: CreateDirectRoomRequest =
+        serde_json::from_str(&json).expect("deserialize create direct room request");
     assert_eq!(restored, request);
 }
 
@@ -1245,6 +1290,17 @@ fn join_room_request_rejects_unknown_fields() {
         )
         .is_err(),
         "join room request must reject unknown fields"
+    );
+}
+
+#[test]
+fn create_direct_room_request_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<CreateDirectRoomRequest>(
+            r#"{"user_id":"@alice:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "create direct room request must reject unknown fields"
     );
 }
 

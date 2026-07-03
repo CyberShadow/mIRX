@@ -21,6 +21,7 @@ use matrix_sdk::{
     room::Receipts,
     ruma::{
         EventId, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId, RoomId, RoomOrAliasId,
+        UserId,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
@@ -353,6 +354,20 @@ pub(crate) async fn join_room(client: &Client, room_or_alias: &str) -> Result<()
         .join_room_by_id_or_alias(room_or_alias, &[])
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to join Matrix room: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn create_direct_room(
+    client: &Client,
+    user_id: &str,
+) -> Result<(), MatrixCoreError> {
+    let user_id = <&UserId>::try_from(user_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+
+    client.create_dm(user_id).await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to create Matrix direct room: {err}"))
+    })?;
 
     Ok(())
 }

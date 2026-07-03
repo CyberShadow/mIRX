@@ -24,9 +24,10 @@ use mmatrix_testkit::{
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedMembershipCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionKind, VerificationState, ViewIdentity,
+    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedVerificationAction,
+    SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -4425,6 +4426,384 @@ fn automation_driver_slash_join_records_submitted_membership_without_creating_ro
             .all(|item| item.title != "#ops:example.org")
     );
     assert!(!serde_json::to_string(&ui_state.navigation)?.contains("#ops:example.org"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_query_records_submitted_direct_room_without_creating_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before_rooms = app.list_rooms()?;
+    let before_state = app.dump_ui_state()?;
+    assert_eq!(before_state.mdi.active, room_identity("!beta:example"));
+    assert!(app.dump_model()?.submitted_direct_room_commands.is_empty());
+
+    app.set_compose_text("/query @alice:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "query submitted: @alice:example.org");
+    assert_eq!(
+        model.submitted_direct_room_commands,
+        vec![SubmittedDirectRoomCommand {
+            user_id: "@alice:example.org".to_owned(),
+        }]
+    );
+    assert_eq!(app.list_rooms()?, before_rooms);
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert_eq!(ui_state.rooms, before_state.rooms);
+    assert_eq!(
+        ui_state
+            .mdi
+            .views
+            .iter()
+            .map(|view| view.identity.clone())
+            .collect::<Vec<_>>(),
+        before_state
+            .mdi
+            .views
+            .iter()
+            .map(|view| view.identity.clone())
+            .collect::<Vec<_>>()
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_query_opens_existing_direct_room_match()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let events = vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            RoomSummary {
+                room_id: "!direct:example".to_owned(),
+                display_name: "Direct".to_owned(),
+                encrypted: false,
+                is_space: false,
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example.org".to_owned()],
+                tags: Vec::new(),
+                space_children: Vec::new(),
+            },
+        ]),
+        text_event(
+            "!direct:example",
+            "@alice:example.org",
+            1_700_000_000_000,
+            "direct first",
+        ),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta first",
+        ),
+    ];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.set_compose_text("/query @alice:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "query opened: @alice:example.org");
+    assert!(model.submitted_direct_room_commands.is_empty());
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!direct:example"));
+    assert_active_switchbar_item(&ui_state, &room_identity("!direct:example"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let events = vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            RoomSummary {
+                room_id: "!direct-one:example".to_owned(),
+                display_name: "Direct One".to_owned(),
+                encrypted: false,
+                is_space: false,
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example.org".to_owned()],
+                tags: Vec::new(),
+                space_children: Vec::new(),
+            },
+            RoomSummary {
+                room_id: "!direct-two:example".to_owned(),
+                display_name: "Direct Two".to_owned(),
+                encrypted: false,
+                is_space: false,
+                is_direct: true,
+                direct_user_ids: vec!["@alice:example.org".to_owned()],
+                tags: Vec::new(),
+                space_children: Vec::new(),
+            },
+        ]),
+        text_event(
+            "!direct-one:example",
+            "@alice:example.org",
+            1_700_000_000_000,
+            "direct one",
+        ),
+        text_event(
+            "!direct-two:example",
+            "@alice:example.org",
+            1_700_000_030_000,
+            "direct two",
+        ),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta first",
+        ),
+    ];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.set_compose_text("/query @alice:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "ambiguous query target: @alice:example.org");
+    assert!(model.submitted_direct_room_commands.is_empty());
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&ui_state, &room_identity("!beta:example"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_literal_query_submission_is_sent_as_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    app.set_compose_text("//query @alice:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+    assert_eq!(
+        app.dump_model()?.last_error,
+        Some(UiError {
+            operation: "send_text".to_owned(),
+            message: "send message requires an authenticated session".to_owned(),
+        })
+    );
+    assert!(app.dump_model()?.submitted_direct_room_commands.is_empty());
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+    assert!(
+        !app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("query submitted: @alice:example.org")
+    );
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "//query @alice:example.org");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_query_existing_direct_room_activates_room_without_submission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let mut direct_room = room_summary("!direct:example", "Direct", true);
+    direct_room.is_direct = true;
+    direct_room.direct_user_ids = vec!["@alice:example.org".to_owned()];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            direct_room,
+        ]),
+        text_event(
+            "!direct:example",
+            "@alice:example.org",
+            1_700_000_000_000,
+            "hello from direct",
+        ),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta latest",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.set_compose_text("/query @alice:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "query opened: @alice:example.org");
+    assert!(model.submitted_direct_room_commands.is_empty());
+    assert_eq!(model.selected_room.as_deref(), Some("!direct:example"));
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!direct:example")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let mut direct_one = room_summary("!direct-one:example", "Direct One", true);
+    direct_one.is_direct = true;
+    direct_one.direct_user_ids = vec!["@alice:example.org".to_owned()];
+
+    let mut direct_two = room_summary("!direct-two:example", "Direct Two", true);
+    direct_two.is_direct = true;
+    direct_two.direct_user_ids = vec!["@alice:example.org".to_owned()];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", true),
+            direct_one,
+            direct_two,
+        ]),
+        text_event(
+            "!direct-one:example",
+            "@alice:example.org",
+            1_700_000_000_000,
+            "first direct",
+        ),
+        text_event(
+            "!direct-two:example",
+            "@alice:example.org",
+            1_700_000_060_000,
+            "second direct",
+        ),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta latest",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
+
+    app.set_compose_text("/query @alice:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "ambiguous query target: @alice:example.org");
+    assert!(model.submitted_direct_room_commands.is_empty());
+    assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

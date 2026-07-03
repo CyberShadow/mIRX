@@ -159,6 +159,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_direct_room_commands: Vec<SubmittedDirectRoomCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
@@ -169,6 +171,12 @@ pub struct Model {
 pub struct SubmittedMembershipCommand {
     pub action: MembershipCommandAction,
     pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedDirectRoomCommand {
+    pub user_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

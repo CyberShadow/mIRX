@@ -743,6 +743,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_membership_commands: Vec<DumpSubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_direct_room_commands: Vec<DumpSubmittedDirectRoomCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
@@ -753,6 +755,12 @@ pub(crate) struct DumpModel {
 pub(crate) struct DumpSubmittedMembershipCommand {
     pub(crate) action: DumpMembershipCommandAction,
     pub(crate) target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedDirectRoomCommand {
+    pub(crate) user_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -952,6 +960,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
         Operation::JoinRoom => "join_room",
+        Operation::CreateDirectRoom => "create_direct_room",
         Operation::LeaveRoom => "leave_room",
         Operation::SendMessage => "send_text",
         Operation::MarkRoomRead => "mark_room_read",
@@ -2764,6 +2773,7 @@ mod tests {
                     e2ee_status: Some(sample_e2ee_status()),
                     last_verification: None,
                     submitted_membership_commands: Vec::new(),
+                    submitted_direct_room_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
@@ -3302,6 +3312,7 @@ mod tests {
             e2ee_status: Some(sample_e2ee_status()),
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_direct_room_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,

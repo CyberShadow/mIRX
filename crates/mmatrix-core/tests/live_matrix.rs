@@ -15,8 +15,9 @@ use matrix_sdk::{
     },
 };
 use mmatrix_core::{
-    Command, CoreConfig, CoreHandle, Event, LoginRequest, MarkRoomReadRequest,
-    RoomMessagePresentationKind, SendMessageRequest, StoredSession, start,
+    Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, Event, LoginRequest,
+    MarkRoomReadRequest, RoomMessagePresentationKind, RoomSummary, SendMessageRequest,
+    StoredSession, start,
 };
 use tempfile::TempDir;
 
@@ -177,6 +178,39 @@ fn wait_for_live_logged_out(handle: &CoreHandle, context: &str) {
     assert!(saw_logged_out, "timed out waiting for logged out event");
 }
 
+fn wait_for_live_synced_rooms(handle: &CoreHandle, context: &str) -> Vec<RoomSummary> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    while Instant::now() < deadline {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("synced rooms event")
+        {
+            Event::SyncedRooms(rooms) => return rooms,
+            Event::SessionUpdated { session } => {
+                assert_non_empty_session(&session, "session update");
+            }
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
+            Event::Error(err) => {
+                panic!(
+                    "{context} failed during {:?}: {}",
+                    err.operation, err.message
+                )
+            }
+            other => panic!("unexpected {context} event: {other:?}"),
+        }
+    }
+
+    panic!("timed out waiting for synced rooms during {context}");
+}
+
 fn live_shutdown_and_join(handle: CoreHandle) {
     handle
         .command_sender()
@@ -272,6 +306,16 @@ async fn live_get_fully_read_marker(
         .deserialize_as_unchecked::<FullyReadEventContent>()
         .expect("m.fully_read account data must deserialize as FullyReadEventContent");
     Ok(content.event_id)
+}
+
+fn has_direct_room_for_user(rooms: &[RoomSummary], user_id: &str) -> bool {
+    rooms.iter().any(|room| {
+        room.is_direct
+            && room
+                .direct_user_ids
+                .iter()
+                .any(|direct_user_id| direct_user_id == user_id)
+    })
 }
 
 #[test]
@@ -451,4 +495,63 @@ fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
     assert_eq!(fully_read_event_id, event_id);
 
     live_shutdown_and_join(handle);
+}
+
+#[test]
+fn live_matrix_create_direct_room_metadata_timing_is_env_gated()
+-> Result<(), Box<dyn Error + Send + Sync>> {
+    let Some(homeserver_url) = required_env("MMATRIX_HS") else {
+        eprintln!(
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_HS is not set"
+        );
+        return Ok(());
+    };
+    let Some(username) = required_env("MMATRIX_USER") else {
+        eprintln!(
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_USER is not set"
+        );
+        return Ok(());
+    };
+    let Some(password) = required_env("MMATRIX_PASS") else {
+        eprintln!(
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_PASS is not set"
+        );
+        return Ok(());
+    };
+    let Some(target) = required_env("MMATRIX_DM_TARGET") else {
+        eprintln!(
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_DM_TARGET is not set"
+        );
+        return Ok(());
+    };
+
+    let (_temp_dir, handle) = live_start_core();
+    live_send_login(
+        &handle,
+        homeserver_url,
+        username,
+        password,
+        "mmatrix live direct room test",
+    );
+    wait_for_live_login_and_synced_rooms(&handle);
+
+    handle
+        .command_sender()
+        .send(Command::CreateDirectRoom(CreateDirectRoomRequest {
+            user_id: target.clone(),
+        }))
+        .expect("send create direct room");
+
+    let first_snapshot = wait_for_live_synced_rooms(&handle, "create direct room first snapshot");
+    if !has_direct_room_for_user(&first_snapshot, &target) {
+        let second_snapshot =
+            wait_for_live_synced_rooms(&handle, "create direct room second snapshot");
+        assert!(
+            has_direct_room_for_user(&second_snapshot, &target),
+            "expected direct room metadata for {target} in second post-command snapshot"
+        );
+    }
+
+    live_shutdown_and_join(handle);
+    Ok(())
 }

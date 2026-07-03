@@ -16,8 +16,8 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, E2eeBackupState,
-    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, JoinRoomRequest,
+    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
+    E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event, JoinRoomRequest,
     LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
     RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomActivityUpdate, RoomActivityUpdateKind, RoomImageInfo, RoomMemberSummary, RoomMembers,
@@ -80,17 +80,18 @@ use crate::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
-        DumpRoomActivityResponse, DumpRoomMessageActivityLine, DumpSubmittedMembershipCommand,
-        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
+        DumpRoomActivityResponse, DumpRoomMessageActivityLine, DumpSubmittedDirectRoomCommand,
+        DumpSubmittedMembershipCommand, DumpSubmittedVerificationAction,
+        DumpVerificationActionKind, FailureEnvelope, GetVersionResponse, LifecycleState,
+        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
+        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
+        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiRoomState, UiState,
+        VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+        dump_verification_from_state_event, failure_response, parse_command_request,
+        success_response,
     },
 };
 
@@ -1087,6 +1088,7 @@ enum LocalSlashCommand<'a> {
     Status,
     Window { target: &'a str },
     Join { target: String },
+    Query { user_id: String },
     Part { target: Option<String> },
     Clear,
     E2ee(E2eeSlashCommand),
@@ -1104,6 +1106,13 @@ enum E2eeSlashCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowTargetError {
     Unknown,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum QueryTargetResolution {
+    None,
+    Single(String),
     Ambiguous,
 }
 
@@ -3420,6 +3429,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
 fn preserves_membership_submission_status(status: &str, operation: Operation) -> bool {
     match operation {
         Operation::JoinRoom => status.starts_with("join submitted: "),
+        Operation::CreateDirectRoom => status.starts_with("query submitted: "),
         Operation::LeaveRoom => status.starts_with("part submitted: "),
         _ => false,
     }
@@ -6303,6 +6313,12 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "join" => LocalSlashCommand::Invalid {
             feedback: "usage: /join <room-id-or-alias>".to_owned(),
         },
+        "query" if !argument.is_empty() => LocalSlashCommand::Query {
+            user_id: argument.to_owned(),
+        },
+        "query" => LocalSlashCommand::Invalid {
+            feedback: "usage: /query <mxid>".to_owned(),
+        },
         "part" if argument.is_empty() => LocalSlashCommand::Part { target: None },
         "part" => LocalSlashCommand::Part {
             target: Some(argument.to_owned()),
@@ -6521,6 +6537,26 @@ unsafe fn execute_local_slash_command(
                 Ok(message) | Err(message) => set_local_command_status(hwnd, message),
             }
         }
+        LocalSlashCommand::Query { user_id } => {
+            match resolve_direct_room_query_target(&state_ref(hwnd).model, &user_id) {
+                QueryTargetResolution::Single(room_id) => {
+                    activate_view(hwnd, &ViewId::Room(room_id), None)?;
+                    set_local_command_status(hwnd, format!("query opened: {user_id}"))
+                }
+                QueryTargetResolution::Ambiguous => {
+                    set_local_command_status(hwnd, format!("ambiguous query target: {user_id}"))
+                }
+                QueryTargetResolution::None => {
+                    let result = {
+                        let state = state_mut(hwnd);
+                        submit_query_slash_command(state, user_id)
+                    };
+                    match result {
+                        Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+                    }
+                }
+            }
+        }
         LocalSlashCommand::Part { target } => {
             let result = {
                 let state = state_mut(hwnd);
@@ -6637,6 +6673,20 @@ fn resolve_room_command_target(
     Ok(room.room_id.clone())
 }
 
+fn resolve_direct_room_query_target(model: &UiModel, user_id: &str) -> QueryTargetResolution {
+    let mut matches = model
+        .rooms
+        .iter()
+        .filter(|room| room.is_direct && room.direct_user_ids.iter().any(|id| id == user_id));
+    let Some(room) = matches.next() else {
+        return QueryTargetResolution::None;
+    };
+    if matches.next().is_some() {
+        return QueryTargetResolution::Ambiguous;
+    }
+    QueryTargetResolution::Single(room.room_id.clone())
+}
+
 fn resolve_part_slash_command_room_id(
     state: &WindowState,
     target: Option<&str>,
@@ -6669,6 +6719,21 @@ fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<
         .map_err(|err| format!("failed to enqueue join room command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("join submitted: {target}"))
+}
+
+fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Result<String, String> {
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let command = Command::CreateDirectRoom(CreateDirectRoomRequest {
+        user_id: user_id.clone(),
+    });
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("query submitted: {user_id}"))
 }
 
 fn submit_part_slash_command(
@@ -6943,6 +7008,15 @@ fn dump_submitted_membership_command(command: &Command) -> Option<DumpSubmittedM
     }
 }
 
+fn dump_submitted_direct_room_command(command: &Command) -> Option<DumpSubmittedDirectRoomCommand> {
+    match command {
+        Command::CreateDirectRoom(request) => Some(DumpSubmittedDirectRoomCommand {
+            user_id: request.user_id.clone(),
+        }),
+        _ => None,
+    }
+}
+
 fn submitted_membership_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMembershipCommand> {
@@ -6950,6 +7024,16 @@ fn submitted_membership_commands_from_state(
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_membership_command)
+        .collect()
+}
+
+fn submitted_direct_room_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedDirectRoomCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_direct_room_command)
         .collect()
 }
 
@@ -6996,6 +7080,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .as_ref()
             .map(dump_verification_from_state_event),
         submitted_membership_commands: submitted_membership_commands_from_state(state),
+        submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
@@ -7345,6 +7430,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
         Operation::JoinRoom => "join room",
+        Operation::CreateDirectRoom => "create direct room",
         Operation::LeaveRoom => "leave room",
         Operation::SendMessage => "send text",
         Operation::MarkRoomRead => "mark room read",
@@ -9561,6 +9647,27 @@ mod tests {
                 message: "leave room requires an authenticated session".to_owned(),
             })
         );
+
+        state.model.status = "query submitted: @alice:example.org".to_owned();
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::CreateDirectRoom,
+                message: "create direct room requires an authenticated session".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.status, "query submitted: @alice:example.org");
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+        assert_eq!(
+            state.model.last_error,
+            Some(CoreErrorEvent {
+                operation: Operation::CreateDirectRoom,
+                message: "create direct room requires an authenticated session".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -11723,6 +11830,18 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_slash_command("/query @alice:example.org"),
+            LocalSlashCommand::Query {
+                user_id: "@alice:example.org".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/query   @alice:example.org   "),
+            LocalSlashCommand::Query {
+                user_id: "@alice:example.org".to_owned(),
+            }
+        );
+        assert_eq!(
             parse_slash_command("/part"),
             LocalSlashCommand::Part { target: None }
         );
@@ -11740,6 +11859,18 @@ mod tests {
             parse_slash_command("/join"),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /join <room-id-or-alias>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/query"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /query <mxid>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/query   "),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /query <mxid>".to_owned(),
             }
         );
     }
@@ -11790,6 +11921,47 @@ mod tests {
     }
 
     #[test]
+    fn resolve_direct_room_query_target_distinguishes_none_single_and_ambiguous() {
+        let mut single_room = room("!single:example", "Single", false);
+        single_room.is_direct = true;
+        single_room.direct_user_ids = vec!["@alice:example.org".to_owned()];
+
+        let mut ambiguous_one = room("!ambiguous-one:example", "Ambiguous One", false);
+        ambiguous_one.is_direct = true;
+        ambiguous_one.direct_user_ids = vec!["@carol:example.org".to_owned()];
+
+        let mut ambiguous_two = room("!ambiguous-two:example", "Ambiguous Two", false);
+        ambiguous_two.is_direct = true;
+        ambiguous_two.direct_user_ids = vec![
+            "@carol:example.org".to_owned(),
+            "@other:example.org".to_owned(),
+        ];
+
+        let model = UiModel {
+            rooms: vec![
+                room("!plain:example", "Plain", false),
+                single_room,
+                ambiguous_one,
+                ambiguous_two,
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_direct_room_query_target(&model, "@missing:example.org"),
+            QueryTargetResolution::None
+        );
+        assert_eq!(
+            resolve_direct_room_query_target(&model, "@alice:example.org"),
+            QueryTargetResolution::Single("!single:example".to_owned())
+        );
+        assert_eq!(
+            resolve_direct_room_query_target(&model, "@carol:example.org"),
+            QueryTargetResolution::Ambiguous
+        );
+    }
+
+    #[test]
     fn submit_join_slash_command_records_typed_join_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
 
@@ -11800,6 +11972,24 @@ mod tests {
             state.recorded_commands,
             vec![Command::JoinRoom(JoinRoomRequest {
                 room_or_alias: "#ops:example.org".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_query_slash_command_records_typed_create_direct_room_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+
+        let status =
+            submit_query_slash_command(&mut state, "@alice:example.org".to_owned()).unwrap();
+
+        assert_eq!(status, "query submitted: @alice:example.org");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::CreateDirectRoom(CreateDirectRoomRequest {
+                user_id: "@alice:example.org".to_owned(),
             })]
         );
 
