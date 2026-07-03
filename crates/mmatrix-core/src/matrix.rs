@@ -21,8 +21,8 @@ use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::Receipts,
     ruma::{
-        EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, UInt, OwnedUserId, RoomId,
-        RoomOrAliasId, UserId,
+        EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedUserId, RoomId,
+        RoomOrAliasId, UInt, UserId,
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
@@ -1925,10 +1925,9 @@ mod tests {
 
     use super::{
         LocalEchoMessageDetails, attach_thread_relation, cancelled_state,
-        direct_user_ids_by_room_from_content, map_cross_signing_status, map_decimals,
-        fetch_room_image_media, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_message_activity,
-        map_send_queue_update,
+        direct_user_ids_by_room_from_content, fetch_room_image_media, map_cross_signing_status,
+        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_image_media_request_parameters,
@@ -1957,14 +1956,14 @@ mod tests {
         },
         media::{MediaFormat, MediaThumbnailSettings},
         ruma::{
-            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
-            OwnedUserId, UInt,
+            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId,
+            UInt,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, ToDeviceEvent,
                 direct::DirectEventContent,
-                room::MediaSource,
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
+                room::MediaSource,
                 room::{
                     member::OriginalSyncRoomMemberEvent,
                     message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},

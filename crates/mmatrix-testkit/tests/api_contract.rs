@@ -13,17 +13,17 @@ use mmatrix_core::{
     RoomReadState,
 };
 use mmatrix_testkit::{
-    ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MembershipCommandAction, Model,
-    NavigationNode, NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberView,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild,
-    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
-    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewIdentity, FetchRoomImageMediaRequest,
+    ComposeKey, FetchRoomImageMediaRequest, LaunchOptions, LoginArgs, MdiState, MdiView,
+    MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
+    RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
+    RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
+    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]

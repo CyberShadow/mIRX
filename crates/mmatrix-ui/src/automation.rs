@@ -974,6 +974,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
         Operation::MarkRoomRead => "mark_room_read",
+        Operation::FetchRoomImageMedia => "fetch_room_image_media",
         Operation::RoomList => "room_list",
         Operation::RoomReadState => "room_read_state",
         Operation::E2eeStatus => "e2ee_status",
