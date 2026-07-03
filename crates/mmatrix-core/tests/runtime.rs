@@ -3,14 +3,16 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
-    E2eeStatus, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
-    Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, SendMessageRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
+    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -311,6 +313,26 @@ fn set_room_topic_before_login_emits_set_room_topic_error() {
 }
 
 #[test]
+fn fetch_room_image_media_before_login_emits_fetch_room_image_media_error() {
+    assert_invalid_authenticated_command(
+        Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+            room_id: "!ops:example.org".to_owned(),
+            activity_id: "event:$image:example.org".to_owned(),
+            event_id: "$image:example.org".to_owned(),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/image".to_owned(),
+            },
+            format: RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        }),
+        Operation::FetchRoomImageMedia,
+        "fetch room image media requires an authenticated session",
+    );
+}
+
+#[test]
 fn accept_verification_before_login_emits_verification_error() {
     assert_invalid_verification_command(Command::AcceptVerification(verification_flow_id()));
 }
@@ -588,6 +610,32 @@ fn mark_room_read_request_round_trips_through_serde() {
 
     let restored: MarkRoomReadRequest =
         serde_json::from_str(&json).expect("deserialize mark room read request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn fetch_room_image_media_request_round_trips_through_serde() {
+    let request = FetchRoomImageMediaRequest {
+        room_id: "!room:example.org".to_owned(),
+        activity_id: "event:$image:example.org".to_owned(),
+        event_id: "$image:example.org".to_owned(),
+        source: RoomMediaSource::Plain {
+            url: "mxc://example.org/image".to_owned(),
+        },
+        format: RoomImageMediaFormat::Thumbnail {
+            width: 160,
+            height: 120,
+        },
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize fetch room image media request");
+    assert_eq!(
+        json,
+        r#"{"room_id":"!room:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"plain","url":"mxc://example.org/image"},"format":{"type":"thumbnail","width":160,"height":120}}"#
+    );
+
+    let restored: FetchRoomImageMediaRequest =
+        serde_json::from_str(&json).expect("deserialize fetch room image media request");
     assert_eq!(restored, request);
 }
 
@@ -1050,6 +1098,47 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 }
 
 #[test]
+fn room_image_media_events_round_trip_through_serde() {
+    let loaded_event = Event::RoomImageMedia(RoomImageMedia {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$image:example.org".to_owned(),
+        event_id: "$image:example.org".to_owned(),
+        kind: RoomImageMediaKind::Loaded {
+            format: RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+            bytes: vec![1, 2, 3],
+        },
+    });
+    let failed_event = Event::RoomImageMedia(RoomImageMedia {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$image:example.org".to_owned(),
+        event_id: "$image:example.org".to_owned(),
+        kind: RoomImageMediaKind::Failed {
+            format: RoomImageMediaFormat::File,
+            message: "failed to fetch room image media: unavailable".to_owned(),
+        },
+    });
+
+    assert_eq!(
+        serde_json::to_string(&loaded_event).expect("serialize loaded room image media"),
+        r#"{"RoomImageMedia":{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"loaded","format":{"type":"thumbnail","width":160,"height":120},"bytes":[1,2,3]}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&failed_event).expect("serialize failed room image media"),
+        r#"{"RoomImageMedia":{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"failed","format":{"type":"file"},"message":"failed to fetch room image media: unavailable"}}}"#
+    );
+
+    for event in [loaded_event, failed_event] {
+        let json = serde_json::to_string(&event).expect("serialize room image media event");
+        let restored: Event =
+            serde_json::from_str(&json).expect("deserialize room image media event");
+        assert_eq!(restored, event);
+    }
+}
+
+#[test]
 fn room_typing_event_round_trips_through_serde() {
     let event = Event::RoomTyping(RoomTyping {
         room_id: "!ops:example.org".to_owned(),
@@ -1302,6 +1391,41 @@ fn join_room_request_rejects_unknown_fields() {
         )
         .is_err(),
         "join room request must reject unknown fields"
+    );
+}
+
+#[test]
+fn fetch_room_image_media_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<FetchRoomImageMediaRequest>(
+            r#"{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"plain","url":"mxc://example.org/image"},"format":{"type":"thumbnail","width":160,"height":120},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "fetch room image media request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageMedia>(
+            r#"{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"loaded","format":{"type":"file"},"bytes":[1,2,3]},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room image media must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageMediaFormat>(
+            r#"{"type":"thumbnail","width":160,"height":120,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room image media format must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageMediaKind>(
+            r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":"value"}"#
+        )
+        .is_err(),
+        "room image media kind must reject unknown fields"
     );
 }
 

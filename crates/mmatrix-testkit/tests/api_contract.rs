@@ -7,19 +7,23 @@ use std::path::PathBuf;
 
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    Event as CoreEvent, RoomReadState,
+    Event as CoreEvent, FetchRoomImageMediaRequest as CoreFetchRoomImageMediaRequest,
+    RoomImageMedia as CoreRoomImageMedia, RoomImageMediaFormat as CoreRoomImageMediaFormat,
+    RoomImageMediaKind as CoreRoomImageMediaKind, RoomMediaSource as CoreRoomMediaSource,
+    RoomReadState,
 };
 use mmatrix_testkit::{
     ComposeKey, LaunchOptions, LoginArgs, MdiState, MdiView, MembershipCommandAction, Model,
     NavigationNode, NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs,
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomImageActivity, RoomImageInfo,
-    RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberView,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild,
+    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
+    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewIdentity, FetchRoomImageMediaRequest,
 };
 
 #[cfg(not(windows))]
@@ -1267,6 +1271,206 @@ fn room_read_state_event_rejects_unknown_fields_inside_payload() {
     .unwrap_err();
 
     assert!(error.to_string().contains("unknown field `unexpected`"));
+}
+
+#[test]
+fn fetch_room_image_media_request_round_trips_through_json() {
+    let request = FetchRoomImageMediaRequest {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image:example".to_owned(),
+        event_id: "$image:example".to_owned(),
+        source: RoomMediaSource::Plain {
+            url: "mxc://example.org/image".to_owned(),
+        },
+        format: RoomImageMediaFormat::Thumbnail {
+            width: 160,
+            height: 120,
+        },
+    };
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image:example",
+        "event_id": "$image:example",
+        "source": {
+            "type": "plain",
+            "url": "mxc://example.org/image"
+        },
+        "format": {
+            "type": "thumbnail",
+            "width": 160,
+            "height": 120
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&request).expect("serialize image media request"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<FetchRoomImageMediaRequest>(json.clone())
+            .expect("deserialize image media request"),
+        request
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreFetchRoomImageMediaRequest>(json)
+            .expect("deserialize core image media request"),
+        CoreFetchRoomImageMediaRequest {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$image:example".to_owned(),
+            event_id: "$image:example".to_owned(),
+            source: CoreRoomMediaSource::Plain {
+                url: "mxc://example.org/image".to_owned(),
+            },
+            format: CoreRoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        }
+    );
+}
+
+#[test]
+fn room_image_media_round_trips_through_json() {
+    let loaded = RoomImageMedia {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image:example".to_owned(),
+        event_id: "$image:example".to_owned(),
+        kind: RoomImageMediaKind::Loaded {
+            format: RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+            bytes: vec![1, 2, 3],
+        },
+    };
+    let loaded_json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image:example",
+        "event_id": "$image:example",
+        "kind": {
+            "type": "loaded",
+            "format": {
+                "type": "thumbnail",
+                "width": 160,
+                "height": 120
+            },
+            "bytes": [1, 2, 3]
+        }
+    });
+    let failed = RoomImageMedia {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$image:example".to_owned(),
+        event_id: "$image:example".to_owned(),
+        kind: RoomImageMediaKind::Failed {
+            format: RoomImageMediaFormat::File,
+            message: "failed to fetch room image media: unavailable".to_owned(),
+        },
+    };
+    let failed_json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$image:example",
+        "event_id": "$image:example",
+        "kind": {
+            "type": "failed",
+            "format": {
+                "type": "file"
+            },
+            "message": "failed to fetch room image media: unavailable"
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&loaded).expect("serialize loaded room image media"),
+        loaded_json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomImageMedia>(loaded_json.clone())
+            .expect("deserialize loaded room image media"),
+        loaded
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomImageMedia>(loaded_json)
+            .expect("deserialize core loaded room image media"),
+        CoreRoomImageMedia {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$image:example".to_owned(),
+            event_id: "$image:example".to_owned(),
+            kind: CoreRoomImageMediaKind::Loaded {
+                format: CoreRoomImageMediaFormat::Thumbnail {
+                    width: 160,
+                    height: 120,
+                },
+                bytes: vec![1, 2, 3],
+            },
+        }
+    );
+
+    assert_eq!(
+        serde_json::to_value(&failed).expect("serialize failed room image media"),
+        failed_json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomImageMedia>(failed_json.clone())
+            .expect("deserialize failed room image media"),
+        failed
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomImageMedia>(failed_json)
+            .expect("deserialize core failed room image media"),
+        CoreRoomImageMedia {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$image:example".to_owned(),
+            event_id: "$image:example".to_owned(),
+            kind: CoreRoomImageMediaKind::Failed {
+                format: CoreRoomImageMediaFormat::File,
+                message: "failed to fetch room image media: unavailable".to_owned(),
+            },
+        }
+    );
+}
+
+#[test]
+fn room_image_media_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<FetchRoomImageMediaRequest>(
+            r#"{
+            "room_id":"!room:example",
+            "activity_id":"event:$image:example",
+            "event_id":"$image:example",
+            "source":{"type":"plain","url":"mxc://example.org/image"},
+            "format":{"type":"thumbnail","width":160,"height":120},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageMedia>(
+            r#"{
+            "room_id":"!room:example",
+            "activity_id":"event:$image:example",
+            "event_id":"$image:example",
+            "kind":{"type":"loaded","format":{"type":"file"},"bytes":[1,2,3]},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageMediaFormat>(
+            r#"{"type":"thumbnail","width":160,"height":120,"unexpected":true}"#
+        )
+        .is_err()
+    );
+
+    assert!(
+        serde_json::from_str::<RoomImageMediaKind>(
+            r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":true}"#
+        )
+        .is_err()
+    );
 }
 
 #[test]

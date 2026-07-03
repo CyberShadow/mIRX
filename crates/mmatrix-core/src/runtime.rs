@@ -193,6 +193,9 @@ async fn handle_command(
         Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
+        Command::FetchRoomImageMedia(request) => {
+            handle_fetch_room_image_media(event_tx, state, request).await
+        }
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
         Command::RecoverE2ee(request) => handle_recover_e2ee(event_tx, state, &request).await,
         Command::AcceptVerification(flow) => {
@@ -555,6 +558,26 @@ async fn handle_mark_room_read(
     if let Err(err) = matrix::mark_room_read(client, &request).await {
         emit_matrix_error(event_tx, Operation::MarkRoomRead, err);
     }
+
+    false
+}
+
+async fn handle_fetch_room_image_media(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: crate::api::FetchRoomImageMediaRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::FetchRoomImageMedia,
+            "fetch room image media requires an authenticated session",
+        );
+        return false;
+    };
+
+    let media = matrix::fetch_room_image_media(client, request).await;
+    emit_event(event_tx, Event::RoomImageMedia(media));
 
     false
 }

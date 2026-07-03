@@ -18,6 +18,7 @@ pub enum Command {
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
     MarkRoomRead(MarkRoomReadRequest),
+    FetchRoomImageMedia(FetchRoomImageMediaRequest),
     RefreshE2eeStatus,
     RecoverE2ee(RecoverE2eeRequest),
     AcceptVerification(VerificationFlowId),
@@ -95,6 +96,23 @@ pub struct SetRoomTopicRequest {
 pub struct MarkRoomReadRequest {
     pub room_id: String,
     pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FetchRoomImageMediaRequest {
+    pub room_id: String,
+    pub activity_id: String,
+    pub event_id: String,
+    pub source: RoomMediaSource,
+    pub format: RoomImageMediaFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomImageMediaFormat {
+    Thumbnail { width: u32, height: u32 },
+    File,
 }
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -266,6 +284,15 @@ pub struct RoomActivityUpdate {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomImageMedia {
+    pub room_id: String,
+    pub activity_id: String,
+    pub event_id: String,
+    pub kind: RoomImageMediaKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomTyping {
     pub room_id: String,
     pub user_ids: Vec<String>,
@@ -360,6 +387,19 @@ pub enum E2eeRecoveryOperation {
 pub enum RoomActivityUpdateKind {
     MessageSent { event_id: String },
     MessageFailed { message: String, recoverable: bool },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomImageMediaKind {
+    Loaded {
+        format: RoomImageMediaFormat,
+        bytes: Vec<u8>,
+    },
+    Failed {
+        format: RoomImageMediaFormat,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -484,6 +524,7 @@ pub enum Operation {
     SetRoomTopic,
     SendMessage,
     MarkRoomRead,
+    FetchRoomImageMedia,
     RoomList,
     RoomReadState,
     E2eeStatus,
@@ -503,6 +544,7 @@ pub enum Event {
     SyncedRooms(Vec<RoomSummary>),
     RoomActivity(Box<RoomActivity>),
     RoomActivityUpdate(RoomActivityUpdate),
+    RoomImageMedia(RoomImageMedia),
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),

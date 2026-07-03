@@ -326,6 +326,23 @@ pub enum RoomMediaSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FetchRoomImageMediaRequest {
+    pub room_id: String,
+    pub activity_id: String,
+    pub event_id: String,
+    pub source: RoomMediaSource,
+    pub format: RoomImageMediaFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomImageMediaFormat {
+    Thumbnail { width: u32, height: u32 },
+    File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomImageInfo {
     pub mimetype: Option<String>,
     pub size: Option<u64>,
@@ -373,6 +390,34 @@ pub enum RoomStateNoticeContent {
 }
 
 impl RoomActivity {
+    pub fn contains(&self, substr: &str) -> bool {
+        serde_json::to_string(self).is_ok_and(|json| json.contains(substr))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomImageMedia {
+    pub room_id: String,
+    pub activity_id: String,
+    pub event_id: String,
+    pub kind: RoomImageMediaKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomImageMediaKind {
+    Loaded {
+        format: RoomImageMediaFormat,
+        bytes: Vec<u8>,
+    },
+    Failed {
+        format: RoomImageMediaFormat,
+        message: String,
+    },
+}
+
+impl RoomImageMedia {
     pub fn contains(&self, substr: &str) -> bool {
         serde_json::to_string(self).is_ok_and(|json| json.contains(substr))
     }

@@ -18,10 +18,12 @@ use matrix_sdk::{
             VerificationRequest as MatrixVerificationRequest, VerificationRequestState,
         },
     },
+    media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::Receipts,
     ruma::{
-        EventId, MilliSecondsSinceUnixEpoch, OwnedDeviceId, OwnedUserId, RoomId, RoomOrAliasId,
-        UserId,
+        EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, UInt, OwnedUserId, RoomId,
+        RoomOrAliasId, UserId,
+        api::client::media::get_content_thumbnail::v3::Method,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
@@ -52,15 +54,16 @@ use tokio::task::JoinHandle;
 
 use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryState, E2eeStatus, Event, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
+    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -618,6 +621,95 @@ pub(crate) fn summarize_joined_room_read_states(client: &Client) -> Vec<RoomRead
         .into_iter()
         .map(|room| room_read_state_from_room(&room))
         .collect()
+}
+
+pub(crate) async fn fetch_room_image_media(
+    client: &Client,
+    request: FetchRoomImageMediaRequest,
+) -> RoomImageMedia {
+    let FetchRoomImageMediaRequest {
+        room_id,
+        activity_id,
+        event_id,
+        source,
+        format,
+    } = request;
+
+    let params = match room_image_media_request_parameters(&source, &format) {
+        Ok(params) => params,
+        Err(err) => {
+            return RoomImageMedia {
+                room_id,
+                activity_id,
+                event_id,
+                kind: RoomImageMediaKind::Failed {
+                    format,
+                    message: err.to_string(),
+                },
+            };
+        }
+    };
+
+    match client.media().get_media_content(&params, true).await {
+        Ok(bytes) => RoomImageMedia {
+            room_id,
+            activity_id,
+            event_id,
+            kind: RoomImageMediaKind::Loaded { format, bytes },
+        },
+        Err(err) => RoomImageMedia {
+            room_id,
+            activity_id,
+            event_id,
+            kind: RoomImageMediaKind::Failed {
+                format,
+                message: format!("failed to fetch room image media: {err}"),
+            },
+        },
+    }
+}
+
+fn room_image_media_request_parameters(
+    source: &RoomMediaSource,
+    format: &RoomImageMediaFormat,
+) -> Result<MediaRequestParameters, MatrixCoreError> {
+    let source = match source {
+        RoomMediaSource::Plain { url } => {
+            let uri = <&MxcUri>::from(url.as_str());
+            uri.validate()
+                .map_err(|err| MatrixCoreError::new(format!("invalid media MXC URI: {err}")))?;
+            MediaSource::Plain(uri.to_owned())
+        }
+        RoomMediaSource::Encrypted { .. } => {
+            return Err(MatrixCoreError::new(
+                "encrypted image media is not supported by this API shape",
+            ));
+        }
+    };
+
+    let format = match format {
+        RoomImageMediaFormat::Thumbnail { width, height } => {
+            if *width == 0 || *height == 0 {
+                return Err(MatrixCoreError::new(
+                    "thumbnail width and height must be greater than zero",
+                ));
+            }
+
+            let width = UInt::new(u64::from(*width))
+                .ok_or_else(|| MatrixCoreError::new("thumbnail width is out of range"))?;
+            let height = UInt::new(u64::from(*height))
+                .ok_or_else(|| MatrixCoreError::new("thumbnail height is out of range"))?;
+
+            MediaFormat::Thumbnail(MediaThumbnailSettings::with_method(
+                Method::Scale,
+                width,
+                height,
+            ))
+        }
+        RoomImageMediaFormat::File => MediaFormat::File,
+    };
+
+    Ok(MediaRequestParameters { source, format })
 }
 
 async fn summarize_space_children(
@@ -1834,36 +1926,44 @@ mod tests {
     use super::{
         LocalEchoMessageDetails, attach_thread_relation, cancelled_state,
         direct_user_ids_by_room_from_content, map_cross_signing_status, map_decimals,
-        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
+        fetch_room_image_media, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_message_activity,
+        map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_list_update_is_relevant, room_members_from_parts,
-        room_message_event_content, room_read_state_from_parts, room_read_update_is_relevant,
-        room_tag_summaries_from_tags, room_typing_from_sync_typing,
-        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        room_activity_from_sync_topic, room_image_media_request_parameters,
+        room_list_update_is_relevant, room_members_from_parts, room_message_event_content,
+        room_read_state_from_parts, room_read_update_is_relevant, room_tag_summaries_from_tags,
+        room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
+        verification_flow_id_from_to_device, verification_request_from_to_device,
+        verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
-        Operation, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-        RoomActivityUpdateKind, RoomImageActivity, RoomImageInfo, RoomMediaSource,
+        FetchRoomImageMediaRequest, Operation, RoomActivity, RoomActivityKind,
+        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomImageActivity,
+        RoomImageInfo, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
         RoomMemberSummary, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
         RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
+        Client,
         encryption::{
             backups::BackupState,
             recovery::RecoveryState,
             verification::{Emoji as MatrixEmoji, EmojiShortAuthString},
         },
+        media::{MediaFormat, MediaThumbnailSettings},
         ruma::{
-            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId,
+            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
+            OwnedUserId, UInt,
+            api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, ToDeviceEvent,
                 direct::DirectEventContent,
+                room::MediaSource,
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 room::{
                     member::OriginalSyncRoomMemberEvent,
@@ -1969,6 +2069,34 @@ mod tests {
         ]
     }
 
+    fn build_test_client() -> Client {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            Client::builder()
+                .homeserver_url("http://localhost")
+                .build()
+                .await
+                .expect("build matrix client")
+        })
+    }
+
+    fn room_image_media_request(source: RoomMediaSource) -> FetchRoomImageMediaRequest {
+        FetchRoomImageMediaRequest {
+            room_id: "!room:example.org".to_owned(),
+            activity_id: "event:$image:example.org".to_owned(),
+            event_id: "$image:example.org".to_owned(),
+            source,
+            format: RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        }
+    }
+
     #[test]
     fn e2ee_recovery_state_mapping_covers_all_sdk_variants() {
         for (state, expected) in [
@@ -1994,6 +2122,114 @@ mod tests {
         ] {
             assert_eq!(map_e2ee_backup_state(state), expected);
         }
+    }
+
+    #[test]
+    fn room_image_media_request_parameters_map_plain_thumbnail_requests() {
+        let params = room_image_media_request_parameters(
+            &RoomMediaSource::Plain {
+                url: "mxc://example.org/image".to_owned(),
+            },
+            &RoomImageMediaFormat::Thumbnail {
+                width: 160,
+                height: 120,
+            },
+        )
+        .expect("build media request parameters");
+
+        match params.source {
+            MediaSource::Plain(uri) => assert_eq!(uri.as_str(), "mxc://example.org/image"),
+            other => panic!("expected plain MXC source, got {other:?}"),
+        }
+        match params.format {
+            MediaFormat::Thumbnail(settings) => {
+                assert_eq!(
+                    settings.method,
+                    MediaThumbnailSettings::with_method(
+                        Method::Scale,
+                        UInt::new(160).expect("valid width"),
+                        UInt::new(120).expect("valid height"),
+                    )
+                    .method
+                );
+                assert_eq!(settings.width, UInt::new(160).expect("valid width"));
+                assert_eq!(settings.height, UInt::new(120).expect("valid height"));
+                assert!(!settings.animated);
+            }
+            other => panic!("expected thumbnail media format, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_room_image_media_returns_typed_failure_for_invalid_mxc() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let client = build_test_client();
+
+        let media = runtime.block_on(async {
+            fetch_room_image_media(
+                &client,
+                room_image_media_request(RoomMediaSource::Plain {
+                    url: "not-an-mxc-uri".to_owned(),
+                }),
+            )
+            .await
+        });
+
+        assert_eq!(media.room_id, "!room:example.org");
+        assert_eq!(media.activity_id, "event:$image:example.org");
+        assert_eq!(media.event_id, "$image:example.org");
+        match media.kind {
+            RoomImageMediaKind::Failed { format, message } => {
+                assert_eq!(
+                    format,
+                    RoomImageMediaFormat::Thumbnail {
+                        width: 160,
+                        height: 120,
+                    }
+                );
+                assert!(
+                    message.starts_with("invalid media MXC URI:"),
+                    "unexpected error message: {message}"
+                );
+            }
+            other => panic!("expected failed room image media, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_room_image_media_returns_typed_failure_for_encrypted_sources() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let client = build_test_client();
+
+        let media = runtime.block_on(async {
+            fetch_room_image_media(
+                &client,
+                room_image_media_request(RoomMediaSource::Encrypted {
+                    url: "mxc://example.org/image".to_owned(),
+                }),
+            )
+            .await
+        });
+
+        assert_eq!(media.room_id, "!room:example.org");
+        assert_eq!(media.activity_id, "event:$image:example.org");
+        assert_eq!(media.event_id, "$image:example.org");
+        assert_eq!(
+            media.kind,
+            RoomImageMediaKind::Failed {
+                format: RoomImageMediaFormat::Thumbnail {
+                    width: 160,
+                    height: 120,
+                },
+                message: "encrypted image media is not supported by this API shape".to_owned(),
+            }
+        );
     }
 
     #[test]
