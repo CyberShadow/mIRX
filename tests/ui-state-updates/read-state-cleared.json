@@ -1,0 +1,13 @@
+[
+  {
+    "RoomReadState": {
+      "room_id": "!alpha:example",
+      "latest_active_event_id": "$alpha-latest",
+      "fully_read_event_id": "$alpha-latest",
+      "marked_unread": false,
+      "num_unread": 0,
+      "num_notifications": 0,
+      "num_mentions": 0
+    }
+  }
+]

@@ -801,7 +801,7 @@ configure_case_expectations() {
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!beta:example::Beta'
-        --expect-switchbar-item 'room:!alpha:example::Alpha'
+        --expect-switchbar-item 'room:!alpha:example::Alpha [query: @alice:example] [@1 !2 *1 M]'
       )
       switchbar_activity_expect_args=(
         --expect-switchbar-activity 'room:!alpha:example'
@@ -809,6 +809,43 @@ configure_case_expectations() {
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!beta:example'
         --expect-no-switchbar-activity 'status'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Alpha [query: @alice:example] [@1 !2 *1 M]'
+      )
+      expect_switchbar_active='room:!beta:example'
+      ;;
+    read-state-cleared)
+      expect_selected='!beta:example'
+      expect_active_view='room:!beta:example'
+      append_events_path="$root_dir/tests/ui-state-updates/read-state-cleared.json"
+      room_expect_args=(
+        --expect-room '!beta:example'
+        --expect-room '!alpha:example'
+      )
+      room_read_target_expect_args=(
+        --expect-room-read-target '!alpha:example::null'
+        --expect-room-read-target '!beta:example::null'
+      )
+      room_unread_expect_args=(
+        --expect-room-unread '!alpha:example::0::0::0::false'
+        --expect-room-unread '!beta:example::0::0::0::false'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+        --expect-switchbar-item 'room:!alpha:example::Alpha [query: @alice:example]'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!alpha:example'
+        --expect-no-switchbar-activity 'room:!beta:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Alpha [query: @alice:example]'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'Alpha [query: @alice:example] [@1 !2 *1 M]'
       )
       expect_switchbar_active='room:!beta:example'
       ;;

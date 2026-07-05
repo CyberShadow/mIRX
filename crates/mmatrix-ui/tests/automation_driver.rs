@@ -176,6 +176,12 @@ fn fixture_state_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn fixture_update_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/ui-state-updates")
+        .join(name)
+}
+
 fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let state_path = unique_state_path();
     fs::write(&state_path, serde_json::to_vec(events)?)?;
@@ -3714,8 +3720,20 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         app.dump_model()?.selected_room.as_deref(),
         Some("!beta:example")
     );
+    assert_eq!(
+        find_switchbar_item(&initial_state, &room_identity("!beta:example")).title,
+        "Beta"
+    );
+    assert_eq!(
+        find_switchbar_item(&initial_state, &room_identity("!alpha:example")).title,
+        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+    );
     assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), false);
     assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
+    assert!(navigation_contains(
+        &initial_state.navigation,
+        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+    ));
     assert_eq!(
         find_ui_room(&initial_state, "!beta:example"),
         &UiRoomState {
@@ -3771,7 +3789,15 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         app.dump_model()?.selected_room.as_deref(),
         Some("!alpha:example")
     );
+    assert_eq!(
+        find_switchbar_item(&activated_state, &room_identity("!alpha:example")).title,
+        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+    );
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
+    assert!(navigation_contains(
+        &activated_state.navigation,
+        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+    ));
     assert_eq!(
         find_ui_room(&activated_state, "!alpha:example"),
         &UiRoomState {
@@ -3796,6 +3822,54 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         }
     );
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("read-state-ingestion.json");
+    let update_path = fixture_update_path("read-state-cleared.json");
+    let mut events: Vec<Event> = serde_json::from_str(&fs::read_to_string(&fixture_path)?)?;
+    let update_events: Vec<Event> = serde_json::from_str(&fs::read_to_string(&update_path)?)?;
+    events.extend(update_events);
+    let state_path = write_state_file(&events)?;
+
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let cleared_state = app.dump_ui_state()?;
+
+    assert_eq!(
+        find_ui_room(&cleared_state, "!alpha:example").read_state,
+        Some(UiRoomReadState {
+            latest_active_event_id: Some("$alpha-latest".to_owned()),
+            fully_read_event_id: Some("$alpha-latest".to_owned()),
+            marked_unread: false,
+            num_unread: 0,
+            num_notifications: 0,
+            num_mentions: 0,
+        })
+    );
+    assert_eq!(
+        find_switchbar_item(&cleared_state, &room_identity("!alpha:example")).title,
+        "Alpha [query: @alice:example]"
+    );
+    assert!(navigation_contains(
+        &cleared_state.navigation,
+        "Alpha [query: @alice:example]"
+    ));
+    assert_navigation_not_contains(
+        &cleared_state.navigation,
+        "Alpha [query: @alice:example] [@1 !2 *1 M]",
+    );
+
+    let _ = fs::remove_file(&state_path);
     Ok(())
 }
 

@@ -4066,6 +4066,33 @@ fn append_room_label_markers(label: &mut String, room: &RoomSummary) {
     }
 }
 
+fn append_room_read_state_tokens(label: &mut String, read_state: Option<&RoomReadState>) {
+    let Some(read_state) = read_state else {
+        return;
+    };
+
+    let mut tokens = Vec::new();
+    if read_state.num_mentions > 0 {
+        tokens.push(format!("@{}", read_state.num_mentions));
+    }
+    if read_state.num_notifications > 0 {
+        tokens.push(format!("!{}", read_state.num_notifications));
+    }
+    if read_state.num_unread > 0 {
+        tokens.push(format!("*{}", read_state.num_unread));
+    }
+    if read_state.marked_unread {
+        tokens.push("M".to_owned());
+    }
+    if tokens.is_empty() {
+        return;
+    }
+
+    label.push_str(" [");
+    label.push_str(&tokens.join(" "));
+    label.push(']');
+}
+
 fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
     let mut header = format!("Room: {}", room.display_name);
     append_room_label_markers(&mut header, room);
@@ -4533,6 +4560,12 @@ fn room_tree_label(room: &RoomSummary) -> String {
     label
 }
 
+fn room_navigation_label(model: &UiModel, room: &RoomSummary) -> String {
+    let mut label = room_tree_label(room);
+    append_room_read_state_tokens(&mut label, model.room_read_states.get(&room.room_id));
+    label
+}
+
 fn space_tree_label(space: &RoomSummary) -> String {
     space.display_name.clone()
 }
@@ -4559,7 +4592,14 @@ fn view_title(model: &UiModel, view_id: &ViewId) -> String {
 }
 
 fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
-    view_title(&state.model, view_id)
+    match view_id {
+        ViewId::Room(room_id) => {
+            let room = room_by_id(&state.model.rooms, room_id)
+                .expect("room switchbar button must target an existing room");
+            room_navigation_label(&state.model, room)
+        }
+        ViewId::Status | ViewId::Thread { .. } => view_title(&state.model, view_id),
+    }
 }
 
 fn switchbar_button_state(state: &WindowState, view_id: &ViewId) -> u8 {
@@ -5347,7 +5387,7 @@ unsafe fn render_room_tree_leaf(state: &mut WindowState, parent: isize, room: &R
     let room_item = insert_mapped_tree_item(
         state,
         parent,
-        &room_tree_label(room),
+        &room_navigation_label(&state.model, room),
         ViewId::Room(room.room_id.clone()),
     );
     let threads = state
@@ -10203,6 +10243,94 @@ mod tests {
     }
 
     #[test]
+    fn room_navigation_label_appends_read_state_suffix_after_existing_markers() {
+        let mut state = test_state();
+        let mut direct_room = room("!direct:example", "Direct", true);
+        direct_room.is_direct = true;
+        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+        state.model.rooms = vec![direct_room];
+        state.model.room_read_states.insert(
+            "!direct:example".to_owned(),
+            RoomReadState {
+                room_id: "!direct:example".to_owned(),
+                latest_active_event_id: Some("$latest".to_owned()),
+                fully_read_event_id: Some("$fully-read".to_owned()),
+                marked_unread: true,
+                num_unread: 3,
+                num_notifications: 2,
+                num_mentions: 1,
+            },
+        );
+
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Direct [query: @alice:example] [e2ee] [@1 !2 *3 M]"
+        );
+    }
+
+    #[test]
+    fn room_navigation_label_handles_sparse_and_absent_read_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!todo:example", "Todo", false)];
+
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Todo"
+        );
+
+        state.model.room_read_states.insert(
+            "!todo:example".to_owned(),
+            RoomReadState {
+                room_id: "!todo:example".to_owned(),
+                latest_active_event_id: None,
+                fully_read_event_id: None,
+                marked_unread: true,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Todo [M]"
+        );
+
+        state.model.room_read_states.insert(
+            "!todo:example".to_owned(),
+            RoomReadState {
+                room_id: "!todo:example".to_owned(),
+                latest_active_event_id: None,
+                fully_read_event_id: None,
+                marked_unread: false,
+                num_unread: 7,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Todo [*7]"
+        );
+
+        state.model.room_read_states.insert(
+            "!todo:example".to_owned(),
+            RoomReadState {
+                room_id: "!todo:example".to_owned(),
+                latest_active_event_id: Some("$latest".to_owned()),
+                fully_read_event_id: Some("$latest".to_owned()),
+                marked_unread: false,
+                num_unread: 0,
+                num_notifications: 0,
+                num_mentions: 0,
+            },
+        );
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Todo"
+        );
+    }
+
+    #[test]
     fn render_room_lines_include_query_marker_for_direct_rooms() {
         let mut state = test_state();
         let mut direct_room = room("!direct:example", "Direct", true);
@@ -12228,12 +12356,24 @@ mod tests {
     }
 
     #[test]
-    fn switchbar_button_text_keeps_plain_titles_for_exact_view_identity() {
+    fn switchbar_button_text_includes_room_read_suffix_without_changing_other_titles() {
         let mut state = test_state();
         let mut direct_room = room("!room:example", "Room", true);
         direct_room.is_direct = true;
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         state.model.rooms = vec![direct_room];
+        state.model.room_read_states.insert(
+            "!room:example".to_owned(),
+            RoomReadState {
+                room_id: "!room:example".to_owned(),
+                latest_active_event_id: Some("$latest".to_owned()),
+                fully_read_event_id: Some("$fully-read".to_owned()),
+                marked_unread: true,
+                num_unread: 3,
+                num_notifications: 2,
+                num_mentions: 1,
+            },
+        );
         state.room_activity.insert(room_view_id("!room:example"));
         state.model.room_views.insert(
             "!room:example".to_owned(),
@@ -12257,7 +12397,7 @@ mod tests {
         );
         assert_eq!(
             switchbar_button_text(&state, &room_view_id("!room:example")),
-            "Room [query: @alice:example] [e2ee]"
+            "Room [query: @alice:example] [e2ee] [@1 !2 *3 M]"
         );
         assert_eq!(
             switchbar_button_text(&state, &thread_view_id("!room:example", "$thread-root")),
@@ -12938,6 +13078,56 @@ mod tests {
         .unwrap();
 
         assert!(!state.room_activity.contains(&room_view_id("!room:example")));
+    }
+
+    #[test]
+    fn caught_up_zero_read_state_clears_navigation_suffixes() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+
+        apply_core_event(
+            &mut state,
+            room_read_state(
+                "!room:example",
+                Some("$latest"),
+                Some("$fully-read"),
+                true,
+                3,
+                2,
+                1,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Room [@1 !2 *3 M]"
+        );
+        assert_eq!(
+            switchbar_button_text(&state, &room_view_id("!room:example")),
+            "Room [@1 !2 *3 M]"
+        );
+
+        apply_core_event(
+            &mut state,
+            room_read_state(
+                "!room:example",
+                Some("$latest"),
+                Some("$latest"),
+                false,
+                0,
+                0,
+                0,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            room_navigation_label(&state.model, &state.model.rooms[0]),
+            "Room"
+        );
+        assert_eq!(
+            switchbar_button_text(&state, &room_view_id("!room:example")),
+            "Room"
+        );
     }
 
     #[test]
