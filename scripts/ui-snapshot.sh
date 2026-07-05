@@ -736,6 +736,61 @@ configure_case_expectations() {
         --expect-no-navigation-text 'failed local echo'
       )
       ;;
+    dense-timeline-log)
+      expect_selected='!dense:example'
+      expect_active_view='room:!dense:example'
+      room_expect_args=(
+        --expect-room '!dense:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!dense:example::@dense.sender.with.a.very.long.mxid:example.org'
+        --expect-room-activity '!dense:example::dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::Dense Member Alpha Beta Gamma Delta'
+        --expect-room-activity '!dense:example::@dense-leaver:example'
+        --expect-room-activity '!dense:example::unsupported_message'
+        --expect-room-activity '!dense:example::dense-audio-alpha-beta-gamma-delta-epsilon-zeta.ogg'
+        --expect-room-activity '!dense:example::dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::"state":"failed"'
+        --expect-room-activity '!dense:example::dense-diagram-alpha-beta-gamma-delta.png'
+        --expect-room-activity '!dense:example::"type":"thread"'
+        --expect-room-activity '!dense:example::dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-activity '!dense:example::dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!dense:example::Room: Dense (!dense:example)'
+        --expect-room-view '!dense:example::Topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:13] @dense.sender.with.a.very.long.mxid:example.org: dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:14] -@system:example- dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::* [22:15] @alice:example dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::* [22:16] @alice:example set topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::* [22:17] Dense Member Alpha Beta Gamma Delta joined'
+        --expect-room-view '!dense:example::* [22:17] @dense-leaver:example left'
+        --expect-room-view '!dense:example::* [22:18] @alice:example sent unsupported m.audio: dense-audio-alpha-beta-gamma-delta-epsilon-zeta.ogg'
+        --expect-room-view '!dense:example::[22:19] @alice:example: dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
+        --expect-room-view '!dense:example::[22:20] @alice:example: dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
+        --expect-room-view '!dense:example::* [22:21] @alice:example sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!dense:example::[22:22] @bob:example: dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:23] @carol:example: dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!dense:example::Dense'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!dense:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!dense:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-no-navigation-text 'dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-no-navigation-text 'dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+      )
+      ;;
     member-list)
       expect_selected='!members:example'
       expect_active_view='room:!members:example'

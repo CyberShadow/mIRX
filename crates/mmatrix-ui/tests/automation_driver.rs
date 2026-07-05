@@ -2258,9 +2258,9 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
                 && timeline_rect.bottom - timeline_rect.top > 0,
             "timeline child must have a visible client rect"
         );
-        assert!(
-            unsafe { rendered_line_count(timeline_hwnd) } > visible_rows(timeline_rect),
-            "timeline fixture must overflow the visible area before scrolling"
+        assert_eq!(
+            before_top_line, 0,
+            "wrapped timeline should start at the top before page-down"
         );
     }
 
@@ -2393,6 +2393,127 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     Ok(())
 }
 
+#[test]
+fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    let long_body =
+        "dense wrap row 00 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    for index in 0..18 {
+        let body = format!(
+            "dense wrap row {index:02} alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
+        );
+        events.push(text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_001_000_000 + index * 60_000,
+            &body,
+        ));
+    }
+    events.push(text_event(
+        "!beta:example",
+        "@bob:example",
+        1_700_002_500_000,
+        "dense multiline line a\ndense multiline line b",
+    ));
+    events.push(text_event(
+        "!beta:example",
+        "@bob:example",
+        1_700_002_560_000,
+        "dense trailing blank line\n",
+    ));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(Some("!beta:example"), long_body, Duration::from_secs(5))?;
+
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline_style = unsafe { window_style(timeline_hwnd) };
+    let timeline_rect = unsafe { client_rect(timeline_hwnd) };
+    assert!(
+        timeline_style & WS_VSCROLL != 0,
+        "timeline child must advertise WS_VSCROLL"
+    );
+
+    let text = unsafe { read_window_text(timeline_hwnd) };
+    assert!(
+        text.contains(long_body),
+        "timeline WM_GETTEXT must keep the full long logical row: {text:?}"
+    );
+    assert!(
+        text.contains("dense multiline line a\r\ndense multiline line b"),
+        "timeline WM_GETTEXT must keep multiline normalization for wrapped rows: {text:?}"
+    );
+    assert!(
+        text.contains("dense trailing blank line\r\n"),
+        "timeline WM_GETTEXT must keep trailing blank lines for wrapped rows: {text:?}"
+    );
+
+    let before = unsafe { scrollbar_info(timeline_hwnd) };
+    let before_top_line = unsafe { timeline_top_line(timeline_hwnd) };
+    if let Some(before) = before {
+        assert!(
+            before.nMax > 0,
+            "vertical scrollbar must report a non-zero range: style=0x{:x} rect={}x{} nMin={} nMax={} nPage={} nPos={}",
+            timeline_style,
+            timeline_rect.right - timeline_rect.left,
+            timeline_rect.bottom - timeline_rect.top,
+            before.nMin,
+            before.nMax,
+            before.nPage,
+            before.nPos
+        );
+        assert!(
+            before.nPage > 0,
+            "vertical scrollbar must report a visible page size"
+        );
+    } else {
+        assert!(
+            timeline_rect.right - timeline_rect.left > 0
+                && timeline_rect.bottom - timeline_rect.top > 0,
+            "timeline child must have a visible client rect"
+        );
+        assert_eq!(
+            before_top_line, 0,
+            "wrapped timeline should start at the top before page-down"
+        );
+    }
+
+    unsafe {
+        SendMessageW(timeline_hwnd, WM_VSCROLL, SB_PAGEDOWN as WPARAM, 0);
+    }
+
+    let after_top_line = unsafe { timeline_top_line(timeline_hwnd) };
+    if let Some(before) = before {
+        let after = unsafe { scrollbar_info(timeline_hwnd) }
+            .expect("GetScrollInfo should keep succeeding once it succeeds for the timeline child");
+        assert!(
+            after.nPos > before.nPos,
+            "page-down must advance scrollbar position for wrapped rows: before={}, after={}",
+            before.nPos,
+            after.nPos
+        );
+    } else {
+        assert!(
+            after_top_line > before_top_line,
+            "page-down must advance the timeline top line for wrapped rows: before={}, after={}",
+            before_top_line,
+            after_top_line
+        );
+    }
+
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 unsafe fn active_mdi_content_hwnd(app: &MmatrixApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };
@@ -2447,15 +2568,6 @@ unsafe fn read_window_text(hwnd: HWND) -> String {
     let mut buffer = vec![0u16; len as usize + 1];
     unsafe { SendMessageW(hwnd, WM_GETTEXT, buffer.len(), buffer.as_mut_ptr() as isize) };
     String::from_utf16_lossy(&buffer[..len as usize])
-}
-
-fn visible_rows(rect: RECT) -> usize {
-    let usable_height = (rect.bottom - rect.top - 12).max(20);
-    (usable_height / 20).max(1) as usize
-}
-
-unsafe fn rendered_line_count(hwnd: HWND) -> usize {
-    unsafe { read_window_text(hwnd) }.split('\n').count()
 }
 
 unsafe fn timeline_top_line(hwnd: HWND) -> i32 {
