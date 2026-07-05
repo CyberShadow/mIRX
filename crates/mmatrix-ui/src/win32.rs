@@ -86,7 +86,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{
-    AppCommand, HELP, RunOptions,
+    AppCommand, FrameSize, HELP, RunOptions,
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
@@ -114,6 +114,10 @@ const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
 const FRAME_TITLE: &str = "mmatrix";
+const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
+    width: 1024,
+    height: 768,
+};
 const TREE_CLASS_NAME: &str = "SysTreeView32";
 const MDI_CLASS_NAME: &str = "MDICLIENT";
 const EDIT_CLASS_NAME: &str = "EDIT";
@@ -1727,7 +1731,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         recorded_commands: Vec::new(),
     });
 
-    let hwnd = create_main_window(instance, state)?;
+    let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;
 
     let startup = (|| -> Result<Option<CoreBridge>, String> {
         if automation_enabled {
@@ -1829,6 +1833,13 @@ fn should_start_core_bridge(command: &AppCommand) -> bool {
         AppCommand::Run(options) => options.render_state.is_none(),
         AppCommand::AutoClose => true,
         AppCommand::SelfTest | AppCommand::Help => false,
+    }
+}
+
+fn frame_size_for_command(command: &AppCommand) -> FrameSize {
+    match command {
+        AppCommand::Run(options) => options.frame_size.unwrap_or(DEFAULT_FRAME_SIZE),
+        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => DEFAULT_FRAME_SIZE,
     }
 }
 
@@ -2268,7 +2279,11 @@ fn register_recover_e2ee_dialog_class(instance: *mut c_void) -> Result<(), Strin
     Ok(())
 }
 
-fn create_main_window(instance: *mut c_void, state: Box<WindowState>) -> Result<HWND, String> {
+fn create_main_window(
+    instance: *mut c_void,
+    state: Box<WindowState>,
+    frame_size: FrameSize,
+) -> Result<HWND, String> {
     let class_name = wide_null(FRAME_CLASS_NAME);
     let title = wide_null(FRAME_TITLE);
     let state_ptr = Box::into_raw(state);
@@ -2281,8 +2296,8 @@ fn create_main_window(instance: *mut c_void, state: Box<WindowState>) -> Result<
             WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            1024,
-            768,
+            frame_size.width,
+            frame_size.height,
             null_mut(),
             null_mut(),
             instance,
@@ -8878,6 +8893,52 @@ mod tests {
             in_reply_to_event_id: Some(thread_root_event_id.to_owned()),
             is_falling_back: false,
         }
+    }
+
+    #[test]
+    fn frame_size_defaults_for_run_command() {
+        assert_eq!(
+            frame_size_for_command(&AppCommand::Run(RunOptions {
+                automation: false,
+                render_state: None,
+                frame_size: None,
+            })),
+            DEFAULT_FRAME_SIZE
+        );
+    }
+
+    #[test]
+    fn frame_size_uses_explicit_run_value() {
+        assert_eq!(
+            frame_size_for_command(&AppCommand::Run(RunOptions {
+                automation: true,
+                render_state: None,
+                frame_size: Some(FrameSize {
+                    width: 640,
+                    height: 768,
+                }),
+            })),
+            FrameSize {
+                width: 640,
+                height: 768,
+            }
+        );
+    }
+
+    #[test]
+    fn frame_size_defaults_for_self_test() {
+        assert_eq!(
+            frame_size_for_command(&AppCommand::SelfTest),
+            DEFAULT_FRAME_SIZE
+        );
+    }
+
+    #[test]
+    fn frame_size_defaults_for_auto_close() {
+        assert_eq!(
+            frame_size_for_command(&AppCommand::AutoClose),
+            DEFAULT_FRAME_SIZE
+        );
     }
 
     fn reply_relation(in_reply_to_event_id: &str) -> RoomActivityRelation {

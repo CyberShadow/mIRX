@@ -79,10 +79,54 @@ const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MMATRIX_TESTKIT_CAPTURE_DIR_WIN";
 #[cfg(windows)]
 const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameSize {
+    pub width: i32,
+    pub height: i32,
+}
+
+impl FrameSize {
+    pub fn parse_arg(value: &str) -> Result<FrameSize, String> {
+        let mut parts = value.split('x');
+        let width = parts
+            .next()
+            .ok_or_else(|| format!("invalid frame size {value:?}: expected WIDTHxHEIGHT"))?;
+        let height = parts
+            .next()
+            .ok_or_else(|| format!("invalid frame size {value:?}: expected WIDTHxHEIGHT"))?;
+        if width.is_empty() || height.is_empty() || parts.next().is_some() {
+            return Err(format!(
+                "invalid frame size {value:?}: expected WIDTHxHEIGHT"
+            ));
+        }
+
+        let width = width.parse::<i32>().map_err(|_| {
+            format!("invalid frame size {value:?}: width must be a positive integer")
+        })?;
+        let height = height.parse::<i32>().map_err(|_| {
+            format!("invalid frame size {value:?}: height must be a positive integer")
+        })?;
+        if width <= 0 || height <= 0 {
+            return Err(format!(
+                "invalid frame size {value:?}: dimensions must be positive"
+            ));
+        }
+
+        Ok(FrameSize { width, height })
+    }
+}
+
+impl fmt::Display for FrameSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchOptions {
     pub startup_timeout: Duration,
     pub local_app_data: Option<PathBuf>,
+    pub frame_size: Option<FrameSize>,
 }
 
 impl Default for LaunchOptions {
@@ -90,8 +134,25 @@ impl Default for LaunchOptions {
         Self {
             startup_timeout: DEFAULT_LAUNCH_TIMEOUT,
             local_app_data: None,
+            frame_size: None,
         }
     }
+}
+
+#[cfg(any(test, windows))]
+fn launch_args(args: &[OsString], frame_size: Option<FrameSize>) -> Vec<OsString> {
+    let mut final_args = args.to_vec();
+    if !final_args
+        .iter()
+        .any(|arg| arg == OsStr::new("--automation") || arg == OsStr::new("--render-state"))
+    {
+        final_args.push(OsString::from("--automation"));
+    }
+    if let Some(frame_size) = frame_size {
+        final_args.push(OsString::from("--frame-size"));
+        final_args.push(OsString::from(frame_size.to_string()));
+    }
+    final_args
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1689,14 +1750,7 @@ mod imp {
             args: &[OsString],
             options: LaunchOptions,
         ) -> Result<Self, TestkitError> {
-            let mut final_args = args.to_vec();
-            if !final_args
-                .iter()
-                .any(|arg| arg == OsStr::new("--automation") || arg == OsStr::new("--render-state"))
-            {
-                final_args.push(OsString::from("--automation"));
-            }
-
+            let final_args = launch_args(args, options.frame_size);
             let mut command = Command::new(exe_path);
             command.args(&final_args);
             if let Some(local_app_data) = options.local_app_data.as_ref() {
@@ -2400,5 +2454,78 @@ mod imp {
     fn last_os_error(operation: &str) -> String {
         let error = std::io::Error::last_os_error();
         format!("{operation} failed: {error}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameSize, launch_args};
+    use std::ffi::OsString;
+
+    #[test]
+    fn launch_args_add_automation_by_default() {
+        assert_eq!(launch_args(&[], None), vec![OsString::from("--automation")]);
+    }
+
+    #[test]
+    fn launch_args_preserve_automatic_automation_when_frame_size_is_requested() {
+        assert_eq!(
+            launch_args(
+                &[],
+                Some(FrameSize {
+                    width: 640,
+                    height: 768,
+                }),
+            ),
+            vec![
+                OsString::from("--automation"),
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_args_preserve_existing_automation_behavior_with_render_state() {
+        assert_eq!(
+            launch_args(
+                &[
+                    OsString::from("--render-state"),
+                    OsString::from("state.json"),
+                ],
+                Some(FrameSize {
+                    width: 640,
+                    height: 768,
+                }),
+            ),
+            vec![
+                OsString::from("--render-state"),
+                OsString::from("state.json"),
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+            ]
+        );
+    }
+
+    #[test]
+    fn launch_args_append_frame_size_only_when_requested() {
+        assert_eq!(
+            launch_args(
+                &[OsString::from("--automation")],
+                Some(FrameSize {
+                    width: 640,
+                    height: 768,
+                }),
+            ),
+            vec![
+                OsString::from("--automation"),
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+            ]
+        );
+        assert_eq!(
+            launch_args(&[OsString::from("--automation")], None),
+            vec![OsString::from("--automation")]
+        );
     }
 }

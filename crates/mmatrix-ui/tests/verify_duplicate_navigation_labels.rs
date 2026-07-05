@@ -107,6 +107,7 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
         LaunchOptions {
             startup_timeout: Duration::from_secs(20),
             local_app_data: None,
+            frame_size: None,
         },
     )?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -183,6 +184,7 @@ fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
         LaunchOptions {
             startup_timeout: Duration::from_secs(20),
             local_app_data: None,
+            frame_size: None,
         },
     )?;
     app.wait_idle(Duration::from_secs(5))?;

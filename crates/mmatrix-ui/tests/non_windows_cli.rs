@@ -46,6 +46,18 @@ fn render_state_runs_non_windows_stub() {
 }
 
 #[test]
+fn frame_size_runs_non_windows_stub() {
+    let output = run_ui(&["--frame-size", "640x768"]);
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout utf-8"),
+        "mmatrix-ui non-windows stub\n"
+    );
+    assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
+}
+
+#[test]
 fn self_test_prints_core_self_test_line() {
     let output = run_ui(&["--self-test"]);
 
@@ -77,10 +89,11 @@ fn help_prints_extended_usage() {
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
         "\
-usage: mmatrix-ui [--automation] [--render-state <file.json>]
+usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT]
        mmatrix-ui [--self-test|--auto-close|--help]
   --automation                enable automation control surface
   --render-state <file.json>  load render-state events at startup
+  --frame-size WIDTHxHEIGHT   create the frame at an explicit launch size
   --self-test                 create the Win32 shell, verify the edit control, and exit
   --auto-close                create the Win32 shell and close it automatically
   --help                      show this help
@@ -97,6 +110,18 @@ fn invalid_arguments_exit_with_usage_error() {
     assert_eq!(String::from_utf8(output.stdout).expect("stdout utf-8"), "");
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr utf-8"),
-        "usage: mmatrix-ui [--automation] [--render-state <file.json>] | [--self-test|--auto-close|--help]\n"
+        "usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]\n"
+    );
+}
+
+#[test]
+fn invalid_frame_size_exits_with_usage_error() {
+    let output = run_ui(&["--frame-size", "640"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(String::from_utf8(output.stdout).expect("stdout utf-8"), "");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr utf-8"),
+        "usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]\n"
     );
 }

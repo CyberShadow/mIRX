@@ -2,7 +2,6 @@ use std::time::Duration;
 
 #[cfg(not(windows))]
 use std::ffi::OsString;
-#[cfg(not(windows))]
 use std::path::PathBuf;
 
 use mmatrix_core::{
@@ -13,7 +12,7 @@ use mmatrix_core::{
     RoomReadState,
 };
 use mmatrix_testkit::{
-    ComposeKey, FetchRoomImageMediaRequest, LaunchOptions, LoginArgs, MdiState, MdiView,
+    ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
     MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
     RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
@@ -110,7 +109,63 @@ fn launch_options_default_has_expected_timeout() {
         LaunchOptions {
             startup_timeout: Duration::from_secs(10),
             local_app_data: None,
+            frame_size: None,
         }
+    );
+}
+
+#[test]
+fn frame_size_parse_arg_accepts_expected_shape() {
+    assert_eq!(
+        FrameSize::parse_arg("640x768"),
+        Ok(FrameSize {
+            width: 640,
+            height: 768,
+        })
+    );
+    assert_eq!(
+        FrameSize {
+            width: 640,
+            height: 768,
+        }
+        .to_string(),
+        "640x768"
+    );
+}
+
+#[test]
+fn frame_size_parse_arg_rejects_malformed_values() {
+    for value in [
+        "640",
+        "640X768",
+        "x768",
+        "640x",
+        "0x768",
+        "640x0",
+        "-1x768",
+        "640x768x1",
+    ] {
+        FrameSize::parse_arg(value).expect_err("frame size must reject malformed values");
+    }
+}
+
+#[test]
+fn launch_options_support_explicit_frame_size() {
+    let options = LaunchOptions {
+        startup_timeout: Duration::from_secs(1),
+        local_app_data: Some(PathBuf::from("/var/tmp/mmatrix-testkit")),
+        frame_size: Some(FrameSize {
+            width: 640,
+            height: 768,
+        }),
+    };
+
+    assert_eq!(
+        options.frame_size,
+        Some(FrameSize {
+            width: 640,
+            height: 768,
+        })
     );
 }
 
@@ -3315,7 +3370,8 @@ fn non_windows_platform_reports_unsupported_driver() {
         &[OsString::from("--automation")],
         LaunchOptions {
             startup_timeout: Duration::from_secs(1),
-            local_app_data: Some(PathBuf::from("/tmp/mmatrix-testkit")),
+            local_app_data: Some(PathBuf::from("/var/tmp/mmatrix-testkit")),
+            frame_size: None,
         },
     )
     .expect_err("launch_with_options must fail off Windows");

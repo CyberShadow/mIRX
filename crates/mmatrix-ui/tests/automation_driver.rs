@@ -112,6 +112,7 @@ fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {
     LaunchOptions {
         startup_timeout: Duration::from_secs(20),
         local_app_data,
+        frame_size: None,
     }
 }
 

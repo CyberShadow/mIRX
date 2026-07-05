@@ -1,0 +1,90 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!members:example",
+        "display_name": "Members",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!members:example",
+      "activity_id": "event:$members-context-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$members-context-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "member list context line",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!members:example",
+      "activity_id": "event:$members-context-2",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$members-context-2",
+        "transaction_id": null,
+        "sender": "@casey:example",
+        "presentation": "text",
+        "body": "timeline stays visible beside the list",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!members:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice"
+        },
+        {
+          "user_id": "@casey:example",
+          "display_name": "Casey"
+        },
+        {
+          "user_id": "@sam-one:example",
+          "display_name": "Sam"
+        },
+        {
+          "user_id": "@sam-two:example",
+          "display_name": "Sam"
+        },
+        {
+          "user_id": "@ghost:example",
+          "display_name": null
+        },
+        {
+          "user_id": "@blank:example",
+          "display_name": ""
+        },
+        {
+          "user_id": "@zoe:example",
+          "display_name": "Zoe"
+        }
+      ]
+    }
+  }
+]

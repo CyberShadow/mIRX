@@ -29,6 +29,7 @@ fn launch_options() -> LaunchOptions {
     LaunchOptions {
         startup_timeout: Duration::from_secs(20),
         local_app_data: None,
+        frame_size: None,
     }
 }
 

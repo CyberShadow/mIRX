@@ -17,20 +17,28 @@ use non_windows as platform;
 #[cfg(windows)]
 use win32 as platform;
 
-const USAGE: &str = "usage: mmatrix-ui [--automation] [--render-state <file.json>] | [--self-test|--auto-close|--help]";
+const USAGE: &str = "usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]";
 const HELP: &str = "\
-usage: mmatrix-ui [--automation] [--render-state <file.json>]
+usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT]
        mmatrix-ui [--self-test|--auto-close|--help]
   --automation                enable automation control surface
   --render-state <file.json>  load render-state events at startup
+  --frame-size WIDTHxHEIGHT   create the frame at an explicit launch size
   --self-test                 create the Win32 shell, verify the edit control, and exit
   --auto-close                create the Win32 shell and close it automatically
   --help                      show this help";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrameSize {
+    width: i32,
+    height: i32,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RunOptions {
     automation: bool,
     render_state: Option<PathBuf>,
+    frame_size: Option<FrameSize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +63,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
     let mut run_options = RunOptions {
         automation: false,
         render_state: None,
+        frame_size: None,
     };
     let mut lifecycle_command = None;
     let mut args = args.into_iter();
@@ -79,10 +88,22 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
                 run_options.automation = true;
                 run_options.render_state = Some(PathBuf::from(path));
             }
+            flag if flag == OsStr::new("--frame-size") => {
+                if lifecycle_command.is_some() || run_options.frame_size.is_some() {
+                    return Err(());
+                }
+
+                let value = args.next().ok_or(())?;
+                if is_known_option(&value) {
+                    return Err(());
+                }
+                run_options.frame_size = Some(parse_frame_size_arg(&value)?);
+            }
             flag if flag == OsStr::new("--self-test") => {
                 if lifecycle_command.is_some()
                     || run_options.automation
                     || run_options.render_state.is_some()
+                    || run_options.frame_size.is_some()
                 {
                     return Err(());
                 }
@@ -92,6 +113,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
                 if lifecycle_command.is_some()
                     || run_options.automation
                     || run_options.render_state.is_some()
+                    || run_options.frame_size.is_some()
                 {
                     return Err(());
                 }
@@ -101,6 +123,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
                 if lifecycle_command.is_some()
                     || run_options.automation
                     || run_options.render_state.is_some()
+                    || run_options.frame_size.is_some()
                 {
                     return Err(());
                 }
@@ -111,6 +134,24 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<AppCommand, ()
     }
 
     Ok(lifecycle_command.unwrap_or(AppCommand::Run(run_options)))
+}
+
+fn parse_frame_size_arg(arg: &OsString) -> Result<FrameSize, ()> {
+    let value = arg.to_str().ok_or(())?;
+    let mut parts = value.split('x');
+    let width = parts.next().ok_or(())?;
+    let height = parts.next().ok_or(())?;
+    if width.is_empty() || height.is_empty() || parts.next().is_some() {
+        return Err(());
+    }
+
+    let width = width.parse::<i32>().map_err(|_| ())?;
+    let height = height.parse::<i32>().map_err(|_| ())?;
+    if width <= 0 || height <= 0 {
+        return Err(());
+    }
+
+    Ok(FrameSize { width, height })
 }
 
 fn is_valid_render_state_path(arg: &OsString) -> bool {
@@ -132,6 +173,7 @@ fn is_known_option(arg: &OsString) -> bool {
         flag
             if flag == OsStr::new("--automation")
                 || flag == OsStr::new("--render-state")
+                || flag == OsStr::new("--frame-size")
                 || flag == OsStr::new("--self-test")
                 || flag == OsStr::new("--auto-close")
                 || flag == OsStr::new("--help")
@@ -143,7 +185,7 @@ mod tests {
     use std::ffi::OsString;
     use std::path::PathBuf;
 
-    use super::{AppCommand, RunOptions, parse_args};
+    use super::{AppCommand, FrameSize, RunOptions, parse_args};
 
     #[test]
     fn parses_run_modes() {
@@ -152,6 +194,7 @@ mod tests {
             Ok(AppCommand::Run(RunOptions {
                 automation: false,
                 render_state: None,
+                frame_size: None,
             }))
         );
         assert_eq!(
@@ -159,6 +202,7 @@ mod tests {
             Ok(AppCommand::Run(RunOptions {
                 automation: true,
                 render_state: None,
+                frame_size: None,
             }))
         );
         assert_eq!(
@@ -169,6 +213,7 @@ mod tests {
             Ok(AppCommand::Run(RunOptions {
                 automation: true,
                 render_state: Some(PathBuf::from("state.json")),
+                frame_size: None,
             }))
         );
         assert_eq!(
@@ -179,11 +224,13 @@ mod tests {
             Ok(AppCommand::Run(RunOptions {
                 automation: true,
                 render_state: Some(PathBuf::from("--state.json")),
+                frame_size: None,
             }))
         );
         let expected = Ok(AppCommand::Run(RunOptions {
             automation: true,
             render_state: Some(PathBuf::from("state.json")),
+            frame_size: None,
         }));
         assert_eq!(
             parse_args([
@@ -200,6 +247,33 @@ mod tests {
                 OsString::from("--automation"),
             ]),
             expected
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("640x768"),]),
+            Ok(AppCommand::Run(RunOptions {
+                automation: false,
+                render_state: None,
+                frame_size: Some(FrameSize {
+                    width: 640,
+                    height: 768,
+                }),
+            }))
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--render-state"),
+                OsString::from("state.json"),
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+            ]),
+            Ok(AppCommand::Run(RunOptions {
+                automation: true,
+                render_state: Some(PathBuf::from("state.json")),
+                frame_size: Some(FrameSize {
+                    width: 640,
+                    height: 768,
+                }),
+            }))
         );
     }
 
@@ -268,6 +342,59 @@ mod tests {
             ]),
             Err(())
         );
+        assert_eq!(parse_args([OsString::from("--frame-size")]), Err(()));
+        assert_eq!(
+            parse_args([
+                OsString::from("--frame-size"),
+                OsString::from("--automation"),
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("640"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("640X768"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("x768"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("640x"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("0x768"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("640x0"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--frame-size"),
+                OsString::from("-1x768"),
+                OsString::from("--automation"),
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([OsString::from("--frame-size"), OsString::from("640x768x1"),]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+                OsString::from("--frame-size"),
+                OsString::from("800x600"),
+            ]),
+            Err(())
+        );
         assert_eq!(
             parse_args([
                 OsString::from("--self-test"),
@@ -285,6 +412,14 @@ mod tests {
         );
         assert_eq!(
             parse_args([
+                OsString::from("--self-test"),
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
                 OsString::from("--auto-close"),
                 OsString::from("--automation")
             ]),
@@ -295,6 +430,22 @@ mod tests {
                 OsString::from("--auto-close"),
                 OsString::from("--render-state"),
                 OsString::from("state.json"),
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--auto-close"),
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+            ]),
+            Err(())
+        );
+        assert_eq!(
+            parse_args([
+                OsString::from("--frame-size"),
+                OsString::from("640x768"),
+                OsString::from("--help"),
             ]),
             Err(())
         );

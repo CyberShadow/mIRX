@@ -189,6 +189,7 @@ configure_case_expectations() {
   expect_active_view=
   select_views=()
   append_events_path=
+  case_frame_size=
   expect_switchbar_active=
   verification_text_expect_args=()
 
@@ -819,6 +820,35 @@ configure_case_expectations() {
         --expect-no-navigation-text 'member list context line'
       )
       ;;
+    member-list-narrow)
+      expect_selected='!members:example'
+      expect_active_view='room:!members:example'
+      case_frame_size=640x768
+      room_expect_args=(
+        --expect-room '!members:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!members:example::Room: Members (!members:example)'
+        --expect-room-view '!members:example::member list context line'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!members:example::Alice'
+        --expect-room-member '!members:example::Sam (@sam-one:example)'
+        --expect-room-member '!members:example::@ghost:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!members:example::Members'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!members:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!members:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'member list context line'
+      )
+      ;;
     typing-indicator)
       expect_selected='!typing:example'
       expect_active_view='room:!typing:example'
@@ -1176,6 +1206,7 @@ run_case() {
   local driver_stderr="$tmpdir/$case_name.driver.stderr"
   local driver_status=0
   local driver_args=()
+  local ui_args=()
   local append_events_path_win=
 
   configure_case_expectations "$case_name"
@@ -1234,7 +1265,12 @@ run_case() {
     driver_args+=(--expect-switchbar-active "$expect_switchbar_active")
   fi
 
-  wine "$ui_exe" --render-state "$state_path_win" --automation >/dev/null 2>&1 &
+  ui_args=(--render-state "$state_path_win" --automation)
+  if [[ -n "${case_frame_size:-}" ]]; then
+    ui_args+=(--frame-size "$case_frame_size")
+  fi
+
+  wine "$ui_exe" "${ui_args[@]}" >/dev/null 2>&1 &
   app_pid=$!
 
   set +e
@@ -1305,7 +1341,7 @@ main() {
 
   [[ -d "$states_dir" ]] || die "missing states directory: $states_dir"
 
-  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-ui-snapshot.XXXXXX")
+  tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mmatrix-ui-snapshot.XXXXXX")
   generated_dir="$tmpdir/generated-ui-snapshots"
   diff_dir="$tmpdir/ui-snapshot-diffs"
   keep_tmpdir=0
