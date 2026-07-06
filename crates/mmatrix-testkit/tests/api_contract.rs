@@ -7,23 +7,25 @@ use std::path::PathBuf;
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event as CoreEvent, FetchRoomImageMediaRequest as CoreFetchRoomImageMediaRequest,
-    RoomImageMedia as CoreRoomImageMedia, RoomImageMediaFormat as CoreRoomImageMediaFormat,
-    RoomImageMediaKind as CoreRoomImageMediaKind, RoomMediaSource as CoreRoomMediaSource,
-    RoomReadState,
+    RoomActivityUpdate as CoreRoomActivityUpdate,
+    RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
+    RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget, RoomImageMedia as CoreRoomImageMedia,
+    RoomImageMediaFormat as CoreRoomImageMediaFormat, RoomImageMediaKind as CoreRoomImageMediaKind,
+    RoomMediaSource as CoreRoomMediaSource, RoomReadState,
 };
 use mmatrix_testkit::{
     ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
     MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
     RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
-    StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
-    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewIdentity,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageActivity,
+    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState,
+    RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
+    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -1447,6 +1449,200 @@ fn room_activity_thread_relation_round_trips_through_json() {
     assert_eq!(
         serde_json::from_value::<RoomActivity>(json).expect("deserialize thread activity"),
         activity
+    );
+}
+
+#[test]
+fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
+    let sent = RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: "txn-1".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::MessageSent {
+            event_id: "$event:example.org".to_owned(),
+        },
+    };
+    let failed = RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: "txn-1".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::MessageFailed {
+            message: "send failed".to_owned(),
+            recoverable: true,
+        },
+    };
+    let replaced = RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::MessageReplaced {
+            replacement_event_id: "$edit:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            timestamp_ms: 1_700_000_001_000,
+            presentation: RoomMessagePresentationKind::Text,
+            body: "edited body".to_owned(),
+        },
+    };
+
+    let sent_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "transaction",
+            "transaction_id": "txn-1"
+        },
+        "kind": {
+            "type": "message_sent",
+            "event_id": "$event:example.org"
+        }
+    });
+    let failed_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "transaction",
+            "transaction_id": "txn-1"
+        },
+        "kind": {
+            "type": "message_failed",
+            "message": "send failed",
+            "recoverable": true
+        }
+    });
+    let replaced_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "event",
+            "event_id": "$original:example.org"
+        },
+        "kind": {
+            "type": "message_replaced",
+            "replacement_event_id": "$edit:example.org",
+            "sender": "@alice:example.org",
+            "timestamp_ms": 1700000001000u64,
+            "presentation": "text",
+            "body": "edited body"
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&sent).expect("serialize sent update"),
+        sent_json
+    );
+    assert_eq!(
+        serde_json::to_value(&failed).expect("serialize failed update"),
+        failed_json
+    );
+    assert_eq!(
+        serde_json::to_value(&replaced).expect("serialize replaced update"),
+        replaced_json
+    );
+
+    assert_eq!(
+        serde_json::from_value::<CoreRoomActivityUpdate>(sent_json.clone())
+            .expect("deserialize sent update as core"),
+        CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Transaction {
+                transaction_id: "txn-1".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::MessageSent {
+                event_id: "$event:example.org".to_owned(),
+            },
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomActivityUpdate>(failed_json.clone())
+            .expect("deserialize failed update as core"),
+        CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Transaction {
+                transaction_id: "txn-1".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::MessageFailed {
+                message: "send failed".to_owned(),
+                recoverable: true,
+            },
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomActivityUpdate>(replaced_json.clone())
+            .expect("deserialize replaced update as core"),
+        CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::MessageReplaced {
+                replacement_event_id: "$edit:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_700_000_001_000,
+                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
+                body: "edited body".to_owned(),
+            },
+        }
+    );
+
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdate>(sent_json).expect("deserialize sent update"),
+        sent
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdate>(failed_json)
+            .expect("deserialize failed update"),
+        failed
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdate>(replaced_json)
+            .expect("deserialize replaced update"),
+        replaced
+    );
+}
+
+#[test]
+fn room_activity_update_dtos_reject_unknown_fields_and_invalid_tags() {
+    assert!(
+        serde_json::from_str::<RoomActivityUpdate>(
+            r#"{"room_id":"!ops:example.org","target":{"type":"transaction","transaction_id":"txn-1"},"kind":{"type":"message_sent","event_id":"$event:example.org"},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room activity update must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateTarget>(
+            r#"{"type":"event","event_id":"$original:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "event target must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateTarget>(
+            r#"{"type":"transaction","transaction_id":"txn-1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "transaction target must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","unexpected":"value"}"#
+        )
+        .is_err(),
+        "message replaced kind must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateTarget>(
+            r#"{"type":"event","transaction_id":"txn-1"}"#
+        )
+        .is_err(),
+        "event target must reject transaction payloads"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text"}"#
+        )
+        .is_err(),
+        "message replaced kind must require body"
     );
 }
 

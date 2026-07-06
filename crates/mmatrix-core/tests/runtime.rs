@@ -5,9 +5,9 @@ use mmatrix_core::{
     E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
     E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
+    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
     SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
@@ -1066,14 +1066,18 @@ fn room_activity_events_round_trip_through_serde() {
     }));
     let sent_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
-        transaction_id: "txn-1".to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: "txn-1".to_owned(),
+        },
         kind: RoomActivityUpdateKind::MessageSent {
             event_id: "$event:example.org".to_owned(),
         },
     });
     let failed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
-        transaction_id: "txn-1".to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: "txn-1".to_owned(),
+        },
         kind: RoomActivityUpdateKind::MessageFailed {
             message: "send failed".to_owned(),
             recoverable: true,
@@ -1165,10 +1169,25 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     }));
     let failed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
-        transaction_id: "txn-1".to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: "txn-1".to_owned(),
+        },
         kind: RoomActivityUpdateKind::MessageFailed {
             message: "send failed".to_owned(),
             recoverable: true,
+        },
+    });
+    let replaced_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::MessageReplaced {
+            replacement_event_id: "$edit:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            timestamp_ms: 1_700_000_001_000,
+            presentation: RoomMessagePresentationKind::Text,
+            body: "edited body".to_owned(),
         },
     });
 
@@ -1191,7 +1210,12 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     );
     assert_eq!(
         serde_json::to_string(&failed_update_event).expect("serialize failed room activity update"),
-        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","transaction_id":"txn-1","kind":{"type":"message_failed","message":"send failed","recoverable":true}}}"#
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"transaction","transaction_id":"txn-1"},"kind":{"type":"message_failed","message":"send failed","recoverable":true}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&replaced_update_event)
+            .expect("serialize replaced room activity update"),
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body"}}}"#
     );
 }
 
@@ -1716,7 +1740,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomActivityUpdate>(
-            r#"{"room_id":"!ops:example.org","transaction_id":"txn-1","kind":{"type":"message_sent","event_id":"$event:example.org"},"unexpected":"value"}"#
+            r#"{"room_id":"!ops:example.org","target":{"type":"transaction","transaction_id":"txn-1"},"kind":{"type":"message_sent","event_id":"$event:example.org"},"unexpected":"value"}"#
         )
         .is_err(),
         "room activity update must reject unknown fields"
@@ -1724,10 +1748,18 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","transaction_id":"txn-1","kind":{"type":"message_failed","message":"send failed","recoverable":true,"unexpected":"value"}}}"#
+            r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"transaction","transaction_id":"txn-1","unexpected":"value"},"kind":{"type":"message_failed","message":"send failed","recoverable":true}}}"#
         )
         .is_err(),
-        "failed room activity update must reject unknown fields"
+        "room activity update target must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","unexpected":"value"}}}"#
+        )
+        .is_err(),
+        "message replaced room activity update must reject unknown fields"
     );
 
     assert!(

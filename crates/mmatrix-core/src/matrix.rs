@@ -37,6 +37,7 @@ use matrix_sdk::{
                 message::{
                     MessageType, OriginalSyncRoomMessageEvent, Relation as MessageContentRelation,
                     Relation as MessageRelation, RoomMessageEventContent,
+                    RoomMessageEventContentWithoutRelation,
                 },
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
@@ -56,14 +57,15 @@ use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
-    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SendMessageThreadTarget, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomTyping, SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -806,9 +808,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
         async move {
-            if let Some(activity) = room_activity_from_sync_message(room.room_id().as_str(), &event)
+            if let Some(event) =
+                room_timeline_event_from_sync_message(room.room_id().as_str(), &event)
             {
-                emit_event(&events, Event::RoomActivity(Box::new(activity)));
+                emit_event(&events, event);
             }
         }
     });
@@ -882,6 +885,19 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     );
 }
 
+fn room_timeline_event_from_sync_message(
+    room_id: &str,
+    event: &OriginalSyncRoomMessageEvent,
+) -> Option<Event> {
+    if let Some(MessageRelation::Replacement(replacement)) = event.content.relates_to.as_ref() {
+        return room_activity_update_from_sync_message_replacement(room_id, event, replacement)
+            .map(Event::RoomActivityUpdate);
+    }
+
+    room_activity_from_sync_message(room_id, event)
+        .map(|activity| Event::RoomActivity(Box::new(activity)))
+}
+
 fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
@@ -941,6 +957,31 @@ fn room_activity_from_sync_message(
             msgtype: msgtype.to_owned(),
             body: body.to_owned(),
         }),
+    })
+}
+
+fn room_activity_update_from_sync_message_replacement(
+    room_id: &str,
+    event: &OriginalSyncRoomMessageEvent,
+    replacement: &matrix_sdk::ruma::events::relation::Replacement<
+        RoomMessageEventContentWithoutRelation,
+    >,
+) -> Option<RoomActivityUpdate> {
+    let (presentation, body) =
+        room_message_presentation_and_body_from_message_type(&replacement.new_content.msgtype)?;
+
+    Some(RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: replacement.event_id.to_string(),
+        },
+        kind: RoomActivityUpdateKind::MessageReplaced {
+            replacement_event_id: event.event_id.to_string(),
+            sender: event.sender.to_string(),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            presentation,
+            body,
+        },
     })
 }
 
@@ -1682,7 +1723,9 @@ fn map_send_queue_update(
             event_id,
         } => Ok(vec![Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id,
-            transaction_id: transaction_id.to_string(),
+            target: RoomActivityUpdateTarget::Transaction {
+                transaction_id: transaction_id.to_string(),
+            },
             kind: RoomActivityUpdateKind::MessageSent {
                 event_id: event_id.to_string(),
             },
@@ -1696,7 +1739,9 @@ fn map_send_queue_update(
             Ok(vec![
                 Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id,
-                    transaction_id: transaction_id.to_string(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: transaction_id.to_string(),
+                    },
                     kind: RoomActivityUpdateKind::MessageFailed {
                         message: message.clone(),
                         recoverable: is_recoverable,
@@ -1785,7 +1830,7 @@ fn outgoing_events_from_local_echo_event(
     if let Some(send_error) = send_error {
         events.push(Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id,
-            transaction_id,
+            target: RoomActivityUpdateTarget::Transaction { transaction_id },
             kind: RoomActivityUpdateKind::MessageFailed {
                 message: send_error.clone(),
                 recoverable: false,
@@ -1987,20 +2032,20 @@ mod tests {
         room_activity_from_sync_topic, room_image_media_request_parameters,
         room_list_update_is_relevant, room_members_from_parts, room_message_event_content,
         room_read_state_from_parts, room_read_update_is_relevant, room_tag_summaries_from_tags,
-        room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
-        verification_flow_id_from_to_device, verification_request_from_to_device,
-        verification_requested_state_event,
+        room_timeline_event_from_sync_message, room_typing_from_sync_typing,
+        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         FetchRoomImageMediaRequest, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomEncryptedFileHashes,
-        RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMediaFormat,
-        RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageThreadTarget,
-        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
+        RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
+        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client,
@@ -2560,6 +2605,200 @@ mod tests {
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
+        );
+    }
+
+    #[test]
+    fn text_sync_message_replacement_maps_to_room_activity_update() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "* edited body",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": "edited body"
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$original:example.org"
+                }
+            },
+            "event_id": "$edit:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001000u64
+        }))
+        .expect("deserialize sync text replacement event");
+
+        assert_eq!(
+            room_timeline_event_from_sync_message("!room:example.org", &event),
+            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::MessageReplaced {
+                    replacement_event_id: "$edit:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_001_000,
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "edited body".to_owned(),
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn notice_and_emote_sync_message_replacements_preserve_presentation() {
+        let notice_event: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.message",
+                "content": {
+                    "msgtype": "m.notice",
+                    "body": "* heads up",
+                    "m.new_content": {
+                        "msgtype": "m.notice",
+                        "body": "heads up"
+                    },
+                    "m.relates_to": {
+                        "rel_type": "m.replace",
+                        "event_id": "$notice:example.org"
+                    }
+                },
+                "event_id": "$notice-edit:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000001001u64
+            }))
+            .expect("deserialize sync notice replacement event");
+        let emote_event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.emote",
+                "body": "* waves",
+                "m.new_content": {
+                    "msgtype": "m.emote",
+                    "body": "waves"
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$emote:example.org"
+                }
+            },
+            "event_id": "$emote-edit:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001002u64
+        }))
+        .expect("deserialize sync emote replacement event");
+
+        assert_eq!(
+            room_timeline_event_from_sync_message("!room:example.org", &notice_event),
+            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$notice:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::MessageReplaced {
+                    replacement_event_id: "$notice-edit:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_001_001,
+                    presentation: RoomMessagePresentationKind::Notice,
+                    body: "heads up".to_owned(),
+                },
+            }))
+        );
+        assert_eq!(
+            room_timeline_event_from_sync_message("!room:example.org", &emote_event),
+            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$emote:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::MessageReplaced {
+                    replacement_event_id: "$emote-edit:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_001_002,
+                    presentation: RoomMessagePresentationKind::Emote,
+                    body: "waves".to_owned(),
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn replacement_sync_message_with_thread_fallback_maps_only_to_update() {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "* thread reply edited",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": "thread reply edited",
+                    "m.relates_to": {
+                        "rel_type": "m.thread",
+                        "event_id": "$thread-root:example.org",
+                        "is_falling_back": false,
+                        "m.in_reply_to": {
+                            "event_id": "$reply-target:example.org"
+                        }
+                    }
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$thread-reply:example.org"
+                }
+            },
+            "event_id": "$thread-edit:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001003u64
+        }))
+        .expect("deserialize sync threaded replacement event");
+
+        assert_eq!(
+            room_timeline_event_from_sync_message("!room:example.org", &event),
+            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$thread-reply:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::MessageReplaced {
+                    replacement_event_id: "$thread-edit:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_001_003,
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "thread reply edited".to_owned(),
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn unsupported_sync_message_replacement_is_ignored() {
+        let image_event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.image",
+                "body": "* diagram.png",
+                "url": "mxc://example.org/fallback-image",
+                "m.new_content": {
+                    "msgtype": "m.image",
+                    "body": "diagram.png",
+                    "url": "mxc://example.org/image"
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$image:example.org"
+                }
+            },
+            "event_id": "$image-edit:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001004u64
+        }))
+        .expect("deserialize sync image replacement event");
+
+        assert_eq!(
+            room_timeline_event_from_sync_message("!room:example.org", &image_event),
+            None
         );
     }
 
@@ -3658,7 +3897,9 @@ mod tests {
             events,
             vec![Event::RoomActivityUpdate(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
-                transaction_id: "txn-1".to_owned(),
+                target: RoomActivityUpdateTarget::Transaction {
+                    transaction_id: "txn-1".to_owned(),
+                },
                 kind: RoomActivityUpdateKind::MessageSent {
                     event_id: "$event:example.org".to_owned(),
                 },
@@ -3789,7 +4030,9 @@ mod tests {
                 })),
                 Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
-                    transaction_id: "txn-1".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
                     kind: RoomActivityUpdateKind::MessageFailed {
                         message: "Other unrecoverable error: wedged".to_owned(),
                         recoverable: false,
@@ -3825,7 +4068,9 @@ mod tests {
             vec![
                 Event::RoomActivityUpdate(RoomActivityUpdate {
                     room_id: "!room:example.org".to_owned(),
-                    transaction_id: "txn-1".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
                     kind: RoomActivityUpdateKind::MessageFailed {
                         message: "send failed".to_owned(),
                         recoverable: true,

@@ -303,8 +303,15 @@ pub enum RoomStateNoticeContent {
 #[serde(deny_unknown_fields)]
 pub struct RoomActivityUpdate {
     pub room_id: String,
-    pub transaction_id: String,
+    pub target: RoomActivityUpdateTarget,
     pub kind: RoomActivityUpdateKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityUpdateTarget {
+    Transaction { transaction_id: String },
+    Event { event_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -410,8 +417,20 @@ pub enum E2eeRecoveryOperation {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomActivityUpdateKind {
-    MessageSent { event_id: String },
-    MessageFailed { message: String, recoverable: bool },
+    MessageSent {
+        event_id: String,
+    },
+    MessageFailed {
+        message: String,
+        recoverable: bool,
+    },
+    MessageReplaced {
+        replacement_event_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        presentation: RoomMessagePresentationKind,
+        body: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

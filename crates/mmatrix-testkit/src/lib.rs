@@ -484,6 +484,40 @@ pub enum RoomStateNoticeContent {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomActivityUpdate {
+    pub room_id: String,
+    pub target: RoomActivityUpdateTarget,
+    pub kind: RoomActivityUpdateKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityUpdateTarget {
+    Transaction { transaction_id: String },
+    Event { event_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomActivityUpdateKind {
+    MessageSent {
+        event_id: String,
+    },
+    MessageFailed {
+        message: String,
+        recoverable: bool,
+    },
+    MessageReplaced {
+        replacement_event_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        presentation: RoomMessagePresentationKind,
+        body: String,
+    },
+}
+
 impl RoomActivity {
     pub fn contains(&self, substr: &str) -> bool {
         serde_json::to_string(self).is_ok_and(|json| json.contains(substr))
