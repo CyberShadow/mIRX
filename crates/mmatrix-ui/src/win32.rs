@@ -21,11 +21,11 @@ use mmatrix_core::{
     FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
-    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest, StoredSession,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
+    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
+    RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
 };
 use serde::Serialize;
@@ -466,6 +466,12 @@ struct LastMessageActivity {
     send_state: RoomMessageSendState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageReplacementFields {
+    presentation: RoomMessagePresentationKind,
+    body: String,
+}
+
 impl RoomViewModel {
     fn clear_visible_entries(&mut self) {
         self.activities.retain(|activity| {
@@ -634,11 +640,10 @@ impl RoomViewModel {
     }
 
     fn mark_message_sent(&mut self, update: RoomActivityUpdate) {
-        let RoomActivityUpdate {
-            transaction_id,
-            kind,
-            ..
-        } = update;
+        let RoomActivityUpdate { target, kind, .. } = update;
+        let RoomActivityUpdateTarget::Transaction { transaction_id } = target else {
+            panic!("message sent update requires a transaction target");
+        };
         let RoomActivityUpdateKind::MessageSent { event_id } = kind else {
             panic!("message sent update requires a sent activity update");
         };
@@ -717,11 +722,10 @@ impl RoomViewModel {
     }
 
     fn mark_message_failed(&mut self, update: RoomActivityUpdate) {
-        let RoomActivityUpdate {
-            transaction_id,
-            kind,
-            ..
-        } = update;
+        let RoomActivityUpdate { target, kind, .. } = update;
+        let RoomActivityUpdateTarget::Transaction { transaction_id } = target else {
+            panic!("message failed update requires a transaction target");
+        };
         let RoomActivityUpdateKind::MessageFailed {
             message,
             recoverable,
@@ -741,6 +745,31 @@ impl RoomViewModel {
             recoverable,
         };
         self.rebuild_threads();
+    }
+
+    fn replace_message(
+        &mut self,
+        target_event_id: &str,
+        replacement: MessageReplacementFields,
+    ) -> bool {
+        let Some(activity) = self.activities.iter_mut().find(|activity| {
+            matches!(
+                &activity.kind,
+                RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some(event_id),
+                    ..
+                }) if event_id == target_event_id
+            )
+        }) else {
+            return false;
+        };
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            panic!("message replacement requires a message room activity");
+        };
+        message.presentation = replacement.presentation;
+        message.body = replacement.body;
+        self.rebuild_threads();
+        true
     }
 
     fn find_message_activity_index(
@@ -827,20 +856,43 @@ impl RoomViewModel {
     }
 
     fn validate_update(&self, update: &RoomActivityUpdate) -> Result<(), String> {
-        let (transaction_id, error_message) = match &update.kind {
-            RoomActivityUpdateKind::MessageSent { .. } => (
-                update.transaction_id.as_str(),
-                "outgoing sent requires an existing queued timeline row",
-            ),
-            RoomActivityUpdateKind::MessageFailed { .. } => (
-                update.transaction_id.as_str(),
-                "outgoing failed requires an existing queued timeline row",
-            ),
-        };
-
-        self.find_pending_message_activity_index(transaction_id)
-            .map(|_| ())
-            .ok_or_else(|| error_message.to_owned())
+        match (&update.target, &update.kind) {
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageSent { .. },
+            ) => self
+                .find_pending_message_activity_index(transaction_id)
+                .map(|_| ())
+                .ok_or_else(|| "outgoing sent requires an existing queued timeline row".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageFailed { .. },
+            ) => self
+                .find_pending_message_activity_index(transaction_id)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    "outgoing failed requires an existing queued timeline row".to_owned()
+                }),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::MessageReplaced { .. },
+            ) => self
+                .find_message_activity_index(None, Some(event_id))
+                .map(|_| ())
+                .ok_or_else(|| "message edit requires an existing visible target event".to_owned()),
+            (
+                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::MessageSent { .. },
+            ) => Err("message sent update requires a transaction target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::MessageFailed { .. },
+            ) => Err("message failed update requires a transaction target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::MessageReplaced { .. },
+            ) => Err("message edit requires an event target".to_owned()),
+        }
     }
 
     fn retain_image_media_for_visible_activities(&mut self) {
@@ -867,13 +919,42 @@ fn validate_synthetic_room_activity_events(
             Event::RoomActivityUpdate(update) => {
                 let room_view = room_views.entry(update.room_id.clone()).or_default();
                 room_view.validate_update(update)?;
-                match &update.kind {
-                    RoomActivityUpdateKind::MessageSent { .. } => {
-                        room_view.mark_message_sent(update.clone())
+                match (&update.target, &update.kind) {
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::MessageSent { .. },
+                    ) => room_view.mark_message_sent(update.clone()),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::MessageFailed { .. },
+                    ) => room_view.mark_message_failed(update.clone()),
+                    (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::MessageReplaced {
+                            presentation, body, ..
+                        },
+                    ) => {
+                        let replaced = room_view.replace_message(
+                            event_id,
+                            MessageReplacementFields {
+                                presentation: *presentation,
+                                body: body.clone(),
+                            },
+                        );
+                        assert!(replaced, "validated synthetic message edit must resolve");
                     }
-                    RoomActivityUpdateKind::MessageFailed { .. } => {
-                        room_view.mark_message_failed(update.clone())
-                    }
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::MessageReplaced { .. },
+                    ) => panic!("message edit requires an event target"),
+                    (
+                        RoomActivityUpdateTarget::Event { .. },
+                        RoomActivityUpdateKind::MessageSent { .. },
+                    ) => panic!("message sent update requires a transaction target"),
+                    (
+                        RoomActivityUpdateTarget::Event { .. },
+                        RoomActivityUpdateKind::MessageFailed { .. },
+                    ) => panic!("message failed update requires a transaction target"),
                 }
             }
             _ => {}
@@ -1104,11 +1185,21 @@ fn room_activity_target_view_id(activity: &RoomActivity) -> ViewId {
 }
 
 fn room_activity_update_marks_inactive_room(update: &RoomActivityUpdate) -> bool {
-    matches!(&update.kind, RoomActivityUpdateKind::MessageFailed { .. })
+    matches!(
+        (&update.target, &update.kind),
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::MessageFailed { .. }
+        )
+    )
 }
 
 fn failed_room_activity_update_view_id(state: &WindowState, update: &RoomActivityUpdate) -> ViewId {
-    let RoomActivityUpdateKind::MessageFailed { .. } = &update.kind else {
+    let (
+        RoomActivityUpdateTarget::Transaction { transaction_id },
+        RoomActivityUpdateKind::MessageFailed { .. },
+    ) = (&update.target, &update.kind)
+    else {
         panic!("failed room activity marker target requires a failed activity update");
     };
     let room_view = state
@@ -1117,7 +1208,7 @@ fn failed_room_activity_update_view_id(state: &WindowState, update: &RoomActivit
         .get(&update.room_id)
         .expect("outgoing failed requires an existing queued timeline row");
     let pending_index = room_view
-        .find_pending_message_activity_index(update.transaction_id.as_str())
+        .find_pending_message_activity_index(transaction_id)
         .expect("outgoing failed requires an existing queued timeline row");
     let pending_activity = room_view
         .activities
@@ -1315,42 +1406,98 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
     }
     state.model.status = format!("timeline update from {}", update.room_id);
     let room_id = update.room_id.clone();
-    let transaction_id = update.transaction_id.clone();
     let refresh_last_activity = state
         .model
         .last_activity
         .as_ref()
-        .is_some_and(|last_activity| match &update.kind {
-            RoomActivityUpdateKind::MessageSent { event_id } => {
+        .is_some_and(|last_activity| match (&update.target, &update.kind) {
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageSent { event_id },
+            ) => {
                 last_activity.room_id == room_id
                     && (last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
                         || last_activity.event_id.as_deref() == Some(event_id.as_str()))
             }
-            RoomActivityUpdateKind::MessageFailed { .. } => {
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageFailed { .. },
+            ) => {
                 last_activity.room_id == room_id
                     && last_activity.transaction_id.as_deref() == Some(transaction_id.as_str())
             }
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::MessageReplaced { .. },
+            ) => {
+                last_activity.room_id == room_id
+                    && last_activity.event_id.as_deref() == Some(event_id.as_str())
+            }
+            _ => false,
         });
-    match &update.kind {
-        RoomActivityUpdateKind::MessageSent { .. } => state
+    match (&update.target, &update.kind) {
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::MessageSent { .. },
+        ) => state
             .model
             .room_views
             .entry(room_id.clone())
             .or_default()
             .mark_message_sent(update.clone()),
-        RoomActivityUpdateKind::MessageFailed { .. } => state
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::MessageFailed { .. },
+        ) => state
             .model
             .room_views
             .entry(room_id.clone())
             .or_default()
             .mark_message_failed(update.clone()),
+        (
+            RoomActivityUpdateTarget::Event { event_id },
+            RoomActivityUpdateKind::MessageReplaced {
+                presentation, body, ..
+            },
+        ) => {
+            let _ = state
+                .model
+                .room_views
+                .entry(room_id.clone())
+                .or_default()
+                .replace_message(
+                    event_id,
+                    MessageReplacementFields {
+                        presentation: *presentation,
+                        body: body.clone(),
+                    },
+                );
+        }
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::MessageReplaced { .. },
+        ) => panic!("message edit requires an event target"),
+        (RoomActivityUpdateTarget::Event { .. }, RoomActivityUpdateKind::MessageSent { .. }) => {
+            panic!("message sent update requires a transaction target")
+        }
+        (RoomActivityUpdateTarget::Event { .. }, RoomActivityUpdateKind::MessageFailed { .. }) => {
+            panic!("message failed update requires a transaction target")
+        }
     }
     if refresh_last_activity
-        && let Some(updated_activity) = state.model.room_views.get(&room_id).and_then(|room_view| {
-            room_view
-                .find_message_activity_index(Some(transaction_id.as_str()), None)
-                .and_then(|index| room_view.activities.get(index))
-        })
+        && let Some(updated_activity) =
+            state
+                .model
+                .room_views
+                .get(&room_id)
+                .and_then(|room_view| match &update.target {
+                    RoomActivityUpdateTarget::Transaction { transaction_id } => room_view
+                        .find_message_activity_index(Some(transaction_id.as_str()), None)
+                        .and_then(|index| room_view.activities.get(index)),
+                    RoomActivityUpdateTarget::Event { event_id } => room_view
+                        .find_message_activity_index(None, Some(event_id.as_str()))
+                        .and_then(|index| room_view.activities.get(index)),
+                })
     {
         state.model.last_activity = last_activity_from_room_activity(updated_activity);
     }
@@ -9112,7 +9259,9 @@ mod tests {
     fn outgoing_sent(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
         Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id: room_id.to_owned(),
-            transaction_id: transaction_id.to_owned(),
+            target: RoomActivityUpdateTarget::Transaction {
+                transaction_id: transaction_id.to_owned(),
+            },
             kind: RoomActivityUpdateKind::MessageSent {
                 event_id: event_id.to_owned(),
             },
@@ -9122,10 +9271,34 @@ mod tests {
     fn outgoing_failed(room_id: &str, transaction_id: &str, message: &str) -> Event {
         Event::RoomActivityUpdate(RoomActivityUpdate {
             room_id: room_id.to_owned(),
-            transaction_id: transaction_id.to_owned(),
+            target: RoomActivityUpdateTarget::Transaction {
+                transaction_id: transaction_id.to_owned(),
+            },
             kind: RoomActivityUpdateKind::MessageFailed {
                 message: message.to_owned(),
                 recoverable: true,
+            },
+        })
+    }
+
+    fn incoming_replaced(
+        room_id: &str,
+        target_event_id: &str,
+        replacement_event_id: &str,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+    ) -> Event {
+        Event::RoomActivityUpdate(RoomActivityUpdate {
+            room_id: room_id.to_owned(),
+            target: RoomActivityUpdateTarget::Event {
+                event_id: target_event_id.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::MessageReplaced {
+                replacement_event_id: replacement_event_id.to_owned(),
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_500,
+                presentation,
+                body: body.to_owned(),
             },
         })
     }
@@ -9605,6 +9778,46 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_event_validation_rejects_message_edit_with_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::MessageReplaced {
+                        replacement_event_id: "$edit:example.org".to_owned(),
+                        sender: "@alice:example".to_owned(),
+                        timestamp_ms: 1_700_000_000_500,
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "edited".to_owned(),
+                    },
+                })]
+            ),
+            Err("message edit requires an event target".to_owned())
+        );
+    }
+
+    #[test]
+    fn synthetic_event_validation_rejects_message_edit_without_visible_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[incoming_replaced(
+                    "!ops:example",
+                    "$missing:example.org",
+                    "$edit:example.org",
+                    RoomMessagePresentationKind::Text,
+                    "edited"
+                )]
+            ),
+            Err("message edit requires an existing visible target event".to_owned())
+        );
+    }
+
+    #[test]
     fn room_activity_events_accumulate_per_room_in_order() {
         let mut state = test_state();
 
@@ -9772,6 +9985,180 @@ mod tests {
                 "Room: Ops (!ops:example)".to_owned(),
                 "[22:13] @alice:example: hello".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn room_activity_update_replaced_updates_existing_row_in_place() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$event:example.org",
+                None,
+                None,
+                RoomMessagePresentationKind::Text,
+                "original body",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$event:example.org",
+                "$edit:example.org",
+                RoomMessagePresentationKind::Emote,
+                "edited body",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.activities),
+            Some(&vec![sent_message_activity_with_presentation(
+                "!ops:example",
+                "$event:example.org",
+                None,
+                RoomMessagePresentationKind::Emote,
+                "edited body",
+                1_700_000_000_000,
+            )])
+        );
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "* [22:13] @alice:example edited body".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn room_activity_update_replaced_refreshes_last_activity_only_for_target() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$older:example.org",
+                None,
+                None,
+                RoomMessagePresentationKind::Text,
+                "older body",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$latest:example.org",
+                None,
+                None,
+                RoomMessagePresentationKind::Text,
+                "latest body",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$older:example.org",
+                "$older-edit:example.org",
+                RoomMessagePresentationKind::Text,
+                "older edited",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.model.last_activity,
+            Some(LastMessageActivity {
+                room_id: "!ops:example".to_owned(),
+                event_id: Some("$latest:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "latest body".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$latest:example.org",
+                "$latest-edit:example.org",
+                RoomMessagePresentationKind::Notice,
+                "latest edited",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.model.last_activity,
+            Some(LastMessageActivity {
+                room_id: "!ops:example".to_owned(),
+                event_id: Some("$latest:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                presentation: RoomMessagePresentationKind::Notice,
+                body: "latest edited".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn direct_message_edit_without_target_leaves_visible_timeline_unchanged() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        let before = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist")
+            .activities
+            .clone();
+
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$missing:example.org",
+                "$edit:example.org",
+                RoomMessagePresentationKind::Text,
+                "edited",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.activities),
+            Some(&before)
         );
     }
 
@@ -12726,6 +13113,42 @@ mod tests {
     }
 
     #[test]
+    fn replacing_thread_root_updates_thread_label() {
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$thread-root",
+            None,
+            "old root",
+            1_700_000_060_000,
+        ));
+        room_view.apply_activity(sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$thread-1",
+            None,
+            Some(thread_relation("$thread-root")),
+            RoomMessagePresentationKind::Text,
+            "thread rep",
+            1_700_000_120_000,
+        ));
+
+        assert!(room_view.replace_message(
+            "$thread-root",
+            MessageReplacementFields {
+                presentation: RoomMessagePresentationKind::Text,
+                body: "edited root".to_owned(),
+            }
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("edited root")
+        );
+    }
+
+    #[test]
     fn thread_timeline_filters_room_activity() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -12781,6 +13204,52 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains("thread rep")));
         assert!(!lines.iter().any(|line| line.contains("lobby")));
         assert!(!lines.iter().any(|line| line.contains("plain")));
+    }
+
+    #[test]
+    fn replacing_threaded_reply_updates_room_and_thread_timeline_projections() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$thread-1", "$thread-root", "old reply"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$thread-1",
+                "$thread-edit:example.org",
+                RoomMessagePresentationKind::Text,
+                "edited reply",
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            render_room_lines(&state.model, "!ops:example")
+                .iter()
+                .any(|line| line.contains("edited reply"))
+        );
+        let lines = project_timeline_rows(&build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+        ));
+        assert!(lines.iter().any(|line| line.contains("edited reply")));
+        assert!(!lines.iter().any(|line| line.contains("old reply")));
     }
 
     #[test]

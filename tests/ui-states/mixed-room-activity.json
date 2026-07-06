@@ -168,7 +168,10 @@
   {
     "RoomActivityUpdate": {
       "room_id": "!mixed:example",
-      "transaction_id": "txn-failed-1",
+      "target": {
+        "type": "transaction",
+        "transaction_id": "txn-failed-1"
+      },
       "kind": {
         "type": "message_failed",
         "message": "send failed",

@@ -11,7 +11,8 @@ use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomMemberSummary, RoomMembers, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomActivityUpdateTarget, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
     StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
@@ -476,7 +477,9 @@ fn pending_message_event(
 fn message_sent_update_event(room_id: &str, transaction_id: &str, event_id: &str) -> Event {
     Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: room_id.to_owned(),
-        transaction_id: transaction_id.to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: transaction_id.to_owned(),
+        },
         kind: RoomActivityUpdateKind::MessageSent {
             event_id: event_id.to_owned(),
         },
@@ -491,12 +494,57 @@ fn message_failed_update_event(
 ) -> Event {
     Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: room_id.to_owned(),
-        transaction_id: transaction_id.to_owned(),
+        target: RoomActivityUpdateTarget::Transaction {
+            transaction_id: transaction_id.to_owned(),
+        },
         kind: RoomActivityUpdateKind::MessageFailed {
             message: message.to_owned(),
             recoverable,
         },
     })
+}
+
+fn message_replaced_update_event(
+    room_id: &str,
+    event_id: &str,
+    replacement_event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    presentation: CoreRoomMessagePresentationKind,
+    body: &str,
+) -> Event {
+    Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: event_id.to_owned(),
+        },
+        kind: RoomActivityUpdateKind::MessageReplaced {
+            replacement_event_id: replacement_event_id.to_owned(),
+            sender: sender.to_owned(),
+            timestamp_ms,
+            presentation,
+            body: body.to_owned(),
+        },
+    })
+}
+
+fn text_message_replaced_update_event(
+    room_id: &str,
+    event_id: &str,
+    replacement_event_id: &str,
+    sender: &str,
+    timestamp_ms: u64,
+    body: &str,
+) -> Event {
+    message_replaced_update_event(
+        room_id,
+        event_id,
+        replacement_event_id,
+        sender,
+        timestamp_ms,
+        CoreRoomMessagePresentationKind::Text,
+        body,
+    )
 }
 
 fn typing_event(room_id: &str, user_ids: &[&str]) -> Event {
@@ -3030,6 +3078,7 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
 
     let thread_view_identity = thread_identity("!ops:example", "$thread-root");
     app.select_view(thread_view_identity.clone())?;
+    app.wait_idle(Duration::from_secs(5))?;
     let thread_state = app.dump_ui_state()?;
     assert_eq!(thread_state.mdi.active, thread_view_identity);
     assert_switchbar_activity(&thread_state, &room_identity("!ops:example"), false);
@@ -3121,6 +3170,237 @@ fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivate
     assert_switchbar_activity(&reactivated_thread_state, &room_view_identity, false);
     assert_switchbar_activity(&reactivated_thread_state, &thread_view_identity, false);
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_applies_receive_side_message_edits_in_place()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("message-edits.json");
+    let update_path = fixture_update_path("message-edits.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![
+            text_entry_with_event_id(
+                "!ops:example",
+                "$ops-room-1",
+                "@alice:example",
+                1_700_000_000_000,
+                "lobby draft",
+            ),
+            text_entry_with_event_id(
+                "!ops:example",
+                "$thread-root",
+                "@bob:example",
+                1_700_000_060_000,
+                "root msg draft",
+            ),
+            text_entry_with_event_id_and_relation(
+                "!ops:example",
+                "$thread-1",
+                "@carol:example",
+                1_700_000_120_000,
+                Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                "thread reply",
+            ),
+        ]
+    );
+
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![
+            text_entry_with_event_id(
+                "!ops:example",
+                "$ops-room-1",
+                "@alice:example",
+                1_700_000_000_000,
+                "lobby edited",
+            ),
+            text_entry_with_event_id(
+                "!ops:example",
+                "$thread-root",
+                "@bob:example",
+                1_700_000_060_000,
+                "root msg edited",
+            ),
+            text_entry_with_event_id_and_relation(
+                "!ops:example",
+                "$thread-1",
+                "@carol:example",
+                1_700_000_120_000,
+                Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                "thread reply",
+            ),
+        ]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    let room_view = find_view(&ui_state, &room_identity("!ops:example"));
+    assert!(view_contains(room_view, "lobby edited"));
+    assert!(view_contains(room_view, "root msg edited"));
+    assert!(!view_contains(room_view, "lobby draft"));
+    assert!(!view_contains(room_view, "root msg draft"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_thread_root_message_edit_updates_thread_titles()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("message-edits.json");
+    let update_path = fixture_update_path("message-edits.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    app.select_view(thread_view_identity.clone())?;
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(
+        find_switchbar_item(&initial_state, &thread_view_identity).title,
+        "Thread: root msg draft"
+    );
+    assert_eq!(
+        find_view(&initial_state, &thread_view_identity).title,
+        "Thread: root msg draft"
+    );
+
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let updated_state = app.dump_ui_state()?;
+    assert_eq!(updated_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&updated_state, &thread_view_identity);
+    assert_eq!(
+        find_switchbar_item(&updated_state, &thread_view_identity).title,
+        "Thread: root msg edited"
+    );
+    let thread_view = find_view(&updated_state, &thread_view_identity);
+    assert_eq!(thread_view.title, "Thread: root msg edited");
+    assert!(view_contains(thread_view, "root msg edited"));
+    assert!(!view_contains(thread_view, "root msg draft"));
+    assert!(navigation_contains(
+        &updated_state.navigation,
+        "root msg edited"
+    ));
+    assert_navigation_not_contains(&updated_state.navigation, "root msg draft");
+
+    let expected_path = navigation_path_by_substrings(
+        &updated_state.navigation,
+        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg edited"],
+    );
+    assert_eq!(app.selected_navigation_path()?, expected_path);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_rejects_invalid_append_message_edit_update_without_exiting()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("message-edits.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!ops:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    match app.append_synthetic_events(&serde_json::to_string(&vec![
+        text_message_replaced_update_event(
+            "!ops:example",
+            "$missing-event",
+            "$edit-missing",
+            "@alice:example",
+            1_700_000_180_000,
+            "ghost edit",
+        ),
+    ])?) {
+        Err(TestkitError::Protocol { code, message }) => {
+            assert_eq!(code, "invalid_synthetic_state");
+            assert_eq!(
+                message,
+                "message edit requires an existing visible target event"
+            );
+        }
+        other => panic!("expected invalid_synthetic_state for append, got {other:?}"),
+    }
+
+    app.ping()?;
+    assert_eq!(
+        app.room_activity(Some("!ops:example"))?,
+        vec![
+            text_entry_with_event_id(
+                "!ops:example",
+                "$ops-room-1",
+                "@alice:example",
+                1_700_000_000_000,
+                "lobby draft",
+            ),
+            text_entry_with_event_id(
+                "!ops:example",
+                "$thread-root",
+                "@bob:example",
+                1_700_000_060_000,
+                "root msg draft",
+            ),
+            text_entry_with_event_id_and_relation(
+                "!ops:example",
+                "$thread-1",
+                "@carol:example",
+                1_700_000_120_000,
+                Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                "thread reply",
+            ),
+        ]
+    );
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!ops:example")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

@@ -402,6 +402,58 @@ configure_case_expectations() {
         --expect-no-navigation-text 'plain'
       )
       ;;
+    message-edits)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      select_views=('thread:!ops:example|$thread-root' 'room:!ops:example')
+      append_events_path="$root_dir/tests/ui-state-updates/message-edits.json"
+      room_expect_args=(
+        --expect-room '!work:example'
+        --expect-room '!ops:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!ops:example::lobby edited'
+        --expect-room-activity '!ops:example::root msg edited'
+        --expect-room-activity '!ops:example::thread reply'
+        --expect-room-activity '!ops:example::"type":"thread"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::Room: Ops (!ops:example)'
+        --expect-room-view '!ops:example::lobby edited'
+        --expect-room-view '!ops:example::root msg edited'
+        --expect-room-view '!ops:example::thread reply'
+      )
+      view_expect_args=(
+        --expect-view 'thread:!ops:example|$thread-root::root msg edited'
+        --expect-view 'thread:!ops:example|$thread-root::thread reply'
+      )
+      view_forbid_args=(
+        --expect-no-view 'thread:!ops:example|$thread-root::lobby draft'
+        --expect-no-view 'thread:!ops:example|$thread-root::root msg draft'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'thread:!ops:example|$thread-root::root msg edited'
+      )
+      switchbar_no_item_expect_args=(
+        --expect-no-switchbar-item 'room:!work:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ops:example'
+        --expect-no-switchbar-activity 'thread:!ops:example|$thread-root'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ops:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'Work'
+        --expect-navigation-text 'Ops'
+        --expect-navigation-text 'root msg edited'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'root msg draft'
+      )
+      ;;
     verification-error)
       expect_selected='!verify:example'
       expect_active_view='room:!verify:example'

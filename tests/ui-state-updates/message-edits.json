@@ -1,0 +1,36 @@
+[
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!ops:example",
+      "target": {
+        "type": "event",
+        "event_id": "$ops-room-1"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$edit-room-1",
+        "sender": "@alice:example",
+        "timestamp_ms": 1700000180000,
+        "presentation": "text",
+        "body": "lobby edited"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!ops:example",
+      "target": {
+        "type": "event",
+        "event_id": "$thread-root"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$edit-thread-root-1",
+        "sender": "@bob:example",
+        "timestamp_ms": 1700000240000,
+        "presentation": "text",
+        "body": "root msg edited"
+      }
+    }
+  }
+]

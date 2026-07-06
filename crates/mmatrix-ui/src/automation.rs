@@ -2050,7 +2050,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
-                br#"{"id":"append","args":{"events":[{"RoomActivityUpdate":{"room_id":"!room:example","transaction_id":"txn-1","kind":{"type":"message_sent","event_id":"$event:example"}}}]}}"#,
+                br#"{"id":"append","args":{"events":[{"RoomActivityUpdate":{"room_id":"!room:example","target":{"type":"transaction","transaction_id":"txn-1"},"kind":{"type":"message_sent","event_id":"$event:example"}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::AppendSyntheticEvents {
@@ -2058,7 +2058,9 @@ mod tests {
                 args: LoadEventsArgs {
                     events: vec![Event::RoomActivityUpdate(mmatrix_core::RoomActivityUpdate {
                         room_id: "!room:example".to_owned(),
-                        transaction_id: "txn-1".to_owned(),
+                        target: mmatrix_core::RoomActivityUpdateTarget::Transaction {
+                            transaction_id: "txn-1".to_owned(),
+                        },
                         kind: mmatrix_core::RoomActivityUpdateKind::MessageSent {
                             event_id: "$event:example".to_owned(),
                         },

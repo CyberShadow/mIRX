@@ -183,7 +183,10 @@
   {
     "RoomActivityUpdate": {
       "room_id": "!dense:example",
-      "transaction_id": "dense-failed-1",
+      "target": {
+        "type": "transaction",
+        "transaction_id": "dense-failed-1"
+      },
       "kind": {
         "type": "message_failed",
         "message": "send failed",
