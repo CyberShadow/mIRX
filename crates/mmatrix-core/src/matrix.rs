@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use matrix_sdk::{
@@ -30,6 +31,7 @@ use matrix_sdk::{
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
+            reaction::OriginalSyncReactionEvent,
             relation::Thread,
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
@@ -788,6 +790,17 @@ async fn summarize_space_children(
         .collect())
 }
 
+#[derive(Default)]
+struct ReactionEventIndex {
+    live: BTreeMap<String, ReactionEventIndexEntry>,
+    pending_redactions: BTreeMap<String, String>,
+}
+
+struct ReactionEventIndexEntry {
+    target_event_id: String,
+    key: String,
+}
+
 pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     let direct_account_data_events = events.clone();
     client.add_event_handler(move |_event: DirectEvent, client: Client| {
@@ -817,17 +830,75 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         }
     });
 
+    let reaction_index = Arc::new(Mutex::new(ReactionEventIndex::default()));
+
     let redaction_events = events.clone();
+    let redaction_reaction_index = reaction_index.clone();
     client.add_event_handler(move |event: OriginalSyncRoomRedactionEvent, room: Room| {
         let events = redaction_events.clone();
+        let reaction_index = redaction_reaction_index.clone();
         async move {
             let rules = room.clone_info().room_version_rules_or_default().redaction;
+            let redacted_event_id = event.redacts(&rules).to_string();
+            let mut reaction_index = reaction_index.lock().expect("lock reaction event index");
+            if let Some(entry) = reaction_index.live.remove(redacted_event_id.as_str()) {
+                emit_event(
+                    &events,
+                    Event::RoomActivityUpdate(
+                        room_activity_update_from_indexed_reaction_redaction(
+                            room.room_id().as_str(),
+                            redacted_event_id,
+                            &event,
+                            entry,
+                        ),
+                    ),
+                );
+                return;
+            }
+
+            reaction_index
+                .pending_redactions
+                .insert(redacted_event_id.clone(), event.event_id.to_string());
             emit_event(
                 &events,
                 Event::RoomActivityUpdate(room_activity_update_from_sync_redaction(
                     room.room_id().as_str(),
                     &event,
-                    &rules,
+                    redacted_event_id,
+                )),
+            );
+        }
+    });
+
+    let reaction_events = events.clone();
+    let reaction_event_index = reaction_index.clone();
+    client.add_event_handler(move |event: OriginalSyncReactionEvent, room: Room| {
+        let events = reaction_events.clone();
+        let reaction_index = reaction_event_index.clone();
+        async move {
+            let reaction_event_id = event.event_id.to_string();
+            let mut reaction_index = reaction_index.lock().expect("lock reaction event index");
+            if reaction_index
+                .pending_redactions
+                .remove(reaction_event_id.as_str())
+                .is_some()
+            {
+                return;
+            }
+
+            reaction_index.live.insert(
+                reaction_event_id.clone(),
+                ReactionEventIndexEntry {
+                    target_event_id: event.content.relates_to.event_id.to_string(),
+                    key: event.content.relates_to.key.clone(),
+                },
+            );
+
+            emit_event(
+                &events,
+                Event::RoomActivityUpdate(room_activity_update_from_sync_reaction(
+                    room.room_id().as_str(),
+                    &event,
                 )),
             );
         }
@@ -1002,15 +1073,52 @@ fn room_activity_update_from_sync_message_replacement(
     })
 }
 
-fn room_activity_update_from_sync_redaction(
+fn room_activity_update_from_sync_reaction(
     room_id: &str,
-    event: &OriginalSyncRoomRedactionEvent,
-    rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
+    event: &OriginalSyncReactionEvent,
 ) -> RoomActivityUpdate {
     RoomActivityUpdate {
         room_id: room_id.to_owned(),
         target: RoomActivityUpdateTarget::Event {
-            event_id: event.redacts(rules).to_string(),
+            event_id: event.content.relates_to.event_id.to_string(),
+        },
+        kind: RoomActivityUpdateKind::ReactionAdded {
+            reaction_event_id: event.event_id.to_string(),
+            sender: event.sender.to_string(),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            key: event.content.relates_to.key.clone(),
+        },
+    }
+}
+
+fn room_activity_update_from_indexed_reaction_redaction(
+    room_id: &str,
+    reaction_event_id: String,
+    event: &OriginalSyncRoomRedactionEvent,
+    entry: ReactionEventIndexEntry,
+) -> RoomActivityUpdate {
+    RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: entry.target_event_id,
+        },
+        kind: RoomActivityUpdateKind::ReactionRemoved {
+            reaction_event_id,
+            redaction_event_id: event.event_id.to_string(),
+            key: entry.key,
+        },
+    }
+}
+
+fn room_activity_update_from_sync_redaction(
+    room_id: &str,
+    event: &OriginalSyncRoomRedactionEvent,
+    redacted_event_id: String,
+) -> RoomActivityUpdate {
+    RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: redacted_event_id,
         },
         kind: RoomActivityUpdateKind::ActivityRedacted {
             redaction_event_id: event.event_id.to_string(),
@@ -2056,13 +2164,15 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        LocalEchoMessageDetails, attach_thread_relation, cancelled_state,
-        direct_user_ids_by_room_from_content, fetch_room_image_media, map_cross_signing_status,
-        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
+        LocalEchoMessageDetails, ReactionEventIndex, ReactionEventIndexEntry,
+        attach_thread_relation, cancelled_state, direct_user_ids_by_room_from_content,
+        fetch_room_image_media, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
+        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string,
+        map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_activity_update_from_sync_redaction,
+        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
+        room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_image_media_request_parameters, room_list_update_is_relevant, room_members_from_parts,
         room_message_event_content, room_read_state_from_parts, room_read_update_is_relevant,
         room_tag_summaries_from_tags, room_timeline_event_from_sync_message,
@@ -2097,6 +2207,7 @@ mod tests {
                 AnyMessageLikeEventContent, ToDeviceEvent,
                 direct::DirectEventContent,
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
+                reaction::OriginalSyncReactionEvent,
                 room::MediaSource,
                 room::{
                     member::OriginalSyncRoomMemberEvent,
@@ -2809,6 +2920,198 @@ mod tests {
     }
 
     #[test]
+    fn sync_reaction_maps_to_room_activity_update() {
+        let event: OriginalSyncReactionEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.reaction",
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$original:example.org",
+                    "key": "+1"
+                }
+            },
+            "event_id": "$reaction:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001500u64
+        }))
+        .expect("deserialize sync reaction event");
+
+        assert_eq!(
+            room_activity_update_from_sync_reaction("!room:example.org", &event),
+            RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ReactionAdded {
+                    reaction_event_id: "$reaction:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_001_500,
+                    key: "+1".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn reaction_redaction_maps_to_reaction_removed_when_indexed() {
+        let reaction_event: OriginalSyncReactionEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.reaction",
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$original:example.org",
+                    "key": "heart"
+                }
+            },
+            "event_id": "$reaction:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001501u64
+        }))
+        .expect("deserialize sync reaction event");
+        let redaction_event: OriginalSyncRoomRedactionEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.redaction",
+                "content": {},
+                "redacts": "$reaction:example.org",
+                "event_id": "$redaction:example.org",
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1700000002003u64
+            }))
+            .expect("deserialize redaction event");
+
+        let mut index = ReactionEventIndex::default();
+        index.live.insert(
+            reaction_event.event_id.to_string(),
+            ReactionEventIndexEntry {
+                target_event_id: reaction_event.content.relates_to.event_id.to_string(),
+                key: reaction_event.content.relates_to.key.clone(),
+            },
+        );
+
+        let reaction_event_id = redaction_event.redacts(&RedactionRules::V1).to_string();
+        let entry = index
+            .live
+            .remove(reaction_event_id.as_str())
+            .expect("reaction indexed");
+        assert_eq!(
+            room_activity_update_from_indexed_reaction_redaction(
+                "!room:example.org",
+                reaction_event_id,
+                &redaction_event,
+                entry,
+            ),
+            RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ReactionRemoved {
+                    reaction_event_id: "$reaction:example.org".to_owned(),
+                    redaction_event_id: "$redaction:example.org".to_owned(),
+                    key: "heart".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn reaction_redaction_before_reaction_suppresses_later_add() {
+        let redaction_event: OriginalSyncRoomRedactionEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.redaction",
+                "content": {},
+                "redacts": "$reaction:example.org",
+                "event_id": "$redaction:example.org",
+                "sender": "@bob:example.org",
+                "origin_server_ts": 1700000002004u64
+            }))
+            .expect("deserialize redaction event");
+        let reaction_event: OriginalSyncReactionEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.reaction",
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$original:example.org",
+                    "key": "eyes"
+                }
+            },
+            "event_id": "$reaction:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001502u64
+        }))
+        .expect("deserialize sync reaction event");
+
+        let mut index = ReactionEventIndex::default();
+        let redacted_event_id = redaction_event.redacts(&RedactionRules::V1).to_string();
+        index
+            .pending_redactions
+            .insert(redacted_event_id, redaction_event.event_id.to_string());
+
+        let reaction_event_id = reaction_event.event_id.to_string();
+        let update = if index
+            .pending_redactions
+            .remove(reaction_event_id.as_str())
+            .is_some()
+        {
+            None
+        } else {
+            index.live.insert(
+                reaction_event_id,
+                ReactionEventIndexEntry {
+                    target_event_id: reaction_event.content.relates_to.event_id.to_string(),
+                    key: reaction_event.content.relates_to.key.clone(),
+                },
+            );
+            Some(room_activity_update_from_sync_reaction(
+                "!room:example.org",
+                &reaction_event,
+            ))
+        };
+
+        assert_eq!(update, None);
+        assert!(
+            index.live.is_empty(),
+            "suppressed reaction must not be indexed"
+        );
+        assert!(
+            index.pending_redactions.is_empty(),
+            "pending redaction tombstone must be cleared when the reaction arrives"
+        );
+    }
+
+    #[test]
+    fn unknown_redaction_still_maps_to_activity_redacted() {
+        let redaction_event: OriginalSyncRoomRedactionEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.redaction",
+                "content": {},
+                "redacts": "$unknown:example.org",
+                "event_id": "$redaction:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000002005u64
+            }))
+            .expect("deserialize redaction event");
+
+        assert_eq!(
+            room_activity_update_from_sync_redaction(
+                "!room:example.org",
+                &redaction_event,
+                redaction_event.redacts(&RedactionRules::V1).to_string(),
+            ),
+            RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$unknown:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ActivityRedacted {
+                    redaction_event_id: "$redaction:example.org".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
     fn legacy_redaction_maps_to_room_activity_update() {
         let event: OriginalSyncRoomRedactionEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.redaction",
@@ -2824,7 +3127,7 @@ mod tests {
             room_activity_update_from_sync_redaction(
                 "!room:example.org",
                 &event,
-                &RedactionRules::V1
+                event.redacts(&RedactionRules::V1).to_string(),
             ),
             RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
@@ -2855,7 +3158,7 @@ mod tests {
             room_activity_update_from_sync_redaction(
                 "!room:example.org",
                 &event,
-                &RedactionRules::V11
+                event.redacts(&RedactionRules::V11).to_string(),
             ),
             RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
@@ -2922,7 +3225,7 @@ mod tests {
             room_activity_update_from_sync_redaction(
                 "!room:example.org",
                 &redaction_event,
-                &RedactionRules::V1
+                redaction_event.redacts(&RedactionRules::V1).to_string(),
             ),
             RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),

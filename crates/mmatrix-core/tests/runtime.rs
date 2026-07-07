@@ -1101,6 +1101,29 @@ fn room_activity_events_round_trip_through_serde() {
             redaction_event_id: "$redaction:example.org".to_owned(),
         },
     });
+    let reaction_added_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionAdded {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            timestamp_ms: 1_700_000_001_500,
+            key: "+1".to_owned(),
+        },
+    });
+    let reaction_removed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionRemoved {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            redaction_event_id: "$redaction:example.org".to_owned(),
+            key: "+1".to_owned(),
+        },
+    });
 
     for event in [
         message_event,
@@ -1114,6 +1137,8 @@ fn room_activity_events_round_trip_through_serde() {
         sent_update_event,
         failed_update_event,
         redacted_update_event,
+        reaction_added_update_event,
+        reaction_removed_update_event,
     ] {
         let json = serde_json::to_string(&event).expect("serialize room activity event");
         let restored: Event = serde_json::from_str(&json).expect("deserialize room activity event");
@@ -1228,6 +1253,29 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             redaction_event_id: "$redaction:example.org".to_owned(),
         },
     });
+    let reaction_added_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionAdded {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            timestamp_ms: 1_700_000_001_500,
+            key: "+1".to_owned(),
+        },
+    });
+    let reaction_removed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionRemoved {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            redaction_event_id: "$redaction:example.org".to_owned(),
+            key: "+1".to_owned(),
+        },
+    });
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
@@ -1263,6 +1311,16 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         serde_json::to_string(&redacted_update_event)
             .expect("serialize redacted room activity update"),
         r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"activity_redacted","redaction_event_id":"$redaction:example.org"}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&reaction_added_update_event)
+            .expect("serialize reaction added room activity update"),
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000001500,"key":"+1"}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&reaction_removed_update_event)
+            .expect("serialize reaction removed room activity update"),
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1"}}}"#
     );
 }
 
@@ -1308,6 +1366,58 @@ fn activity_redacted_update_round_trips_through_json() {
 }
 
 #[test]
+fn reaction_added_update_round_trips_through_json() {
+    let update = RoomActivityUpdateKind::ReactionAdded {
+        reaction_event_id: "$reaction:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        timestamp_ms: 1_700_000_001_500,
+        key: "+1".to_owned(),
+    };
+    let json = serde_json::json!({
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction:example.org",
+        "sender": "@alice:example.org",
+        "timestamp_ms": 1700000001500u64,
+        "key": "+1",
+    });
+
+    assert_eq!(
+        serde_json::to_value(&update).expect("serialize reaction added update"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdateKind>(json)
+            .expect("deserialize reaction added update"),
+        update
+    );
+}
+
+#[test]
+fn reaction_removed_update_round_trips_through_json() {
+    let update = RoomActivityUpdateKind::ReactionRemoved {
+        reaction_event_id: "$reaction:example.org".to_owned(),
+        redaction_event_id: "$redaction:example.org".to_owned(),
+        key: "+1".to_owned(),
+    };
+    let json = serde_json::json!({
+        "type": "reaction_removed",
+        "reaction_event_id": "$reaction:example.org",
+        "redaction_event_id": "$redaction:example.org",
+        "key": "+1",
+    });
+
+    assert_eq!(
+        serde_json::to_value(&update).expect("serialize reaction removed update"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdateKind>(json)
+            .expect("deserialize reaction removed update"),
+        update
+    );
+}
+
+#[test]
 fn redacted_room_activity_rejects_missing_or_extra_fields() {
     assert!(
         serde_json::from_str::<RoomRedactedActivity>(r#"{}"#).is_err(),
@@ -1334,6 +1444,42 @@ fn activity_redacted_update_rejects_missing_or_extra_fields() {
         )
         .is_err(),
         "activity redacted update must reject unknown fields"
+    );
+}
+
+#[test]
+fn reaction_added_update_rejects_missing_or_extra_fields() {
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","key":"+1"}"#
+        )
+        .is_err(),
+        "reaction added update must require timestamp_ms"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000001500,"key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "reaction added update must reject unknown fields"
+    );
+}
+
+#[test]
+fn reaction_removed_update_rejects_missing_or_extra_fields() {
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org"}"#
+        )
+        .is_err(),
+        "reaction removed update must require key"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "reaction removed update must reject unknown fields"
     );
 }
 
@@ -1878,6 +2024,20 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "message replaced room activity update must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000001500,"key":"+1","unexpected":"value"}}}"#
+        )
+        .is_err(),
+        "reaction added room activity update must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1","unexpected":"value"}}}"#
+        )
+        .is_err(),
+        "reaction removed room activity update must reject unknown fields"
     );
 
     assert!(

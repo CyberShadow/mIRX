@@ -438,6 +438,17 @@ pub enum RoomActivityUpdateKind {
         presentation: RoomMessagePresentationKind,
         body: String,
     },
+    ReactionAdded {
+        reaction_event_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        key: String,
+    },
+    ReactionRemoved {
+        reaction_event_id: String,
+        redaction_event_id: String,
+        key: String,
+    },
     ActivityRedacted {
         redaction_event_id: String,
     },
