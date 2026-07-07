@@ -1132,6 +1132,9 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::StateNotice(notice) => {
             DumpRoomActivityKind::StateNotice(dump_room_state_notice_activity_from_core(notice))
         }
+        RoomActivityKind::Redacted(_) => {
+            unreachable!("redacted automation dumps are not implemented in this unit")
+        }
     }
 }
 

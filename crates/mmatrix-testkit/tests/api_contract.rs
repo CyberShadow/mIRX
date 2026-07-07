@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event as CoreEvent, FetchRoomImageMediaRequest as CoreFetchRoomImageMediaRequest,
+    RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityUpdate as CoreRoomActivityUpdate,
     RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
     RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget, RoomImageMedia as CoreRoomImageMedia,
@@ -1324,11 +1325,38 @@ fn room_activity_redacted_round_trips_through_json() {
 
     assert_eq!(
         serde_json::to_value(&activity).expect("serialize redacted activity"),
-        json
+        json.clone()
     );
     assert_eq!(
-        serde_json::from_value::<RoomActivity>(json).expect("deserialize redacted activity"),
+        serde_json::from_value::<RoomActivity>(json.clone())
+            .expect("deserialize redacted activity"),
         activity
+    );
+    assert_eq!(
+        serde_json::to_value(CoreRoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$redacted:example.org".to_owned(),
+            timestamp_ms: 1_710_000_060_000,
+            relation: None,
+            kind: CoreRoomActivityKind::Redacted(mmatrix_core::RoomRedactedActivity {
+                event_id: "$redacted:example.org".to_owned(),
+            }),
+        })
+        .expect("serialize core redacted activity"),
+        json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomActivity>(json)
+            .expect("deserialize core redacted activity"),
+        CoreRoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$redacted:example.org".to_owned(),
+            timestamp_ms: 1_710_000_060_000,
+            relation: None,
+            kind: CoreRoomActivityKind::Redacted(mmatrix_core::RoomRedactedActivity {
+                event_id: "$redacted:example.org".to_owned(),
+            }),
+        }
     );
 }
 
@@ -1641,6 +1669,32 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             },
         }
     );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomActivityUpdate>(redacted_json.clone())
+            .expect("deserialize redacted update as core"),
+        CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::ActivityRedacted {
+                redaction_event_id: "$redaction:example.org".to_owned(),
+            },
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::ActivityRedacted {
+                redaction_event_id: "$redaction:example.org".to_owned(),
+            },
+        })
+        .expect("serialize redacted update as core"),
+        redacted_json.clone()
+    );
 
     assert_eq!(
         serde_json::from_value::<RoomActivityUpdate>(sent_json).expect("deserialize sent update"),
@@ -1670,6 +1724,11 @@ fn room_activity_redaction_contract_shapes_reject_invalid_payloads() {
         "activity redacted kind must require redaction_event_id"
     );
     assert!(
+        serde_json::from_str::<CoreRoomActivityUpdateKind>(r#"{"type":"activity_redacted"}"#)
+            .is_err(),
+        "core activity redacted kind must require redaction_event_id"
+    );
+    assert!(
         serde_json::from_str::<RoomActivityUpdateKind>(
             r#"{"type":"activity_redacted","redaction_event_id":"$redaction:example.org","unexpected":"value"}"#
         )
@@ -1677,8 +1736,19 @@ fn room_activity_redaction_contract_shapes_reject_invalid_payloads() {
         "activity redacted kind must reject unknown fields"
     );
     assert!(
+        serde_json::from_str::<CoreRoomActivityUpdateKind>(
+            r#"{"type":"activity_redacted","redaction_event_id":"$redaction:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "core activity redacted kind must reject unknown fields"
+    );
+    assert!(
         serde_json::from_str::<RoomActivityKind>(r#"{"type":"redacted"}"#).is_err(),
         "redacted activity must require event_id"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomActivityKind>(r#"{"type":"redacted"}"#).is_err(),
+        "core redacted activity must require event_id"
     );
     assert!(
         serde_json::from_str::<RoomActivityKind>(
@@ -1686,6 +1756,13 @@ fn room_activity_redaction_contract_shapes_reject_invalid_payloads() {
         )
         .is_err(),
         "redacted activity must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomActivityKind>(
+            r#"{"type":"redacted","event_id":"$redacted:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "core redacted activity must reject unknown fields"
     );
 }
 
