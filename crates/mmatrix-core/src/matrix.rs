@@ -22,8 +22,8 @@ use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::Receipts,
     ruma::{
-        EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedUserId, RoomId,
-        RoomOrAliasId, UInt, UserId,
+        EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
+        RoomId, RoomOrAliasId, UInt, UserId,
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
             AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
@@ -31,8 +31,8 @@ use matrix_sdk::{
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
-            reaction::OriginalSyncReactionEvent,
-            relation::Thread,
+            reaction::{OriginalSyncReactionEvent, ReactionEventContent},
+            relation::{Annotation, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
@@ -59,16 +59,16 @@ use tokio::task::JoinHandle;
 use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactReactionRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
+    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -800,6 +800,20 @@ struct ReactionEventIndexEntry {
     target_event_id: String,
     key: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingOutgoingKind {
+    Message,
+    Reaction {
+        target_event_id: String,
+        key: String,
+    },
+    Redaction {
+        redacts: String,
+    },
+}
+
+type PendingOutgoingRegistry = Arc<Mutex<BTreeMap<String, PendingOutgoingKind>>>;
 
 pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     let direct_account_data_events = events.clone();
@@ -1803,9 +1817,10 @@ pub(crate) fn start_send_queue_update_task(
     events: EventSender,
 ) -> JoinHandle<()> {
     let mut updates = client.send_queue().subscribe();
+    let pending = Arc::new(Mutex::new(BTreeMap::new()));
 
     tokio::task::spawn_local(async move {
-        match hydrate_send_queue_local_echoes(&client, &current_user_id).await {
+        match hydrate_send_queue_local_echoes(&client, &current_user_id, &pending).await {
             Ok(initial_events) => {
                 for event in initial_events {
                     emit_event(&events, event);
@@ -1822,7 +1837,7 @@ pub(crate) fn start_send_queue_update_task(
 
         loop {
             match updates.recv().await {
-                Ok(update) => match map_send_queue_update(update, &current_user_id) {
+                Ok(update) => match map_send_queue_update(update, &current_user_id, &pending) {
                     Ok(mapped_events) => {
                         for event in mapped_events {
                             emit_event(&events, event);
@@ -1852,50 +1867,75 @@ pub(crate) fn start_send_queue_update_task(
 fn map_send_queue_update(
     update: SendQueueUpdate,
     current_user_id: &str,
+    pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
     let room_id = update.room_id.to_string();
 
     match update.update {
         RoomSendQueueUpdate::NewLocalEvent(local_echo) => {
-            map_local_echo(room_id, local_echo, current_user_id)
+            map_local_echo(room_id, local_echo, current_user_id, pending)
         }
         RoomSendQueueUpdate::SentEvent {
             transaction_id,
             event_id,
-        } => Ok(vec![Event::RoomActivityUpdate(RoomActivityUpdate {
-            room_id,
-            target: RoomActivityUpdateTarget::Transaction {
-                transaction_id: transaction_id.to_string(),
-            },
-            kind: RoomActivityUpdateKind::MessageSent {
-                event_id: event_id.to_string(),
-            },
-        })]),
+        } => {
+            let transaction_id = transaction_id.to_string();
+            Ok(match take_pending_outgoing_kind(pending, &transaction_id) {
+                Some(PendingOutgoingKind::Message) => {
+                    vec![Event::RoomActivityUpdate(RoomActivityUpdate {
+                        room_id,
+                        target: RoomActivityUpdateTarget::Transaction { transaction_id },
+                        kind: RoomActivityUpdateKind::MessageSent {
+                            event_id: event_id.to_string(),
+                        },
+                    })]
+                }
+                Some(PendingOutgoingKind::Reaction { .. })
+                | Some(PendingOutgoingKind::Redaction { .. })
+                | None => Vec::new(),
+            })
+        }
         RoomSendQueueUpdate::SendError {
             transaction_id,
             error,
             is_recoverable,
         } => {
+            let transaction_id = transaction_id.to_string();
             let message = error.to_string();
-            Ok(vec![
-                Event::RoomActivityUpdate(RoomActivityUpdate {
-                    room_id,
-                    target: RoomActivityUpdateTarget::Transaction {
-                        transaction_id: transaction_id.to_string(),
-                    },
-                    kind: RoomActivityUpdateKind::MessageFailed {
-                        message: message.clone(),
-                        recoverable: is_recoverable,
-                    },
-                }),
-                Event::Error(CoreErrorEvent {
+            Ok(match take_pending_outgoing_kind(pending, &transaction_id) {
+                Some(PendingOutgoingKind::Message) => vec![
+                    Event::RoomActivityUpdate(RoomActivityUpdate {
+                        room_id,
+                        target: RoomActivityUpdateTarget::Transaction { transaction_id },
+                        kind: RoomActivityUpdateKind::MessageFailed {
+                            message: message.clone(),
+                            recoverable: is_recoverable,
+                        },
+                    }),
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::SendMessage,
+                        message,
+                    }),
+                ],
+                Some(PendingOutgoingKind::Reaction { .. }) => vec![Event::Error(CoreErrorEvent {
+                    operation: Operation::SendReaction,
+                    message,
+                })],
+                Some(PendingOutgoingKind::Redaction { .. }) => vec![Event::Error(CoreErrorEvent {
+                    operation: Operation::RedactReaction,
+                    message,
+                })],
+                None => vec![Event::Error(CoreErrorEvent {
                     operation: Operation::SendMessage,
                     message,
-                }),
-            ])
+                })],
+            })
         }
-        RoomSendQueueUpdate::CancelledLocalEvent { .. }
-        | RoomSendQueueUpdate::ReplacedLocalEvent { .. }
+        RoomSendQueueUpdate::CancelledLocalEvent { transaction_id } => {
+            take_pending_outgoing_kind(pending, &transaction_id.to_string());
+            Ok(Vec::new())
+        }
+        RoomSendQueueUpdate::ReplacedLocalEvent { .. }
         | RoomSendQueueUpdate::RetryEvent { .. }
         | RoomSendQueueUpdate::MediaUpload { .. } => Ok(Vec::new()),
     }
@@ -1904,6 +1944,7 @@ fn map_send_queue_update(
 async fn hydrate_send_queue_local_echoes(
     client: &Client,
     current_user_id: &str,
+    pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
     let local_echoes = client.send_queue().local_echoes().await.map_err(|err| {
         MatrixCoreError::new(format!("failed to load Matrix local echoes: {err}"))
@@ -1916,6 +1957,7 @@ async fn hydrate_send_queue_local_echoes(
                 room_id.to_string(),
                 local_echo,
                 current_user_id,
+                pending,
             )?);
         }
     }
@@ -1927,25 +1969,59 @@ fn map_local_echo(
     room_id: String,
     local_echo: LocalEcho,
     current_user_id: &str,
+    pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
     let transaction_id = local_echo.transaction_id.to_string();
-    let LocalEchoContent::Event {
-        serialized_event,
-        send_handle,
-        send_error,
-    } = local_echo.content
-    else {
-        return Ok(Vec::new());
-    };
+    match local_echo.content {
+        LocalEchoContent::Event {
+            serialized_event,
+            send_handle,
+            send_error,
+        } => outgoing_events_from_local_echo_event(
+            room_id,
+            transaction_id,
+            current_user_id,
+            send_handle.created_at,
+            &serialized_event,
+            send_error.as_ref().map(ToString::to_string),
+            pending,
+        ),
+        LocalEchoContent::React {
+            key, applies_to, ..
+        } => {
+            insert_pending_outgoing_kind(
+                pending,
+                transaction_id,
+                PendingOutgoingKind::Reaction {
+                    target_event_id: applies_to.to_string(),
+                    key,
+                },
+            );
+            Ok(Vec::new())
+        }
+        LocalEchoContent::Redaction {
+            redacts,
+            send_error,
+            ..
+        } => {
+            insert_pending_outgoing_kind(
+                pending,
+                transaction_id,
+                PendingOutgoingKind::Redaction {
+                    redacts: redacts.to_string(),
+                },
+            );
 
-    outgoing_events_from_local_echo_event(
-        room_id,
-        transaction_id,
-        current_user_id,
-        send_handle.created_at,
-        &serialized_event,
-        send_error.as_ref().map(ToString::to_string),
-    )
+            let mut events = Vec::new();
+            if let Some(send_error) = send_error {
+                events.push(Event::Error(CoreErrorEvent {
+                    operation: Operation::RedactReaction,
+                    message: send_error.to_string(),
+                }));
+            }
+            Ok(events)
+        }
+    }
 }
 
 fn outgoing_events_from_local_echo_event(
@@ -1955,35 +2031,85 @@ fn outgoing_events_from_local_echo_event(
     created_at: MilliSecondsSinceUnixEpoch,
     serialized_event: &SerializableEventContent,
     send_error: Option<String>,
+    pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
-    let Some(activity) = map_local_message_activity(
+    if let Some(activity) = map_local_message_activity(
         room_id.clone(),
         transaction_id.clone(),
         current_user_id,
         created_at,
         serialized_event,
-    )?
+    )? {
+        insert_pending_outgoing_kind(
+            pending,
+            transaction_id.clone(),
+            PendingOutgoingKind::Message,
+        );
+
+        let mut events = vec![Event::RoomActivity(Box::new(activity))];
+        if let Some(send_error) = send_error {
+            events.push(Event::RoomActivityUpdate(RoomActivityUpdate {
+                room_id,
+                target: RoomActivityUpdateTarget::Transaction { transaction_id },
+                kind: RoomActivityUpdateKind::MessageFailed {
+                    message: send_error.clone(),
+                    recoverable: false,
+                },
+            }));
+            events.push(Event::Error(CoreErrorEvent {
+                operation: Operation::SendMessage,
+                message: send_error,
+            }));
+        }
+
+        return Ok(events);
+    }
+
+    let Some((target_event_id, key)) =
+        reaction_target_and_key_from_serialized_event(serialized_event)?
     else {
         return Ok(Vec::new());
     };
 
-    let mut events = vec![Event::RoomActivity(Box::new(activity))];
+    insert_pending_outgoing_kind(
+        pending,
+        transaction_id,
+        PendingOutgoingKind::Reaction {
+            target_event_id,
+            key,
+        },
+    );
+
+    let mut events = Vec::new();
     if let Some(send_error) = send_error {
-        events.push(Event::RoomActivityUpdate(RoomActivityUpdate {
-            room_id,
-            target: RoomActivityUpdateTarget::Transaction { transaction_id },
-            kind: RoomActivityUpdateKind::MessageFailed {
-                message: send_error.clone(),
-                recoverable: false,
-            },
-        }));
         events.push(Event::Error(CoreErrorEvent {
-            operation: Operation::SendMessage,
+            operation: Operation::SendReaction,
             message: send_error,
         }));
     }
 
     Ok(events)
+}
+
+fn insert_pending_outgoing_kind(
+    pending: &PendingOutgoingRegistry,
+    transaction_id: String,
+    kind: PendingOutgoingKind,
+) {
+    pending
+        .lock()
+        .expect("lock pending outgoing registry")
+        .insert(transaction_id, kind);
+}
+
+fn take_pending_outgoing_kind(
+    pending: &PendingOutgoingRegistry,
+    transaction_id: &str,
+) -> Option<PendingOutgoingKind> {
+    pending
+        .lock()
+        .expect("lock pending outgoing registry")
+        .remove(transaction_id)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2060,6 +2186,22 @@ fn message_presentation_and_body_from_serialized_event(
     }))
 }
 
+fn reaction_target_and_key_from_serialized_event(
+    serialized_event: &SerializableEventContent,
+) -> Result<Option<(String, String)>, MatrixCoreError> {
+    let AnyMessageLikeEventContent::Reaction(content) = serialized_event
+        .deserialize()
+        .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some((
+        content.relates_to.event_id.to_string(),
+        content.relates_to.key,
+    )))
+}
+
 fn room_message_event_content(
     presentation: RoomMessagePresentationKind,
     body: String,
@@ -2090,17 +2232,39 @@ fn attach_thread_relation(
     Ok(())
 }
 
+fn joined_room_by_id(client: &Client, room_id: &str) -> Result<Room, MatrixCoreError> {
+    client
+        .joined_rooms()
+        .into_iter()
+        .find(|room| room.room_id().as_str() == room_id)
+        .ok_or_else(|| MatrixCoreError::new(format!("joined room not found: {room_id}")))
+}
+
+fn reaction_event_content(
+    target_event_id: String,
+    key: String,
+) -> Result<ReactionEventContent, MatrixCoreError> {
+    let target_event_id = <&EventId>::try_from(target_event_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
+        .to_owned();
+
+    Ok(ReactionEventContent::new(Annotation::new(
+        target_event_id,
+        key,
+    )))
+}
+
+fn owned_event_id_from_str(event_id: &str) -> Result<OwnedEventId, MatrixCoreError> {
+    <&EventId>::try_from(event_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))
+        .map(|event_id| event_id.to_owned())
+}
+
 pub(crate) async fn send_message(
     client: &Client,
     request: SendMessageRequest,
 ) -> Result<(), MatrixCoreError> {
-    let room = client
-        .joined_rooms()
-        .into_iter()
-        .find(|room| room.room_id().as_str() == request.room_id)
-        .ok_or_else(|| {
-            MatrixCoreError::new(format!("joined room not found: {}", request.room_id))
-        })?;
+    let room = joined_room_by_id(client, &request.room_id)?;
 
     let mut content = room_message_event_content(request.presentation, request.body);
     if let Some(thread) = request.thread {
@@ -2111,6 +2275,36 @@ pub(crate) async fn send_message(
         .send(AnyMessageLikeEventContent::RoomMessage(content))
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn send_reaction(
+    client: &Client,
+    request: SendReactionRequest,
+) -> Result<(), MatrixCoreError> {
+    let room = joined_room_by_id(client, &request.room_id)?;
+    let content = reaction_event_content(request.target_event_id, request.key)?;
+
+    room.send_queue()
+        .send(AnyMessageLikeEventContent::Reaction(content))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix reaction: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn redact_reaction(
+    client: &Client,
+    request: RedactReactionRequest,
+) -> Result<(), MatrixCoreError> {
+    let room = joined_room_by_id(client, &request.room_id)?;
+    let reaction_event_id = owned_event_id_from_str(&request.reaction_event_id)?;
+
+    room.send_queue()
+        .redact(reaction_event_id, None)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to redact Matrix reaction: {err}")))?;
 
     Ok(())
 }
@@ -2161,15 +2355,16 @@ pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> Stor
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use super::{
-        LocalEchoMessageDetails, ReactionEventIndex, ReactionEventIndexEntry,
-        attach_thread_relation, cancelled_state, direct_user_ids_by_room_from_content,
-        fetch_room_image_media, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
-        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string,
-        map_local_message_activity, map_send_queue_update,
-        message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
+        LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
+        ReactionEventIndexEntry, attach_thread_relation, cancelled_state,
+        direct_user_ids_by_room_from_content, fetch_room_image_media, insert_pending_outgoing_kind,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_message_activity,
+        map_send_queue_update, message_presentation_and_body_from_serialized_event,
+        outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
@@ -2235,6 +2430,10 @@ mod tests {
 
     fn transaction_id() -> OwnedTransactionId {
         "txn-1".into()
+    }
+
+    fn pending_outgoing_registry() -> PendingOutgoingRegistry {
+        Arc::new(Mutex::new(BTreeMap::new()))
     }
 
     fn event_id() -> OwnedEventId {
@@ -4348,6 +4547,8 @@ mod tests {
 
     #[test]
     fn send_queue_sent_update_maps_to_room_activity_update() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(&pending, "txn-1".to_owned(), PendingOutgoingKind::Message);
         let events = map_send_queue_update(
             SendQueueUpdate {
                 room_id: room_id(),
@@ -4357,6 +4558,7 @@ mod tests {
                 },
             },
             "@alice:example.org",
+            &pending,
         )
         .expect("map sent update");
 
@@ -4375,8 +4577,95 @@ mod tests {
     }
 
     #[test]
+    fn reaction_send_queue_sent_update_emits_no_message_sent() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(
+            &pending,
+            "txn-1".to_owned(),
+            PendingOutgoingKind::Reaction {
+                target_event_id: "$target:example.org".to_owned(),
+                key: "+1".to_owned(),
+            },
+        );
+
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SentEvent {
+                    transaction_id: transaction_id(),
+                    event_id: event_id(),
+                },
+            },
+            "@alice:example.org",
+            &pending,
+        )
+        .expect("map reaction sent update");
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn redaction_send_queue_sent_update_emits_no_message_sent() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(
+            &pending,
+            "txn-1".to_owned(),
+            PendingOutgoingKind::Redaction {
+                redacts: "$reaction:example.org".to_owned(),
+            },
+        );
+
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SentEvent {
+                    transaction_id: transaction_id(),
+                    event_id: event_id(),
+                },
+            },
+            "@alice:example.org",
+            &pending,
+        )
+        .expect("map redaction sent update");
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn restored_reaction_local_echo_registers_pending_reaction_without_room_activity() {
+        let pending = pending_outgoing_registry();
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::Reaction(
+                reaction_event_content("$target:example.org".to_owned(), "+1".to_owned())
+                    .expect("build reaction content"),
+            ))
+            .expect("serialize reaction event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            MilliSecondsSinceUnixEpoch::now(),
+            &serialized_event,
+            None,
+            &pending,
+        )
+        .expect("map restored reaction local echo");
+
+        assert!(events.is_empty());
+        assert_eq!(
+            pending.lock().expect("lock pending registry").get("txn-1"),
+            Some(&PendingOutgoingKind::Reaction {
+                target_event_id: "$target:example.org".to_owned(),
+                key: "+1".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn restored_local_echo_hydrates_to_pending_room_activity() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
+        let pending = pending_outgoing_registry();
         let serialized_event = SerializableEventContent::new(
             &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
         )
@@ -4389,6 +4678,7 @@ mod tests {
             created_at,
             &serialized_event,
             None,
+            &pending,
         )
         .expect("map restored local echo");
 
@@ -4414,6 +4704,7 @@ mod tests {
     #[test]
     fn restored_threaded_local_echo_hydrates_to_pending_room_activity() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
+        let pending = pending_outgoing_registry();
         let mut content = RoomMessageEventContent::text_plain("hello from thread");
         attach_thread_relation(
             &mut content,
@@ -4434,6 +4725,7 @@ mod tests {
             created_at,
             &serialized_event,
             None,
+            &pending,
         )
         .expect("map restored local echo");
 
@@ -4463,6 +4755,7 @@ mod tests {
     #[test]
     fn restored_failed_local_echo_re_emits_error_surface() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
+        let pending = pending_outgoing_registry();
         let serialized_event = SerializableEventContent::new(
             &AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain("hello")),
         )
@@ -4475,6 +4768,7 @@ mod tests {
             created_at,
             &serialized_event,
             Some("Other unrecoverable error: wedged".to_owned()),
+            &pending,
         )
         .expect("map restored failed local echo");
 
@@ -4515,6 +4809,8 @@ mod tests {
 
     #[test]
     fn send_queue_error_maps_to_failed_activity_update_and_error_surface() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(&pending, "txn-1".to_owned(), PendingOutgoingKind::Message);
         let events = map_send_queue_update(
             SendQueueUpdate {
                 room_id: room_id(),
@@ -4527,6 +4823,7 @@ mod tests {
                 },
             },
             "@alice:example.org",
+            &pending,
         )
         .expect("map send error");
 
@@ -4552,6 +4849,79 @@ mod tests {
     }
 
     #[test]
+    fn reaction_send_queue_error_emits_typed_error_only() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(
+            &pending,
+            "txn-1".to_owned(),
+            PendingOutgoingKind::Reaction {
+                target_event_id: "$target:example.org".to_owned(),
+                key: "+1".to_owned(),
+            },
+        );
+
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SendError {
+                    transaction_id: transaction_id(),
+                    error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
+                        "reaction send failed",
+                    ))),
+                    is_recoverable: true,
+                },
+            },
+            "@alice:example.org",
+            &pending,
+        )
+        .expect("map reaction send error");
+
+        assert_eq!(
+            events,
+            vec![Event::Error(CoreErrorEvent {
+                operation: Operation::SendReaction,
+                message: "reaction send failed".to_owned(),
+            })]
+        );
+    }
+
+    #[test]
+    fn redaction_send_queue_error_emits_typed_error_only() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(
+            &pending,
+            "txn-1".to_owned(),
+            PendingOutgoingKind::Redaction {
+                redacts: "$reaction:example.org".to_owned(),
+            },
+        );
+
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SendError {
+                    transaction_id: transaction_id(),
+                    error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
+                        "redaction send failed",
+                    ))),
+                    is_recoverable: true,
+                },
+            },
+            "@alice:example.org",
+            &pending,
+        )
+        .expect("map redaction send error");
+
+        assert_eq!(
+            events,
+            vec![Event::Error(CoreErrorEvent {
+                operation: Operation::RedactReaction,
+                message: "redaction send failed".to_owned(),
+            })]
+        );
+    }
+
+    #[test]
     fn room_message_event_content_serializes_expected_msgtypes() {
         let text = serde_json::to_value(room_message_event_content(
             RoomMessagePresentationKind::Text,
@@ -4572,6 +4942,39 @@ mod tests {
         assert_eq!(text["msgtype"], "m.text");
         assert_eq!(notice["msgtype"], "m.notice");
         assert_eq!(emote["msgtype"], "m.emote");
+    }
+
+    #[test]
+    fn reaction_event_content_serializes_annotation_relation() {
+        let content = reaction_event_content("$target:example.org".to_owned(), "+1".to_owned())
+            .expect("build reaction content");
+
+        assert_eq!(
+            serde_json::to_value(content).expect("serialize reaction content"),
+            serde_json::json!({
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$target:example.org",
+                    "key": "+1",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn reaction_event_content_rejects_invalid_target_event_id() {
+        let err = reaction_event_content("not-an-event-id".to_owned(), "+1".to_owned())
+            .expect_err("reject invalid target event id");
+
+        assert!(err.to_string().contains("invalid Matrix event id"));
+    }
+
+    #[test]
+    fn owned_event_id_from_str_rejects_invalid_reaction_event_id() {
+        let err =
+            owned_event_id_from_str("not-an-event-id").expect_err("reject invalid reaction id");
+
+        assert!(err.to_string().contains("invalid Matrix event id"));
     }
 
     #[test]
