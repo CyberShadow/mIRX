@@ -454,6 +454,62 @@ configure_case_expectations() {
         --expect-no-navigation-text 'root msg draft'
       )
       ;;
+    redactions)
+      expect_selected='!redactions:example'
+      expect_active_view='room:!redactions:example'
+      append_events_path="$root_dir/tests/ui-state-updates/redactions.json"
+      select_views=('thread:!redactions:example|$redact-thread-root' 'room:!redactions:example')
+      room_expect_args=(
+        --expect-room '!redactions:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!redactions:example::"type":"redacted"'
+        --expect-room-activity '!redactions:example::$redact-text'
+        --expect-room-activity '!redactions:example::$redact-edited'
+        --expect-room-activity '!redactions:example::$redact-image'
+        --expect-room-activity '!redactions:example::$redact-unsupported'
+        --expect-room-activity '!redactions:example::$redact-thread-root'
+        --expect-room-activity '!redactions:example::$redact-thread-reply'
+        --expect-room-activity '!redactions:example::$redact-topic-notice'
+        --expect-room-activity '!redactions:example::"type":"thread"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!redactions:example::Room: Redactions (!redactions:example)'
+        --expect-room-view '!redactions:example::message redacted'
+      )
+      view_expect_args=(
+        --expect-view 'thread:!redactions:example|$redact-thread-root::message redacted'
+      )
+      view_forbid_args=(
+        --expect-no-view 'room:!redactions:example::redaction text payload should disappear'
+        --expect-no-view 'room:!redactions:example::redaction edited original should disappear'
+        --expect-no-view 'room:!redactions:example::redaction edited replacement should disappear'
+        --expect-no-view 'room:!redactions:example::redaction-image-body.png'
+        --expect-no-view 'room:!redactions:example::redaction-image-file.png'
+        --expect-no-view 'room:!redactions:example::mxc://example.org/redaction-image-source'
+        --expect-no-view 'room:!redactions:example::loading image...'
+        --expect-no-view 'room:!redactions:example::image unavailable'
+        --expect-no-view 'room:!redactions:example::redaction unsupported payload should disappear'
+        --expect-no-view 'room:!redactions:example::redaction thread root payload should disappear'
+        --expect-no-view 'room:!redactions:example::redaction thread reply payload should disappear'
+        --expect-no-view 'room:!redactions:example::@grace:example set topic: redaction topic should disappear'
+        --expect-no-view 'thread:!redactions:example|$redact-thread-root::redaction thread root payload should disappear'
+        --expect-no-view 'thread:!redactions:example|$redact-thread-root::redaction thread reply payload should disappear'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!redactions:example::Redactions'
+        --expect-switchbar-item 'thread:!redactions:example|$redact-thread-root::Message redacted'
+      )
+      expect_switchbar_active='room:!redactions:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'Redactions'
+        --expect-navigation-text 'Message redacted'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'redaction thread root payload should disappear'
+      )
+      ;;
     verification-error)
       expect_selected='!verify:example'
       expect_active_view='room:!verify:example'
