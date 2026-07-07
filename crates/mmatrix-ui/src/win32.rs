@@ -9180,6 +9180,8 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::LeaveRoom => "leave room",
         Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
+        Operation::SendReaction => "send reaction",
+        Operation::RedactReaction => "redact reaction",
         Operation::MarkRoomRead => "mark room read",
         Operation::FetchRoomImageMedia => "fetch room image media",
         Operation::RoomList => "room list",
