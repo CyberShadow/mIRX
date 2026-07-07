@@ -463,14 +463,13 @@ configure_case_expectations() {
         --expect-room '!redactions:example'
       )
       room_activity_expect_args=(
-        --expect-room-activity '!redactions:example::"type":"redacted"'
-        --expect-room-activity '!redactions:example::$redact-text'
-        --expect-room-activity '!redactions:example::$redact-edited'
-        --expect-room-activity '!redactions:example::$redact-image'
-        --expect-room-activity '!redactions:example::$redact-unsupported'
-        --expect-room-activity '!redactions:example::$redact-thread-root'
-        --expect-room-activity '!redactions:example::$redact-thread-reply'
-        --expect-room-activity '!redactions:example::$redact-topic-notice'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-text"'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-edited"'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-image"'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-unsupported"'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-thread-root"'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-thread-reply"'
+        --expect-room-activity '!redactions:example::"type":"redacted","event_id":"$redact-topic-notice"'
         --expect-room-activity '!redactions:example::"type":"thread"'
       )
       room_view_expect_args=(
