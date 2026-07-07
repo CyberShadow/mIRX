@@ -19,14 +19,15 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event,
     FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
-    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
-    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactReactionRequest,
+    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -2033,15 +2034,36 @@ enum ComposeSubmission<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalSlashCommand<'a> {
     Status,
-    Window { target: &'a str },
-    Join { target: String },
-    Query { user_id: String },
-    Part { target: Option<String> },
-    Topic { topic: String },
+    Window {
+        target: &'a str,
+    },
+    Join {
+        target: String,
+    },
+    Query {
+        user_id: String,
+    },
+    Part {
+        target: Option<String>,
+    },
+    React {
+        target_event_id: String,
+        key: String,
+    },
+    Unreact {
+        reaction_event_id: String,
+    },
+    Topic {
+        topic: String,
+    },
     Clear,
     E2ee(E2eeSlashCommand),
-    Verify { action: VerificationAction },
-    Invalid { feedback: String },
+    Verify {
+        action: VerificationAction,
+    },
+    Invalid {
+        feedback: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7955,6 +7977,8 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "part" => LocalSlashCommand::Part {
             target: Some(argument.to_owned()),
         },
+        "react" => parse_react_slash_command(argument),
+        "unreact" => parse_unreact_slash_command(argument),
         "topic" if !argument.is_empty() => LocalSlashCommand::Topic {
             topic: argument.to_owned(),
         },
@@ -7993,6 +8017,36 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         _ => LocalSlashCommand::Invalid {
             feedback: format!("unknown command: {}", &input[..command_end]),
         },
+    }
+}
+
+fn parse_react_slash_command(argument: &str) -> LocalSlashCommand<'_> {
+    let Some(target_end) = argument.bytes().position(|byte| byte.is_ascii_whitespace()) else {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /react <event-id> <key>".to_owned(),
+        };
+    };
+    let target_event_id = &argument[..target_end];
+    let key = argument[target_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
+    if target_event_id.is_empty() || key.is_empty() {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /react <event-id> <key>".to_owned(),
+        };
+    }
+    LocalSlashCommand::React {
+        target_event_id: target_event_id.to_owned(),
+        key: key.to_owned(),
+    }
+}
+
+fn parse_unreact_slash_command(argument: &str) -> LocalSlashCommand<'_> {
+    if argument.is_empty() || argument.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /unreact <reaction-event-id>".to_owned(),
+        };
+    }
+    LocalSlashCommand::Unreact {
+        reaction_event_id: argument.to_owned(),
     }
 }
 
@@ -8204,6 +8258,27 @@ unsafe fn execute_local_slash_command(
                 Ok(message) | Err(message) => set_local_command_status(hwnd, message),
             }
         }
+        LocalSlashCommand::React {
+            target_event_id,
+            key,
+        } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_react_slash_command(state, target_event_id, key)
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
+        LocalSlashCommand::Unreact { reaction_event_id } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_unreact_slash_command(state, reaction_event_id)
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
         LocalSlashCommand::Topic { topic } => {
             let result = {
                 let state = state_mut(hwnd);
@@ -8404,6 +8479,48 @@ fn submit_part_slash_command(
         .map_err(|err| format!("failed to enqueue leave room command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("part submitted: {room_id}"))
+}
+
+fn submit_react_slash_command(
+    state: &mut WindowState,
+    target_event_id: String,
+    key: String,
+) -> Result<String, String> {
+    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let command = Command::SendReaction(SendReactionRequest {
+        room_id: room_id.clone(),
+        target_event_id: target_event_id.clone(),
+        key,
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue send reaction command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("Reaction queued for {target_event_id}"))
+}
+
+fn submit_unreact_slash_command(
+    state: &mut WindowState,
+    reaction_event_id: String,
+) -> Result<String, String> {
+    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let command = Command::RedactReaction(RedactReactionRequest {
+        room_id,
+        reaction_event_id: reaction_event_id.clone(),
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue redact reaction command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("Reaction redaction queued for {reaction_event_id}"))
 }
 
 fn submit_topic_slash_command(state: &mut WindowState, topic: String) -> Result<String, String> {
@@ -16138,6 +16255,13 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_compose_submission("//react $react-normal +1"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/react $react-normal +1".to_owned()),
+            }
+        );
+        assert_eq!(
             parse_compose_submission("///status"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
@@ -16322,6 +16446,33 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_slash_command("/react $react-normal +1"),
+            LocalSlashCommand::React {
+                target_event_id: "$react-normal".to_owned(),
+                key: "+1".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/react $react-normal eyes"),
+            LocalSlashCommand::React {
+                target_event_id: "$react-normal".to_owned(),
+                key: "eyes".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/react $react-normal two words"),
+            LocalSlashCommand::React {
+                target_event_id: "$react-normal".to_owned(),
+                key: "two words".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/unreact $reaction-alice-plus-one"),
+            LocalSlashCommand::Unreact {
+                reaction_event_id: "$reaction-alice-plus-one".to_owned(),
+            }
+        );
+        assert_eq!(
             parse_slash_command("/topic incident review"),
             LocalSlashCommand::Topic {
                 topic: "incident review".to_owned(),
@@ -16365,6 +16516,36 @@ mod tests {
             parse_slash_command("/topic   "),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /topic <text>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/react"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /react <event-id> <key>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/react $react-normal"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /react <event-id> <key>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/react $react-normal   "),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /react <event-id> <key>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/unreact"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /unreact <reaction-event-id>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/unreact $one $two"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /unreact <reaction-event-id>".to_owned(),
             }
         );
     }
@@ -16569,6 +16750,123 @@ mod tests {
         assert_eq!(
             submit_part_slash_command(&mut state, Some("Shared")),
             Err("ambiguous part target: Shared".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_react_slash_command_from_active_room_records_typed_request_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = room_view_id("!room:example");
+
+        let status =
+            submit_react_slash_command(&mut state, "$react-normal".to_owned(), "+1".to_owned())
+                .unwrap();
+
+        assert_eq!(status, "Reaction queued for $react-normal");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SendReaction(SendReactionRequest {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$react-normal".to_owned(),
+                key: "+1".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_react_slash_command_from_thread_targets_parent_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = thread_view_id("!room:example", "$thread-root");
+
+        let status = submit_react_slash_command(
+            &mut state,
+            "$react-normal".to_owned(),
+            "two words".to_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(status, "Reaction queued for $react-normal");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SendReaction(SendReactionRequest {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$react-normal".to_owned(),
+                key: "two words".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_react_slash_command_from_status_returns_no_room_selected() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_react_slash_command(&mut state, "$react-normal".to_owned(), "+1".to_owned(),),
+            Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_unreact_slash_command_from_active_room_records_typed_request_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = room_view_id("!room:example");
+
+        let status =
+            submit_unreact_slash_command(&mut state, "$reaction-alice-plus-one".to_owned())
+                .unwrap();
+
+        assert_eq!(
+            status,
+            "Reaction redaction queued for $reaction-alice-plus-one"
+        );
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RedactReaction(RedactReactionRequest {
+                room_id: "!room:example".to_owned(),
+                reaction_event_id: "$reaction-alice-plus-one".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_unreact_slash_command_from_thread_targets_parent_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = thread_view_id("!room:example", "$thread-root");
+
+        let status =
+            submit_unreact_slash_command(&mut state, "$reaction-alice-plus-one".to_owned())
+                .unwrap();
+
+        assert_eq!(
+            status,
+            "Reaction redaction queued for $reaction-alice-plus-one"
+        );
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RedactReaction(RedactReactionRequest {
+                room_id: "!room:example".to_owned(),
+                reaction_event_id: "$reaction-alice-plus-one".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_unreact_slash_command_from_status_returns_no_room_selected() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_unreact_slash_command(&mut state, "$reaction-alice-plus-one".to_owned()),
+            Err("no room selected".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
     }
