@@ -12,9 +12,9 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation,
     E2eeRecoverySucceeded, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RestoreSessionRequest, RoomMembers, RoomReadState, RoomSummary, SendReactionRequest,
-    SetRoomTopicRequest, VerificationFlowId,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RestoreSessionRequest,
+    RoomMembers, RoomReadState, RoomSummary, SendReactionRequest, SetRoomTopicRequest,
+    VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 

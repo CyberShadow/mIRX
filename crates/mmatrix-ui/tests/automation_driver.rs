@@ -6242,11 +6242,7 @@ fn automation_driver_slash_react_records_submitted_reaction_without_appending_te
     let before = app.room_activity(Some("!reactions:example"))?;
     let before_model = app.dump_model()?;
     assert!(before_model.submitted_reaction_commands.is_empty());
-    assert!(
-        before_model
-            .submitted_redaction_commands
-            .is_empty()
-    );
+    assert!(before_model.submitted_redaction_commands.is_empty());
 
     app.set_compose_text("/react $react-normal +1")?;
     app.send_compose_key(ComposeKey::Return)?;
@@ -6365,11 +6361,7 @@ fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
 
     let before_model = app.dump_model()?;
     assert!(before_model.submitted_reaction_commands.is_empty());
-    assert!(
-        before_model
-            .submitted_redaction_commands
-            .is_empty()
-    );
+    assert!(before_model.submitted_redaction_commands.is_empty());
 
     app.set_compose_text("/unreact $reaction-alice-plus-one")?;
     app.send_compose_key(ComposeKey::Return)?;
@@ -6422,7 +6414,12 @@ fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
 
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, room_identity("!reactions:example"));
-    assert!(ui_state.status_bar.text.contains("usage: /redact <event-id>"));
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("usage: /redact <event-id>")
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

@@ -19,14 +19,14 @@ use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event,
     FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RestoreSessionRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RestoreSessionRequest,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, StoredSession,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
 };
 use serde::Serialize;
@@ -95,8 +95,8 @@ use crate::{
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedRoomTopicCommand, DumpSubmittedVerificationAction,
-        DumpVerificationActionKind, FailureEnvelope,
+        DumpSubmittedRedactionCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
         MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
         ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
@@ -8530,10 +8530,7 @@ fn submit_react_slash_command(
 
 fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Result<(), String> {
     let room_id = resolve_part_slash_command_room_id(state, None)?;
-    let command = Command::RedactEvent(RedactEventRequest {
-        room_id,
-        event_id,
-    });
+    let command = Command::RedactEvent(RedactEventRequest { room_id, event_id });
     let sender = state
         .command_sender
         .as_ref()
@@ -8545,7 +8542,10 @@ fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Res
     Ok(())
 }
 
-fn submit_redact_slash_command(state: &mut WindowState, event_id: String) -> Result<String, String> {
+fn submit_redact_slash_command(
+    state: &mut WindowState,
+    event_id: String,
+) -> Result<String, String> {
     submit_redact_event_command(state, event_id.clone())?;
     Ok(format!("Redaction queued for {event_id}"))
 }
@@ -16927,7 +16927,8 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = room_view_id("!room:example");
 
-        let status = submit_redact_slash_command(&mut state, "$event-to-redact".to_owned()).unwrap();
+        let status =
+            submit_redact_slash_command(&mut state, "$event-to-redact".to_owned()).unwrap();
 
         assert_eq!(status, "Redaction queued for $event-to-redact");
         assert_eq!(
@@ -16953,7 +16954,8 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
 
-        let status = submit_redact_slash_command(&mut state, "$event-to-redact".to_owned()).unwrap();
+        let status =
+            submit_redact_slash_command(&mut state, "$event-to-redact".to_owned()).unwrap();
 
         assert_eq!(status, "Redaction queued for $event-to-redact");
         assert_eq!(
