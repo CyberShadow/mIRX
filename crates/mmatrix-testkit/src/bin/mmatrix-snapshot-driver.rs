@@ -1774,7 +1774,7 @@ mod windows_main {
             }
 
             for path_or_label in &config.expect_navigation_activity {
-                let node = find_navigation_node_by_path_or_label(
+                let node = crate::find_navigation_node_by_path_or_label(
                     &ui_state.navigation,
                     path_or_label,
                 )
@@ -1794,13 +1794,14 @@ mod windows_main {
             }
 
             for path_or_label in &config.expect_no_navigation_activity {
-                let node = find_navigation_node_by_path_or_label(&ui_state.navigation, path_or_label)
-                    .ok_or_else(|| {
-                        format!(
-                            "navigation no-activity assertion failed: missing unique node matching {:?}",
-                            path_or_label
-                        )
-                    })?;
+                let node =
+                    crate::find_navigation_node_by_path_or_label(&ui_state.navigation, path_or_label)
+                        .ok_or_else(|| {
+                            format!(
+                                "navigation no-activity assertion failed: missing unique node matching {:?}",
+                                path_or_label
+                            )
+                        })?;
                 if node.has_activity {
                     return Err(format!(
                         "navigation no-activity assertion failed: expected {:?} to have no activity, found true",
