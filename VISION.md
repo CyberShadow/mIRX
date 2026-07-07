@@ -66,8 +66,8 @@ from scratch.
 - Matrix SDK timeline, state, and send-queue inputs first enter `mmatrix-core`,
   which normalizes them into typed room activity/state events before Win32 stores
   and renders them.
-- Future reactions, media, receipts, typing, threads, and verification UX should
-  extend that typed boundary rather than adding separate UI-only paths.
+- Reactions, media, read-state, typing, threads, and verification slices extend
+  that typed boundary rather than adding separate UI-only paths.
 
 ## UI model (mIRC-faithful)
 
@@ -113,9 +113,10 @@ protocol. **Our work is the UX**: display/save recovery key, passphrase entry,
 recovery prompt on new login, verification request/accept/emoji-confirm/cancel,
 and backup health indicators.
 
-**Secret storage:** for v1, rely on the SDK's own encrypted store (simplest). A
-Windows DPAPI / Credential Manager wrapper for the store passphrase is a possible
-later hardening step (confirmed to work even under Wine).
+**Secret storage:** the SDK's encrypted store remains the base account/crypto
+store. The Win32 shell persists its session payload via DPAPI and stores the
+per-profile SDK SQLite passphrase separately, while password persistence stays
+out of scope.
 
 ## Development environment (Linux host → Windows target)
 
@@ -126,9 +127,10 @@ Validated empirically (spike, task 25116) on this Linux host:
   passed through: `RUSTFLAGS=-L native=$PTHREADS/lib`,
   `CFLAGS_x86_64_pc_windows_gnu=-I$PTHREADS/include` (and CXXFLAGS). `matrix-sdk`
   requires `bundled-sqlite`.
-- **Run/test under Wine 11 + Xvfb.** Real Win32 windows + common controls work
-  (treeview, edit). Set `WINEDLLOVERRIDES='mscoree,mshtml='` (without it, Wine
-  prefix init hangs). DPAPI + Credential Manager work under Wine.
+- **Run/test under Wine 11 + Xvfb.** These are required local gates for HWND
+  automation and screenshot diffs. Set `WINEDLLOVERRIDES='mscoree,mshtml='`
+  (without it, Wine prefix init hangs). Real Windows remains authoritative for
+  DPI, keyboard/input behavior, DPAPI, and installer behavior.
 - **MSVC parity lane.** `x86_64-pc-windows-msvc` via `cargo-xwin` is the
   production-parity build but is currently network-blocked here (can't reach
   `aka.ms`); reserve it for a real-Windows CI lane.
@@ -166,15 +168,17 @@ Windows. Validated layered approach:
 The current vertical slice already covers login, saved-session restore, room
 sync, room listing, typed room activity/state rendering, send, and logout
 through the `mmatrix-core` boundary, with deterministic offline fixtures plus
-env-gated live automation coverage.
+env-gated live automation coverage. The Win32 shell, room/thread activation,
+read-state persistence, token refresh persistence, and session restore path are
+already in place; remaining work is richer UX on top of those slices.
 
 ## v1 feature set
 
 Dense mIRC-style room/status shell · space/room/thread tree · room timeline
 (virtualized) · send/receive typed room messages (`m.text`, `m.notice`,
-`m.emote`) · spaces · threads · **E2EE** (cross-signing,
-SAS verification, secret-storage recovery, key backup) · secure credential
-storage · token refresh persistence.
+`m.emote`) · spaces · threads · reaction/redaction/media UX built on the typed
+core boundary · **E2EE** (cross-signing, SAS verification, secret-storage
+recovery, key backup) · secure credential storage · token refresh persistence.
 
 ## Risks
 
@@ -186,8 +190,8 @@ storage · token refresh persistence.
 4. **SDK API churn** — pin versions; isolate behind the app-service facade.
 5. **E2EE UX completeness** — recovery/verification/backup are product flows, not
    one-line SDK calls; scope deliberately for v1.
-6. **Wine ≠ Windows** — Wine is fine for smoke/HWND tests, but a real-Windows lane
-   stays authoritative for secret storage, DPI, input, and installer.
+6. **Wine ≠ Windows** — Wine/Xvfb are useful required local gates, but a
+   real-Windows lane stays authoritative for DPI, input, DPAPI, and installer.
 
 ## Resolved decisions
 
@@ -198,18 +202,19 @@ storage · token refresh persistence.
 | E2EE depth | Full well-behaved baseline (cross-signing + verification + recovery + backup). |
 | mIRC fidelity | True Win32 MDI + treebar + switchbar. |
 | Packaging | Single static `.exe`, system DLLs only; ZIP if ever needed. |
-| Secret storage | SDK encrypted store for v1 (DPAPI optional later). |
+| Secret storage | SDK encrypted store plus DPAPI-protected session and store-passphrase persistence. |
 | Min Windows | Windows 10+. |
 | Name | `mmatrix`. |
 | Dev loop | Cross-compile `windows-gnu` on Linux + Wine; MSVC on a real-Windows lane. |
 
 ## Immediate next step
 
-1. **Replace the minimal shell with the richer mIRC-style UI**: treebar/switchbar,
-   denser room/status layout, and the native interaction polish that matches the
-   current Windows-first direction.
-2. **Harden account/session handling**: move saved-session secrets out of local
-   cleartext JSON into secure OS credential storage, persist token refresh data,
-   and add the missing E2EE verification/recovery/key-backup UX.
-3. **Expand coverage where Wine is not authoritative**: add a real-Windows lane
-   for the live session slice and future spaces/threads work.
+1. **Keep shell activation synchronized end to end**: MDI children, treebar
+   selection, and switchbar state should continue to move together for every
+   room, thread, and status activation path.
+2. **Keep shell fidelity visible in coverage**: inactive markers, compose focus,
+   and constrained-layout snapshots should stay in the automated verification
+   lane so regressions are obvious under Wine/Xvfb.
+3. **Track real-Windows-only risk explicitly**: keep Wine/Xvfb as the required
+   local gate, then use a real-Windows lane for DPI, input, DPAPI, installer,
+   and other parity checks that Wine cannot authoritatively close out.

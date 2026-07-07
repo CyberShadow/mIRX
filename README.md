@@ -7,8 +7,8 @@
 - Vertical-slice prototype scaffold is in place.
 - `mmatrix-core` owns the Matrix SDK runtime boundary and has offline tests plus env-gated live Matrix coverage.
 - Matrix SDK timeline, state, and send-queue inputs enter `mmatrix-core`, which normalizes them into typed room activity/state events that Win32 stores and renders.
-- Future reactions, media, receipts, typing, threads, and verification UX should extend that typed boundary instead of adding separate UI-only paths.
-- `mmatrix-ui` is a native Win32 shell with deterministic Wine automation and a live login/session-restore/sync/rooms/send slice through `mmatrix-core`.
+- Reactions, media, read-state, typing, threads, and verification slices extend that typed boundary instead of adding separate UI-only paths.
+- `mmatrix-ui` is a native Win32 shell with deterministic Wine automation, focused snapshot coverage, and a live login/session-restore/sync/rooms/send slice through `mmatrix-core`.
 - CI is intended to run the full local check sequence through the Nix devshell.
 
 ## Local Commands
@@ -27,6 +27,7 @@ nix develop -c ./scripts/measure.sh
 ```
 
 Normal checks remain offline and deterministic. They do not require network access or Matrix credentials.
+Wine/Xvfb automation and screenshot diffs are required local gates for the Win32 shell, but real Windows remains authoritative for DPI, keyboard/input behavior, DPAPI, and installer validation.
 
 ## Live Matrix Checks
 
