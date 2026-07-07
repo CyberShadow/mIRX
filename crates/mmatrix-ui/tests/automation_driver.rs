@@ -27,11 +27,11 @@ use mmatrix_testkit::{
     RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedRoomTopicCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiError, UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionKind, VerificationState, ViewIdentity,
+    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedRoomTopicCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -42,9 +42,9 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
-    GetWindowLongPtrW, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL,
-    SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_PASTE,
-    WM_VSCROLL, WS_VSCROLL,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO,
+    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE,
+    WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -2315,6 +2315,10 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
     ];
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
     app.wait_idle(Duration::from_secs(5))?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    let rect = unsafe { window_rect(frame) };
+    assert_eq!(rect.right - rect.left, 640);
+    assert_eq!(rect.bottom - rect.top, 768);
 
     app.select_room("!members:example")?;
     let ui_state = app.dump_ui_state()?;
@@ -2323,7 +2327,10 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
         app.dump_model()?.selected_room.as_deref(),
         Some("!members:example")
     );
-    assert_eq!(find_ui_room(&ui_state, "!members:example").room_id, "!members:example");
+    assert_eq!(
+        find_ui_room(&ui_state, "!members:example").room_id,
+        "!members:example"
+    );
 
     let members_view = find_view(&ui_state, &room_identity("!members:example"));
     assert_eq!(
@@ -2805,6 +2812,16 @@ unsafe fn class_name(hwnd: HWND) -> String {
 unsafe fn client_rect(hwnd: HWND) -> RECT {
     let mut rect = RECT::default();
     unsafe { GetClientRect(hwnd, &mut rect) };
+    rect
+}
+
+unsafe fn window_rect(hwnd: HWND) -> RECT {
+    let mut rect = RECT::default();
+    assert_ne!(
+        unsafe { GetWindowRect(hwnd, &mut rect) },
+        0,
+        "GetWindowRect must succeed"
+    );
     rect
 }
 
@@ -4816,6 +4833,10 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
     ];
     let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
     app.wait_idle(Duration::from_secs(5))?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    let rect = unsafe { window_rect(frame) };
+    assert_eq!(rect.right - rect.left, 900);
+    assert_eq!(rect.bottom - rect.top, 620);
 
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, room_identity("!focus:example"));
@@ -4843,7 +4864,10 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
             &room_identity("!docs:example"),
         ]
     );
-    assert_eq!(find_switchbar_item(&ui_state, &ViewIdentity::Status).title, "Status");
+    assert_eq!(
+        find_switchbar_item(&ui_state, &ViewIdentity::Status).title,
+        "Status"
+    );
     assert_eq!(
         find_switchbar_item(&ui_state, &room_identity("!focus:example")).title,
         "Focus"
@@ -4864,10 +4888,12 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
     ));
     assert!(view_members_contain(focus_view, "Alice"));
     assert!(view_members_contain(focus_view, "Casey"));
-    assert!(ui_state
-        .status_bar
-        .text
-        .contains("timeline update from !inbox:example"));
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("timeline update from !inbox:example")
+    );
 
     Ok(())
 }
