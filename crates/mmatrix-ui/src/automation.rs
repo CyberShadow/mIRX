@@ -845,7 +845,17 @@ pub(crate) struct DumpRoomActivity {
     pub(crate) activity_id: String,
     pub(crate) timestamp_ms: u64,
     pub(crate) relation: Option<DumpRoomActivityRelation>,
+    pub(crate) reactions: Vec<DumpRoomReactionSummary>,
     pub(crate) kind: DumpRoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomReactionSummary {
+    pub(crate) key: String,
+    pub(crate) count: u64,
+    pub(crate) senders: Vec<String>,
+    pub(crate) reaction_event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1081,6 +1091,7 @@ pub(crate) fn dump_room_activity_from_activity(activity: &RoomActivity) -> DumpR
             .relation
             .as_ref()
             .map(dump_room_activity_relation_from_core),
+        reactions: Vec::new(),
         kind: dump_room_activity_kind_from_core(&activity.kind),
     }
 }
@@ -1553,17 +1564,17 @@ mod tests {
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
         DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomImageActivity,
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomRedactedActivity,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
-        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
-        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiRoomReadState, UiRoomState, UiState,
-        VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
+        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
+        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
+        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2993,6 +3004,7 @@ mod tests {
                                 in_reply_to_event_id: Some("$reply:example".to_owned()),
                                 is_falling_back: false,
                             }),
+                            reactions: Vec::new(),
                             kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: Some("txn-1".to_owned()),
@@ -3010,6 +3022,7 @@ mod tests {
                             activity_id: "event:$image:example".to_owned(),
                             timestamp_ms: 1_700_000_030_000,
                             relation: None,
+                            reactions: Vec::new(),
                             kind: DumpRoomActivityKind::Image(Box::new(DumpRoomImageActivity {
                                 event_id: "$image:example".to_owned(),
                                 sender: "@alice:example".to_owned(),
@@ -3034,6 +3047,7 @@ mod tests {
                             activity_id: "state:$state-1".to_owned(),
                             timestamp_ms: 1_700_000_060_000,
                             relation: None,
+                            reactions: Vec::new(),
                             kind: DumpRoomActivityKind::StateNotice(DumpRoomStateNoticeActivity {
                                 event_id: "$state-1".to_owned(),
                                 sender: "@alice:example".to_owned(),
@@ -3063,6 +3077,7 @@ mod tests {
                                 "in_reply_to_event_id":"$reply:example",
                                 "is_falling_back":false
                             },
+                            "reactions":[],
                             "kind":{
                                 "type":"message",
                                 "event_id":"$event:example",
@@ -3078,6 +3093,7 @@ mod tests {
                             "activity_id":"event:$image:example",
                             "timestamp_ms":1700000030000u64,
                             "relation":null,
+                            "reactions":[],
                             "kind":{
                                 "type":"image",
                                 "event_id":"$image:example",
@@ -3104,6 +3120,7 @@ mod tests {
                             "activity_id":"state:$state-1",
                             "timestamp_ms":1700000060000u64,
                             "relation":null,
+                            "reactions":[],
                             "kind":{
                                 "type":"state_notice",
                                 "event_id":"$state-1",
@@ -3696,6 +3713,38 @@ mod tests {
                 num_mentions: 1,
             }
         );
+        let plain_activity = RoomActivity {
+            room_id: "!plain:example".to_owned(),
+            activity_id: "event:$plain:example".to_owned(),
+            timestamp_ms: 1_700_000_000_100,
+            relation: None,
+            kind: RoomActivityKind::Message(RoomMessageActivity {
+                event_id: Some("$plain:example".to_owned()),
+                transaction_id: None,
+                sender: "@plain:example".to_owned(),
+                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
+                body: "plain".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            }),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&plain_activity),
+            DumpRoomActivity {
+                room_id: "!plain:example".to_owned(),
+                activity_id: "event:$plain:example".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                relation: None,
+                reactions: Vec::new(),
+                kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
+                    event_id: Some("$plain:example".to_owned()),
+                    transaction_id: None,
+                    sender: "@plain:example".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "plain".to_owned(),
+                    send_state: DumpRoomMessageSendState::Sent,
+                }),
+            }
+        );
         let activity = RoomActivity {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$event:example".to_owned(),
@@ -3725,6 +3774,7 @@ mod tests {
                     in_reply_to_event_id: Some("$reply:example".to_owned()),
                     is_falling_back: true,
                 }),
+                reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
                     event_id: Some("$event:example".to_owned()),
                     transaction_id: Some("txn-1".to_owned()),
@@ -3749,6 +3799,86 @@ mod tests {
                 send_state: DumpRoomMessageSendState::Sent,
             })
         );
+        let reaction_dump = DumpRoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$event:example".to_owned(),
+            timestamp_ms: 1_700_000_000_000,
+            relation: None,
+            reactions: vec![
+                DumpRoomReactionSummary {
+                    key: "fire".to_owned(),
+                    count: 2,
+                    senders: vec!["@alice:example".to_owned(), "@bob:example".to_owned()],
+                    reaction_event_ids: vec![
+                        "$reaction-2:example".to_owned(),
+                        "$reaction-3:example".to_owned(),
+                    ],
+                },
+                DumpRoomReactionSummary {
+                    key: "+1".to_owned(),
+                    count: 1,
+                    senders: vec!["@carol:example".to_owned()],
+                    reaction_event_ids: vec!["$reaction-1:example".to_owned()],
+                },
+            ],
+            kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
+                event_id: Some("$event:example".to_owned()),
+                transaction_id: Some("txn-1".to_owned()),
+                sender: "@alice:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello".to_owned(),
+                send_state: DumpRoomMessageSendState::Sent,
+            }),
+        };
+        let reaction_dump_json = json!({
+            "room_id":"!room:example",
+            "activity_id":"event:$event:example",
+            "timestamp_ms":1700000000000u64,
+            "relation":null,
+            "reactions":[
+                {
+                    "key":"fire",
+                    "count":2u64,
+                    "senders":["@alice:example","@bob:example"],
+                    "reaction_event_ids":["$reaction-2:example","$reaction-3:example"]
+                },
+                {
+                    "key":"+1",
+                    "count":1u64,
+                    "senders":["@carol:example"],
+                    "reaction_event_ids":["$reaction-1:example"]
+                }
+            ],
+            "kind":{
+                "type":"message",
+                "event_id":"$event:example",
+                "transaction_id":"txn-1",
+                "sender":"@alice:example",
+                "presentation":"text",
+                "body":"hello",
+                "send_state":{"state":"sent"}
+            }
+        });
+        assert_eq!(
+            serde_json::to_value(&reaction_dump)
+                .expect("serialize dump room activity with reactions"),
+            reaction_dump_json.clone()
+        );
+        assert_eq!(
+            serde_json::from_value::<DumpRoomActivity>(reaction_dump_json)
+                .expect("deserialize dump room activity with reactions"),
+            reaction_dump
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomReactionSummary>(json!({
+                "key":"+1",
+                "count":1u64,
+                "senders":["@alice:example"],
+                "reaction_event_ids":["$reaction-1:example"],
+                "unexpected":true
+            }))
+            .is_err()
+        );
         let unsupported_activity = RoomActivity {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$audio1:example.org".to_owned(),
@@ -3768,6 +3898,7 @@ mod tests {
                 activity_id: "event:$audio1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
                 relation: None,
+                reactions: Vec::new(),
                 kind: DumpRoomActivityKind::UnsupportedMessage(
                     DumpUnsupportedRoomMessageActivity {
                         event_id: "$audio1:example.org".to_owned(),
@@ -3788,6 +3919,7 @@ mod tests {
                 "activity_id":"event:$audio1:example.org",
                 "timestamp_ms":1710000000000u64,
                 "relation":null,
+                "reactions":[],
                 "kind":{
                     "type":"unsupported_message",
                     "event_id":"$audio1:example.org",
@@ -3831,6 +3963,7 @@ mod tests {
                 activity_id: "event:$image1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_010_000,
                 relation: None,
+                reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Image(Box::new(DumpRoomImageActivity {
                     event_id: "$image1:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
@@ -3859,6 +3992,7 @@ mod tests {
                 "activity_id":"event:$image1:example.org",
                 "timestamp_ms":1710000010000u64,
                 "relation":null,
+                "reactions":[],
                 "kind":{
                     "type":"image",
                     "event_id":"$image1:example.org",
@@ -3936,6 +4070,7 @@ mod tests {
                     in_reply_to_event_id: Some("$redact-thread-root".to_owned()),
                     is_falling_back: false,
                 }),
+                reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Redacted(DumpRoomRedactedActivity {
                     event_id: "$redacted:example.org".to_owned(),
                 }),
@@ -3956,6 +4091,7 @@ mod tests {
                     "in_reply_to_event_id":"$redact-thread-root",
                     "is_falling_back":false
                 },
+                "reactions":[],
                 "kind":{
                     "type":"redacted",
                     "event_id":"$redacted:example.org"
@@ -3996,6 +4132,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$event:example",
                 "timestamp_ms":1700000000000u64,
+                "reactions":[],
                 "kind":{
                     "type":"message",
                     "event_id":"$event:example",
@@ -4061,6 +4198,7 @@ mod tests {
                 "room_id":"!ops:example",
                 "activity_id":"state:$state-1",
                 "timestamp_ms":1700000000000u64,
+                "reactions":[],
                 "kind":{
                     "type":"state_notice",
                     "event_id":"$state-1",
@@ -4080,6 +4218,7 @@ mod tests {
                 "room_id":"!ops:example",
                 "activity_id":"state:$state-1",
                 "timestamp_ms":1700000000000u64,
+                "reactions":[],
                 "kind":{
                     "type":"state_notice",
                     "event_id":"$state-1",
@@ -4099,6 +4238,7 @@ mod tests {
                 "room_id":"!ops:example",
                 "activity_id":"event:$redacted-1",
                 "timestamp_ms":1700000000000u64,
+                "reactions":[],
                 "kind":{
                     "type":"redacted",
                     "event_id":"$redacted-1",

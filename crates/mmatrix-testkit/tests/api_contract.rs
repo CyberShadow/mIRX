@@ -21,7 +21,7 @@ use mmatrix_testkit::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageActivity,
     RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState,
     RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomRedactedActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
     StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
     SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
@@ -741,6 +741,7 @@ fn room_activity_sent_message_round_trips_through_json() {
         activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
@@ -758,6 +759,7 @@ fn room_activity_sent_message_round_trips_through_json() {
             "activity_id": "activity-1",
             "timestamp_ms": 1700000000000u64,
             "relation": null,
+            "reactions": [],
             "kind": {
                 "type": "message",
                 "event_id": "$event:example",
@@ -785,6 +787,7 @@ fn room_activity_pending_message_round_trips_through_json() {
         activity_id: "activity-2".to_owned(),
         timestamp_ms: 1_700_000_060_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some("txn-2".to_owned()),
@@ -802,6 +805,7 @@ fn room_activity_pending_message_round_trips_through_json() {
             "activity_id": "activity-2",
             "timestamp_ms": 1700000060000u64,
             "relation": null,
+            "reactions": [],
             "kind": {
                 "type": "message",
                 "event_id": null,
@@ -829,6 +833,7 @@ fn room_activity_failed_message_round_trips_through_json() {
         activity_id: "activity-3".to_owned(),
         timestamp_ms: 1_700_000_120_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some("txn-3".to_owned()),
@@ -849,6 +854,7 @@ fn room_activity_failed_message_round_trips_through_json() {
             "activity_id": "activity-3",
             "timestamp_ms": 1700000120000u64,
             "relation": null,
+            "reactions": [],
             "kind": {
                 "type": "message",
                 "event_id": null,
@@ -878,6 +884,7 @@ fn room_activity_notice_message_round_trips_through_json() {
         activity_id: "activity-notice".to_owned(),
         timestamp_ms: 1_700_000_150_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$notice:example".to_owned()),
             transaction_id: None,
@@ -893,6 +900,7 @@ fn room_activity_notice_message_round_trips_through_json() {
         "activity_id": "activity-notice",
         "timestamp_ms": 1700000150000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "message",
             "event_id": "$notice:example",
@@ -923,6 +931,7 @@ fn room_activity_emote_message_round_trips_through_json() {
         activity_id: "activity-emote".to_owned(),
         timestamp_ms: 1_700_000_165_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$emote:example".to_owned()),
             transaction_id: Some("txn-emote".to_owned()),
@@ -938,6 +947,7 @@ fn room_activity_emote_message_round_trips_through_json() {
         "activity_id": "activity-emote",
         "timestamp_ms": 1700000165000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "message",
             "event_id": "$emote:example",
@@ -968,6 +978,7 @@ fn room_activity_topic_state_notice_round_trips_through_json() {
         activity_id: "activity-4".to_owned(),
         timestamp_ms: 1_700_000_180_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$topic:example".to_owned(),
             sender: "@alice:example".to_owned(),
@@ -985,6 +996,7 @@ fn room_activity_topic_state_notice_round_trips_through_json() {
             "activity_id": "activity-4",
             "timestamp_ms": 1700000180000u64,
             "relation": null,
+            "reactions": [],
             "kind": {
                 "type": "state_notice",
                 "event_id": "$topic:example",
@@ -1011,6 +1023,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
         activity_id: "activity-5".to_owned(),
         timestamp_ms: 1_700_000_240_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: "$member:example".to_owned(),
             sender: "@carol:example".to_owned(),
@@ -1029,6 +1042,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             "activity_id": "activity-5",
             "timestamp_ms": 1700000240000u64,
             "relation": null,
+            "reactions": [],
             "kind": {
                 "type": "state_notice",
                 "event_id": "$member:example",
@@ -1056,6 +1070,7 @@ fn room_activity_unsupported_message_round_trips_through_json() {
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -1069,6 +1084,7 @@ fn room_activity_unsupported_message_round_trips_through_json() {
         "activity_id": "event:$audio1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "unsupported_message",
             "event_id": "$audio1:example.org",
@@ -1096,6 +1112,7 @@ fn room_activity_image_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(None))),
     };
 
@@ -1104,6 +1121,7 @@ fn room_activity_image_round_trips_through_json() {
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "image",
             "event_id": "$image1:example.org",
@@ -1143,6 +1161,7 @@ fn room_activity_image_pending_media_state_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
             RoomImageMediaState::Pending,
         )))),
@@ -1153,6 +1172,7 @@ fn room_activity_image_pending_media_state_round_trips_through_json() {
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "image",
             "event_id": "$image1:example.org",
@@ -1195,6 +1215,7 @@ fn room_activity_image_loaded_media_state_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
             RoomImageMediaState::Loaded {
                 width: 320,
@@ -1208,6 +1229,7 @@ fn room_activity_image_loaded_media_state_round_trips_through_json() {
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "image",
             "event_id": "$image1:example.org",
@@ -1252,6 +1274,7 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
             RoomImageMediaState::Failed {
                 message: "download failed".to_owned(),
@@ -1264,6 +1287,7 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "image",
             "event_id": "$image1:example.org",
@@ -1307,6 +1331,7 @@ fn room_activity_redacted_round_trips_through_json() {
         activity_id: "event:$redacted:example.org".to_owned(),
         timestamp_ms: 1_710_000_060_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: "$redacted:example.org".to_owned(),
         }),
@@ -1317,6 +1342,7 @@ fn room_activity_redacted_round_trips_through_json() {
         "activity_id": "event:$redacted:example.org",
         "timestamp_ms": 1710000060000u64,
         "relation": null,
+        "reactions": [],
         "kind": {
             "type": "redacted",
             "event_id": "$redacted:example.org"
@@ -1332,6 +1358,17 @@ fn room_activity_redacted_round_trips_through_json() {
             .expect("deserialize redacted activity"),
         activity
     );
+    let core_json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$redacted:example.org",
+        "timestamp_ms": 1710000060000u64,
+        "relation": null,
+        "kind": {
+            "type": "redacted",
+            "event_id": "$redacted:example.org"
+        }
+    });
+
     assert_eq!(
         serde_json::to_value(CoreRoomActivity {
             room_id: "!room:example".to_owned(),
@@ -1343,10 +1380,10 @@ fn room_activity_redacted_round_trips_through_json() {
             }),
         })
         .expect("serialize core redacted activity"),
-        json.clone()
+        core_json.clone()
     );
     assert_eq!(
-        serde_json::from_value::<CoreRoomActivity>(json)
+        serde_json::from_value::<CoreRoomActivity>(core_json)
             .expect("deserialize core redacted activity"),
         CoreRoomActivity {
             room_id: "!room:example".to_owned(),
@@ -1449,6 +1486,7 @@ fn room_activity_omitted_relation_defaults_to_none() {
             activity_id: "activity-omitted-relation".to_owned(),
             timestamp_ms: 1_700_000_000_000,
             relation: None,
+            reactions: Vec::new(),
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example".to_owned()),
                 transaction_id: None,
@@ -1472,6 +1510,7 @@ fn room_activity_thread_relation_round_trips_through_json() {
             in_reply_to_event_id: Some("$reply:example".to_owned()),
             is_falling_back: true,
         }),
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$thread-event:example".to_owned()),
             transaction_id: None,
@@ -1491,6 +1530,7 @@ fn room_activity_thread_relation_round_trips_through_json() {
             "in_reply_to_event_id": "$reply:example",
             "is_falling_back": true,
         },
+        "reactions": [],
         "kind": {
             "type": "message",
             "event_id": "$thread-event:example",
@@ -1511,6 +1551,145 @@ fn room_activity_thread_relation_round_trips_through_json() {
     assert_eq!(
         serde_json::from_value::<RoomActivity>(json).expect("deserialize thread activity"),
         activity
+    );
+}
+
+#[test]
+fn room_activity_dump_reaction_summaries_round_trip_and_default() {
+    let with_reactions = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$event:example",
+        "timestamp_ms": 1700000000000u64,
+        "relation": null,
+        "reactions": [
+            {
+                "key": "+1",
+                "count": 2u64,
+                "senders": ["@alice:example", "@bob:example"],
+                "reaction_event_ids": ["$reaction-1:example", "$reaction-2:example"]
+            }
+        ],
+        "kind": {
+            "type": "message",
+            "event_id": "$event:example",
+            "transaction_id": null,
+            "sender": "@carol:example",
+            "presentation": "text",
+            "body": "hello",
+            "send_state": {
+                "state": "sent"
+            }
+        }
+    });
+    let activity_with_reactions = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$event:example".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        relation: None,
+        reactions: vec![RoomReactionSummary {
+            key: "+1".to_owned(),
+            count: 2,
+            senders: vec!["@alice:example".to_owned(), "@bob:example".to_owned()],
+            reaction_event_ids: vec![
+                "$reaction-1:example".to_owned(),
+                "$reaction-2:example".to_owned(),
+            ],
+        }],
+        kind: RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some("$event:example".to_owned()),
+            transaction_id: None,
+            sender: "@carol:example".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "hello".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+    };
+
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(with_reactions)
+            .expect("deserialize activity dump with reactions"),
+        activity_with_reactions.clone()
+    );
+    assert_eq!(
+        serde_json::to_value(&activity_with_reactions)
+            .expect("serialize activity dump with reactions"),
+        serde_json::json!({
+            "room_id": "!room:example",
+            "activity_id": "event:$event:example",
+            "timestamp_ms": 1700000000000u64,
+            "relation": null,
+            "reactions": [
+                {
+                    "key": "+1",
+                    "count": 2u64,
+                    "senders": ["@alice:example", "@bob:example"],
+                    "reaction_event_ids": ["$reaction-1:example", "$reaction-2:example"]
+                }
+            ],
+            "kind": {
+                "type": "message",
+                "event_id": "$event:example",
+                "transaction_id": null,
+                "sender": "@carol:example",
+                "presentation": "text",
+                "body": "hello",
+                "send_state": {
+                    "state": "sent"
+                }
+            }
+        })
+    );
+
+    let without_reactions = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$event:example",
+        "timestamp_ms": 1700000000000u64,
+        "kind": {
+            "type": "message",
+            "event_id": "$event:example",
+            "transaction_id": null,
+            "sender": "@carol:example",
+            "presentation": "text",
+            "body": "hello",
+            "send_state": {
+                "state": "sent"
+            }
+        }
+    });
+    let activity = serde_json::from_value::<RoomActivity>(without_reactions)
+        .expect("deserialize activity dump without reactions");
+
+    assert!(activity.reactions.is_empty());
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize activity dump without reactions"),
+        serde_json::json!({
+            "room_id": "!room:example",
+            "activity_id": "event:$event:example",
+            "timestamp_ms": 1700000000000u64,
+            "relation": null,
+            "reactions": [],
+            "kind": {
+                "type": "message",
+                "event_id": "$event:example",
+                "transaction_id": null,
+                "sender": "@carol:example",
+                "presentation": "text",
+                "body": "hello",
+                "send_state": {
+                    "state": "sent"
+                }
+            }
+        })
+    );
+    assert!(
+        serde_json::from_value::<RoomReactionSummary>(serde_json::json!({
+            "key": "+1",
+            "count": 1u64,
+            "senders": ["@alice:example"],
+            "reaction_event_ids": ["$reaction-1:example"],
+            "unexpected": true,
+        }))
+        .is_err()
     );
 }
 
@@ -1555,6 +1734,29 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         },
         kind: RoomActivityUpdateKind::ActivityRedacted {
             redaction_event_id: "$redaction:example.org".to_owned(),
+        },
+    };
+    let reaction_added = RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionAdded {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            timestamp_ms: 1_700_000_001_500,
+            key: "+1".to_owned(),
+        },
+    };
+    let reaction_removed = RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionRemoved {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            redaction_event_id: "$redaction:example.org".to_owned(),
+            key: "+1".to_owned(),
         },
     };
 
@@ -1607,6 +1809,33 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             "redaction_event_id": "$redaction:example.org"
         }
     });
+    let reaction_added_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "event",
+            "event_id": "$original:example.org"
+        },
+        "kind": {
+            "type": "reaction_added",
+            "reaction_event_id": "$reaction:example.org",
+            "sender": "@alice:example.org",
+            "timestamp_ms": 1700000001500u64,
+            "key": "+1"
+        }
+    });
+    let reaction_removed_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "event",
+            "event_id": "$original:example.org"
+        },
+        "kind": {
+            "type": "reaction_removed",
+            "reaction_event_id": "$reaction:example.org",
+            "redaction_event_id": "$redaction:example.org",
+            "key": "+1"
+        }
+    });
 
     assert_eq!(
         serde_json::to_value(&sent).expect("serialize sent update"),
@@ -1623,6 +1852,14 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
     assert_eq!(
         serde_json::to_value(&redacted).expect("serialize redacted update"),
         redacted_json
+    );
+    assert_eq!(
+        serde_json::to_value(&reaction_added).expect("serialize reaction added update"),
+        reaction_added_json
+    );
+    assert_eq!(
+        serde_json::to_value(&reaction_removed).expect("serialize reaction removed update"),
+        reaction_removed_json
     );
 
     assert_eq!(
@@ -1683,6 +1920,37 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         }
     );
     assert_eq!(
+        serde_json::from_value::<CoreRoomActivityUpdate>(reaction_added_json.clone())
+            .expect("deserialize reaction added update as core"),
+        CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::ReactionAdded {
+                reaction_event_id: "$reaction:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_700_000_001_500,
+                key: "+1".to_owned(),
+            },
+        }
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomActivityUpdate>(reaction_removed_json.clone())
+            .expect("deserialize reaction removed update as core"),
+        CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::ReactionRemoved {
+                reaction_event_id: "$reaction:example.org".to_owned(),
+                redaction_event_id: "$redaction:example.org".to_owned(),
+                key: "+1".to_owned(),
+            },
+        }
+    );
+    assert_eq!(
         serde_json::to_value(CoreRoomActivityUpdate {
             room_id: "!ops:example.org".to_owned(),
             target: CoreRoomActivityUpdateTarget::Event {
@@ -1694,6 +1962,37 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         })
         .expect("serialize redacted update as core"),
         redacted_json.clone()
+    );
+    assert_eq!(
+        serde_json::to_value(CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::ReactionAdded {
+                reaction_event_id: "$reaction:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_700_000_001_500,
+                key: "+1".to_owned(),
+            },
+        })
+        .expect("serialize reaction added update as core"),
+        reaction_added_json.clone()
+    );
+    assert_eq!(
+        serde_json::to_value(CoreRoomActivityUpdate {
+            room_id: "!ops:example.org".to_owned(),
+            target: CoreRoomActivityUpdateTarget::Event {
+                event_id: "$original:example.org".to_owned(),
+            },
+            kind: CoreRoomActivityUpdateKind::ReactionRemoved {
+                reaction_event_id: "$reaction:example.org".to_owned(),
+                redaction_event_id: "$redaction:example.org".to_owned(),
+                key: "+1".to_owned(),
+            },
+        })
+        .expect("serialize reaction removed update as core"),
+        reaction_removed_json.clone()
     );
 
     assert_eq!(
@@ -1714,6 +2013,16 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         serde_json::from_value::<RoomActivityUpdate>(redacted_json)
             .expect("deserialize redacted update"),
         redacted
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdate>(reaction_added_json)
+            .expect("deserialize reaction added update"),
+        reaction_added
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdate>(reaction_removed_json)
+            .expect("deserialize reaction removed update"),
+        reaction_removed
     );
 }
 
@@ -1741,6 +2050,63 @@ fn room_activity_redaction_contract_shapes_reject_invalid_payloads() {
         )
         .is_err(),
         "core activity redacted kind must reject unknown fields"
+    );
+    for missing_field_json in [
+        r#"{"type":"reaction_added","sender":"@alice:example.org","timestamp_ms":1700000001500,"key":"+1"}"#,
+        r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","timestamp_ms":1700000001500,"key":"+1"}"#,
+        r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","key":"+1"}"#,
+        r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000001500}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<RoomActivityUpdateKind>(missing_field_json).is_err(),
+            "reaction added kind must reject payload missing a required field: {missing_field_json}"
+        );
+        assert!(
+            serde_json::from_str::<CoreRoomActivityUpdateKind>(missing_field_json).is_err(),
+            "core reaction added kind must reject payload missing a required field: {missing_field_json}"
+        );
+    }
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000001500,"key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "reaction added kind must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomActivityUpdateKind>(
+            r#"{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000001500,"key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "core reaction added kind must reject unknown fields"
+    );
+    for missing_field_json in [
+        r#"{"type":"reaction_removed","redaction_event_id":"$redaction:example.org","key":"+1"}"#,
+        r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","key":"+1"}"#,
+        r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<RoomActivityUpdateKind>(missing_field_json).is_err(),
+            "reaction removed kind must reject payload missing a required field: {missing_field_json}"
+        );
+        assert!(
+            serde_json::from_str::<CoreRoomActivityUpdateKind>(missing_field_json).is_err(),
+            "core reaction removed kind must reject payload missing a required field: {missing_field_json}"
+        );
+    }
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "reaction removed kind must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomActivityUpdateKind>(
+            r#"{"type":"reaction_removed","reaction_event_id":"$reaction:example.org","redaction_event_id":"$redaction:example.org","key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "core reaction removed kind must reject unknown fields"
     );
     assert!(
         serde_json::from_str::<RoomActivityKind>(r#"{"type":"redacted"}"#).is_err(),
@@ -2277,6 +2643,7 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
         activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some("$event:example".to_owned()),
             transaction_id: Some("txn-1".to_owned()),
@@ -2310,6 +2677,7 @@ fn room_activity_contains_matches_unsupported_message_fields() {
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
@@ -2330,6 +2698,7 @@ fn room_activity_contains_matches_image_fields() {
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(None))),
     };
 

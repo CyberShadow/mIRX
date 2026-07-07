@@ -323,7 +323,18 @@ pub struct RoomActivity {
     pub timestamp_ms: u64,
     #[serde(default)]
     pub relation: Option<RoomActivityRelation>,
+    #[serde(default)]
+    pub reactions: Vec<RoomReactionSummary>,
     pub kind: RoomActivityKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomReactionSummary {
+    pub key: String,
+    pub count: u64,
+    pub senders: Vec<String>,
+    pub reaction_event_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -522,6 +533,17 @@ pub enum RoomActivityUpdateKind {
         timestamp_ms: u64,
         presentation: RoomMessagePresentationKind,
         body: String,
+    },
+    ReactionAdded {
+        reaction_event_id: String,
+        sender: String,
+        timestamp_ms: u64,
+        key: String,
+    },
+    ReactionRemoved {
+        reaction_event_id: String,
+        redaction_event_id: String,
+        key: String,
     },
     ActivityRedacted {
         redaction_event_id: String,
