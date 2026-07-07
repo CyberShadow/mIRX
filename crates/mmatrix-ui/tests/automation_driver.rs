@@ -4,7 +4,7 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::ptr::copy_nonoverlapping;
+use std::ptr::{copy_nonoverlapping, null_mut};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
@@ -37,10 +37,13 @@ use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
-    GetWindowLongPtrW, SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, WM_CHAR,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    GetWindowLongPtrW, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL,
+    SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_PASTE,
+    WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -54,6 +57,8 @@ const EDIT_ID: i32 = 1003;
 const MDI_ID: i32 = 1002;
 const VIEW_CONTENT_ID: i32 = 2001;
 const WM_TIMELINE_GET_TOP_LINE: u32 = 0x8000 + 100;
+// Intentionally duplicated from production to exercise the real switchbar toolbar command range.
+const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
@@ -1165,6 +1170,61 @@ fn navigation_path_by_substrings(
         .into_iter()
         .map(NavigationPathSegment::first)
         .collect()
+}
+
+fn activate_switchbar_item_by_command(
+    app: &MmatrixApp,
+    identity: &ViewIdentity,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ui_state = app.dump_ui_state()?;
+    let index = ui_state
+        .switchbar
+        .items
+        .iter()
+        .position(|item| &item.identity == identity)
+        .unwrap_or_else(|| panic!("missing switchbar item for {identity:?}"));
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe {
+        SendMessageW(frame, WM_COMMAND, (SWITCHBAR_COMMAND_FIRST + index) as WPARAM, 0);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+unsafe fn compose_edit_hwnd(app: &MmatrixApp) -> HWND {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
+    assert!(!edit.is_null(), "compose edit control must exist");
+    edit
+}
+
+unsafe fn focused_hwnd(app: &MmatrixApp) -> HWND {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let ui_thread = unsafe { GetWindowThreadProcessId(frame, null_mut()) };
+    assert_ne!(ui_thread, 0, "UI thread ID must exist");
+    let current_thread = unsafe { GetCurrentThreadId() };
+    if current_thread != ui_thread {
+        assert_ne!(
+            unsafe { AttachThreadInput(current_thread, ui_thread, 1) },
+            0,
+            "AttachThreadInput must succeed"
+        );
+    }
+    let focused = unsafe { GetFocus() };
+    if current_thread != ui_thread {
+        assert_ne!(
+            unsafe { AttachThreadInput(current_thread, ui_thread, 0) },
+            0,
+            "AttachThreadInput detach must succeed"
+        );
+    }
+    focused
+}
+
+fn assert_compose_has_focus(app: &MmatrixApp) {
+    let focused = unsafe { focused_hwnd(app) };
+    let compose = unsafe { compose_edit_hwnd(app) };
+    assert_eq!(focused, compose, "compose edit must have Win32 focus");
 }
 
 fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
@@ -4424,6 +4484,98 @@ fn automation_driver_can_activate_status_view_and_return_to_room()
         Some("!verify:example")
     );
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    let room_path = navigation_path_by_substrings(
+        &initial_state.navigation,
+        &["mmatrix", "rooms: 1", "Work", "Ops"],
+    );
+    let thread_path = navigation_path_by_substrings(
+        &initial_state.navigation,
+        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg"],
+    );
+    let room_view_identity = room_identity("!ops:example");
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+
+    app.select_navigation_path(&thread_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    activate_switchbar_item_by_command(&app, &ViewIdentity::Status)?;
+    let status_state = app.dump_ui_state()?;
+    assert_eq!(status_state.mdi.active, ViewIdentity::Status);
+    assert_active_switchbar_item(&status_state, &ViewIdentity::Status);
+    assert_eq!(app.selected_navigation_path()?, nav_path(&["mmatrix", "status"]));
+    assert_compose_has_focus(&app);
+
+    activate_switchbar_item_by_command(&app, &room_view_identity)?;
+    let room_state = app.dump_ui_state()?;
+    assert_eq!(room_state.mdi.active, room_view_identity);
+    assert_active_switchbar_item(&room_state, &room_view_identity);
+    assert_eq!(app.selected_navigation_path()?, room_path);
+    assert_compose_has_focus(&app);
+
+    activate_switchbar_item_by_command(&app, &thread_view_identity)?;
+    let thread_state = app.dump_ui_state()?;
+    assert_eq!(thread_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&thread_state, &thread_view_identity);
+    assert_eq!(app.selected_navigation_path()?, thread_path);
+    assert_compose_has_focus(&app);
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_activation_returns_keyboard_to_compose()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    let alpha_path = navigation_path_by_substrings(
+        &initial_state.navigation,
+        &["mmatrix", "rooms: 2", "Alpha"],
+    );
+
+    app.select_navigation_path(&alpha_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, room_identity("!alpha:example"));
+    assert_compose_has_focus(&app);
+
+    activate_switchbar_item_by_command(&app, &ViewIdentity::Status)?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+    assert_compose_has_focus(&app);
+
+    app.set_compose_text("/window !beta:example")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(app.dump_ui_state()?.mdi.active, room_identity("!beta:example"));
+    assert_compose_has_focus(&app);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
