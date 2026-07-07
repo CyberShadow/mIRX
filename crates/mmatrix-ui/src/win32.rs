@@ -7647,6 +7647,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                         "room_id":"!one:example",
                         "activity_id":"event:$one-first",
                         "timestamp_ms":1700000000000u64,
+                        "reactions":[],
                         "relation":null,
                         "kind":{
                             "type":"message",
@@ -7662,6 +7663,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                         "room_id":"!one:example",
                         "activity_id":"event:$one-second",
                         "timestamp_ms":1700000060000u64,
+                        "reactions":[],
                         "relation":null,
                         "kind":{
                             "type":"message",
