@@ -8,11 +8,11 @@ use mmatrix_core::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
     RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -1064,6 +1064,15 @@ fn room_activity_events_round_trip_through_serde() {
             body: "voice.ogg".to_owned(),
         }),
     }));
+    let redacted_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$redacted:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_006,
+        relation: None,
+        kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: "$redacted:example.org".to_owned(),
+        }),
+    }));
     let sent_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         target: RoomActivityUpdateTarget::Transaction {
@@ -1083,6 +1092,15 @@ fn room_activity_events_round_trip_through_serde() {
             recoverable: true,
         },
     });
+    let redacted_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ActivityRedacted {
+            redaction_event_id: "$redaction:example.org".to_owned(),
+        },
+    });
 
     for event in [
         message_event,
@@ -1092,8 +1110,10 @@ fn room_activity_events_round_trip_through_serde() {
         image_event,
         encrypted_image_event,
         unsupported_message_event,
+        redacted_event,
         sent_update_event,
         failed_update_event,
+        redacted_update_event,
     ] {
         let json = serde_json::to_string(&event).expect("serialize room activity event");
         let restored: Event = serde_json::from_str(&json).expect("deserialize room activity event");
@@ -1167,6 +1187,15 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             body: "voice.ogg".to_owned(),
         }),
     }));
+    let redacted_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$redacted:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_005,
+        relation: None,
+        kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: "$redacted:example.org".to_owned(),
+        }),
+    }));
     let failed_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
         room_id: "!ops:example.org".to_owned(),
         target: RoomActivityUpdateTarget::Transaction {
@@ -1190,6 +1219,15 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             body: "edited body".to_owned(),
         },
     });
+    let redacted_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ActivityRedacted {
+            redaction_event_id: "$redaction:example.org".to_owned(),
+        },
+    });
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
@@ -1209,6 +1247,10 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"relation":null,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg"}}}"#
     );
     assert_eq!(
+        serde_json::to_string(&redacted_event).expect("serialize redacted room activity"),
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$redacted:example.org","timestamp_ms":1700000000005,"relation":null,"kind":{"type":"redacted","event_id":"$redacted:example.org"}}}"#
+    );
+    assert_eq!(
         serde_json::to_string(&failed_update_event).expect("serialize failed room activity update"),
         r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"transaction","transaction_id":"txn-1"},"kind":{"type":"message_failed","message":"send failed","recoverable":true}}}"#
     );
@@ -1216,6 +1258,82 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         serde_json::to_string(&replaced_update_event)
             .expect("serialize replaced room activity update"),
         r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body"}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&redacted_update_event)
+            .expect("serialize redacted room activity update"),
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"activity_redacted","redaction_event_id":"$redaction:example.org"}}}"#
+    );
+}
+
+#[test]
+fn redacted_room_activity_round_trips_through_json() {
+    let activity = RoomActivityKind::Redacted(RoomRedactedActivity {
+        event_id: "$redacted:example.org".to_owned(),
+    });
+    let json = serde_json::json!({
+        "type": "redacted",
+        "event_id": "$redacted:example.org",
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize redacted activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityKind>(json).expect("deserialize redacted activity"),
+        activity
+    );
+}
+
+#[test]
+fn activity_redacted_update_round_trips_through_json() {
+    let update = RoomActivityUpdateKind::ActivityRedacted {
+        redaction_event_id: "$redaction:example.org".to_owned(),
+    };
+    let json = serde_json::json!({
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction:example.org",
+    });
+
+    assert_eq!(
+        serde_json::to_value(&update).expect("serialize activity redacted update"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdateKind>(json)
+            .expect("deserialize activity redacted update"),
+        update
+    );
+}
+
+#[test]
+fn redacted_room_activity_rejects_missing_or_extra_fields() {
+    assert!(
+        serde_json::from_str::<RoomRedactedActivity>(r#"{}"#).is_err(),
+        "redacted room activity must require event_id"
+    );
+    assert!(
+        serde_json::from_str::<RoomRedactedActivity>(
+            r#"{"event_id":"$redacted:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "redacted room activity must reject unknown fields"
+    );
+}
+
+#[test]
+fn activity_redacted_update_rejects_missing_or_extra_fields() {
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(r#"{"type":"activity_redacted"}"#).is_err(),
+        "activity redacted update must require redaction_event_id"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"activity_redacted","redaction_event_id":"$redaction:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "activity redacted update must reject unknown fields"
     );
 }
 

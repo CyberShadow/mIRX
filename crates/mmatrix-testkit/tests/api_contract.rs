@@ -20,12 +20,13 @@ use mmatrix_testkit::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageActivity,
     RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState,
     RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
+    StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
+    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -1299,6 +1300,39 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
 }
 
 #[test]
+fn room_activity_redacted_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$redacted:example.org".to_owned(),
+        timestamp_ms: 1_710_000_060_000,
+        relation: None,
+        kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: "$redacted:example.org".to_owned(),
+        }),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$redacted:example.org",
+        "timestamp_ms": 1710000060000u64,
+        "relation": null,
+        "kind": {
+            "type": "redacted",
+            "event_id": "$redacted:example.org"
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize redacted activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize redacted activity"),
+        activity
+    );
+}
+
+#[test]
 fn room_activity_relation_reply_round_trips_through_json() {
     let relation = RoomActivityRelation::Reply {
         in_reply_to_event_id: "$reply:example".to_owned(),
@@ -1486,6 +1520,15 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             body: "edited body".to_owned(),
         },
     };
+    let redacted = RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$original:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ActivityRedacted {
+            redaction_event_id: "$redaction:example.org".to_owned(),
+        },
+    };
 
     let sent_json = serde_json::json!({
         "room_id": "!ops:example.org",
@@ -1525,6 +1568,17 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             "body": "edited body"
         }
     });
+    let redacted_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "event",
+            "event_id": "$original:example.org"
+        },
+        "kind": {
+            "type": "activity_redacted",
+            "redaction_event_id": "$redaction:example.org"
+        }
+    });
 
     assert_eq!(
         serde_json::to_value(&sent).expect("serialize sent update"),
@@ -1537,6 +1591,10 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
     assert_eq!(
         serde_json::to_value(&replaced).expect("serialize replaced update"),
         replaced_json
+    );
+    assert_eq!(
+        serde_json::to_value(&redacted).expect("serialize redacted update"),
+        redacted_json
     );
 
     assert_eq!(
@@ -1597,6 +1655,37 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
         serde_json::from_value::<RoomActivityUpdate>(replaced_json)
             .expect("deserialize replaced update"),
         replaced
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivityUpdate>(redacted_json)
+            .expect("deserialize redacted update"),
+        redacted
+    );
+}
+
+#[test]
+fn room_activity_redaction_contract_shapes_reject_invalid_payloads() {
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(r#"{"type":"activity_redacted"}"#).is_err(),
+        "activity redacted kind must require redaction_event_id"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityUpdateKind>(
+            r#"{"type":"activity_redacted","redaction_event_id":"$redaction:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "activity redacted kind must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityKind>(r#"{"type":"redacted"}"#).is_err(),
+        "redacted activity must require event_id"
+    );
+    assert!(
+        serde_json::from_str::<RoomActivityKind>(
+            r#"{"type":"redacted","event_id":"$redacted:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "redacted activity must reject unknown fields"
     );
 }
 

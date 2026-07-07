@@ -187,6 +187,7 @@ pub enum RoomActivityKind {
     Image(Box<RoomImageActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     StateNotice(RoomStateNoticeActivity),
+    Redacted(RoomRedactedActivity),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -285,6 +286,12 @@ pub struct RoomStateNoticeActivity {
     pub sender: String,
     pub state_key: String,
     pub content: RoomStateNoticeContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomRedactedActivity {
+    pub event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -430,6 +437,9 @@ pub enum RoomActivityUpdateKind {
         timestamp_ms: u64,
         presentation: RoomMessagePresentationKind,
         body: String,
+    },
+    ActivityRedacted {
+        redaction_event_id: String,
     },
 }
 

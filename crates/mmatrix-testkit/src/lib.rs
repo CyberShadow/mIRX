@@ -346,6 +346,7 @@ pub enum RoomActivityKind {
     Image(Box<RoomImageActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     StateNotice(RoomStateNoticeActivity),
+    Redacted(RoomRedactedActivity),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -473,6 +474,12 @@ pub struct RoomStateNoticeActivity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomRedactedActivity {
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomStateNoticeContent {
     Topic {
@@ -515,6 +522,9 @@ pub enum RoomActivityUpdateKind {
         timestamp_ms: u64,
         presentation: RoomMessagePresentationKind,
         body: String,
+    },
+    ActivityRedacted {
+        redaction_event_id: String,
     },
 }
 

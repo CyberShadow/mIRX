@@ -39,6 +39,7 @@ use matrix_sdk::{
                     Relation as MessageRelation, RoomMessageEventContent,
                     RoomMessageEventContentWithoutRelation,
                 },
+                redaction::OriginalSyncRoomRedactionEvent,
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
             space::child::{SpaceChildEventContent, SpaceChildOrd},
@@ -816,6 +817,22 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         }
     });
 
+    let redaction_events = events.clone();
+    client.add_event_handler(move |event: OriginalSyncRoomRedactionEvent, room: Room| {
+        let events = redaction_events.clone();
+        async move {
+            let rules = room.clone_info().room_version_rules_or_default().redaction;
+            emit_event(
+                &events,
+                Event::RoomActivityUpdate(room_activity_update_from_sync_redaction(
+                    room.room_id().as_str(),
+                    &event,
+                    &rules,
+                )),
+            );
+        }
+    });
+
     let topic_events = events.clone();
     client.add_event_handler(move |event: SyncRoomTopicEvent, room: Room| {
         let events = topic_events.clone();
@@ -983,6 +1000,22 @@ fn room_activity_update_from_sync_message_replacement(
             body,
         },
     })
+}
+
+fn room_activity_update_from_sync_redaction(
+    room_id: &str,
+    event: &OriginalSyncRoomRedactionEvent,
+    rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
+) -> RoomActivityUpdate {
+    RoomActivityUpdate {
+        room_id: room_id.to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: event.redacts(rules).to_string(),
+        },
+        kind: RoomActivityUpdateKind::ActivityRedacted {
+            redaction_event_id: event.event_id.to_string(),
+        },
+    }
 }
 
 fn room_activity_relation_from_message(
@@ -2029,12 +2062,13 @@ mod tests {
         map_emoji_short_auth_string, map_local_message_activity, map_send_queue_update,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_image_media_request_parameters,
-        room_list_update_is_relevant, room_members_from_parts, room_message_event_content,
-        room_read_state_from_parts, room_read_update_is_relevant, room_tag_summaries_from_tags,
-        room_timeline_event_from_sync_message, room_typing_from_sync_typing,
-        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        room_activity_from_sync_topic, room_activity_update_from_sync_redaction,
+        room_image_media_request_parameters, room_list_update_is_relevant, room_members_from_parts,
+        room_message_event_content, room_read_state_from_parts, room_read_update_is_relevant,
+        room_tag_summaries_from_tags, room_timeline_event_from_sync_message,
+        room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
+        verification_flow_id_from_to_device, verification_request_from_to_device,
+        verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
@@ -2067,11 +2101,13 @@ mod tests {
                 room::{
                     member::OriginalSyncRoomMemberEvent,
                     message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+                    redaction::OriginalSyncRoomRedactionEvent,
                     topic::OriginalSyncRoomTopicEvent,
                 },
                 tag::{TagInfo, TagName, Tags},
                 typing::SyncTypingEvent,
             },
+            room_version_rules::RedactionRules,
         },
         send_queue::{RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
@@ -2769,6 +2805,134 @@ mod tests {
                     body: "thread reply edited".to_owned(),
                 },
             }))
+        );
+    }
+
+    #[test]
+    fn legacy_redaction_maps_to_room_activity_update() {
+        let event: OriginalSyncRoomRedactionEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.redaction",
+            "content": {},
+            "redacts": "$original:example.org",
+            "event_id": "$redaction:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000002000u64
+        }))
+        .expect("deserialize legacy redaction event");
+
+        assert_eq!(
+            room_activity_update_from_sync_redaction(
+                "!room:example.org",
+                &event,
+                &RedactionRules::V1
+            ),
+            RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ActivityRedacted {
+                    redaction_event_id: "$redaction:example.org".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn v11_redaction_maps_to_room_activity_update() {
+        let event: OriginalSyncRoomRedactionEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.redaction",
+            "content": {
+                "redacts": "$original:example.org"
+            },
+            "event_id": "$redaction:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000002001u64
+        }))
+        .expect("deserialize v11 redaction event");
+
+        assert_eq!(
+            room_activity_update_from_sync_redaction(
+                "!room:example.org",
+                &event,
+                &RedactionRules::V11
+            ),
+            RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ActivityRedacted {
+                    redaction_event_id: "$redaction:example.org".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn redaction_targeting_edited_message_uses_original_event_id() {
+        let replacement_event: OriginalSyncRoomMessageEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.message",
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "* edited body",
+                    "m.new_content": {
+                        "msgtype": "m.text",
+                        "body": "edited body"
+                    },
+                    "m.relates_to": {
+                        "rel_type": "m.replace",
+                        "event_id": "$original:example.org"
+                    }
+                },
+                "event_id": "$edit:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000001000u64
+            }))
+            .expect("deserialize replacement event");
+        let redaction_event: OriginalSyncRoomRedactionEvent =
+            serde_json::from_value(serde_json::json!({
+                "type": "m.room.redaction",
+                "content": {},
+                "redacts": "$original:example.org",
+                "event_id": "$redaction:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000002002u64
+            }))
+            .expect("deserialize redaction event");
+
+        assert_eq!(
+            room_timeline_event_from_sync_message("!room:example.org", &replacement_event),
+            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::MessageReplaced {
+                    replacement_event_id: "$edit:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_001_000,
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "edited body".to_owned(),
+                },
+            }))
+        );
+        assert_eq!(
+            room_activity_update_from_sync_redaction(
+                "!room:example.org",
+                &redaction_event,
+                &RedactionRules::V1
+            ),
+            RoomActivityUpdate {
+                room_id: "!room:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$original:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ActivityRedacted {
+                    redaction_event_id: "$redaction:example.org".to_owned(),
+                },
+            }
         );
     }
 
