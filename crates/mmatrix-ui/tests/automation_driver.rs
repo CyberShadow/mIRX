@@ -621,6 +621,7 @@ fn message_entry(
         activity_id: format!("event:{}", generated_event_id(room_id, body)),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
@@ -675,6 +676,7 @@ fn message_entry_with_event_id_and_relation(
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
         relation,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
@@ -735,6 +737,7 @@ fn pending_entry_with_presentation(
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
@@ -777,6 +780,7 @@ fn failed_entry(
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
@@ -803,6 +807,7 @@ fn topic_entry_with_event_id(
         activity_id: format!("state:{event_id}"),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
@@ -851,6 +856,7 @@ fn member_entry_with_event_id(
         activity_id: format!("state:{event_id}"),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
@@ -876,6 +882,7 @@ fn unsupported_entry_with_event_id(
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
@@ -895,6 +902,7 @@ fn image_entry_with_event_id(
         activity_id: format!("event:{}", activity.event_id),
         timestamp_ms,
         relation: None,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(activity)),
     }
 }
@@ -911,6 +919,7 @@ fn redacted_entry(
         activity_id: activity_id.to_owned(),
         timestamp_ms,
         relation,
+        reactions: Vec::new(),
         kind: RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: event_id.to_owned(),
         }),
@@ -1405,6 +1414,7 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
             activity_id: "event:$event:example.org".to_owned(),
             timestamp_ms: 1_700_000_000_100,
             relation: None,
+            reactions: Vec::new(),
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
@@ -3006,6 +3016,7 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
                     in_reply_to_event_id: Some("$thread-1".to_owned()),
                     is_falling_back: false,
                 }),
+                reactions: Vec::new(),
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("thread-pending-1".to_owned()),
@@ -3861,6 +3872,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 activity_id: "txn:txn-failed-1".to_owned(),
                 timestamp_ms: 1_700_000_300_000,
                 relation: None,
+                reactions: Vec::new(),
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-failed-1".to_owned()),
@@ -6147,6 +6159,7 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
             activity_id: "event:$event:example.org".to_owned(),
             timestamp_ms: 1_700_000_060_000,
             relation: None,
+            reactions: Vec::new(),
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example.org".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
