@@ -14166,6 +14166,7 @@ mod tests {
                     "hello",
                     1_700_000_000_000,
                 )],
+                reactions_by_target: BTreeMap::new(),
                 threads: BTreeMap::new(),
                 image_media: BTreeMap::new(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
