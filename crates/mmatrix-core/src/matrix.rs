@@ -1932,7 +1932,7 @@ fn map_send_queue_update(
             })
         }
         RoomSendQueueUpdate::CancelledLocalEvent { transaction_id } => {
-            take_pending_outgoing_kind(pending, &transaction_id.to_string());
+            take_pending_outgoing_kind(pending, transaction_id.as_ref());
             Ok(Vec::new())
         }
         RoomSendQueueUpdate::ReplacedLocalEvent { .. }
@@ -2362,7 +2362,7 @@ mod tests {
         ReactionEventIndexEntry, attach_thread_relation, cancelled_state,
         direct_user_ids_by_room_from_content, fetch_room_image_media, insert_pending_outgoing_kind,
         map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_message_activity,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
         outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
         room_activity_from_sync_member, room_activity_from_sync_message,
@@ -2387,7 +2387,7 @@ mod tests {
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
-        Client,
+        Client, SessionMeta,
         encryption::{
             backups::BackupState,
             recovery::RecoveryState,
@@ -2415,12 +2415,14 @@ mod tests {
             },
             room_version_rules::RedactionRules,
         },
-        send_queue::{RoomSendQueueUpdate, SendQueueUpdate},
+        send_queue::{LocalEchoContent, RoomSendQueue, RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
     };
+    use matrix_sdk_base::cross_process_lock::CrossProcessLockConfig;
     use matrix_sdk_base::{
-        RoomInfoNotableUpdateReasons,
+        BaseClient, DmRoomDefinition, RoomInfoNotableUpdateReasons, RoomState, ThreadingSupport,
         read_receipts::{LatestReadReceipt, RoomReadReceipts},
+        store::StoreConfig,
     };
     use matrix_sdk_crypto::CrossSigningStatus;
 
@@ -2527,6 +2529,46 @@ mod tests {
                 .await
                 .expect("build matrix client")
         })
+    }
+
+    fn build_test_room_send_queue_context() -> (tokio::runtime::Runtime, Client, RoomSendQueue) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        let (client, room_send_queue) = runtime.block_on(async {
+            let base_client = BaseClient::new(
+                StoreConfig::new(CrossProcessLockConfig::SingleProcess),
+                ThreadingSupport::Disabled,
+                DmRoomDefinition::MatrixSpec,
+            );
+            base_client
+                .activate(
+                    SessionMeta {
+                        user_id: OwnedUserId::try_from("@alice:example.org")
+                            .expect("valid user id"),
+                        device_id: "DEVICE".into(),
+                    },
+                    matrix_sdk::store::RoomLoadSettings::default(),
+                    None,
+                )
+                .await
+                .expect("activate base client");
+            base_client.get_or_create_room(room_id().as_ref(), RoomState::Joined);
+
+            let client = Client::builder()
+                .homeserver_url("http://localhost")
+                .base_client(base_client)
+                .build()
+                .await
+                .expect("build matrix client");
+            let room = client.get_room(room_id().as_ref()).expect("joined room");
+
+            (client, room.send_queue())
+        });
+
+        (runtime, client, room_send_queue)
     }
 
     fn room_image_media_request(source: RoomMediaSource) -> FetchRoomImageMediaRequest {
@@ -4660,6 +4702,129 @@ mod tests {
                 key: "+1".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn local_echo_react_branch_registers_pending_reaction_without_room_activity() {
+        let pending = pending_outgoing_registry();
+        let (runtime, _client, room_send_queue) = build_test_room_send_queue_context();
+
+        runtime.block_on(async {
+            let (existing_local_echoes, mut updates) = room_send_queue
+                .subscribe()
+                .await
+                .expect("subscribe to room send queue");
+            assert!(existing_local_echoes.is_empty());
+
+            let send_handle = room_send_queue
+                .send(AnyMessageLikeEventContent::RoomMessage(
+                    RoomMessageEventContent::text_plain("hello"),
+                ))
+                .await
+                .expect("queue message");
+
+            let message_transaction_id = loop {
+                let update = updates.recv().await.expect("send queue update");
+                let RoomSendQueueUpdate::NewLocalEvent(local_echo) = update else {
+                    continue;
+                };
+
+                if matches!(local_echo.content, LocalEchoContent::Event { .. }) {
+                    break local_echo.transaction_id.to_string();
+                }
+            };
+            send_handle
+                .react("+1".to_owned())
+                .await
+                .expect("queue reaction")
+                .expect("reaction handle");
+
+            let react_local_echo = loop {
+                let update = updates.recv().await.expect("send queue update");
+                let RoomSendQueueUpdate::NewLocalEvent(local_echo) = update else {
+                    continue;
+                };
+
+                if matches!(local_echo.content, LocalEchoContent::React { .. }) {
+                    break local_echo;
+                }
+            };
+            let reaction_transaction_id = react_local_echo.transaction_id.to_string();
+
+            let events = map_local_echo(
+                "!room:example.org".to_owned(),
+                react_local_echo,
+                "@alice:example.org",
+                &pending,
+            )
+            .expect("map react local echo");
+
+            assert!(events.is_empty());
+            assert_eq!(
+                pending
+                    .lock()
+                    .expect("lock pending registry")
+                    .get(&reaction_transaction_id),
+                Some(&PendingOutgoingKind::Reaction {
+                    target_event_id: message_transaction_id,
+                    key: "+1".to_owned(),
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn local_echo_redaction_branch_registers_pending_redaction_without_room_activity() {
+        let pending = pending_outgoing_registry();
+        let (runtime, _client, room_send_queue) = build_test_room_send_queue_context();
+
+        runtime.block_on(async {
+            let (existing_local_echoes, mut updates) = room_send_queue
+                .subscribe()
+                .await
+                .expect("subscribe to room send queue");
+            assert!(existing_local_echoes.is_empty());
+
+            room_send_queue
+                .redact(
+                    OwnedEventId::try_from("$reaction:example.org")
+                        .expect("valid reaction event id"),
+                    None,
+                )
+                .await
+                .expect("queue redaction");
+
+            let redaction_local_echo = loop {
+                let update = updates.recv().await.expect("send queue update");
+                let RoomSendQueueUpdate::NewLocalEvent(local_echo) = update else {
+                    continue;
+                };
+
+                if matches!(local_echo.content, LocalEchoContent::Redaction { .. }) {
+                    break local_echo;
+                }
+            };
+            let redaction_transaction_id = redaction_local_echo.transaction_id.to_string();
+
+            let events = map_local_echo(
+                "!room:example.org".to_owned(),
+                redaction_local_echo,
+                "@alice:example.org",
+                &pending,
+            )
+            .expect("map redaction local echo");
+
+            assert!(events.is_empty());
+            assert_eq!(
+                pending
+                    .lock()
+                    .expect("lock pending registry")
+                    .get(&redaction_transaction_id),
+                Some(&PendingOutgoingKind::Redaction {
+                    redacts: "$reaction:example.org".to_owned(),
+                })
+            );
+        });
     }
 
     #[test]
