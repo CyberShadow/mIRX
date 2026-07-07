@@ -1,0 +1,108 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!alpha:example",
+        "display_name": "Alpha",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      },
+      {
+        "room_id": "!beta:example",
+        "display_name": "Beta",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!alpha:example",
+      "activity_id": "event:$alpha-room-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$alpha-room-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "alpha lobby",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!alpha:example",
+      "activity_id": "event:$alpha-thread-root",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$alpha-thread-root",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "alpha root",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!alpha:example",
+      "activity_id": "event:$alpha-room-2",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "message",
+        "event_id": "$alpha-room-2",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "presentation": "text",
+        "body": "alpha parent room content",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!alpha:example",
+      "activity_id": "event:$alpha-thread-base",
+      "timestamp_ms": 1700000180000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$alpha-thread-root",
+        "in_reply_to_event_id": "$alpha-thread-root",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$alpha-thread-base",
+        "transaction_id": null,
+        "sender": "@dave:example",
+        "presentation": "text",
+        "body": "alpha thread base",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

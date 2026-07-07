@@ -1122,8 +1122,17 @@ fn assert_navigation_not_contains(node: &NavigationNode, substring: &str) {
 }
 
 fn nav(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
+    nav_with_activity(text, false, children)
+}
+
+fn nav_with_activity(
+    text: &str,
+    has_activity: bool,
+    children: Vec<NavigationNode>,
+) -> NavigationNode {
     NavigationNode {
         text: text.to_owned(),
+        has_activity,
         children,
     }
 }
@@ -1172,6 +1181,17 @@ fn navigation_path_by_substrings(
         .collect()
 }
 
+fn assert_navigation_activity(ui_state: &UiState, path_substrings: &[&str], expected: bool) {
+    let node = ui_state
+        .navigation
+        .find_by_substring_path(path_substrings)
+        .unwrap_or_else(|| panic!("missing unique navigation path containing {path_substrings:?}"));
+    assert_eq!(
+        node.has_activity, expected,
+        "unexpected navigation activity for {path_substrings:?}"
+    );
+}
+
 fn activate_switchbar_item_by_command(
     app: &MmatrixApp,
     identity: &ViewIdentity,
@@ -1185,7 +1205,12 @@ fn activate_switchbar_item_by_command(
         .unwrap_or_else(|| panic!("missing switchbar item for {identity:?}"));
     let frame = app.automation_frame_hwnd() as HWND;
     unsafe {
-        SendMessageW(frame, WM_COMMAND, (SWITCHBAR_COMMAND_FIRST + index) as WPARAM, 0);
+        SendMessageW(
+            frame,
+            WM_COMMAND,
+            (SWITCHBAR_COMMAND_FIRST + index) as WPARAM,
+            0,
+        );
     }
     app.wait_idle(Duration::from_secs(5))?;
     Ok(())
@@ -2839,9 +2864,18 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
                     vec![
                         nav(
                             "Work",
-                            vec![nav("Ops [e2ee]", vec![]), nav("Shared", vec![])],
+                            vec![
+                                nav("Ops [e2ee]", vec![]),
+                                nav_with_activity("Shared", true, vec![]),
+                            ],
                         ),
-                        nav("Social", vec![nav("Shared", vec![]), nav("Random", vec![])],),
+                        nav(
+                            "Social",
+                            vec![
+                                nav_with_activity("Shared", true, vec![]),
+                                nav_with_activity("Random", true, vec![]),
+                            ],
+                        ),
                         nav(
                             "unspaced rooms: 1",
                             vec![nav("Direct [query: @alice:example] [e2ee]", vec![])],
@@ -4518,7 +4552,10 @@ fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
     let status_state = app.dump_ui_state()?;
     assert_eq!(status_state.mdi.active, ViewIdentity::Status);
     assert_active_switchbar_item(&status_state, &ViewIdentity::Status);
-    assert_eq!(app.selected_navigation_path()?, nav_path(&["mmatrix", "status"]));
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "status"])
+    );
     assert_compose_has_focus(&app);
 
     activate_switchbar_item_by_command(&app, &room_view_identity)?;
@@ -4553,14 +4590,15 @@ fn automation_driver_activation_returns_keyboard_to_compose()
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
-    let alpha_path = navigation_path_by_substrings(
-        &initial_state.navigation,
-        &["mmatrix", "rooms: 2", "Alpha"],
-    );
+    let alpha_path =
+        navigation_path_by_substrings(&initial_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
 
     app.select_navigation_path(&alpha_path)?;
     app.wait_idle(Duration::from_secs(5))?;
-    assert_eq!(app.dump_ui_state()?.mdi.active, room_identity("!alpha:example"));
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!alpha:example")
+    );
     assert_compose_has_focus(&app);
 
     activate_switchbar_item_by_command(&app, &ViewIdentity::Status)?;
@@ -4571,7 +4609,10 @@ fn automation_driver_activation_returns_keyboard_to_compose()
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
-    assert_eq!(app.dump_ui_state()?.mdi.active, room_identity("!beta:example"));
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
     assert_compose_has_focus(&app);
 
     drop(app);
@@ -4602,6 +4643,90 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
 
     let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("shell-activity.json");
+    let update_path = fixture_update_path("shell-activity.json");
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let loaded_state = app.dump_ui_state()?;
+    let alpha_room_path =
+        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+    let beta_room_path =
+        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Beta"]);
+    let alpha_thread_path = navigation_path_by_substrings(
+        &loaded_state.navigation,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+    );
+    app.select_navigation_path(&alpha_thread_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_navigation_path(&alpha_room_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let room_view_identity = room_identity("!alpha:example");
+    let beta_view_identity = room_identity("!beta:example");
+    let thread_view_identity = thread_identity("!alpha:example", "$alpha-thread-root");
+    let initial_state = app.dump_ui_state()?;
+
+    assert_eq!(initial_state.mdi.active, room_view_identity);
+    assert_active_switchbar_item(&initial_state, &room_view_identity);
+    assert_eq!(app.selected_navigation_path()?, alpha_room_path);
+    assert_switchbar_activity(&initial_state, &beta_view_identity, true);
+    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_switchbar_activity(&initial_state, &thread_view_identity, true);
+    assert_navigation_activity(
+        &initial_state,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        true,
+    );
+    assert_switchbar_activity(&initial_state, &room_view_identity, false);
+    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+
+    app.select_navigation_path(&alpha_thread_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let thread_state = app.dump_ui_state()?;
+    assert_eq!(thread_state.mdi.active, thread_view_identity);
+    assert_active_switchbar_item(&thread_state, &thread_view_identity);
+    assert_eq!(app.selected_navigation_path()?, alpha_thread_path);
+    assert_switchbar_activity(&thread_state, &thread_view_identity, false);
+    assert_navigation_activity(
+        &thread_state,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        false,
+    );
+    assert_switchbar_activity(&thread_state, &beta_view_identity, true);
+    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_switchbar_activity(&thread_state, &room_view_identity, false);
+    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+
+    app.select_navigation_path(&beta_room_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta_state = app.dump_ui_state()?;
+    assert_eq!(beta_state.mdi.active, beta_view_identity);
+    assert_active_switchbar_item(&beta_state, &beta_view_identity);
+    assert_eq!(app.selected_navigation_path()?, beta_room_path);
+    assert_switchbar_activity(&beta_state, &beta_view_identity, false);
+    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Beta"], false);
+    assert_switchbar_activity(&beta_state, &thread_view_identity, false);
+    assert_navigation_activity(
+        &beta_state,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        false,
+    );
+    assert_switchbar_activity(&beta_state, &room_view_identity, false);
+    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+
     Ok(())
 }
 

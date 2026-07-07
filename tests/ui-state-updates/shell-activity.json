@@ -1,0 +1,45 @@
+[
+  {
+    "RoomActivity": {
+      "room_id": "!beta:example",
+      "activity_id": "event:$beta-activity",
+      "timestamp_ms": 1700000240000,
+      "kind": {
+        "type": "message",
+        "event_id": "$beta-activity",
+        "transaction_id": null,
+        "sender": "@erin:example",
+        "presentation": "text",
+        "body": "beta wakeup",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!alpha:example",
+      "activity_id": "event:$alpha-thread-activity",
+      "timestamp_ms": 1700000300000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$alpha-thread-root",
+        "in_reply_to_event_id": "$alpha-thread-root",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$alpha-thread-activity",
+        "transaction_id": null,
+        "sender": "@frank:example",
+        "presentation": "text",
+        "body": "fresh alpha thread",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]
