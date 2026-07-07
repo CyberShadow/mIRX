@@ -11848,10 +11848,9 @@ mod tests {
             .get("!ops:example")
             .expect("room view must exist");
         assert!(
-            room_view
+            !room_view
                 .image_media
-                .get("event:$image1:example.org")
-                .is_none(),
+                .contains_key("event:$image1:example.org"),
             "redaction should drop stored image media state"
         );
         assert!(
