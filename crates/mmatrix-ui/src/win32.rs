@@ -23,10 +23,10 @@ use mmatrix_core::{
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
     RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeContent,
-    RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget, SetRoomTopicRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
+    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -526,9 +526,7 @@ impl RoomViewModel {
                 }
                 self.activities.push(activity);
             }
-            RoomActivityKind::Redacted(_) => {
-                unreachable!("redacted room activity handling is not implemented in this unit")
-            }
+            RoomActivityKind::Redacted(_) => self.activities.push(activity),
         }
         self.rebuild_threads();
     }
@@ -775,6 +773,19 @@ impl RoomViewModel {
         true
     }
 
+    fn redact_activity(&mut self, target_event_id: &str) -> bool {
+        let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
+            return false;
+        };
+        let activity_id = self.activities[index].activity_id.clone();
+        self.activities[index].kind = RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: target_event_id.to_owned(),
+        });
+        self.remove_image_media(&activity_id);
+        self.rebuild_threads();
+        true
+    }
+
     fn find_message_activity_index(
         &self,
         transaction_id: Option<&str>,
@@ -809,6 +820,12 @@ impl RoomViewModel {
         }
 
         None
+    }
+
+    fn find_activity_index_by_event_id(&self, event_id: &str) -> Option<usize> {
+        self.activities
+            .iter()
+            .position(|activity| room_activity_event_id(activity) == Some(event_id))
     }
 
     fn find_pending_message_activity_index(&self, transaction_id: &str) -> Option<usize> {
@@ -884,9 +901,14 @@ impl RoomViewModel {
                 .map(|_| ())
                 .ok_or_else(|| "message edit requires an existing visible target event".to_owned()),
             (
-                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::ActivityRedacted { .. },
-            ) => Err("redacted activity updates are not implemented in this unit".to_owned()),
+            ) => self
+                .find_activity_index_by_event_id(event_id)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    "activity redaction requires an existing visible target event".to_owned()
+                }),
             (
                 RoomActivityUpdateTarget::Event { .. },
                 RoomActivityUpdateKind::MessageSent { .. },
@@ -959,9 +981,15 @@ fn validate_synthetic_room_activity_events(
                         RoomActivityUpdateKind::MessageReplaced { .. },
                     ) => panic!("message edit requires an event target"),
                     (
-                        RoomActivityUpdateTarget::Event { .. },
+                        RoomActivityUpdateTarget::Event { event_id },
                         RoomActivityUpdateKind::ActivityRedacted { .. },
-                    ) => panic!("redacted activity updates are not implemented in this unit"),
+                    ) => {
+                        let redacted = room_view.redact_activity(event_id);
+                        assert!(
+                            redacted,
+                            "validated synthetic activity redaction must resolve"
+                        );
+                    }
                     (
                         RoomActivityUpdateTarget::Event { .. },
                         RoomActivityUpdateKind::MessageSent { .. },
@@ -1129,9 +1157,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             send_state: RoomMessageSendState::Sent,
         }),
         RoomActivityKind::StateNotice(_) => None,
-        RoomActivityKind::Redacted(_) => {
-            unreachable!("redacted last-activity projection is not implemented in this unit")
-        }
+        RoomActivityKind::Redacted(_) => None,
     }
 }
 
@@ -1143,9 +1169,7 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
         RoomActivityKind::Image(_) => true,
         RoomActivityKind::UnsupportedMessage(_) => true,
         RoomActivityKind::StateNotice(_) => true,
-        RoomActivityKind::Redacted(_) => {
-            unreachable!("redacted inactive-room projection is not implemented in this unit")
-        }
+        RoomActivityKind::Redacted(_) => true,
     }
 }
 
@@ -1158,6 +1182,7 @@ fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
+        RoomActivityKind::Redacted(activity) => Some(activity.event_id.as_str()),
         _ => None,
     }
 }
@@ -1184,9 +1209,7 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
         ),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
         RoomActivityKind::StateNotice(_) => None,
-        RoomActivityKind::Redacted(_) => {
-            unreachable!("redacted thread labels are not implemented in this unit")
-        }
+        RoomActivityKind::Redacted(_) => Some("Message redacted".to_owned()),
     }
 }
 
@@ -1254,7 +1277,8 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
         }
         RoomActivityKind::Image(_)
         | RoomActivityKind::UnsupportedMessage(_)
-        | RoomActivityKind::StateNotice(_) => room_activity_event_id(activity),
+        | RoomActivityKind::StateNotice(_)
+        | RoomActivityKind::Redacted(_) => room_activity_event_id(activity),
         _ => None,
     }
 }
@@ -1395,6 +1419,7 @@ fn apply_room_image_media_event(state: &mut WindowState, media: RoomImageMedia) 
 }
 
 fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
+    let clears_last_activity = matches!(activity.kind, RoomActivityKind::Redacted(_));
     let target_view_id = room_activity_target_view_id(&activity);
     if room_activity_marks_inactive_room(&activity)
         && state.active_view != target_view_id
@@ -1420,6 +1445,8 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
         .apply_activity(activity);
     if let Some(last_activity) = last_activity {
         state.model.last_activity = Some(last_activity);
+    } else if clears_last_activity {
+        state.model.last_activity = None;
     }
 }
 
@@ -1462,9 +1489,12 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                     && last_activity.event_id.as_deref() == Some(event_id.as_str())
             }
             (
-                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateTarget::Event { event_id },
                 RoomActivityUpdateKind::ActivityRedacted { .. },
-            ) => false,
+            ) => {
+                last_activity.room_id == room_id
+                    && last_activity.event_id.as_deref() == Some(event_id.as_str())
+            }
             _ => false,
         });
     match (&update.target, &update.kind) {
@@ -1506,10 +1536,18 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                 );
         }
         (
-            RoomActivityUpdateTarget::Event { .. },
+            RoomActivityUpdateTarget::Event { event_id },
             RoomActivityUpdateKind::ActivityRedacted { .. },
         ) => {
-            unreachable!("redacted activity updates are not implemented in this unit");
+            let redacted = state
+                .model
+                .room_views
+                .entry(room_id.clone())
+                .or_default()
+                .redact_activity(event_id);
+            if redacted {
+                prune_decoded_images(state);
+            }
         }
         (
             RoomActivityUpdateTarget::Transaction { .. },
@@ -1537,7 +1575,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                         .find_message_activity_index(Some(transaction_id.as_str()), None)
                         .and_then(|index| room_view.activities.get(index)),
                     RoomActivityUpdateTarget::Event { event_id } => room_view
-                        .find_message_activity_index(None, Some(event_id.as_str()))
+                        .find_activity_index_by_event_id(event_id.as_str())
                         .and_then(|index| room_view.activities.get(index)),
                 })
     {
@@ -4784,7 +4822,15 @@ fn push_room_activity_row(
             }
         },
         RoomActivityKind::Redacted(_) => {
-            unreachable!("redacted timeline rows are not implemented in this unit");
+            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+            let body = "message redacted".to_owned();
+            rows.push(TimelineRow::log(
+                TimelineRowKind::StateNotice,
+                format!("* {timestamp} {body}"),
+                timestamp,
+                "*".to_owned(),
+                body,
+            ));
         }
     }
 }
@@ -9348,6 +9394,18 @@ mod tests {
         })
     }
 
+    fn incoming_redacted(room_id: &str, target_event_id: &str, redaction_event_id: &str) -> Event {
+        Event::RoomActivityUpdate(RoomActivityUpdate {
+            room_id: room_id.to_owned(),
+            target: RoomActivityUpdateTarget::Event {
+                event_id: target_event_id.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::ActivityRedacted {
+                redaction_event_id: redaction_event_id.to_owned(),
+            },
+        })
+    }
+
     fn room_read_state(
         room_id: &str,
         latest_active_event_id: Option<&str>,
@@ -9863,6 +9921,40 @@ mod tests {
     }
 
     #[test]
+    fn redaction_synthetic_event_validation_rejects_missing_event_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[incoming_redacted(
+                    "!ops:example",
+                    "$missing:example.org",
+                    "$redaction:example.org",
+                )]
+            ),
+            Err("activity redaction requires an existing visible target event".to_owned())
+        );
+    }
+
+    #[test]
+    fn redaction_synthetic_event_validation_rejects_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ActivityRedacted {
+                        redaction_event_id: "$redaction:example.org".to_owned(),
+                    },
+                })]
+            ),
+            Err("activity redacted update requires an event target".to_owned())
+        );
+    }
+
+    #[test]
     fn room_activity_events_accumulate_per_room_in_order() {
         let mut state = test_state();
 
@@ -10172,6 +10264,111 @@ mod tests {
     }
 
     #[test]
+    fn redaction_room_activity_update_replaces_text_message_with_tombstone() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$event:example.org",
+                None,
+                None,
+                RoomMessagePresentationKind::Text,
+                "secret body",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$event:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        assert!(matches!(
+            room_view.activities.as_slice(),
+            [RoomActivity {
+                activity_id,
+                kind: RoomActivityKind::Redacted(RoomRedactedActivity { event_id }),
+                ..
+            }] if activity_id == "event:$event:example.org" && event_id == "$event:example.org"
+        ));
+        assert_eq!(state.model.last_activity, None);
+
+        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("secret body"));
+    }
+
+    #[test]
+    fn redaction_room_activity_update_overrides_edited_message_and_blocks_late_replacement() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$event:example.org",
+                None,
+                None,
+                RoomMessagePresentationKind::Text,
+                "original body",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$event:example.org",
+                "$edit:example.org",
+                RoomMessagePresentationKind::Emote,
+                "edited body",
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$event:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$event:example.org",
+                "$late-edit:example.org",
+                RoomMessagePresentationKind::Text,
+                "late body",
+            ),
+        )
+        .unwrap();
+
+        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("original body"));
+        assert!(!rendered.contains("edited body"));
+        assert!(!rendered.contains("late body"));
+    }
+
+    #[test]
     fn direct_message_edit_without_target_leaves_visible_timeline_unchanged() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -10205,6 +10402,42 @@ mod tests {
                 .map(|view| &view.activities),
             Some(&before)
         );
+    }
+
+    #[test]
+    fn redaction_runtime_unknown_event_target_leaves_visible_timeline_unchanged() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        let before_activities = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist")
+            .activities
+            .clone();
+        let before_last_activity = state.model.last_activity.clone();
+
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$missing:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .map(|view| &view.activities),
+            Some(&before_activities)
+        );
+        assert_eq!(state.model.last_activity, before_last_activity);
     }
 
     #[test]
@@ -11105,6 +11338,31 @@ mod tests {
     }
 
     #[test]
+    fn redaction_state_notice_renders_generic_tombstone_without_old_notice_text() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            member_state("!ops:example", "@carol:example", "join", Some("carol")),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$member:!ops:example:@carol:example:join",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+
+        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("carol joined"));
+        assert!(!rendered.contains("membership: join"));
+    }
+
+    #[test]
     fn room_tree_label_marks_direct_rooms_as_queries_before_e2ee() {
         let mut direct_room = room("!direct:example", "Direct", true);
         direct_room.is_direct = true;
@@ -11271,6 +11529,38 @@ mod tests {
                 "* [16:00] @alice:example.org sent unsupported m.image: diagram.png".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn redaction_unsupported_message_hides_msgtype_and_body() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            unsupported_message(
+                "!ops:example",
+                "$unsupported:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "m.audio",
+                "voice-note.ogg",
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$unsupported:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+
+        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("m.audio"));
+        assert!(!rendered.contains("voice-note.ogg"));
     }
 
     #[test]
@@ -11503,6 +11793,102 @@ mod tests {
                 message: "current".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn redaction_image_row_clears_media_state_and_ignores_late_media_updates() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            image_message(
+                "!ops:example",
+                "$image1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "body fallback",
+                Some("diagram.png"),
+                Some(RoomImageInfo {
+                    mimetype: Some("image/png".to_owned()),
+                    size: Some(12_345),
+                    width: Some(640),
+                    height: Some(480),
+                    is_animated: Some(false),
+                    thumbnail_source: None,
+                }),
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "current".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$image1:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        assert!(
+            room_view
+                .image_media
+                .get("event:$image1:example.org")
+                .is_none(),
+            "redaction should drop stored image media state"
+        );
+        assert!(
+            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+                .is_empty(),
+            "redacted image rows must not trigger lazy image fetches"
+        );
+
+        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("diagram.png"));
+        assert!(!rendered.contains("body fallback"));
+        assert!(!rendered.contains("mxc://example.org/diagram"));
+
+        apply_core_event(
+            &mut state,
+            room_image_media_event(
+                "!ops:example",
+                "event:$image1:example.org",
+                "$image1:example.org",
+                RoomImageMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "late".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        assert!(room_view.image_media.is_empty());
+        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("late"));
     }
 
     #[test]
@@ -13194,6 +13580,55 @@ mod tests {
     }
 
     #[test]
+    fn redaction_thread_root_keeps_thread_reachable_and_labels_it_message_redacted() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root",
+                None,
+                "old root",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$thread-1", "$thread-root", "thread rep"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$thread-root", "$redaction:example.org"),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("Message redacted")
+        );
+
+        let lines = project_timeline_rows(&build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+        ));
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("message redacted"));
+        assert!(!rendered.contains("old root"));
+    }
+
+    #[test]
     fn thread_timeline_filters_room_activity() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -13295,6 +13730,46 @@ mod tests {
         ));
         assert!(lines.iter().any(|line| line.contains("edited reply")));
         assert!(!lines.iter().any(|line| line.contains("old reply")));
+    }
+
+    #[test]
+    fn redaction_threaded_reply_updates_room_and_thread_timeline_projections() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$thread-1", "$thread-root", "old reply"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$thread-1", "$redaction:example.org"),
+        )
+        .unwrap();
+
+        let room_rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        assert!(room_rendered.contains("message redacted"));
+        assert!(!room_rendered.contains("old reply"));
+
+        let thread_lines = project_timeline_rows(&build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+        ));
+        let thread_rendered = thread_lines.join("\n");
+        assert!(thread_rendered.contains("message redacted"));
+        assert!(!thread_rendered.contains("old reply"));
     }
 
     #[test]
