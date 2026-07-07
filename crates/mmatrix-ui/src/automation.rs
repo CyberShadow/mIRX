@@ -532,6 +532,8 @@ pub(crate) struct UiRoomReadState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct NavigationNode {
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) has_activity: bool,
     pub(crate) children: Vec<NavigationNode>,
 }
 
@@ -3260,15 +3262,19 @@ mod tests {
                 UiState {
                     navigation: NavigationNode {
                         text: "mmatrix".to_owned(),
+                        has_activity: false,
                         children: vec![
                             NavigationNode {
                                 text: "status".to_owned(),
+                                has_activity: false,
                                 children: vec![],
                             },
                             NavigationNode {
                                 text: "rooms: 1".to_owned(),
+                                has_activity: false,
                                 children: vec![NavigationNode {
                                     text: "Room".to_owned(),
+                                    has_activity: true,
                                     children: vec![],
                                 }],
                             },
@@ -3373,9 +3379,10 @@ mod tests {
                 "json":{
                     "navigation":{
                         "text":"mmatrix",
+                        "has_activity":false,
                         "children":[
-                            {"text":"status","children":[]},
-                            {"text":"rooms: 1","children":[{"text":"Room","children":[]}]}
+                            {"text":"status","has_activity":false,"children":[]},
+                            {"text":"rooms: 1","has_activity":false,"children":[{"text":"Room","has_activity":true,"children":[]}]}
                         ]
                     },
                     "mdi":{

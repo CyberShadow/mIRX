@@ -7126,8 +7126,32 @@ unsafe fn read_tree_item_text(tree: HWND, item: isize) -> Result<String, String>
     Ok(String::from_utf16_lossy(&buffer[..text_len]))
 }
 
+unsafe fn read_tree_item_state(tree: HWND, item: isize) -> Result<u32, String> {
+    let mut tree_item = TVITEMEXW {
+        mask: TVIF_STATE,
+        hItem: item as _,
+        stateMask: TVIS_BOLD,
+        ..zeroed()
+    };
+
+    if SendMessageW(
+        tree,
+        TVM_GETITEMW,
+        0,
+        (&mut tree_item as *mut TVITEMEXW) as LPARAM,
+    ) == 0
+    {
+        return Err(format!(
+            "failed to read tree item state for handle 0x{item:x}"
+        ));
+    }
+
+    Ok(tree_item.state)
+}
+
 unsafe fn read_navigation_node(tree: HWND, item: isize) -> Result<NavigationNode, String> {
     let text = read_tree_item_text(tree, item)?;
+    let has_activity = read_tree_item_state(tree, item)? & TVIS_BOLD != 0;
     let mut children = Vec::new();
     let mut child =
         SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
@@ -7136,7 +7160,11 @@ unsafe fn read_navigation_node(tree: HWND, item: isize) -> Result<NavigationNode
         child = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, child as LPARAM) as isize;
     }
 
-    Ok(NavigationNode { text, children })
+    Ok(NavigationNode {
+        text,
+        has_activity,
+        children,
+    })
 }
 
 unsafe fn dump_navigation_tree(hwnd: HWND) -> Result<NavigationNode, String> {

@@ -42,6 +42,8 @@ mod cli {
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
         pub(crate) expect_navigation_texts: Vec<String>,
         pub(crate) expect_no_navigation_texts: Vec<String>,
+        pub(crate) expect_navigation_activity: Vec<String>,
+        pub(crate) expect_no_navigation_activity: Vec<String>,
         pub(crate) expect_direct_rooms: Vec<String>,
         pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
         pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
@@ -374,6 +376,20 @@ mod cli {
                         })?,
                     );
                 }
+                "--expect-navigation-activity" => {
+                    config
+                        .expect_navigation_activity
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-navigation-activity".to_owned()
+                        })?);
+                }
+                "--expect-no-navigation-activity" => {
+                    config
+                        .expect_no_navigation_activity
+                        .push(args.next().ok_or_else(|| {
+                            "missing value for --expect-no-navigation-activity".to_owned()
+                        })?);
+                }
                 "--help" => {
                     return Err(usage());
                 }
@@ -421,6 +437,8 @@ mod cli {
             "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
             "  --expect-no-navigation-text <substring>",
+            "  --expect-navigation-activity <path-or-label>",
+            "  --expect-no-navigation-activity <path-or-label>",
         ]
         .join("\n")
     }
@@ -593,6 +611,8 @@ mod cli {
                 "--expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>"
             ));
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
+            assert!(usage().contains("--expect-navigation-activity <path-or-label>"));
+            assert!(usage().contains("--expect-no-navigation-activity <path-or-label>"));
         }
 
         #[test]
@@ -748,6 +768,10 @@ mod cli {
                     "Ops",
                     "--expect-no-navigation-text",
                     "plain",
+                    "--expect-navigation-activity",
+                    "Alpha/root msg",
+                    "--expect-no-navigation-activity",
+                    "Beta",
                 ]
                 .into_iter()
                 .map(str::to_owned),
@@ -822,6 +846,14 @@ mod cli {
             );
             assert_eq!(config.expect_navigation_texts, vec!["Ops".to_owned()]);
             assert_eq!(config.expect_no_navigation_texts, vec!["plain".to_owned()]);
+            assert_eq!(
+                config.expect_navigation_activity,
+                vec!["Alpha/root msg".to_owned()]
+            );
+            assert_eq!(
+                config.expect_no_navigation_activity,
+                vec!["Beta".to_owned()]
+            );
         }
 
         #[test]
@@ -831,6 +863,30 @@ mod cli {
                     .err()
                     .unwrap(),
                 "missing value for --append-events"
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_missing_navigation_activity_values() {
+            assert_eq!(
+                parse_args(
+                    ["--expect-navigation-activity"]
+                        .into_iter()
+                        .map(str::to_owned),
+                )
+                .err()
+                .unwrap(),
+                "missing value for --expect-navigation-activity"
+            );
+            assert_eq!(
+                parse_args(
+                    ["--expect-no-navigation-activity"]
+                        .into_iter()
+                        .map(str::to_owned),
+                )
+                .err()
+                .unwrap(),
+                "missing value for --expect-no-navigation-activity"
             );
         }
 
@@ -1141,6 +1197,8 @@ mod windows_main {
                 || !self.expect_no_switchbar_activity.is_empty()
                 || !self.expect_navigation_texts.is_empty()
                 || !self.expect_no_navigation_texts.is_empty()
+                || !self.expect_navigation_activity.is_empty()
+                || !self.expect_no_navigation_activity.is_empty()
                 || !self.expect_direct_rooms.is_empty()
                 || !self.expect_room_tags.is_empty()
                 || !self.expect_room_read_targets.is_empty()
@@ -1557,6 +1615,43 @@ mod windows_main {
                 println!("PASS navigation excludes {:?}", substring);
             }
 
+            for path_or_label in &config.expect_navigation_activity {
+                let node = find_navigation_node_by_path_or_label(
+                    &ui_state.navigation,
+                    path_or_label,
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "navigation activity assertion failed: missing unique node matching {:?}",
+                        path_or_label
+                    )
+                })?;
+                if !node.has_activity {
+                    return Err(format!(
+                        "navigation activity assertion failed: expected {:?} to have activity, found false",
+                        path_or_label
+                    ));
+                }
+                println!("PASS navigation activity {:?}", path_or_label);
+            }
+
+            for path_or_label in &config.expect_no_navigation_activity {
+                let node = find_navigation_node_by_path_or_label(&ui_state.navigation, path_or_label)
+                    .ok_or_else(|| {
+                        format!(
+                            "navigation no-activity assertion failed: missing unique node matching {:?}",
+                            path_or_label
+                        )
+                    })?;
+                if node.has_activity {
+                    return Err(format!(
+                        "navigation no-activity assertion failed: expected {:?} to have no activity, found true",
+                        path_or_label
+                    ));
+                }
+                println!("PASS navigation no activity {:?}", path_or_label);
+            }
+
             for expected_room_id in &config.expect_direct_rooms {
                 let room = find_room_state(&ui_state, expected_room_id).ok_or_else(|| {
                     format!("direct room assertion failed: missing room {expected_room_id}")
@@ -1770,6 +1865,25 @@ mod windows_main {
                 .children
                 .iter()
                 .any(|child| navigation_contains(child, substring))
+    }
+
+    fn find_navigation_node_by_path_or_label<'a>(
+        root: &'a NavigationNode,
+        path_or_label: &str,
+    ) -> Option<&'a NavigationNode> {
+        let path = path_or_label
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if path.is_empty() {
+            return None;
+        }
+        if path.len() == 1 {
+            return root.find_by_substring_path(&path);
+        }
+
+        root.find_by_exact_text_path(&path)
+            .or_else(|| root.find_by_substring_path(&path))
     }
 
     pub(crate) fn main() -> ExitCode {

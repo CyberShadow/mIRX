@@ -335,15 +335,19 @@ fn data_models_round_trip_through_json() {
     let ui_state = UiState {
         navigation: NavigationNode {
             text: "mmatrix".to_owned(),
+            has_activity: false,
             children: vec![
                 NavigationNode {
                     text: "status".to_owned(),
+                    has_activity: false,
                     children: vec![],
                 },
                 NavigationNode {
                     text: "rooms: 1".to_owned(),
+                    has_activity: false,
                     children: vec![NavigationNode {
                         text: "Room".to_owned(),
+                        has_activity: true,
                         children: vec![],
                     }],
                 },
@@ -556,16 +560,20 @@ fn data_models_round_trip_through_json() {
         serde_json::json!({
             "navigation": {
                 "text": "mmatrix",
+                "has_activity": false,
                 "children": [
                     {
                         "text": "status",
+                        "has_activity": false,
                         "children": [],
                     },
                     {
                         "text": "rooms: 1",
+                        "has_activity": false,
                         "children": [
                             {
                                 "text": "Room",
+                                "has_activity": true,
                                 "children": [],
                             }
                         ],
@@ -3774,6 +3782,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<NavigationNode>(
             r#"{
             "text":"mmatrix",
+            "has_activity":false,
             "children":[],
             "unexpected":true
         }"#
@@ -4180,6 +4189,7 @@ fn switchbar_helpers_find_items_and_active_item() {
     let ui_state = UiState {
         navigation: NavigationNode {
             text: "mmatrix".to_owned(),
+            has_activity: false,
             children: vec![],
         },
         mdi: MdiState {
@@ -4224,6 +4234,131 @@ fn switchbar_helpers_find_items_and_active_item() {
     assert_eq!(
         ui_state.switchbar.active_item().map(|item| &item.identity),
         Some(&identity)
+    );
+}
+
+#[test]
+fn navigation_node_defaults_missing_activity_to_false() {
+    assert_eq!(
+        serde_json::from_str::<NavigationNode>(
+            r#"{
+            "text":"mmatrix",
+            "children":[
+                {
+                    "text":"status",
+                    "children":[]
+                }
+            ]
+        }"#
+        )
+        .expect("deserialize navigation node without has_activity"),
+        NavigationNode {
+            text: "mmatrix".to_owned(),
+            has_activity: false,
+            children: vec![NavigationNode {
+                text: "status".to_owned(),
+                has_activity: false,
+                children: vec![],
+            }],
+        }
+    );
+}
+
+#[test]
+fn navigation_node_path_helpers_match_unique_paths() {
+    let navigation = NavigationNode {
+        text: "mmatrix".to_owned(),
+        has_activity: false,
+        children: vec![NavigationNode {
+            text: "rooms: 1".to_owned(),
+            has_activity: false,
+            children: vec![NavigationNode {
+                text: "Alpha [query: @alice:example]".to_owned(),
+                has_activity: true,
+                children: vec![NavigationNode {
+                    text: "thread root".to_owned(),
+                    has_activity: true,
+                    children: vec![],
+                }],
+            }],
+        }],
+    };
+
+    assert_eq!(
+        navigation
+            .find_by_exact_text_path(&["mmatrix", "rooms: 1", "Alpha [query: @alice:example]"])
+            .map(|node| node.text.as_str()),
+        Some("Alpha [query: @alice:example]")
+    );
+    assert_eq!(
+        navigation
+            .find_by_substring_path(&["mmatrix", "rooms", "Alpha [query", "thread"])
+            .map(|node| node.text.as_str()),
+        Some("thread root")
+    );
+}
+
+#[test]
+fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
+    let navigation = NavigationNode {
+        text: "mmatrix".to_owned(),
+        has_activity: false,
+        children: vec![
+            NavigationNode {
+                text: "rooms: 1".to_owned(),
+                has_activity: false,
+                children: vec![NavigationNode {
+                    text: "Alpha".to_owned(),
+                    has_activity: false,
+                    children: vec![],
+                }],
+            },
+            NavigationNode {
+                text: "threads: 1".to_owned(),
+                has_activity: false,
+                children: vec![NavigationNode {
+                    text: "Alpha thread".to_owned(),
+                    has_activity: true,
+                    children: vec![],
+                }],
+            },
+        ],
+    };
+
+    assert!(
+        navigation
+            .find_by_substring_path(&["mmatrix", "Alpha"])
+            .is_none()
+    );
+}
+
+#[test]
+fn navigation_node_exact_text_path_returns_none_for_ambiguous_matches() {
+    let navigation = NavigationNode {
+        text: "mmatrix".to_owned(),
+        has_activity: false,
+        children: vec![NavigationNode {
+            text: "rooms: 1".to_owned(),
+            has_activity: false,
+            children: vec![
+                NavigationNode {
+                    text: "Alpha".to_owned(),
+                    has_activity: false,
+                    children: vec![],
+                },
+                NavigationNode {
+                    text: "Alpha".to_owned(),
+                    has_activity: true,
+                    children: vec![],
+                },
+            ],
+        }],
+    };
+
+    assert!(
+        navigation
+            .find_by_exact_text_path(&["mmatrix", "rooms: 1", "Alpha"])
+            .is_none()
     );
 }
 

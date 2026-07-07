@@ -747,7 +747,48 @@ pub struct UiRoomReadState {
 #[serde(deny_unknown_fields)]
 pub struct NavigationNode {
     pub text: String,
+    #[serde(default)]
+    pub has_activity: bool,
     pub children: Vec<NavigationNode>,
+}
+
+impl NavigationNode {
+    pub fn find_by_exact_text_path<'a>(&'a self, path: &[&str]) -> Option<&'a NavigationNode> {
+        find_navigation_node_by_path(self, path, |text, segment| text == segment)
+    }
+
+    pub fn find_by_substring_path<'a>(&'a self, path: &[&str]) -> Option<&'a NavigationNode> {
+        find_navigation_node_by_path(self, path, |text, segment| text.contains(segment))
+    }
+}
+
+fn find_navigation_node_by_path<'a, F>(
+    node: &'a NavigationNode,
+    path: &[&str],
+    matches: F,
+) -> Option<&'a NavigationNode>
+where
+    F: Copy + Fn(&str, &str) -> bool,
+{
+    let (segment, remaining) = path.split_first()?;
+    if !matches(&node.text, segment) {
+        return None;
+    }
+    if remaining.is_empty() {
+        return Some(node);
+    }
+
+    let mut found = None;
+    for child in &node.children {
+        if let Some(match_node) = find_navigation_node_by_path(child, remaining, matches) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(match_node);
+        }
+    }
+
+    found
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
