@@ -1,0 +1,155 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!focus:example",
+        "display_name": "Focus",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      },
+      {
+        "room_id": "!inbox:example",
+        "display_name": "Inbox",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      },
+      {
+        "room_id": "!docs:example",
+        "display_name": "Docs",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!focus:example",
+      "activity_id": "event:$focus-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$focus-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "focus kickoff for constrained shell snapshot coverage",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!focus:example",
+      "activity_id": "event:$focus-2",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$focus-2",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "member pane stays visible while the timeline still has enough width to read",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!focus:example",
+      "activity_id": "event:$focus-3",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "message",
+        "event_id": "$focus-3",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "presentation": "text",
+        "body": "long visible timeline line for the 900x620 shell frame so the MDI content remains obvious",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!focus:example",
+      "activity_id": "event:$focus-4",
+      "timestamp_ms": 1700000180000,
+      "kind": {
+        "type": "message",
+        "event_id": "$focus-4",
+        "transaction_id": null,
+        "sender": "@dave:example",
+        "presentation": "text",
+        "body": "another line keeps the room busy without depending on any new protocol behavior",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!inbox:example",
+      "activity_id": "event:$inbox-1",
+      "timestamp_ms": 1700000240000,
+      "kind": {
+        "type": "message",
+        "event_id": "$inbox-1",
+        "transaction_id": null,
+        "sender": "@erin:example",
+        "presentation": "text",
+        "body": "inbox update keeps the status bar visible",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!focus:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice"
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob"
+        },
+        {
+          "user_id": "@casey:example",
+          "display_name": "Casey"
+        },
+        {
+          "user_id": "@dana:example",
+          "display_name": "Dana"
+        }
+      ]
+    }
+  }
+]

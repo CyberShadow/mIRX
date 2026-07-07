@@ -161,15 +161,7 @@ ensure_binaries() {
 }
 
 is_default_snapshot_case() {
-  local case_name=$1
-  case "$case_name" in
-    shell-activity)
-      return 1
-      ;;
-    *)
-      return 0
-      ;;
-  esac
+  return 0
 }
 
 configure_case_expectations() {
@@ -194,6 +186,8 @@ configure_case_expectations() {
   switchbar_no_activity_expect_args=()
   navigation_expect_args=()
   navigation_forbid_args=()
+  navigation_activity_expect_args=()
+  navigation_no_activity_expect_args=()
   expect_selected=
   expect_error=
   expect_verification=
@@ -1008,6 +1002,81 @@ configure_case_expectations() {
         --expect-no-navigation-text 'member list context line'
       )
       ;;
+    shell-activity)
+      expect_selected='!alpha:example'
+      expect_active_view='room:!alpha:example'
+      select_views=('thread:!alpha:example|$alpha-thread-root' 'room:!alpha:example')
+      append_events_path="$root_dir/tests/ui-state-updates/shell-activity.json"
+      room_expect_args=(
+        --expect-room '!alpha:example'
+        --expect-room '!beta:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!alpha:example::Room: Alpha (!alpha:example)'
+        --expect-room-view '!alpha:example::alpha parent room content'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!alpha:example::Alpha'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+        --expect-switchbar-item 'thread:!alpha:example|$alpha-thread-root::alpha root'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!beta:example'
+        --expect-switchbar-activity 'thread:!alpha:example|$alpha-thread-root'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!alpha:example'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Alpha'
+        --expect-navigation-text 'Beta'
+        --expect-navigation-text 'alpha root'
+      )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'Beta'
+        --expect-navigation-activity 'Alpha/alpha root'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'status'
+        --expect-no-navigation-activity 'Alpha'
+      )
+      expect_switchbar_active='room:!alpha:example'
+      ;;
+    shell-constrained-layout)
+      expect_selected='!focus:example'
+      expect_active_view='room:!focus:example'
+      case_frame_size=900x620
+      room_expect_args=(
+        --expect-room '!focus:example'
+        --expect-room '!inbox:example'
+        --expect-room '!docs:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!focus:example::Room: Focus (!focus:example)'
+        --expect-room-view '!focus:example::long visible timeline line for the 900x620 shell frame so the MDI content remains obvious'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!focus:example::Alice'
+        --expect-room-member '!focus:example::Casey'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !inbox:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!focus:example::Focus'
+        --expect-switchbar-item 'room:!inbox:example::Inbox'
+        --expect-switchbar-item 'room:!docs:example::Docs'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Focus'
+        --expect-navigation-text 'Inbox'
+        --expect-navigation-text 'Docs'
+      )
+      expect_switchbar_active='room:!focus:example'
+      ;;
     typing-indicator)
       expect_selected='!typing:example'
       expect_active_view='room:!typing:example'
@@ -1395,6 +1464,8 @@ run_case() {
     "${switchbar_no_activity_expect_args[@]}"
     "${navigation_expect_args[@]}"
     "${navigation_forbid_args[@]}"
+    "${navigation_activity_expect_args[@]}"
+    "${navigation_no_activity_expect_args[@]}"
   )
 
   if [[ -n "${expect_selected:-}" ]]; then
