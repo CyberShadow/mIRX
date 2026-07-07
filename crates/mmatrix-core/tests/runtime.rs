@@ -4,15 +4,16 @@ use mmatrix_core::{
     Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
     E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
-    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactReactionRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -327,6 +328,31 @@ fn leave_room_before_login_emits_leave_room_error() {
 }
 
 #[test]
+fn send_reaction_before_login_emits_send_reaction_error() {
+    assert_invalid_authenticated_command(
+        Command::SendReaction(SendReactionRequest {
+            room_id: "!ops:example.org".to_owned(),
+            target_event_id: "$event:example.org".to_owned(),
+            key: "+1".to_owned(),
+        }),
+        Operation::SendReaction,
+        "send reaction requires an authenticated session",
+    );
+}
+
+#[test]
+fn redact_reaction_before_login_emits_redact_reaction_error() {
+    assert_invalid_authenticated_command(
+        Command::RedactReaction(RedactReactionRequest {
+            room_id: "!ops:example.org".to_owned(),
+            reaction_event_id: "$reaction:example.org".to_owned(),
+        }),
+        Operation::RedactReaction,
+        "redact reaction requires an authenticated session",
+    );
+}
+
+#[test]
 fn set_room_topic_before_login_emits_set_room_topic_error() {
     assert_invalid_authenticated_command(
         Command::SetRoomTopic(SetRoomTopicRequest {
@@ -636,6 +662,43 @@ fn mark_room_read_request_round_trips_through_serde() {
 
     let restored: MarkRoomReadRequest =
         serde_json::from_str(&json).expect("deserialize mark room read request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn send_reaction_request_round_trips_through_serde() {
+    let request = SendReactionRequest {
+        room_id: "!room:example.org".to_owned(),
+        target_event_id: "$event:example.org".to_owned(),
+        key: "+1".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize send reaction request");
+    assert_eq!(
+        json,
+        r#"{"room_id":"!room:example.org","target_event_id":"$event:example.org","key":"+1"}"#
+    );
+
+    let restored: SendReactionRequest =
+        serde_json::from_str(&json).expect("deserialize send reaction request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn redact_reaction_request_round_trips_through_serde() {
+    let request = RedactReactionRequest {
+        room_id: "!room:example.org".to_owned(),
+        reaction_event_id: "$reaction:example.org".to_owned(),
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize redact reaction request");
+    assert_eq!(
+        json,
+        r#"{"room_id":"!room:example.org","reaction_event_id":"$reaction:example.org"}"#
+    );
+
+    let restored: RedactReactionRequest =
+        serde_json::from_str(&json).expect("deserialize redact reaction request");
     assert_eq!(restored, request);
 }
 
@@ -1842,6 +1905,25 @@ fn leave_room_request_rejects_unknown_fields() {
         )
         .is_err(),
         "leave room request must reject unknown fields"
+    );
+}
+
+#[test]
+fn reaction_request_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<SendReactionRequest>(
+            r#"{"room_id":"!ops:example.org","target_event_id":"$event:example.org","key":"+1","unexpected":"value"}"#
+        )
+        .is_err(),
+        "send reaction request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RedactReactionRequest>(
+            r#"{"room_id":"!ops:example.org","reaction_event_id":"$reaction:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "redact reaction request must reject unknown fields"
     );
 }
 
