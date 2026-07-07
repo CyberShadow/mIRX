@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::ptr::{copy_nonoverlapping, null_mut};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
@@ -59,6 +60,7 @@ const VIEW_CONTENT_ID: i32 = 2001;
 const WM_TIMELINE_GET_TOP_LINE: u32 = 0x8000 + 100;
 // Intentionally duplicated from production to exercise the real switchbar toolbar command range.
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
+static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
@@ -84,28 +86,29 @@ fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
     }
 }
 
-fn unique_state_path() -> PathBuf {
-    let unique = SystemTime::now()
+fn unique_temp_path(prefix: &str, extension: Option<&str>) -> PathBuf {
+    let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system clock must be after unix epoch")
         .as_nanos();
-    env::temp_dir().join(format!("mmatrix-ui-automation-driver-{unique}.json"))
+    let counter = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let stem = format!("{prefix}-{}-{timestamp}-{counter}", std::process::id());
+    match extension {
+        Some(extension) => env::temp_dir().join(format!("{stem}.{extension}")),
+        None => env::temp_dir().join(stem),
+    }
+}
+
+fn unique_state_path() -> PathBuf {
+    unique_temp_path("mmatrix-ui-automation-driver", Some("json"))
 }
 
 fn unique_screenshot_path() -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock must be after unix epoch")
-        .as_nanos();
-    env::temp_dir().join(format!("mmatrix-ui-automation-driver-{unique}.png"))
+    unique_temp_path("mmatrix-ui-automation-driver", Some("png"))
 }
 
 fn unique_local_app_data_path() -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock must be after unix epoch")
-        .as_nanos();
-    env::temp_dir().join(format!("mmatrix-ui-local-app-data-{unique}"))
+    unique_temp_path("mmatrix-ui-local-app-data", None)
 }
 
 fn session_file_path(local_app_data: &Path) -> PathBuf {
