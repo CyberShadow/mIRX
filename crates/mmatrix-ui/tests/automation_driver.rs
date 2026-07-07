@@ -24,12 +24,12 @@ use mmatrix_testkit::{
     NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
     RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedMembershipCommand, SubmittedRoomTopicCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -896,6 +896,24 @@ fn image_entry_with_event_id(
         timestamp_ms,
         relation: None,
         kind: RoomActivityKind::Image(Box::new(activity)),
+    }
+}
+
+fn redacted_entry(
+    room_id: &str,
+    activity_id: &str,
+    timestamp_ms: u64,
+    relation: Option<RoomActivityRelation>,
+    event_id: &str,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: activity_id.to_owned(),
+        timestamp_ms,
+        relation,
+        kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: event_id.to_owned(),
+        }),
     }
 }
 
@@ -3261,6 +3279,166 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
     assert!(view_contains(room_view, "root msg edited"));
     assert!(!view_contains(room_view, "lobby draft"));
     assert!(!view_contains(room_view, "root msg draft"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("redactions.json");
+    let update_path = fixture_update_path("redactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let room_activity = app.room_activity(Some("!redactions:example"))?;
+    assert_eq!(
+        room_activity,
+        vec![
+            redacted_entry(
+                "!redactions:example",
+                "event:$redact-text",
+                1_700_100_000_000,
+                None,
+                "$redact-text",
+            ),
+            redacted_entry(
+                "!redactions:example",
+                "event:$redact-edited",
+                1_700_100_060_000,
+                None,
+                "$redact-edited",
+            ),
+            redacted_entry(
+                "!redactions:example",
+                "event:$redact-image",
+                1_700_100_120_000,
+                None,
+                "$redact-image",
+            ),
+            redacted_entry(
+                "!redactions:example",
+                "event:$redact-unsupported",
+                1_700_100_180_000,
+                None,
+                "$redact-unsupported",
+            ),
+            redacted_entry(
+                "!redactions:example",
+                "event:$redact-thread-root",
+                1_700_100_240_000,
+                None,
+                "$redact-thread-root",
+            ),
+            redacted_entry(
+                "!redactions:example",
+                "event:$redact-thread-reply",
+                1_700_100_300_000,
+                Some(RoomActivityRelation::Thread {
+                    thread_root_event_id: "$redact-thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$redact-thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                "$redact-thread-reply",
+            ),
+            redacted_entry(
+                "!redactions:example",
+                "state:$redact-topic-notice",
+                1_700_100_360_000,
+                None,
+                "$redact-topic-notice",
+            ),
+        ]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    let room_view = find_view(&ui_state, &room_identity("!redactions:example"));
+    assert!(view_contains(room_view, "message redacted"));
+    let room_view_text = room_view.lines.join("\n");
+    let room_view_tombstones = room_view_text.matches("message redacted").count();
+    assert!(
+        room_view_tombstones >= room_activity.len(),
+        "expected at least {} room-view tombstones, got {room_view_tombstones}: {room_view_text}",
+        room_activity.len(),
+    );
+    assert!(navigation_contains(
+        &ui_state.navigation,
+        "Message redacted"
+    ));
+
+    let model = app.dump_model()?;
+    assert_eq!(model.last_activity, None);
+
+    let leak_strings = [
+        "redaction text payload should disappear",
+        "redaction edited original should disappear",
+        "redaction edited replacement should disappear",
+        "redaction-image-body.png",
+        "redaction-image-file.png",
+        "mxc://example.org/redaction-image-source",
+        "m.audio",
+        "redaction unsupported payload should disappear",
+        "redaction thread root payload should disappear",
+        "redaction thread reply payload should disappear",
+    ];
+    let redacted_topic_row = "@grace:example set topic: redaction topic should disappear";
+    let room_activity_text = serde_json::to_string(&room_activity)?;
+    let ui_state_text = serde_json::to_string(&ui_state)?;
+    let model_text = serde_json::to_string(&model)?;
+    for leak in leak_strings {
+        assert!(
+            !room_view_text.contains(leak),
+            "room view unexpectedly leaked {leak:?}: {room_view_text}",
+        );
+        assert!(
+            !room_activity_text.contains(leak),
+            "room activity dump unexpectedly leaked {leak:?}: {room_activity_text}",
+        );
+        assert!(
+            !ui_state_text.contains(leak),
+            "ui state unexpectedly leaked {leak:?}: {ui_state_text}",
+        );
+        assert!(
+            !model_text.contains(leak),
+            "model dump unexpectedly leaked {leak:?}: {model_text}",
+        );
+    }
+    assert!(!room_view_text.contains(redacted_topic_row));
+    assert!(!ui_state_text.contains(redacted_topic_row));
+    assert!(!room_activity_text.contains("redaction topic should disappear"));
+    assert!(!model_text.contains("redaction topic should disappear"));
+
+    let thread_view_identity = thread_identity("!redactions:example", "$redact-thread-root");
+    let thread_path = navigation_path_by_substrings(
+        &ui_state.navigation,
+        &["mmatrix", "rooms: 1", "Redactions", "Message redacted"],
+    );
+    app.select_navigation_path(&thread_path)?;
+    assert_eq!(app.selected_navigation_path()?, thread_path);
+    let thread_state = app.dump_ui_state()?;
+    let thread_view = find_view(&thread_state, &thread_view_identity);
+    assert_eq!(
+        find_switchbar_item(&thread_state, &thread_view_identity).title,
+        "Thread: Message redacted"
+    );
+    assert_eq!(thread_view.title, "Thread: Message redacted");
+    let thread_text = thread_view.lines.join("\n");
+    assert!(thread_text.contains("message redacted"));
+    assert!(thread_text.matches("message redacted").count() >= 2);
+    assert!(!thread_text.contains("redaction thread root payload should disappear"));
+    assert!(!thread_text.contains("redaction thread reply payload should disappear"));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

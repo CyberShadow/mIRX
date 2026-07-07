@@ -1,0 +1,110 @@
+[
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-edited"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$redact-edited-replacement",
+        "sender": "@bob:example",
+        "timestamp_ms": 1700100420000,
+        "presentation": "text",
+        "body": "redaction edited replacement should disappear"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-text"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-text"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-edited"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-edited"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-image"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-image"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-unsupported"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-unsupported"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-thread-root"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-thread-root"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-thread-reply"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-thread-reply"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!redactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$redact-topic-notice"
+      },
+      "kind": {
+        "type": "activity_redacted",
+        "redaction_event_id": "$redaction-topic-notice"
+      }
+    }
+  }
+]

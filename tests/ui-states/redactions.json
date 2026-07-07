@@ -1,0 +1,157 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!redactions:example",
+        "display_name": "Redactions",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "event:$redact-text",
+      "timestamp_ms": 1700100000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$redact-text",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "redaction text payload should disappear",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "event:$redact-edited",
+      "timestamp_ms": 1700100060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$redact-edited",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "redaction edited original should disappear",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "event:$redact-image",
+      "timestamp_ms": 1700100120000,
+      "kind": {
+        "type": "image",
+        "event_id": "$redact-image",
+        "sender": "@carol:example",
+        "body": "redaction-image-body.png",
+        "filename": "redaction-image-file.png",
+        "source": {
+          "type": "plain",
+          "url": "mxc://example.org/redaction-image-source"
+        },
+        "info": {
+          "mimetype": "image/png",
+          "size": 12345,
+          "width": 640,
+          "height": 480,
+          "is_animated": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "event:$redact-unsupported",
+      "timestamp_ms": 1700100180000,
+      "kind": {
+        "type": "unsupported_message",
+        "event_id": "$redact-unsupported",
+        "sender": "@dave:example",
+        "msgtype": "m.audio",
+        "body": "redaction unsupported payload should disappear"
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "event:$redact-thread-root",
+      "timestamp_ms": 1700100240000,
+      "kind": {
+        "type": "message",
+        "event_id": "$redact-thread-root",
+        "transaction_id": null,
+        "sender": "@erin:example",
+        "presentation": "text",
+        "body": "redaction thread root payload should disappear",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "event:$redact-thread-reply",
+      "timestamp_ms": 1700100300000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$redact-thread-root",
+        "in_reply_to_event_id": "$redact-thread-root",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$redact-thread-reply",
+        "transaction_id": null,
+        "sender": "@frank:example",
+        "presentation": "text",
+        "body": "redaction thread reply payload should disappear",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!redactions:example",
+      "activity_id": "state:$redact-topic-notice",
+      "timestamp_ms": 1700100360000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$redact-topic-notice",
+        "sender": "@grace:example",
+        "state_key": "",
+        "content": {
+          "type": "topic",
+          "topic": "redaction topic should disappear"
+        }
+      },
+      "relation": null
+    }
+  }
+]

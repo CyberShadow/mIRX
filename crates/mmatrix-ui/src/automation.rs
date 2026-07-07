@@ -5,8 +5,8 @@ use std::fmt;
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, StoredSession,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, StoredSession,
     UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
@@ -868,6 +868,7 @@ pub(crate) enum DumpRoomActivityKind {
     Image(Box<DumpRoomImageActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     StateNotice(DumpRoomStateNoticeActivity),
+    Redacted(DumpRoomRedactedActivity),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -967,6 +968,12 @@ pub(crate) struct DumpRoomStateNoticeActivity {
     pub(crate) sender: String,
     pub(crate) state_key: String,
     pub(crate) content: DumpRoomStateNoticeContent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomRedactedActivity {
+    pub(crate) event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1132,8 +1139,8 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::StateNotice(notice) => {
             DumpRoomActivityKind::StateNotice(dump_room_state_notice_activity_from_core(notice))
         }
-        RoomActivityKind::Redacted(_) => {
-            unreachable!("redacted automation dumps are not implemented in this unit")
+        RoomActivityKind::Redacted(redacted) => {
+            DumpRoomActivityKind::Redacted(dump_room_redacted_activity_from_core(redacted))
         }
     }
 }
@@ -1241,6 +1248,14 @@ pub(crate) fn dump_room_state_notice_activity_from_core(
         sender: notice.sender.clone(),
         state_key: notice.state_key.clone(),
         content: dump_room_state_notice_content_from_core(&notice.content),
+    }
+}
+
+pub(crate) fn dump_room_redacted_activity_from_core(
+    redacted: &RoomRedactedActivity,
+) -> DumpRoomRedactedActivity {
+    DumpRoomRedactedActivity {
+        event_id: redacted.event_id.clone(),
     }
 }
 
@@ -1517,9 +1532,9 @@ mod tests {
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
         RoomImageInfo, RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomReadState, RoomSummary, RoomTagSummary, SpaceChildSummary,
-        StoredSession, UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
+        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
+        VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1538,8 +1553,8 @@ mod tests {
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
         DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomImageActivity,
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomRedactedActivity,
+        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedRoomTopicCommand,
         DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
@@ -3897,6 +3912,85 @@ mod tests {
             super::dump_room_message_activity_line_from_activity(&image_activity),
             None
         );
+        let redacted_activity = RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$redacted:example.org".to_owned(),
+            timestamp_ms: 1_710_000_020_000,
+            relation: Some(RoomActivityRelation::Thread {
+                thread_root_event_id: "$redact-thread-root".to_owned(),
+                in_reply_to_event_id: Some("$redact-thread-root".to_owned()),
+                is_falling_back: false,
+            }),
+            kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+                event_id: "$redacted:example.org".to_owned(),
+            }),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&redacted_activity),
+            DumpRoomActivity {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$redacted:example.org".to_owned(),
+                timestamp_ms: 1_710_000_020_000,
+                relation: Some(DumpRoomActivityRelation::Thread {
+                    thread_root_event_id: "$redact-thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$redact-thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                kind: DumpRoomActivityKind::Redacted(DumpRoomRedactedActivity {
+                    event_id: "$redacted:example.org".to_owned(),
+                }),
+            }
+        );
+        let redacted_json =
+            serde_json::to_value(super::dump_room_activity_from_activity(&redacted_activity))
+                .expect("serialize redacted dump room activity");
+        assert_eq!(
+            redacted_json,
+            json!({
+                "room_id":"!room:example",
+                "activity_id":"event:$redacted:example.org",
+                "timestamp_ms":1710000020000u64,
+                "relation":{
+                    "type":"thread",
+                    "thread_root_event_id":"$redact-thread-root",
+                    "in_reply_to_event_id":"$redact-thread-root",
+                    "is_falling_back":false
+                },
+                "kind":{
+                    "type":"redacted",
+                    "event_id":"$redacted:example.org"
+                }
+            })
+        );
+        let redacted_json_text =
+            serde_json::to_string(&redacted_json).expect("serialize redacted dump room activity");
+        for leaked_field in [
+            "redaction text payload should disappear",
+            "redaction edited replacement should disappear",
+            "redaction-image-body.png",
+            "redaction-image-file.png",
+            "mxc://example.org/redaction-image-source",
+            "m.audio",
+            "redaction unsupported payload should disappear",
+            "redaction topic should disappear",
+            "state_key",
+            "presentation",
+            "body",
+            "filename",
+            "source",
+            "media_state",
+            "msgtype",
+            "content",
+        ] {
+            assert!(
+                !redacted_json_text.contains(leaked_field),
+                "redacted automation dump unexpectedly leaked {leaked_field:?}: {redacted_json_text}",
+            );
+        }
+        assert_eq!(
+            super::dump_room_message_activity_line_from_activity(&redacted_activity),
+            None
+        );
         assert!(
             serde_json::from_value::<DumpRoomActivity>(json!({
                 "room_id":"!room:example",
@@ -3996,6 +4090,19 @@ mod tests {
                         "topic":"incident review",
                         "unexpected":true
                     }
+                }
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomActivity>(json!({
+                "room_id":"!ops:example",
+                "activity_id":"event:$redacted-1",
+                "timestamp_ms":1700000000000u64,
+                "kind":{
+                    "type":"redacted",
+                    "event_id":"$redacted-1",
+                    "unexpected":true
                 }
             }))
             .is_err()
