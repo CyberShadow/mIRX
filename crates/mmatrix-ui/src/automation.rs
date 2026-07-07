@@ -747,6 +747,10 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_topic_commands: Vec<DumpSubmittedRoomTopicCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_reaction_commands: Vec<DumpSubmittedReactionCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_reaction_redaction_commands: Vec<DumpSubmittedReactionRedactionCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
@@ -770,6 +774,21 @@ pub(crate) struct DumpSubmittedDirectRoomCommand {
 pub(crate) struct DumpSubmittedRoomTopicCommand {
     pub(crate) room_id: String,
     pub(crate) topic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedReactionCommand {
+    pub(crate) room_id: String,
+    pub(crate) target_event_id: String,
+    pub(crate) key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedReactionRedactionCommand {
+    pub(crate) room_id: String,
+    pub(crate) reaction_event_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1568,6 +1587,7 @@ mod tests {
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpSubmittedReactionCommand, DumpSubmittedReactionRedactionCommand,
         DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
         LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
         NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
@@ -2924,6 +2944,8 @@ mod tests {
                     submitted_membership_commands: Vec::new(),
                     submitted_direct_room_commands: Vec::new(),
                     submitted_room_topic_commands: Vec::new(),
+                    submitted_reaction_commands: Vec::new(),
+                    submitted_reaction_redaction_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
@@ -3474,6 +3496,8 @@ mod tests {
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
+            submitted_reaction_commands: Vec::new(),
+            submitted_reaction_redaction_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,
@@ -3545,6 +3569,8 @@ mod tests {
                 room_id: "!ops:example".to_owned(),
                 topic: "incident review".to_owned(),
             }],
+            submitted_reaction_commands: Vec::new(),
+            submitted_reaction_redaction_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
@@ -3568,12 +3594,126 @@ mod tests {
                     "unexpected":true
                 }
             ],
+            "submitted_reaction_commands":[],
+            "submitted_reaction_redaction_commands":[],
             "last_error":null,
             "selected_room":"!ops:example"
         }))
         .unwrap_err();
 
         assert!(error.to_string().contains("unknown field `unexpected`"));
+    }
+
+    #[test]
+    fn dump_model_round_trips_submitted_reaction_commands_and_rejects_unknown_nested_fields() {
+        let model = DumpModel {
+            status: "ready".to_owned(),
+            lifecycle_state: LifecycleState::Ready,
+            rooms: Vec::new(),
+            last_activity: None,
+            e2ee_status: None,
+            last_verification: None,
+            submitted_membership_commands: Vec::new(),
+            submitted_direct_room_commands: Vec::new(),
+            submitted_room_topic_commands: Vec::new(),
+            submitted_reaction_commands: vec![DumpSubmittedReactionCommand {
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$target:example".to_owned(),
+                key: "+1".to_owned(),
+            }],
+            submitted_reaction_redaction_commands: vec![DumpSubmittedReactionRedactionCommand {
+                room_id: "!ops:example".to_owned(),
+                reaction_event_id: "$reaction:example".to_owned(),
+            }],
+            submitted_verification_actions: Vec::new(),
+            last_error: None,
+            selected_room: Some("!ops:example".to_owned()),
+        };
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "status":"ready",
+                "lifecycle_state":"ready",
+                "rooms":[],
+                "last_activity":null,
+                "e2ee_status":null,
+                "last_verification":null,
+                "submitted_reaction_commands":[
+                    {
+                        "room_id":"!ops:example",
+                        "target_event_id":"$target:example",
+                        "key":"+1"
+                    }
+                ],
+                "submitted_reaction_redaction_commands":[
+                    {
+                        "room_id":"!ops:example",
+                        "reaction_event_id":"$reaction:example"
+                    }
+                ],
+                "last_error":null,
+                "selected_room":"!ops:example"
+            })
+        );
+        assert_eq!(serde_json::from_value::<DumpModel>(json).unwrap(), model);
+
+        let reaction_error = serde_json::from_value::<DumpModel>(json!({
+            "status":"ready",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":null,
+            "last_verification":null,
+            "submitted_membership_commands":[],
+            "submitted_direct_room_commands":[],
+            "submitted_room_topic_commands":[],
+            "submitted_reaction_commands":[
+                {
+                    "room_id":"!ops:example",
+                    "target_event_id":"$target:example",
+                    "key":"+1",
+                    "unexpected":true
+                }
+            ],
+            "submitted_reaction_redaction_commands":[],
+            "last_error":null,
+            "selected_room":"!ops:example"
+        }))
+        .unwrap_err();
+        assert!(
+            reaction_error
+                .to_string()
+                .contains("unknown field `unexpected`")
+        );
+
+        let redaction_error = serde_json::from_value::<DumpModel>(json!({
+            "status":"ready",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":null,
+            "last_verification":null,
+            "submitted_membership_commands":[],
+            "submitted_direct_room_commands":[],
+            "submitted_room_topic_commands":[],
+            "submitted_reaction_commands":[],
+            "submitted_reaction_redaction_commands":[
+                {
+                    "room_id":"!ops:example",
+                    "reaction_event_id":"$reaction:example",
+                    "unexpected":true
+                }
+            ],
+            "last_error":null,
+            "selected_room":"!ops:example"
+        }))
+        .unwrap_err();
+        assert!(
+            redaction_error
+                .to_string()
+                .contains("unknown field `unexpected`")
+        );
     }
 
     #[test]

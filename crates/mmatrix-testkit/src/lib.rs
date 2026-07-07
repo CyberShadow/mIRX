@@ -224,6 +224,10 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_topic_commands: Vec<SubmittedRoomTopicCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_reaction_commands: Vec<SubmittedReactionCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_reaction_redaction_commands: Vec<SubmittedReactionRedactionCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
@@ -247,6 +251,21 @@ pub struct SubmittedDirectRoomCommand {
 pub struct SubmittedRoomTopicCommand {
     pub room_id: String,
     pub topic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedReactionCommand {
+    pub room_id: String,
+    pub target_event_id: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedReactionRedactionCommand {
+    pub room_id: String,
+    pub reaction_event_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

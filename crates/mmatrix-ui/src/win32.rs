@@ -94,7 +94,8 @@ use crate::{
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedReactionRedactionCommand, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
         MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
@@ -8812,6 +8813,29 @@ fn dump_submitted_room_topic_command(command: &Command) -> Option<DumpSubmittedR
     }
 }
 
+fn dump_submitted_reaction_command(command: &Command) -> Option<DumpSubmittedReactionCommand> {
+    match command {
+        Command::SendReaction(request) => Some(DumpSubmittedReactionCommand {
+            room_id: request.room_id.clone(),
+            target_event_id: request.target_event_id.clone(),
+            key: request.key.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn dump_submitted_reaction_redaction_command(
+    command: &Command,
+) -> Option<DumpSubmittedReactionRedactionCommand> {
+    match command {
+        Command::RedactReaction(request) => Some(DumpSubmittedReactionRedactionCommand {
+            room_id: request.room_id.clone(),
+            reaction_event_id: request.reaction_event_id.clone(),
+        }),
+        _ => None,
+    }
+}
+
 fn submitted_membership_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMembershipCommand> {
@@ -8839,6 +8863,26 @@ fn submitted_room_topic_commands_from_state(
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_room_topic_command)
+        .collect()
+}
+
+fn submitted_reaction_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedReactionCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_reaction_command)
+        .collect()
+}
+
+fn submitted_reaction_redaction_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedReactionRedactionCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_reaction_redaction_command)
         .collect()
 }
 
@@ -8887,6 +8931,10 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_membership_commands: submitted_membership_commands_from_state(state),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
+        submitted_reaction_commands: submitted_reaction_commands_from_state(state),
+        submitted_reaction_redaction_commands: submitted_reaction_redaction_commands_from_state(
+            state,
+        ),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
@@ -16772,6 +16820,14 @@ mod tests {
                 key: "+1".to_owned(),
             })]
         );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_reaction_commands,
+            vec![DumpSubmittedReactionCommand {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$react-normal".to_owned(),
+                key: "+1".to_owned(),
+            }]
+        );
 
         stop_test_core(handle);
     }
@@ -16831,6 +16887,13 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 reaction_event_id: "$reaction-alice-plus-one".to_owned(),
             })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_reaction_redaction_commands,
+            vec![DumpSubmittedReactionRedactionCommand {
+                room_id: "!room:example".to_owned(),
+                reaction_event_id: "$reaction-alice-plus-one".to_owned(),
+            }]
         );
 
         stop_test_core(handle);
@@ -17068,6 +17131,9 @@ mod tests {
                 thread: None,
             })]
         );
+        let dump = dump_model_from_state(&state);
+        assert!(dump.submitted_reaction_commands.is_empty());
+        assert!(dump.submitted_reaction_redaction_commands.is_empty());
 
         handle
             .command_sender()
