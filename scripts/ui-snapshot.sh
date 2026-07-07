@@ -454,6 +454,46 @@ configure_case_expectations() {
         --expect-no-navigation-text 'root msg draft'
       )
       ;;
+    reactions)
+      expect_selected='!reactions:example'
+      expect_active_view='room:!reactions:example'
+      append_events_path="$root_dir/tests/ui-state-updates/reactions.json"
+      select_views=('thread:!reactions:example|$react-thread-root' 'room:!reactions:example')
+      room_expect_args=(
+        --expect-room '!reactions:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!reactions:example::"reactions":['
+        --expect-room-activity '!reactions:example::"key":"+1"'
+        --expect-room-activity '!reactions:example::"count":1'
+        --expect-room-activity '!reactions:example::$reaction-plus-one-b'
+        --expect-room-activity '!reactions:example::"key":"eyes"'
+        --expect-room-activity '!reactions:example::"type":"thread"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!reactions:example::Room: Reactions (!reactions:example)'
+        --expect-room-view '!reactions:example::normal reaction target'
+        --expect-room-view '!reactions:example::reactions: +1 x1'
+      )
+      view_expect_args=(
+        --expect-view 'thread:!reactions:example|$react-thread-root::thread reaction root'
+        --expect-view 'thread:!reactions:example|$react-thread-root::thread reaction reply'
+        --expect-view 'thread:!reactions:example|$react-thread-root::reactions: eyes x1'
+      )
+      view_forbid_args=(
+        --expect-no-view 'room:!reactions:example::heart x1'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!reactions:example::Reactions'
+        --expect-switchbar-item 'thread:!reactions:example|$react-thread-root::thread reaction root'
+      )
+      expect_switchbar_active='room:!reactions:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'Reactions'
+        --expect-navigation-text 'thread reaction root'
+      )
+      ;;
     redactions)
       expect_selected='!redactions:example'
       expect_active_view='room:!redactions:example'

@@ -1,0 +1,143 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!reactions:example",
+        "display_name": "Reactions",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!reactions:example",
+      "activity_id": "event:$react-normal",
+      "timestamp_ms": 1700200000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$react-normal",
+        "transaction_id": null,
+        "sender": "@normal:example",
+        "presentation": "text",
+        "body": "normal reaction target",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!reactions:example",
+      "activity_id": "event:$react-thread-root",
+      "timestamp_ms": 1700200060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$react-thread-root",
+        "transaction_id": null,
+        "sender": "@root:example",
+        "presentation": "text",
+        "body": "thread reaction root",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!reactions:example",
+      "activity_id": "event:$react-thread-reply",
+      "timestamp_ms": 1700200120000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$react-thread-root",
+        "in_reply_to_event_id": "$react-thread-root",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$react-thread-reply",
+        "transaction_id": null,
+        "sender": "@reply:example",
+        "presentation": "text",
+        "body": "thread reaction reply",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction-plus-one-a",
+        "sender": "@alice:example",
+        "timestamp_ms": 1700200180000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction-plus-one-b",
+        "sender": "@bob:example",
+        "timestamp_ms": 1700200240000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction-heart-a",
+        "sender": "@carol:example",
+        "timestamp_ms": 1700200300000,
+        "key": "heart"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-thread-reply"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction-eyes-thread",
+        "sender": "@dave:example",
+        "timestamp_ms": 1700200360000,
+        "key": "eyes"
+      }
+    }
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_removed",
+        "reaction_event_id": "$reaction-plus-one-a",
+        "redaction_event_id": "$redact-reaction-plus-one-a",
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_removed",
+        "reaction_event_id": "$reaction-heart-a",
+        "redaction_event_id": "$redact-reaction-heart-a",
+        "key": "heart"
+      }
+    }
+  }
+]

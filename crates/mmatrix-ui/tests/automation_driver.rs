@@ -24,7 +24,7 @@ use mmatrix_testkit::{
     NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
     RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomRedactedActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
     SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedRoomTopicCommand,
     SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
@@ -722,6 +722,28 @@ fn text_entry_with_event_id_and_relation(
         RoomMessagePresentationKind::Text,
         body,
     )
+}
+
+fn with_reactions(mut activity: RoomActivity, reactions: Vec<RoomReactionSummary>) -> RoomActivity {
+    activity.reactions = reactions;
+    activity
+}
+
+fn reaction_summary(
+    key: &str,
+    count: u64,
+    senders: &[&str],
+    reaction_event_ids: &[&str],
+) -> RoomReactionSummary {
+    RoomReactionSummary {
+        key: key.to_owned(),
+        count,
+        senders: senders.iter().map(|sender| (*sender).to_owned()).collect(),
+        reaction_event_ids: reaction_event_ids
+            .iter()
+            .map(|event_id| (*event_id).to_owned())
+            .collect(),
+    }
 }
 
 fn pending_entry_with_presentation(
@@ -3290,6 +3312,169 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
     assert!(view_contains(room_view, "root msg edited"));
     assert!(!view_contains(room_view, "lobby draft"));
     assert!(!view_contains(room_view, "root msg draft"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!reactions:example"))?,
+        vec![
+            with_reactions(
+                text_entry_with_event_id(
+                    "!reactions:example",
+                    "$react-normal",
+                    "@normal:example",
+                    1_700_200_000_000,
+                    "normal reaction target",
+                ),
+                vec![
+                    reaction_summary(
+                        "+1",
+                        2,
+                        &["@alice:example", "@bob:example"],
+                        &["$reaction-plus-one-a", "$reaction-plus-one-b"],
+                    ),
+                    reaction_summary("heart", 1, &["@carol:example"], &["$reaction-heart-a"],),
+                ],
+            ),
+            text_entry_with_event_id(
+                "!reactions:example",
+                "$react-thread-root",
+                "@root:example",
+                1_700_200_060_000,
+                "thread reaction root",
+            ),
+            with_reactions(
+                text_entry_with_event_id_and_relation(
+                    "!reactions:example",
+                    "$react-thread-reply",
+                    "@reply:example",
+                    1_700_200_120_000,
+                    Some(RoomActivityRelation::Thread {
+                        thread_root_event_id: "$react-thread-root".to_owned(),
+                        in_reply_to_event_id: Some("$react-thread-root".to_owned()),
+                        is_falling_back: false,
+                    }),
+                    "thread reaction reply",
+                ),
+                vec![reaction_summary(
+                    "eyes",
+                    1,
+                    &["@dave:example"],
+                    &["$reaction-eyes-thread"],
+                )],
+            ),
+        ]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    let room_view = find_view(&ui_state, &room_identity("!reactions:example"));
+    assert!(view_contains(room_view, "reactions: +1 x2  heart x1"));
+
+    let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
+    app.select_view(thread_view_identity.clone())?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let thread_state = app.dump_ui_state()?;
+    let thread_view = find_view(&thread_state, &thread_view_identity);
+    assert!(view_contains(thread_view, "reactions: eyes x1"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_applies_receive_side_reactions_redactions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let update_path = fixture_update_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!reactions:example"))?,
+        vec![
+            with_reactions(
+                text_entry_with_event_id(
+                    "!reactions:example",
+                    "$react-normal",
+                    "@normal:example",
+                    1_700_200_000_000,
+                    "normal reaction target",
+                ),
+                vec![reaction_summary(
+                    "+1",
+                    1,
+                    &["@bob:example"],
+                    &["$reaction-plus-one-b"],
+                )],
+            ),
+            text_entry_with_event_id(
+                "!reactions:example",
+                "$react-thread-root",
+                "@root:example",
+                1_700_200_060_000,
+                "thread reaction root",
+            ),
+            with_reactions(
+                text_entry_with_event_id_and_relation(
+                    "!reactions:example",
+                    "$react-thread-reply",
+                    "@reply:example",
+                    1_700_200_120_000,
+                    Some(RoomActivityRelation::Thread {
+                        thread_root_event_id: "$react-thread-root".to_owned(),
+                        in_reply_to_event_id: Some("$react-thread-root".to_owned()),
+                        is_falling_back: false,
+                    }),
+                    "thread reaction reply",
+                ),
+                vec![reaction_summary(
+                    "eyes",
+                    1,
+                    &["@dave:example"],
+                    &["$reaction-eyes-thread"],
+                )],
+            ),
+        ]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    let room_view = find_view(&ui_state, &room_identity("!reactions:example"));
+    assert!(view_contains(room_view, "reactions: +1 x1"));
+    assert!(!view_contains(room_view, "heart x1"));
+
+    let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
+    app.select_view(thread_view_identity.clone())?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let thread_state = app.dump_ui_state()?;
+    let thread_view = find_view(&thread_state, &thread_view_identity);
+    assert!(view_contains(thread_view, "reactions: eyes x1"));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
