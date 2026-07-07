@@ -526,6 +526,9 @@ impl RoomViewModel {
                 }
                 self.activities.push(activity);
             }
+            RoomActivityKind::Redacted(_) => {
+                unreachable!("redacted room activity handling is not implemented in this unit")
+            }
         }
         self.rebuild_threads();
     }
@@ -882,6 +885,10 @@ impl RoomViewModel {
                 .ok_or_else(|| "message edit requires an existing visible target event".to_owned()),
             (
                 RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::ActivityRedacted { .. },
+            ) => Err("redacted activity updates are not implemented in this unit".to_owned()),
+            (
+                RoomActivityUpdateTarget::Event { .. },
                 RoomActivityUpdateKind::MessageSent { .. },
             ) => Err("message sent update requires a transaction target".to_owned()),
             (
@@ -892,6 +899,10 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Transaction { .. },
                 RoomActivityUpdateKind::MessageReplaced { .. },
             ) => Err("message edit requires an event target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::ActivityRedacted { .. },
+            ) => Err("activity redacted update requires an event target".to_owned()),
         }
     }
 
@@ -949,12 +960,20 @@ fn validate_synthetic_room_activity_events(
                     ) => panic!("message edit requires an event target"),
                     (
                         RoomActivityUpdateTarget::Event { .. },
+                        RoomActivityUpdateKind::ActivityRedacted { .. },
+                    ) => panic!("redacted activity updates are not implemented in this unit"),
+                    (
+                        RoomActivityUpdateTarget::Event { .. },
                         RoomActivityUpdateKind::MessageSent { .. },
                     ) => panic!("message sent update requires a transaction target"),
                     (
                         RoomActivityUpdateTarget::Event { .. },
                         RoomActivityUpdateKind::MessageFailed { .. },
                     ) => panic!("message failed update requires a transaction target"),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::ActivityRedacted { .. },
+                    ) => panic!("activity redacted update requires an event target"),
                 }
             }
             _ => {}
@@ -1110,6 +1129,9 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             send_state: RoomMessageSendState::Sent,
         }),
         RoomActivityKind::StateNotice(_) => None,
+        RoomActivityKind::Redacted(_) => {
+            unreachable!("redacted last-activity projection is not implemented in this unit")
+        }
     }
 }
 
@@ -1121,6 +1143,9 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
         RoomActivityKind::Image(_) => true,
         RoomActivityKind::UnsupportedMessage(_) => true,
         RoomActivityKind::StateNotice(_) => true,
+        RoomActivityKind::Redacted(_) => {
+            unreachable!("redacted inactive-room projection is not implemented in this unit")
+        }
     }
 }
 
@@ -1159,6 +1184,9 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
         ),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
         RoomActivityKind::StateNotice(_) => None,
+        RoomActivityKind::Redacted(_) => {
+            unreachable!("redacted thread labels are not implemented in this unit")
+        }
     }
 }
 
@@ -1433,6 +1461,10 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                 last_activity.room_id == room_id
                     && last_activity.event_id.as_deref() == Some(event_id.as_str())
             }
+            (
+                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::ActivityRedacted { .. },
+            ) => false,
             _ => false,
         });
     match (&update.target, &update.kind) {
@@ -1474,9 +1506,19 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                 );
         }
         (
+            RoomActivityUpdateTarget::Event { .. },
+            RoomActivityUpdateKind::ActivityRedacted { .. },
+        ) => {
+            unreachable!("redacted activity updates are not implemented in this unit");
+        }
+        (
             RoomActivityUpdateTarget::Transaction { .. },
             RoomActivityUpdateKind::MessageReplaced { .. },
         ) => panic!("message edit requires an event target"),
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::ActivityRedacted { .. },
+        ) => panic!("activity redacted update requires an event target"),
         (RoomActivityUpdateTarget::Event { .. }, RoomActivityUpdateKind::MessageSent { .. }) => {
             panic!("message sent update requires a transaction target")
         }
@@ -4741,6 +4783,9 @@ fn push_room_activity_row(
                 ));
             }
         },
+        RoomActivityKind::Redacted(_) => {
+            unreachable!("redacted timeline rows are not implemented in this unit");
+        }
     }
 }
 
