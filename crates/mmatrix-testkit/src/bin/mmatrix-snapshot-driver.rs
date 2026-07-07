@@ -1165,6 +1165,164 @@ mod cli {
     }
 }
 
+#[cfg(any(windows, test))]
+fn find_navigation_node_by_path_or_label<'a>(
+    root: &'a mmatrix_testkit::NavigationNode,
+    path_or_label: &str,
+) -> Option<&'a mmatrix_testkit::NavigationNode> {
+    let path = path_or_label
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    match path.len() {
+        0 => None,
+        1 => find_unique_navigation_substring_match(root, path[0]),
+        _ => find_unique_navigation_path_match(root, &path, |text, segment| text == segment)
+            .or_else(|| {
+                find_unique_navigation_path_match(root, &path, |text, segment| {
+                    text.contains(segment)
+                })
+            }),
+    }
+}
+
+#[cfg(any(windows, test))]
+fn find_unique_navigation_substring_match<'a>(
+    node: &'a mmatrix_testkit::NavigationNode,
+    substring: &str,
+) -> Option<&'a mmatrix_testkit::NavigationNode> {
+    let mut matches = Vec::new();
+    collect_navigation_substring_matches(node, substring, &mut matches);
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
+}
+
+#[cfg(any(windows, test))]
+fn collect_navigation_substring_matches<'a>(
+    node: &'a mmatrix_testkit::NavigationNode,
+    substring: &str,
+    matches: &mut Vec<&'a mmatrix_testkit::NavigationNode>,
+) {
+    if node.text.contains(substring) {
+        matches.push(node);
+    }
+    for child in &node.children {
+        collect_navigation_substring_matches(child, substring, matches);
+    }
+}
+
+#[cfg(any(windows, test))]
+fn find_unique_navigation_path_match<'a, F>(
+    root: &'a mmatrix_testkit::NavigationNode,
+    path: &[&str],
+    segment_matches: F,
+) -> Option<&'a mmatrix_testkit::NavigationNode>
+where
+    F: Copy + Fn(&str, &str) -> bool,
+{
+    let mut matches = Vec::new();
+    collect_navigation_path_matches(root, path, segment_matches, &mut matches);
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
+}
+
+#[cfg(any(windows, test))]
+fn collect_navigation_path_matches<'a, F>(
+    node: &'a mmatrix_testkit::NavigationNode,
+    path: &[&str],
+    segment_matches: F,
+    matches: &mut Vec<&'a mmatrix_testkit::NavigationNode>,
+) where
+    F: Copy + Fn(&str, &str) -> bool,
+{
+    if let Some((segment, remaining)) = path.split_first() {
+        if segment_matches(&node.text, segment) {
+            if remaining.is_empty() {
+                matches.push(node);
+            } else {
+                for child in &node.children {
+                    collect_navigation_path_matches(child, remaining, segment_matches, matches);
+                }
+            }
+        }
+    }
+
+    for child in &node.children {
+        collect_navigation_path_matches(child, path, segment_matches, matches);
+    }
+}
+
+#[cfg(test)]
+mod navigation_lookup_tests {
+    use super::find_navigation_node_by_path_or_label;
+    use mmatrix_testkit::NavigationNode;
+
+    fn nav(text: &str, has_activity: bool, children: Vec<NavigationNode>) -> NavigationNode {
+        NavigationNode {
+            text: text.to_owned(),
+            has_activity,
+            children,
+        }
+    }
+
+    fn sample_navigation() -> NavigationNode {
+        nav(
+            "mmatrix",
+            false,
+            vec![
+                nav("status", false, vec![]),
+                nav(
+                    "rooms: 2",
+                    false,
+                    vec![
+                        nav("Alpha", false, vec![nav("alpha root", true, vec![])]),
+                        nav("Beta", true, vec![]),
+                    ],
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn navigation_lookup_finds_unique_bare_label_anywhere_in_tree() {
+        let navigation = sample_navigation();
+
+        assert_eq!(
+            find_navigation_node_by_path_or_label(&navigation, "Beta")
+                .map(|node| node.text.as_str()),
+            Some("Beta")
+        );
+    }
+
+    #[test]
+    fn navigation_lookup_finds_root_omitted_path() {
+        let navigation = sample_navigation();
+
+        assert_eq!(
+            find_navigation_node_by_path_or_label(&navigation, "Alpha/alpha root")
+                .map(|node| node.text.as_str()),
+            Some("alpha root")
+        );
+    }
+
+    #[test]
+    fn navigation_lookup_rejects_ambiguous_bare_label() {
+        let navigation = nav(
+            "mmatrix",
+            false,
+            vec![nav("Beta", true, vec![]), nav("Beta thread", true, vec![])],
+        );
+
+        assert!(find_navigation_node_by_path_or_label(&navigation, "Beta").is_none());
+    }
+}
+
 #[cfg(windows)]
 mod windows_main {
     use std::collections::BTreeMap;
@@ -1865,25 +2023,6 @@ mod windows_main {
                 .children
                 .iter()
                 .any(|child| navigation_contains(child, substring))
-    }
-
-    fn find_navigation_node_by_path_or_label<'a>(
-        root: &'a NavigationNode,
-        path_or_label: &str,
-    ) -> Option<&'a NavigationNode> {
-        let path = path_or_label
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect::<Vec<_>>();
-        if path.is_empty() {
-            return None;
-        }
-        if path.len() == 1 {
-            return root.find_by_substring_path(&path);
-        }
-
-        root.find_by_exact_text_path(&path)
-            .or_else(|| root.find_by_substring_path(&path))
     }
 
     pub(crate) fn main() -> ExitCode {
