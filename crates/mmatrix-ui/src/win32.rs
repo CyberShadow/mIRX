@@ -92,7 +92,7 @@ use crate::{
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
-        DumpRoomMessageActivityLine, DumpSubmittedDirectRoomCommand,
+        DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedMembershipCommand, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
@@ -291,6 +291,7 @@ enum TimelineRowKind {
     Header,
     Topic,
     Typing,
+    ReactionSummary,
     Message {
         presentation: RoomMessagePresentationKind,
         send_state: TimelineMessageSendState,
@@ -382,6 +383,7 @@ struct UiModel {
 struct RoomViewModel {
     topic: Option<String>,
     activities: Vec<RoomActivity>,
+    reactions_by_target: BTreeMap<String, BTreeMap<String, RoomReactionEntry>>,
     threads: BTreeMap<String, ThreadViewModel>,
     image_media: BTreeMap<String, RoomImageMediaState>,
     typing_user_ids: Vec<String>,
@@ -472,6 +474,14 @@ struct MessageReplacementFields {
     body: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoomReactionEntry {
+    reaction_event_id: String,
+    sender: String,
+    timestamp_ms: u64,
+    key: String,
+}
+
 impl RoomViewModel {
     fn clear_visible_entries(&mut self) {
         self.activities.retain(|activity| {
@@ -483,6 +493,7 @@ impl RoomViewModel {
                 })
             )
         });
+        self.reactions_by_target.clear();
         self.retain_image_media_for_visible_activities();
         self.rebuild_threads();
     }
@@ -526,7 +537,10 @@ impl RoomViewModel {
                 }
                 self.activities.push(activity);
             }
-            RoomActivityKind::Redacted(_) => self.activities.push(activity),
+            RoomActivityKind::Redacted(redacted) => {
+                self.remove_reactions_for_target(&redacted.event_id);
+                self.activities.push(activity);
+            }
         }
         self.rebuild_threads();
     }
@@ -778,12 +792,95 @@ impl RoomViewModel {
             return false;
         };
         let activity_id = self.activities[index].activity_id.clone();
+        self.remove_reactions_for_target(target_event_id);
         self.activities[index].kind = RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: target_event_id.to_owned(),
         });
         self.remove_image_media(&activity_id);
         self.rebuild_threads();
         true
+    }
+
+    fn add_reaction(
+        &mut self,
+        target_event_id: &str,
+        reaction_event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        key: &str,
+    ) -> bool {
+        let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
+            return false;
+        };
+        if matches!(self.activities[index].kind, RoomActivityKind::Redacted(_)) {
+            return false;
+        }
+        self.reactions_by_target
+            .entry(target_event_id.to_owned())
+            .or_default()
+            .insert(
+                reaction_event_id.to_owned(),
+                RoomReactionEntry {
+                    reaction_event_id: reaction_event_id.to_owned(),
+                    sender: sender.to_owned(),
+                    timestamp_ms,
+                    key: key.to_owned(),
+                },
+            );
+        true
+    }
+
+    fn remove_reaction(
+        &mut self,
+        target_event_id: &str,
+        reaction_event_id: &str,
+        key: &str,
+    ) -> bool {
+        let Some(reactions) = self.reactions_by_target.get_mut(target_event_id) else {
+            return false;
+        };
+        let matches_key = reactions
+            .get(reaction_event_id)
+            .is_some_and(|entry| entry.key == key);
+        if !matches_key {
+            return false;
+        }
+        reactions.remove(reaction_event_id);
+        if reactions.is_empty() {
+            self.reactions_by_target.remove(target_event_id);
+        }
+        true
+    }
+
+    fn remove_reactions_for_target(&mut self, target_event_id: &str) {
+        self.reactions_by_target.remove(target_event_id);
+    }
+
+    fn reaction_summaries_for_event(&self, target_event_id: &str) -> Vec<DumpRoomReactionSummary> {
+        let Some(reactions) = self.reactions_by_target.get(target_event_id) else {
+            return Vec::new();
+        };
+
+        let mut grouped = BTreeMap::<String, Vec<&RoomReactionEntry>>::new();
+        for entry in reactions.values() {
+            grouped.entry(entry.key.clone()).or_default().push(entry);
+        }
+
+        grouped
+            .into_iter()
+            .map(|(key, mut entries)| {
+                entries.sort_by(|left, right| left.reaction_event_id.cmp(&right.reaction_event_id));
+                DumpRoomReactionSummary {
+                    key,
+                    count: entries.len() as u64,
+                    senders: entries.iter().map(|entry| entry.sender.clone()).collect(),
+                    reaction_event_ids: entries
+                        .iter()
+                        .map(|entry| entry.reaction_event_id.clone())
+                        .collect(),
+                }
+            })
+            .collect()
     }
 
     fn find_message_activity_index(
@@ -910,6 +1007,34 @@ impl RoomViewModel {
                     "activity redaction requires an existing visible target event".to_owned()
                 }),
             (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionAdded { .. },
+            ) => {
+                let Some(index) = self.find_activity_index_by_event_id(event_id) else {
+                    return Err("reaction add requires an existing visible target event".to_owned());
+                };
+                if matches!(self.activities[index].kind, RoomActivityKind::Redacted(_)) {
+                    return Err("reaction add requires an existing visible target event".to_owned());
+                }
+                Ok(())
+            }
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionRemoved {
+                    reaction_event_id,
+                    key,
+                    ..
+                },
+            ) => self
+                .reactions_by_target
+                .get(event_id)
+                .and_then(|reactions| reactions.get(reaction_event_id))
+                .filter(|entry| entry.key == *key)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    "reaction removal requires a matching stored reaction event".to_owned()
+                }),
+            (
                 RoomActivityUpdateTarget::Event { .. },
                 RoomActivityUpdateKind::MessageSent { .. },
             ) => Err("message sent update requires a transaction target".to_owned()),
@@ -925,6 +1050,14 @@ impl RoomViewModel {
                 RoomActivityUpdateTarget::Transaction { .. },
                 RoomActivityUpdateKind::ActivityRedacted { .. },
             ) => Err("activity redacted update requires an event target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::ReactionAdded { .. },
+            ) => Err("reaction add requires an event target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::ReactionRemoved { .. },
+            ) => Err("reaction removal requires an event target".to_owned()),
         }
     }
 
@@ -991,6 +1124,35 @@ fn validate_synthetic_room_activity_events(
                         );
                     }
                     (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::ReactionAdded {
+                            reaction_event_id,
+                            sender,
+                            timestamp_ms,
+                            key,
+                        },
+                    ) => {
+                        let added = room_view.add_reaction(
+                            event_id,
+                            reaction_event_id,
+                            sender,
+                            *timestamp_ms,
+                            key,
+                        );
+                        assert!(added, "validated synthetic reaction add must resolve");
+                    }
+                    (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::ReactionRemoved {
+                            reaction_event_id,
+                            key,
+                            ..
+                        },
+                    ) => {
+                        let removed = room_view.remove_reaction(event_id, reaction_event_id, key);
+                        assert!(removed, "validated synthetic reaction removal must resolve");
+                    }
+                    (
                         RoomActivityUpdateTarget::Event { .. },
                         RoomActivityUpdateKind::MessageSent { .. },
                     ) => panic!("message sent update requires a transaction target"),
@@ -1002,6 +1164,14 @@ fn validate_synthetic_room_activity_events(
                         RoomActivityUpdateTarget::Transaction { .. },
                         RoomActivityUpdateKind::ActivityRedacted { .. },
                     ) => panic!("activity redacted update requires an event target"),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::ReactionAdded { .. },
+                    ) => panic!("reaction add requires an event target"),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::ReactionRemoved { .. },
+                    ) => panic!("reaction removal requires an event target"),
                 }
             }
             _ => {}
@@ -1495,6 +1665,17 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                 last_activity.room_id == room_id
                     && last_activity.event_id.as_deref() == Some(event_id.as_str())
             }
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionAdded { .. },
+            )
+            | (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionRemoved { .. },
+            ) => {
+                last_activity.room_id == room_id
+                    && last_activity.event_id.as_deref() == Some(event_id.as_str())
+            }
             _ => false,
         });
     match (&update.target, &update.kind) {
@@ -1550,6 +1731,37 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             }
         }
         (
+            RoomActivityUpdateTarget::Event { event_id },
+            RoomActivityUpdateKind::ReactionAdded {
+                reaction_event_id,
+                sender,
+                timestamp_ms,
+                key,
+            },
+        ) => {
+            let _ = state
+                .model
+                .room_views
+                .entry(room_id.clone())
+                .or_default()
+                .add_reaction(event_id, reaction_event_id, sender, *timestamp_ms, key);
+        }
+        (
+            RoomActivityUpdateTarget::Event { event_id },
+            RoomActivityUpdateKind::ReactionRemoved {
+                reaction_event_id,
+                key,
+                ..
+            },
+        ) => {
+            let _ = state
+                .model
+                .room_views
+                .entry(room_id.clone())
+                .or_default()
+                .remove_reaction(event_id, reaction_event_id, key);
+        }
+        (
             RoomActivityUpdateTarget::Transaction { .. },
             RoomActivityUpdateKind::MessageReplaced { .. },
         ) => panic!("message edit requires an event target"),
@@ -1557,6 +1769,14 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
             RoomActivityUpdateTarget::Transaction { .. },
             RoomActivityUpdateKind::ActivityRedacted { .. },
         ) => panic!("activity redacted update requires an event target"),
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::ReactionAdded { .. },
+        ) => panic!("reaction add requires an event target"),
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::ReactionRemoved { .. },
+        ) => panic!("reaction removal requires an event target"),
         (RoomActivityUpdateTarget::Event { .. }, RoomActivityUpdateKind::MessageSent { .. }) => {
             panic!("message sent update requires a transaction target")
         }
@@ -3413,6 +3633,7 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         TimelineRowKind::Header | TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
         TimelineRowKind::Topic => rgb(0x4A, 0x42, 0x2A),
         TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
+        TimelineRowKind::ReactionSummary => rgb(0x6B, 0x6B, 0x6B),
         TimelineRowKind::Message {
             send_state: TimelineMessageSendState::Pending,
             ..
@@ -4833,6 +5054,29 @@ fn push_room_activity_row(
             ));
         }
     }
+
+    let Some(room_view) = room_view else {
+        return;
+    };
+    let Some(event_id) = room_activity_event_id(activity) else {
+        return;
+    };
+    if matches!(activity.kind, RoomActivityKind::Redacted(_)) {
+        return;
+    }
+    let summaries = room_view.reaction_summaries_for_event(event_id);
+    if summaries.is_empty() {
+        return;
+    }
+    let summary_text = summaries
+        .iter()
+        .map(|summary| format!("{} x{}", summary.key, summary.count))
+        .collect::<Vec<_>>()
+        .join("  ");
+    rows.push(TimelineRow::full_width(
+        TimelineRowKind::ReactionSummary,
+        format!("    reactions: {summary_text}"),
+    ));
 }
 
 fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
@@ -8821,6 +9065,9 @@ fn dump_room_activity_entry_from_room_entry(
     activity: &RoomActivity,
 ) -> DumpRoomActivity {
     let mut dump = dump_room_activity_from_activity(activity);
+    if let Some(event_id) = room_activity_event_id(activity) {
+        dump.reactions = room_view.reaction_summaries_for_event(event_id);
+    }
     let RoomActivityKind::Image(image) = &activity.kind else {
         return dump;
     };
@@ -9406,6 +9653,48 @@ mod tests {
         })
     }
 
+    fn incoming_reaction_added(
+        room_id: &str,
+        target_event_id: &str,
+        reaction_event_id: &str,
+        sender: &str,
+        key: &str,
+        timestamp_ms: u64,
+    ) -> Event {
+        Event::RoomActivityUpdate(RoomActivityUpdate {
+            room_id: room_id.to_owned(),
+            target: RoomActivityUpdateTarget::Event {
+                event_id: target_event_id.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::ReactionAdded {
+                reaction_event_id: reaction_event_id.to_owned(),
+                sender: sender.to_owned(),
+                timestamp_ms,
+                key: key.to_owned(),
+            },
+        })
+    }
+
+    fn incoming_reaction_removed(
+        room_id: &str,
+        target_event_id: &str,
+        reaction_event_id: &str,
+        redaction_event_id: &str,
+        key: &str,
+    ) -> Event {
+        Event::RoomActivityUpdate(RoomActivityUpdate {
+            room_id: room_id.to_owned(),
+            target: RoomActivityUpdateTarget::Event {
+                event_id: target_event_id.to_owned(),
+            },
+            kind: RoomActivityUpdateKind::ReactionRemoved {
+                reaction_event_id: reaction_event_id.to_owned(),
+                redaction_event_id: redaction_event_id.to_owned(),
+                key: key.to_owned(),
+            },
+        })
+    }
+
     fn room_read_state(
         room_id: &str,
         latest_active_event_id: Option<&str>,
@@ -9955,6 +10244,49 @@ mod tests {
     }
 
     #[test]
+    fn reaction_add_synthetic_event_validation_rejects_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ReactionAdded {
+                        reaction_event_id: "$reaction:example.org".to_owned(),
+                        sender: "@alice:example".to_owned(),
+                        timestamp_ms: 1_700_000_000_500,
+                        key: "+1".to_owned(),
+                    },
+                })]
+            ),
+            Err("reaction add requires an event target".to_owned())
+        );
+    }
+
+    #[test]
+    fn reaction_removed_synthetic_event_validation_rejects_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ReactionRemoved {
+                        reaction_event_id: "$reaction:example.org".to_owned(),
+                        redaction_event_id: "$redaction:example.org".to_owned(),
+                        key: "+1".to_owned(),
+                    },
+                })]
+            ),
+            Err("reaction removal requires an event target".to_owned())
+        );
+    }
+
+    #[test]
     fn room_activity_events_accumulate_per_room_in_order() {
         let mut state = test_state();
 
@@ -10366,6 +10698,525 @@ mod tests {
         assert!(!rendered.contains("original body"));
         assert!(!rendered.contains("edited body"));
         assert!(!rendered.contains("late body"));
+    }
+
+    #[test]
+    fn reaction_projection_renders_single_summary_row_after_annotated_activity() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event:example.org",
+                None,
+                "hello",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$event:example.org",
+                "$reaction-1:example.org",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_500,
+            ),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Header,
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                TimelineRowKind::ReactionSummary,
+            ]
+        );
+        assert_eq!(
+            project_timeline_rows(&rows),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+                "    reactions: +1 x1".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn reaction_projection_aggregates_multiple_keys_deterministically_into_one_summary_row() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-heart-1",
+                "@alice:example.org",
+                "heart",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-plus",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_200,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-eyes",
+                "@carol:example.org",
+                "eyes",
+                1_700_000_000_300,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-heart-2",
+                "@dave:example.org",
+                "heart",
+                1_700_000_000_400,
+            ),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.kind == TimelineRowKind::ReactionSummary)
+                .count(),
+            1
+        );
+        assert_eq!(
+            project_timeline_rows(&rows),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+                "    reactions: +1 x1  eyes x1  heart x2".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn same_reaction_event_id_does_not_double_count() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-1",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-1",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        assert_eq!(
+            room_view.reaction_summaries_for_event("$!ops:example:hello"),
+            vec![DumpRoomReactionSummary {
+                key: "+1".to_owned(),
+                count: 1,
+                senders: vec!["@bob:example.org".to_owned()],
+                reaction_event_ids: vec!["$reaction-1".to_owned()],
+            }]
+        );
+    }
+
+    #[test]
+    fn different_reaction_event_ids_with_same_sender_and_key_count_separately() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-1",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-2",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_200,
+            ),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        assert_eq!(
+            room_view.reaction_summaries_for_event("$!ops:example:hello"),
+            vec![DumpRoomReactionSummary {
+                key: "+1".to_owned(),
+                count: 2,
+                senders: vec!["@bob:example.org".to_owned(), "@bob:example.org".to_owned(),],
+                reaction_event_ids: vec!["$reaction-1".to_owned(), "$reaction-2".to_owned()],
+            }]
+        );
+    }
+
+    #[test]
+    fn reaction_removed_removes_only_matching_event_id_and_key() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-1",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-2",
+                "@carol:example.org",
+                "+1",
+                1_700_000_000_200,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-3",
+                "@dave:example.org",
+                "heart",
+                1_700_000_000_300,
+            ),
+        )
+        .unwrap();
+
+        apply_core_event(
+            &mut state,
+            incoming_reaction_removed(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-1",
+                "$redaction-wrong-key",
+                "heart",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+                "    reactions: +1 x2  heart x1".to_owned(),
+            ]
+        );
+
+        apply_core_event(
+            &mut state,
+            incoming_reaction_removed(
+                "!ops:example",
+                "$!ops:example:hello",
+                "$reaction-1",
+                "$redaction-right",
+                "+1",
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:13] @alice:example: hello".to_owned(),
+                "    reactions: +1 x1  heart x1".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn redacting_target_removes_reaction_summary_and_leaves_no_reaction_row() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event:example.org",
+                None,
+                "hello",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$event:example.org",
+                "$reaction-1:example.org",
+                "@bob:example.org",
+                "+1",
+                1_700_000_000_500,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$event:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![TimelineRowKind::Header, TimelineRowKind::StateNotice]
+        );
+        assert_eq!(
+            project_timeline_rows(&rows),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "* [22:13] message redacted".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn dump_room_activity_entry_attaches_reactions_without_creating_pseudo_entries() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event-1:example.org",
+                None,
+                "first",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$event-2:example.org",
+                None,
+                "second",
+                1_700_000_000_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$event-1:example.org",
+                "$reaction-1",
+                "@bob:example.org",
+                "heart",
+                1_700_000_000_200,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$event-1:example.org",
+                "$reaction-2",
+                "@carol:example.org",
+                "heart",
+                1_700_000_000_300,
+            ),
+        )
+        .unwrap();
+
+        let room_view = state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist");
+        let dumps = room_view
+            .activities
+            .iter()
+            .map(|activity| dump_room_activity_entry_from_room_entry(room_view, activity))
+            .collect::<Vec<_>>();
+
+        assert_eq!(dumps.len(), room_view.activities.len());
+        assert_eq!(
+            dumps
+                .iter()
+                .map(|dump| dump.activity_id.clone())
+                .collect::<Vec<_>>(),
+            room_view
+                .activities
+                .iter()
+                .map(|activity| activity.activity_id.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            dumps[0].reactions,
+            vec![DumpRoomReactionSummary {
+                key: "heart".to_owned(),
+                count: 2,
+                senders: vec![
+                    "@bob:example.org".to_owned(),
+                    "@carol:example.org".to_owned(),
+                ],
+                reaction_event_ids: vec!["$reaction-1".to_owned(), "$reaction-2".to_owned()],
+            }]
+        );
+        assert!(dumps[1].reactions.is_empty());
+    }
+
+    #[test]
+    fn thread_timeline_projection_includes_reactions_for_root_and_reply() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$thread-1", "$thread-root", "thread rep"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$thread-root",
+                "$reaction-root",
+                "@bob:example.org",
+                "heart",
+                1_700_000_060_100,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_reaction_added(
+                "!ops:example",
+                "$thread-1",
+                "$reaction-reply",
+                "@carol:example.org",
+                "eyes",
+                1_700_000_120_100,
+            ),
+        )
+        .unwrap();
+
+        let rows = build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root");
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Header,
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                TimelineRowKind::ReactionSummary,
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                TimelineRowKind::ReactionSummary,
+            ]
+        );
+        assert_eq!(
+            project_timeline_rows(&rows),
+            vec![
+                "Room: Ops (!ops:example)".to_owned(),
+                "[22:14] @alice:example: root msg".to_owned(),
+                "    reactions: heart x1".to_owned(),
+                "[22:15] @alice:example: thread rep".to_owned(),
+                "    reactions: eyes x1".to_owned(),
+            ]
+        );
     }
 
     #[test]
