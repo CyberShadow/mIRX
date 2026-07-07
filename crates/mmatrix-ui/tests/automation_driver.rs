@@ -21,17 +21,17 @@ use mmatrix_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
-    ComposeKey, LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp, NavigationNode,
-    NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
-    RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedRedactionCommand, SubmittedRoomTopicCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    ComposeKey, FrameSize, LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp,
+    NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
+    RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedRoomTopicCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
+    UiError, UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionKind, VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -2264,6 +2264,67 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
 
     app.select_room("!members:example")?;
     let ui_state = app.dump_ui_state()?;
+    let members_view = find_view(&ui_state, &room_identity("!members:example"));
+    assert_eq!(
+        view_member_labels(members_view),
+        vec![
+            "Alice",
+            "Casey",
+            "Sam (@sam-one:example)",
+            "Sam (@sam-two:example)",
+            "@ghost:example",
+            "@blank:example",
+            "Zoe",
+        ]
+    );
+    assert!(view_contains(members_view, "member list context line"));
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_loads_member_list_fixture_in_narrow_frame()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("member-list-narrow.json");
+    assert_eq!(
+        fixture_path.file_name().and_then(|name| name.to_str()),
+        Some("member-list-narrow.json")
+    );
+
+    let frame_size = FrameSize {
+        width: 640,
+        height: 768,
+    };
+    let options = LaunchOptions {
+        frame_size: Some(frame_size),
+        ..launch_options(None)
+    };
+    assert_eq!(
+        options.frame_size,
+        Some(FrameSize {
+            width: 640,
+            height: 768,
+        })
+    );
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!members:example")?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!members:example"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!members:example")
+    );
+    assert_eq!(find_ui_room(&ui_state, "!members:example").room_id, "!members:example");
+
     let members_view = find_view(&ui_state, &room_identity("!members:example"));
     assert_eq!(
         view_member_labels(members_view),
@@ -4729,6 +4790,84 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     );
     assert_switchbar_activity(&beta_state, &room_view_identity, false);
     assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_renders_shell_constrained_layout_fixture()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("shell-constrained-layout.json");
+    let frame_size = FrameSize {
+        width: 900,
+        height: 620,
+    };
+    let options = LaunchOptions {
+        frame_size: Some(frame_size),
+        ..launch_options(None)
+    };
+    assert_eq!(options.frame_size, Some(frame_size));
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!focus:example"));
+    assert_active_switchbar_item(&ui_state, &room_identity("!focus:example"));
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!focus:example")
+    );
+    assert!(navigation_contains(&ui_state.navigation, "Focus"));
+    assert!(navigation_contains(&ui_state.navigation, "Inbox"));
+    assert!(navigation_contains(&ui_state.navigation, "Docs"));
+
+    let switchbar_identities = ui_state
+        .switchbar
+        .items
+        .iter()
+        .map(|item| &item.identity)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        switchbar_identities,
+        vec![
+            &ViewIdentity::Status,
+            &room_identity("!focus:example"),
+            &room_identity("!inbox:example"),
+            &room_identity("!docs:example"),
+        ]
+    );
+    assert_eq!(find_switchbar_item(&ui_state, &ViewIdentity::Status).title, "Status");
+    assert_eq!(
+        find_switchbar_item(&ui_state, &room_identity("!focus:example")).title,
+        "Focus"
+    );
+    assert_eq!(
+        find_switchbar_item(&ui_state, &room_identity("!inbox:example")).title,
+        "Inbox"
+    );
+    assert_eq!(
+        find_switchbar_item(&ui_state, &room_identity("!docs:example")).title,
+        "Docs"
+    );
+
+    let focus_view = find_view(&ui_state, &room_identity("!focus:example"));
+    assert!(view_contains(
+        focus_view,
+        "long visible timeline line for the 900x620 shell frame so the MDI content remains obvious"
+    ));
+    assert!(view_members_contain(focus_view, "Alice"));
+    assert!(view_members_contain(focus_view, "Casey"));
+    assert!(ui_state
+        .status_bar
+        .text
+        .contains("timeline update from !inbox:example"));
 
     Ok(())
 }
