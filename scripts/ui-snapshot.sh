@@ -160,6 +160,18 @@ ensure_binaries() {
   cargo build --target x86_64-pc-windows-gnu -p mmatrix-testkit --bin mmatrix-snapshot-driver
 }
 
+is_default_snapshot_case() {
+  local case_name=$1
+  case "$case_name" in
+    shell-activity)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 configure_case_expectations() {
   local case_name=$1
   room_activity_expect_args=()
@@ -1515,6 +1527,17 @@ main() {
       requested+=("$state_path")
     done
     state_files=("${requested[@]}")
+  else
+    local discovered=()
+    local state_path=
+    for state_path in "${state_files[@]}"; do
+      local case_name=${state_path##*/}
+      case_name=${case_name%.json}
+      if is_default_snapshot_case "$case_name"; then
+        discovered+=("$state_path")
+      fi
+    done
+    state_files=("${discovered[@]}")
   fi
 
   for state_path in "${state_files[@]}"; do

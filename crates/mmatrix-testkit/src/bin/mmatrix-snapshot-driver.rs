@@ -1241,14 +1241,14 @@ fn collect_navigation_path_matches<'a, F>(
 ) where
     F: Copy + Fn(&str, &str) -> bool,
 {
-    if let Some((segment, remaining)) = path.split_first() {
-        if segment_matches(&node.text, segment) {
-            if remaining.is_empty() {
-                matches.push(node);
-            } else {
-                for child in &node.children {
-                    collect_navigation_path_matches(child, remaining, segment_matches, matches);
-                }
+    if let Some((segment, remaining)) = path.split_first()
+        && segment_matches(&node.text, segment)
+    {
+        if remaining.is_empty() {
+            matches.push(node);
+        } else {
+            for child in &node.children {
+                collect_navigation_path_matches(child, remaining, segment_matches, matches);
             }
         }
     }
