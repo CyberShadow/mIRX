@@ -12,7 +12,7 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation,
     E2eeRecoverySucceeded, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactReactionRequest,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RestoreSessionRequest, RoomMembers, RoomReadState, RoomSummary, SendReactionRequest,
     SetRoomTopicRequest, VerificationFlowId,
 };
@@ -194,7 +194,7 @@ async fn handle_command(
         Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendReaction(request) => handle_send_reaction(event_tx, state, request).await,
-        Command::RedactReaction(request) => handle_redact_reaction(event_tx, state, request).await,
+        Command::RedactEvent(request) => handle_redact_event(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
         Command::FetchRoomImageMedia(request) => {
             handle_fetch_room_image_media(event_tx, state, request).await
@@ -544,22 +544,22 @@ async fn handle_send_reaction(
     false
 }
 
-async fn handle_redact_reaction(
+async fn handle_redact_event(
     event_tx: &EventSender,
     state: &mut WorkerState,
-    request: RedactReactionRequest,
+    request: RedactEventRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
         emit_invalid_state(
             event_tx,
-            Operation::RedactReaction,
-            "redact reaction requires an authenticated session",
+            Operation::RedactEvent,
+            "redact event requires an authenticated session",
         );
         return false;
     };
 
-    if let Err(err) = matrix::redact_reaction(client, request).await {
-        emit_matrix_error(event_tx, Operation::RedactReaction, err);
+    if let Err(err) = matrix::redact_event(client, request).await {
+        emit_matrix_error(event_tx, Operation::RedactEvent, err);
     }
 
     false

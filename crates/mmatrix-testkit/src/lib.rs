@@ -226,7 +226,7 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_reaction_commands: Vec<SubmittedReactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub submitted_reaction_redaction_commands: Vec<SubmittedReactionRedactionCommand>,
+    pub submitted_redaction_commands: Vec<SubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     pub last_error: Option<UiError>,
@@ -263,9 +263,9 @@ pub struct SubmittedReactionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SubmittedReactionRedactionCommand {
+pub struct SubmittedRedactionCommand {
     pub room_id: String,
-    pub reaction_event_id: String,
+    pub event_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

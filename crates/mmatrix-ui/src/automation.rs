@@ -749,7 +749,7 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_reaction_commands: Vec<DumpSubmittedReactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) submitted_reaction_redaction_commands: Vec<DumpSubmittedReactionRedactionCommand>,
+    pub(crate) submitted_redaction_commands: Vec<DumpSubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     pub(crate) last_error: Option<DumpError>,
@@ -786,9 +786,9 @@ pub(crate) struct DumpSubmittedReactionCommand {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DumpSubmittedReactionRedactionCommand {
+pub(crate) struct DumpSubmittedRedactionCommand {
     pub(crate) room_id: String,
-    pub(crate) reaction_event_id: String,
+    pub(crate) event_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1044,7 +1044,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
         Operation::SendReaction => "send_reaction",
-        Operation::RedactReaction => "redact_reaction",
+        Operation::RedactEvent => "redact_event",
         Operation::MarkRoomRead => "mark_room_read",
         Operation::FetchRoomImageMedia => "fetch_room_image_media",
         Operation::RoomList => "room_list",
@@ -1587,8 +1587,8 @@ mod tests {
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpSubmittedReactionCommand, DumpSubmittedReactionRedactionCommand,
-        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
+        DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedRoomTopicCommand,
+        DumpUnsupportedRoomMessageActivity, GetVersionResponse,
         LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
         NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
         PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
@@ -2945,7 +2945,7 @@ mod tests {
                     submitted_direct_room_commands: Vec::new(),
                     submitted_room_topic_commands: Vec::new(),
                     submitted_reaction_commands: Vec::new(),
-                    submitted_reaction_redaction_commands: Vec::new(),
+                    submitted_redaction_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
@@ -3497,7 +3497,7 @@ mod tests {
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
-            submitted_reaction_redaction_commands: Vec::new(),
+            submitted_redaction_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,
@@ -3570,7 +3570,7 @@ mod tests {
                 topic: "incident review".to_owned(),
             }],
             submitted_reaction_commands: Vec::new(),
-            submitted_reaction_redaction_commands: Vec::new(),
+            submitted_redaction_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
@@ -3595,7 +3595,7 @@ mod tests {
                 }
             ],
             "submitted_reaction_commands":[],
-            "submitted_reaction_redaction_commands":[],
+            "submitted_redaction_commands":[],
             "last_error":null,
             "selected_room":"!ops:example"
         }))
@@ -3621,9 +3621,9 @@ mod tests {
                 target_event_id: "$target:example".to_owned(),
                 key: "+1".to_owned(),
             }],
-            submitted_reaction_redaction_commands: vec![DumpSubmittedReactionRedactionCommand {
+            submitted_redaction_commands: vec![DumpSubmittedRedactionCommand {
                 room_id: "!ops:example".to_owned(),
-                reaction_event_id: "$reaction:example".to_owned(),
+                event_id: "$reaction:example".to_owned(),
             }],
             submitted_verification_actions: Vec::new(),
             last_error: None,
@@ -3646,10 +3646,10 @@ mod tests {
                         "key":"+1"
                     }
                 ],
-                "submitted_reaction_redaction_commands":[
+                "submitted_redaction_commands":[
                     {
                         "room_id":"!ops:example",
-                        "reaction_event_id":"$reaction:example"
+                        "event_id":"$reaction:example"
                     }
                 ],
                 "last_error":null,
@@ -3676,7 +3676,7 @@ mod tests {
                     "unexpected":true
                 }
             ],
-            "submitted_reaction_redaction_commands":[],
+            "submitted_redaction_commands":[],
             "last_error":null,
             "selected_room":"!ops:example"
         }))
@@ -3698,10 +3698,10 @@ mod tests {
             "submitted_direct_room_commands":[],
             "submitted_room_topic_commands":[],
             "submitted_reaction_commands":[],
-            "submitted_reaction_redaction_commands":[
+            "submitted_redaction_commands":[
                 {
                     "room_id":"!ops:example",
-                    "reaction_event_id":"$reaction:example",
+                    "event_id":"$reaction:example",
                     "unexpected":true
                 }
             ],

@@ -24,8 +24,8 @@ use mmatrix_testkit::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
     StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedReactionRedactionCommand, SubmittedRoomTopicCommand,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedRoomTopicCommand, SwitchbarItem,
+    SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
     VerificationEmoji, VerificationState, ViewIdentity,
 };
@@ -309,7 +309,7 @@ fn data_models_round_trip_through_json() {
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
-        submitted_reaction_redaction_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
@@ -2777,7 +2777,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
-        submitted_reaction_redaction_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
@@ -2837,7 +2837,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
-        submitted_reaction_redaction_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -2910,7 +2910,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         }],
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
-        submitted_reaction_redaction_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -2988,7 +2988,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
             topic: "incident review".to_owned(),
         }],
         submitted_reaction_commands: Vec::new(),
-        submitted_reaction_redaction_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3074,7 +3074,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
             target_event_id: "$target:example.org".to_owned(),
             key: "+1".to_owned(),
         }],
-        submitted_reaction_redaction_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3124,7 +3124,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
 }
 
 #[test]
-fn model_submitted_reaction_redaction_commands_round_trip_through_json() {
+fn model_submitted_redaction_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
@@ -3136,9 +3136,9 @@ fn model_submitted_reaction_redaction_commands_round_trip_through_json() {
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
-        submitted_reaction_redaction_commands: vec![SubmittedReactionRedactionCommand {
+        submitted_redaction_commands: vec![SubmittedRedactionCommand {
             room_id: "!ops:example.org".to_owned(),
-            reaction_event_id: "$reaction:example.org".to_owned(),
+            event_id: "$reaction:example.org".to_owned(),
         }],
         submitted_verification_actions: Vec::new(),
         last_error: None,
@@ -3146,7 +3146,7 @@ fn model_submitted_reaction_redaction_commands_round_trip_through_json() {
     };
 
     assert_eq!(
-        serde_json::to_value(&model).expect("serialize model with reaction redaction commands"),
+        serde_json::to_value(&model).expect("serialize model with redaction commands"),
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
@@ -3154,10 +3154,10 @@ fn model_submitted_reaction_redaction_commands_round_trip_through_json() {
             "last_activity": null,
             "e2ee_status": null,
             "last_verification": null,
-            "submitted_reaction_redaction_commands": [
+            "submitted_redaction_commands": [
                 {
                     "room_id": "!ops:example.org",
-                    "reaction_event_id": "$reaction:example.org"
+                    "event_id": "$reaction:example.org"
                 }
             ],
             "last_error": null,
@@ -3172,22 +3172,22 @@ fn model_submitted_reaction_redaction_commands_round_trip_through_json() {
             "last_activity": null,
             "e2ee_status": null,
             "last_verification": null,
-            "submitted_reaction_redaction_commands": [
+            "submitted_redaction_commands": [
                 {
                     "room_id": "!ops:example.org",
-                    "reaction_event_id": "$reaction:example.org"
+                    "event_id": "$reaction:example.org"
                 }
             ],
             "last_error": null,
             "selected_room": null
         }))
-        .expect("deserialize model with reaction redaction commands"),
+        .expect("deserialize model with redaction commands"),
         model
     );
 }
 
 #[test]
-fn model_full_payload_round_trips_submitted_reaction_command_fields() {
+fn model_full_payload_round_trips_submitted_reaction_and_redaction_command_fields() {
     let input_json = serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
@@ -3205,10 +3205,10 @@ fn model_full_payload_round_trips_submitted_reaction_command_fields() {
                 "key": "+1"
             }
         ],
-        "submitted_reaction_redaction_commands": [
+        "submitted_redaction_commands": [
             {
                 "room_id": "!ops:example.org",
-                "reaction_event_id": "$reaction:example.org"
+                "event_id": "$reaction:example.org"
             }
         ],
         "submitted_verification_actions": [],
@@ -3217,7 +3217,7 @@ fn model_full_payload_round_trips_submitted_reaction_command_fields() {
     });
 
     let model = serde_json::from_value::<Model>(input_json)
-        .expect("deserialize full model payload with reaction command fields");
+        .expect("deserialize full model payload with reaction and redaction command fields");
     assert_eq!(
         model,
         Model {
@@ -3235,9 +3235,9 @@ fn model_full_payload_round_trips_submitted_reaction_command_fields() {
                 target_event_id: "$target:example.org".to_owned(),
                 key: "+1".to_owned(),
             }],
-            submitted_reaction_redaction_commands: vec![SubmittedReactionRedactionCommand {
+            submitted_redaction_commands: vec![SubmittedRedactionCommand {
                 room_id: "!ops:example.org".to_owned(),
-                reaction_event_id: "$reaction:example.org".to_owned(),
+                event_id: "$reaction:example.org".to_owned(),
             }],
             submitted_verification_actions: Vec::new(),
             last_error: None,
@@ -3260,10 +3260,10 @@ fn model_full_payload_round_trips_submitted_reaction_command_fields() {
                     "key": "+1"
                 }
             ],
-            "submitted_reaction_redaction_commands": [
+            "submitted_redaction_commands": [
                 {
                     "room_id": "!ops:example.org",
-                    "reaction_event_id": "$reaction:example.org"
+                    "event_id": "$reaction:example.org"
                 }
             ],
             "last_error": null,
@@ -3289,7 +3289,7 @@ fn model_submitted_membership_commands_reject_unknown_nested_fields() {
             }
         ],
         "submitted_reaction_commands": [],
-        "submitted_reaction_redaction_commands": [],
+        "submitted_redaction_commands": [],
         "last_error": null,
         "selected_room": null
     }))
@@ -3315,7 +3315,7 @@ fn model_submitted_direct_room_commands_reject_unknown_nested_fields() {
             }
         ],
         "submitted_reaction_commands": [],
-        "submitted_reaction_redaction_commands": [],
+        "submitted_redaction_commands": [],
         "last_error": null,
         "selected_room": null
     }))
@@ -3343,7 +3343,7 @@ fn model_submitted_room_topic_commands_reject_unknown_nested_fields() {
             }
         ],
         "submitted_reaction_commands": [],
-        "submitted_reaction_redaction_commands": [],
+        "submitted_redaction_commands": [],
         "last_error": null,
         "selected_room": null
     }))
@@ -3372,7 +3372,7 @@ fn model_submitted_reaction_commands_reject_unknown_nested_fields() {
                 "unexpected": true
             }
         ],
-        "submitted_reaction_redaction_commands": [],
+        "submitted_redaction_commands": [],
         "last_error": null,
         "selected_room": null
     }))
@@ -3382,7 +3382,7 @@ fn model_submitted_reaction_commands_reject_unknown_nested_fields() {
 }
 
 #[test]
-fn model_submitted_reaction_redaction_commands_reject_unknown_nested_fields() {
+fn model_submitted_redaction_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
@@ -3394,10 +3394,10 @@ fn model_submitted_reaction_redaction_commands_reject_unknown_nested_fields() {
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
         "submitted_reaction_commands": [],
-        "submitted_reaction_redaction_commands": [
+        "submitted_redaction_commands": [
             {
                 "room_id": "!ops:example.org",
-                "reaction_event_id": "$reaction:example.org",
+                "event_id": "$reaction:example.org",
                 "unexpected": true
             }
         ],

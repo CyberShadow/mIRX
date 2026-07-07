@@ -59,7 +59,7 @@ use tokio::task::JoinHandle;
 use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactReactionRequest, RoomActivity,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
     RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
@@ -1922,7 +1922,7 @@ fn map_send_queue_update(
                     message,
                 })],
                 Some(PendingOutgoingKind::Redaction { .. }) => vec![Event::Error(CoreErrorEvent {
-                    operation: Operation::RedactReaction,
+                    operation: Operation::RedactEvent,
                     message,
                 })],
                 None => vec![Event::Error(CoreErrorEvent {
@@ -2015,7 +2015,7 @@ fn map_local_echo(
             let mut events = Vec::new();
             if let Some(send_error) = send_error {
                 events.push(Event::Error(CoreErrorEvent {
-                    operation: Operation::RedactReaction,
+                    operation: Operation::RedactEvent,
                     message: send_error.to_string(),
                 }));
             }
@@ -2294,17 +2294,17 @@ pub(crate) async fn send_reaction(
     Ok(())
 }
 
-pub(crate) async fn redact_reaction(
+pub(crate) async fn redact_event(
     client: &Client,
-    request: RedactReactionRequest,
+    request: RedactEventRequest,
 ) -> Result<(), MatrixCoreError> {
     let room = joined_room_by_id(client, &request.room_id)?;
-    let reaction_event_id = owned_event_id_from_str(&request.reaction_event_id)?;
+    let event_id = owned_event_id_from_str(&request.event_id)?;
 
     room.send_queue()
-        .redact(reaction_event_id, None)
+        .redact(event_id, None)
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to redact Matrix reaction: {err}")))?;
+        .map_err(|err| MatrixCoreError::new(format!("failed to redact Matrix event: {err}")))?;
 
     Ok(())
 }
@@ -5080,7 +5080,7 @@ mod tests {
         assert_eq!(
             events,
             vec![Event::Error(CoreErrorEvent {
-                operation: Operation::RedactReaction,
+                operation: Operation::RedactEvent,
                 message: "redaction send failed".to_owned(),
             })]
         );

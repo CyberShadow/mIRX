@@ -18,7 +18,7 @@ pub enum Command {
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
     SendReaction(SendReactionRequest),
-    RedactReaction(RedactReactionRequest),
+    RedactEvent(RedactEventRequest),
     MarkRoomRead(MarkRoomReadRequest),
     FetchRoomImageMedia(FetchRoomImageMediaRequest),
     RefreshE2eeStatus,
@@ -78,9 +78,9 @@ pub struct SendReactionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RedactReactionRequest {
+pub struct RedactEventRequest {
     pub room_id: String,
-    pub reaction_event_id: String,
+    pub event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -606,7 +606,7 @@ pub enum Operation {
     SetRoomTopic,
     SendMessage,
     SendReaction,
-    RedactReaction,
+    RedactEvent,
     MarkRoomRead,
     FetchRoomImageMedia,
     RoomList,

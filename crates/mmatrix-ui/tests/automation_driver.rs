@@ -27,7 +27,7 @@ use mmatrix_testkit::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
     SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedReactionRedactionCommand, SubmittedRoomTopicCommand, SubmittedVerificationAction,
+    SubmittedRedactionCommand, SubmittedRoomTopicCommand, SubmittedVerificationAction,
     SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
     ViewIdentity,
@@ -6244,7 +6244,7 @@ fn automation_driver_slash_react_records_submitted_reaction_without_appending_te
     assert!(before_model.submitted_reaction_commands.is_empty());
     assert!(
         before_model
-            .submitted_reaction_redaction_commands
+            .submitted_redaction_commands
             .is_empty()
     );
 
@@ -6262,7 +6262,7 @@ fn automation_driver_slash_react_records_submitted_reaction_without_appending_te
             key: "+1".to_owned(),
         }]
     );
-    assert!(model.submitted_reaction_redaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
     assert_eq!(app.room_activity(Some("!reactions:example"))?, before);
 
     drop(app);
@@ -6300,7 +6300,48 @@ fn automation_driver_slash_react_preserves_key_text() -> Result<(), Box<dyn std:
             key: "eyes".to_owned(),
         }]
     );
-    assert!(model.submitted_reaction_redaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_redact_records_submitted_redaction_without_appending_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before = app.room_activity(Some("!reactions:example"))?;
+    let before_model = app.dump_model()?;
+    assert!(before_model.submitted_reaction_commands.is_empty());
+    assert!(before_model.submitted_redaction_commands.is_empty());
+
+    app.set_compose_text("/redact $event-to-redact")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert!(model.submitted_reaction_commands.is_empty());
+    assert_eq!(
+        model.submitted_redaction_commands,
+        vec![SubmittedRedactionCommand {
+            room_id: "!reactions:example".to_owned(),
+            event_id: "$event-to-redact".to_owned(),
+        }]
+    );
+    assert_eq!(app.room_activity(Some("!reactions:example"))?, before);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -6326,7 +6367,7 @@ fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
     assert!(before_model.submitted_reaction_commands.is_empty());
     assert!(
         before_model
-            .submitted_reaction_redaction_commands
+            .submitted_redaction_commands
             .is_empty()
     );
 
@@ -6338,12 +6379,50 @@ fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
     let model = app.dump_model()?;
     assert!(model.submitted_reaction_commands.is_empty());
     assert_eq!(
-        model.submitted_reaction_redaction_commands,
-        vec![SubmittedReactionRedactionCommand {
+        model.submitted_redaction_commands,
+        vec![SubmittedRedactionCommand {
             room_id: "!reactions:example".to_owned(),
-            reaction_event_id: "$reaction-alice-plus-one".to_owned(),
+            event_id: "$reaction-alice-plus-one".to_owned(),
         }]
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before = app.room_activity(Some("!reactions:example"))?;
+
+    app.set_compose_text("/redact")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "usage: /redact <event-id>");
+    assert!(model.submitted_reaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+    assert_eq!(model.last_error, None);
+    assert_eq!(app.room_activity(Some("!reactions:example"))?, before);
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!reactions:example"));
+    assert!(ui_state.status_bar.text.contains("usage: /redact <event-id>"));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -6375,7 +6454,7 @@ fn automation_driver_invalid_react_reports_usage_without_recording_commands()
     let model = app.dump_model()?;
     assert_eq!(model.status, "usage: /react <event-id> <key>");
     assert!(model.submitted_reaction_commands.is_empty());
-    assert!(model.submitted_reaction_redaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
     assert_eq!(model.last_error, None);
     assert_eq!(app.room_activity(Some("!reactions:example"))?, before);
 
@@ -6422,7 +6501,7 @@ fn automation_driver_literal_react_submission_is_sent_as_text()
         })
     );
     assert!(model.submitted_reaction_commands.is_empty());
-    assert!(model.submitted_reaction_redaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
     assert_eq!(
         app.dump_ui_state()?.mdi.active,
         room_identity("!reactions:example")
@@ -6475,7 +6554,50 @@ fn automation_driver_slash_react_from_thread_targets_parent_room()
             key: "+1".to_owned(),
         }]
     );
-    assert!(model.submitted_reaction_redaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+    assert_eq!(app.room_activity(Some("!reactions:example"))?, before);
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, thread_view_identity);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_redact_from_thread_targets_parent_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
+    let before = app.room_activity(Some("!reactions:example"))?;
+    app.select_view(thread_view_identity.clone())?;
+
+    app.set_compose_text("/redact $event-to-redact")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert!(model.submitted_reaction_commands.is_empty());
+    assert_eq!(
+        model.submitted_redaction_commands,
+        vec![SubmittedRedactionCommand {
+            room_id: "!reactions:example".to_owned(),
+            event_id: "$event-to-redact".to_owned(),
+        }]
+    );
     assert_eq!(app.room_activity(Some("!reactions:example"))?, before);
 
     let ui_state = app.dump_ui_state()?;

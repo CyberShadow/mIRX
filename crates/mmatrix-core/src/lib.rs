@@ -10,7 +10,7 @@ pub use api::{
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState,
     E2eeRecoverySucceeded, E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
     LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RedactReactionRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
+    RedactEventRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
     RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,

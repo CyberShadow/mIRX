@@ -4,7 +4,7 @@ use mmatrix_core::{
     Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
     E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactReactionRequest, RoomActivity,
+    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
     RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
@@ -341,14 +341,14 @@ fn send_reaction_before_login_emits_send_reaction_error() {
 }
 
 #[test]
-fn redact_reaction_before_login_emits_redact_reaction_error() {
+fn redact_event_before_login_emits_redact_event_error() {
     assert_invalid_authenticated_command(
-        Command::RedactReaction(RedactReactionRequest {
+        Command::RedactEvent(RedactEventRequest {
             room_id: "!ops:example.org".to_owned(),
-            reaction_event_id: "$reaction:example.org".to_owned(),
+            event_id: "$reaction:example.org".to_owned(),
         }),
-        Operation::RedactReaction,
-        "redact reaction requires an authenticated session",
+        Operation::RedactEvent,
+        "redact event requires an authenticated session",
     );
 }
 
@@ -685,20 +685,20 @@ fn send_reaction_request_round_trips_through_serde() {
 }
 
 #[test]
-fn redact_reaction_request_round_trips_through_serde() {
-    let request = RedactReactionRequest {
+fn redact_event_request_round_trips_through_serde() {
+    let request = RedactEventRequest {
         room_id: "!room:example.org".to_owned(),
-        reaction_event_id: "$reaction:example.org".to_owned(),
+        event_id: "$reaction:example.org".to_owned(),
     };
 
-    let json = serde_json::to_string(&request).expect("serialize redact reaction request");
+    let json = serde_json::to_string(&request).expect("serialize redact event request");
     assert_eq!(
         json,
-        r#"{"room_id":"!room:example.org","reaction_event_id":"$reaction:example.org"}"#
+        r#"{"room_id":"!room:example.org","event_id":"$reaction:example.org"}"#
     );
 
-    let restored: RedactReactionRequest =
-        serde_json::from_str(&json).expect("deserialize redact reaction request");
+    let restored: RedactEventRequest =
+        serde_json::from_str(&json).expect("deserialize redact event request");
     assert_eq!(restored, request);
 }
 
@@ -1919,11 +1919,11 @@ fn reaction_request_dtos_reject_unknown_fields() {
     );
 
     assert!(
-        serde_json::from_str::<RedactReactionRequest>(
-            r#"{"room_id":"!ops:example.org","reaction_event_id":"$reaction:example.org","unexpected":"value"}"#
+        serde_json::from_str::<RedactEventRequest>(
+            r#"{"room_id":"!ops:example.org","event_id":"$reaction:example.org","unexpected":"value"}"#
         )
         .is_err(),
-        "redact reaction request must reject unknown fields"
+        "redact event request must reject unknown fields"
     );
 }
 
