@@ -168,6 +168,8 @@ configure_case_expectations() {
   local case_name=$1
   room_activity_expect_args=()
   room_expect_args=()
+  room_membership_expect_args=()
+  room_forbid_args=()
   room_direct_expect_args=()
   room_tag_expect_args=()
   room_read_target_expect_args=()
@@ -244,6 +246,162 @@ configure_case_expectations() {
         --expect-no-navigation-text 'incident review'
         --expect-no-navigation-text 'encryption enabled'
         --expect-no-navigation-text 'deploy window opens'
+      )
+      ;;
+    invited-room-list)
+      expect_selected='!invite:example'
+      expect_active_view='room:!invite:example'
+      select_views=('room:!invite:example')
+      room_expect_args=(
+        --expect-room '!beta:example'
+        --expect-room '!invite:example'
+      )
+      room_membership_expect_args=(
+        --expect-room-membership '!beta:example::join'
+        --expect-room-membership '!invite:example::invite'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!invite:example::Invitation to Lobby'
+        --expect-room-view '!invite:example::Use /accept or /reject to respond.'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'invited: Lobby (!invite:example)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+        --expect-switchbar-item 'room:!invite:example::Lobby [invite]'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!beta:example'
+        --expect-no-switchbar-activity 'room:!invite:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!invite:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'rooms: 1'
+        --expect-navigation-text 'invites: 1'
+        --expect-navigation-text 'Beta'
+        --expect-navigation-text 'Lobby [invite]'
+      )
+      ;;
+    invited-direct-room)
+      expect_selected='!invite-direct:example'
+      expect_active_view='room:!invite-direct:example'
+      select_views=('room:!invite-direct:example')
+      room_expect_args=(
+        --expect-room '!beta:example'
+        --expect-room '!invite-direct:example'
+      )
+      room_membership_expect_args=(
+        --expect-room-membership '!beta:example::join'
+        --expect-room-membership '!invite-direct:example::invite'
+      )
+      room_direct_expect_args=(
+        --expect-direct-room '!invite-direct:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!invite-direct:example::Invitation to Daria'
+        --expect-room-view '!invite-direct:example::Use /accept or /reject to respond.'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'invited: Daria (!invite-direct:example)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+        --expect-switchbar-item 'room:!invite-direct:example::Daria [invite] [query: @daria:example]'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!beta:example'
+        --expect-no-switchbar-activity 'room:!invite-direct:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!invite-direct:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'rooms: 1'
+        --expect-navigation-text 'invites: 1'
+        --expect-navigation-text 'Beta'
+        --expect-navigation-text 'Daria [invite] [query: @daria:example]'
+      )
+      ;;
+    invited-room-accept)
+      expect_selected='!invite:example'
+      expect_active_view='room:!invite:example'
+      select_views=('room:!invite:example')
+      append_events_path="$root_dir/tests/ui-state-updates/invited-room-accept.json"
+      room_expect_args=(
+        --expect-room '!beta:example'
+        --expect-room '!invite:example'
+      )
+      room_membership_expect_args=(
+        --expect-room-membership '!beta:example::join'
+        --expect-room-membership '!invite:example::join'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!invite:example::Room: Lobby (!invite:example)'
+      )
+      view_forbid_args=(
+        --expect-no-view 'room:!invite:example::Use /accept or /reject to respond.'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+        --expect-switchbar-item 'room:!invite:example::Lobby'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!beta:example'
+        --expect-no-switchbar-activity 'room:!invite:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!invite:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'rooms: 2'
+        --expect-navigation-text 'invites: 0'
+        --expect-navigation-text 'Beta'
+        --expect-navigation-text 'Lobby'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'Lobby [invite]'
+      )
+      ;;
+    invited-room-reject)
+      expect_selected='!beta:example'
+      expect_active_view='room:!beta:example'
+      select_views=('room:!invite:example')
+      append_events_path="$root_dir/tests/ui-state-updates/invited-room-reject.json"
+      room_expect_args=(
+        --expect-room '!beta:example'
+      )
+      room_membership_expect_args=(
+        --expect-room-membership '!beta:example::join'
+      )
+      room_forbid_args=(
+        --expect-no-room '!invite:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!beta:example::Room: Beta (!beta:example)'
+        --expect-room-view '!beta:example::beta latest'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!beta:example::Beta'
+      )
+      switchbar_no_item_expect_args=(
+        --expect-no-switchbar-item 'room:!invite:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!beta:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!beta:example'
+      navigation_expect_args=(
+        --expect-navigation-text 'rooms: 1'
+        --expect-navigation-text 'invites: 0'
+        --expect-navigation-text 'Beta'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'Lobby [invite]'
       )
       ;;
     space-hierarchy)
@@ -1449,6 +1607,8 @@ run_case() {
     --wait-idle-ms 5000
     --expect-active-view "$expect_active_view"
     "${room_expect_args[@]}"
+    "${room_membership_expect_args[@]}"
+    "${room_forbid_args[@]}"
     "${room_direct_expect_args[@]}"
     "${room_tag_expect_args[@]}"
     "${room_read_target_expect_args[@]}"

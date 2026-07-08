@@ -21,7 +21,8 @@
             "suggested": false,
             "order": "b"
           }
-        ]
+        ],
+        "membership": "join"
       },
       {
         "room_id": "!social:example",
@@ -42,7 +43,8 @@
             "suggested": false,
             "order": "b"
           }
-        ]
+        ],
+        "membership": "join"
       },
       {
         "room_id": "!ops:example",
@@ -52,7 +54,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "membership": "join"
       },
       {
         "room_id": "!shared:example",
@@ -62,7 +65,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "membership": "join"
       },
       {
         "room_id": "!random:example",
@@ -72,7 +76,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "membership": "join"
       },
       {
         "room_id": "!direct:example",
@@ -93,7 +98,8 @@
             "order": null
           }
         ],
-        "space_children": []
+        "space_children": [],
+        "membership": "join"
       }
     ]
   },

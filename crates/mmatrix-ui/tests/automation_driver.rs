@@ -6638,6 +6638,232 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
 }
 
 #[test]
+fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("invited-room-list.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert!(model.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Invite
+    }));
+
+    let state = app.dump_ui_state()?;
+    assert_eq!(state.mdi.active, room_identity("!invite:example"));
+    assert_active_switchbar_item(&state, &room_identity("!invite:example"));
+    assert!(navigation_contains(&state.navigation, "rooms: 1"));
+    assert!(navigation_contains(&state.navigation, "invites: 1"));
+    assert!(navigation_contains(&state.navigation, "Lobby [invite]"));
+    assert_eq!(
+        find_ui_room(&state, "!invite:example").membership,
+        RoomMembership::Invite
+    );
+    assert_eq!(
+        find_switchbar_item(&state, &room_identity("!invite:example")).title,
+        "Lobby [invite]"
+    );
+    let invite_view = find_view(&state, &room_identity("!invite:example"));
+    assert_eq!(invite_view.title, "Lobby [invite]");
+    assert!(view_contains(invite_view, "Invitation to Lobby"));
+    assert!(view_contains(
+        invite_view,
+        "Use /accept or /reject to respond."
+    ));
+    assert!(state.status_bar.text.contains("invited: Lobby (!invite:example)"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("invited-direct-room.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite-direct:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert!(model.rooms.iter().any(|room| {
+        room.room_id == "!invite-direct:example"
+            && room.membership == RoomMembership::Invite
+            && room.is_direct
+            && room.direct_user_ids == ["@daria:example"]
+    }));
+
+    let state = app.dump_ui_state()?;
+    assert_eq!(state.mdi.active, room_identity("!invite-direct:example"));
+    assert_active_switchbar_item(&state, &room_identity("!invite-direct:example"));
+    assert!(navigation_contains(&state.navigation, "rooms: 1"));
+    assert!(navigation_contains(&state.navigation, "invites: 1"));
+    assert!(navigation_contains(
+        &state.navigation,
+        "Daria [invite] [query: @daria:example]"
+    ));
+    let invite_room = find_ui_room(&state, "!invite-direct:example");
+    assert_eq!(invite_room.membership, RoomMembership::Invite);
+    assert!(invite_room.is_direct);
+    assert_eq!(invite_room.direct_user_ids, vec!["@daria:example".to_owned()]);
+    assert_eq!(
+        find_switchbar_item(&state, &room_identity("!invite-direct:example")).title,
+        "Daria [invite] [query: @daria:example]"
+    );
+    let invite_view = find_view(&state, &room_identity("!invite-direct:example"));
+    assert!(invite_view.title.contains("Daria [invite]"));
+    assert!(view_contains(invite_view, "Invitation to Daria"));
+    assert!(view_contains(
+        invite_view,
+        "Use /accept or /reject to respond."
+    ));
+    assert!(
+        state
+            .status_bar
+            .text
+            .contains("invited: Daria (!invite-direct:example)")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joined_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("invited-room-accept.json");
+    let update_path = fixture_update_path("invited-room-accept.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert!(model.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Join
+    }));
+
+    let state = app.dump_ui_state()?;
+    assert_eq!(state.mdi.active, room_identity("!invite:example"));
+    assert_active_switchbar_item(&state, &room_identity("!invite:example"));
+    assert!(navigation_contains(&state.navigation, "rooms: 2"));
+    assert!(navigation_contains(&state.navigation, "invites: 0"));
+    assert!(navigation_contains(&state.navigation, "Lobby"));
+    assert_navigation_not_contains(&state.navigation, "Lobby [invite]");
+    assert_eq!(
+        find_ui_room(&state, "!invite:example").membership,
+        RoomMembership::Join
+    );
+    assert_eq!(
+        find_switchbar_item(&state, &room_identity("!invite:example")).title,
+        "Lobby"
+    );
+    let joined_view = find_view(&state, &room_identity("!invite:example"));
+    assert_eq!(joined_view.title, "Lobby");
+    assert!(view_contains(joined_view, "Room: Lobby (!invite:example)"));
+    assert!(!view_contains(
+        joined_view,
+        "Use /accept or /reject to respond."
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_invited_room_reject_fixture_update_removes_invite_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("invited-room-reject.json");
+    let update_path = fixture_update_path("invited-room-reject.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model
+            .rooms
+            .iter()
+            .map(|room| room.room_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["!beta:example"]
+    );
+
+    let state = app.dump_ui_state()?;
+    assert_eq!(state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&state, &room_identity("!beta:example"));
+    assert!(navigation_contains(&state.navigation, "rooms: 1"));
+    assert!(navigation_contains(&state.navigation, "invites: 0"));
+    assert_navigation_not_contains(&state.navigation, "Lobby [invite]");
+    assert!(
+        state
+            .rooms
+            .iter()
+            .all(|room| room.room_id != "!invite:example")
+    );
+    assert!(
+        state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("!invite:example"))
+    );
+    assert!(
+        state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!invite:example"))
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_hierarchical_tree_ignores_invited_spaces()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

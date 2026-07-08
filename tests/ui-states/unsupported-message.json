@@ -10,7 +10,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "membership": "join"
       },
       {
         "room_id": "!media:example.org",
@@ -20,7 +21,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "membership": "join"
       }
     ]
   },

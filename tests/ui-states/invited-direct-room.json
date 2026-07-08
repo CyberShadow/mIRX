@@ -1,0 +1,50 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!beta:example",
+        "display_name": "Beta",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      },
+      {
+        "room_id": "!invite-direct:example",
+        "display_name": "Daria",
+        "membership": "invite",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": true,
+        "direct_user_ids": [
+          "@daria:example"
+        ],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!beta:example",
+      "activity_id": "event:$beta-latest",
+      "timestamp_ms": 1700000120000,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$beta-latest",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "beta latest",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

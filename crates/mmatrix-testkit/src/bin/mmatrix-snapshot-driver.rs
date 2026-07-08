@@ -8,6 +8,7 @@ fn main() {
 mod cli {
     use std::time::Duration;
 
+    use mmatrix_core::RoomMembership;
     use mmatrix_testkit::ViewIdentity;
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -21,6 +22,8 @@ mod cli {
         pub(crate) append_events: Option<String>,
         pub(crate) expect_selected: Option<String>,
         pub(crate) expect_rooms: Vec<String>,
+        pub(crate) expect_room_memberships: Vec<RoomMembershipExpectation>,
+        pub(crate) expect_no_rooms: Vec<String>,
         pub(crate) expect_room_activities: Vec<RoomActivityExpectation>,
         pub(crate) expect_error: Option<String>,
         pub(crate) expect_verification: Option<String>,
@@ -53,6 +56,12 @@ mod cli {
     pub(crate) struct RoomActivityExpectation {
         pub(crate) room_id: String,
         pub(crate) substring: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct RoomMembershipExpectation {
+        pub(crate) room_id: String,
+        pub(crate) membership: RoomMembership,
     }
 
     pub(crate) struct ViewTextExpectation {
@@ -145,6 +154,20 @@ mod cli {
                     config.expect_rooms.push(
                         args.next()
                             .ok_or_else(|| "missing value for --expect-room".to_owned())?,
+                    );
+                }
+                "--expect-room-membership" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-room-membership".to_owned()
+                    })?;
+                    config
+                        .expect_room_memberships
+                        .push(parse_room_membership_expectation(&value)?);
+                }
+                "--expect-no-room" => {
+                    config.expect_no_rooms.push(
+                        args.next()
+                            .ok_or_else(|| "missing value for --expect-no-room".to_owned())?,
                     );
                 }
                 "--expect-direct-room" => {
@@ -411,6 +434,8 @@ mod cli {
             "  --append-events <path>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
+            "  --expect-room-membership <room_id>::<join|invite>",
+            "  --expect-no-room <room_id>",
             "  --expect-direct-room <room_id>",
             "  --expect-room-tag <room_id>::<tag>::<order-or-null>",
             "  --expect-room-read-target <room_id>::<event-id-or-null>",
@@ -498,6 +523,25 @@ mod cli {
         })
     }
 
+    pub(crate) fn parse_room_membership_expectation(
+        value: &str,
+    ) -> Result<RoomMembershipExpectation, String> {
+        let (room_id, membership) = value.split_once("::").ok_or_else(|| {
+            format!(
+                "invalid --expect-room-membership value {value:?}; expected <room_id>::<join|invite>"
+            )
+        })?;
+        if room_id.is_empty() {
+            return Err(format!(
+                "invalid --expect-room-membership value {value:?}; expected <room_id>::<join|invite>"
+            ));
+        }
+        Ok(RoomMembershipExpectation {
+            room_id: room_id.to_owned(),
+            membership: parse_room_membership_arg(membership, value)?,
+        })
+    }
+
     pub(crate) fn parse_room_tag_expectation(value: &str) -> Result<RoomTagExpectation, String> {
         let parts: Vec<_> = value.split("::").collect();
         if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
@@ -560,6 +604,16 @@ mod cli {
         }
     }
 
+    fn parse_room_membership_arg(value: &str, full_value: &str) -> Result<RoomMembership, String> {
+        match value {
+            "join" => Ok(RoomMembership::Join),
+            "invite" => Ok(RoomMembership::Invite),
+            _ => Err(format!(
+                "invalid --expect-room-membership value {full_value:?}; expected <room_id>::<join|invite>"
+            )),
+        }
+    }
+
     fn parse_strict_bool_arg(
         flag_name: &str,
         full_value: &str,
@@ -588,10 +642,11 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation, ViewExpectation,
-            format_view_identity, parse_args, parse_view_expectation, parse_view_identity_arg,
-            usage,
+            RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
+            RoomUnreadExpectation, ViewExpectation, format_view_identity, parse_args,
+            parse_view_expectation, parse_view_identity_arg, usage,
         };
+        use mmatrix_core::RoomMembership;
         use mmatrix_testkit::ViewIdentity;
         use std::time::Duration;
 
@@ -604,6 +659,8 @@ mod cli {
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains("--expect-view <identity>::<substring>"));
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
+            assert!(usage().contains("--expect-room-membership <room_id>::<join|invite>"));
+            assert!(usage().contains("--expect-no-room <room_id>"));
             assert!(usage().contains("--expect-direct-room <room_id>"));
             assert!(usage().contains("--expect-room-tag <room_id>::<tag>::<order-or-null>"));
             assert!(usage().contains("--expect-room-read-target <room_id>::<event-id-or-null>"));
@@ -730,6 +787,10 @@ mod cli {
                     "!ops:example",
                     "--expect-room",
                     "!work:example",
+                    "--expect-room-membership",
+                    "!invite:example::invite",
+                    "--expect-no-room",
+                    "!missing:example",
                     "--expect-room-activity",
                     "!ops:example::incident review",
                     "--expect-error",
@@ -780,6 +841,14 @@ mod cli {
 
             assert_eq!(config.expect_selected, Some("!ops:example".to_owned()));
             assert_eq!(config.expect_rooms, vec!["!work:example".to_owned()]);
+            assert_eq!(
+                config.expect_room_memberships,
+                vec![RoomMembershipExpectation {
+                    room_id: "!invite:example".to_owned(),
+                    membership: RoomMembership::Invite,
+                }]
+            );
+            assert_eq!(config.expect_no_rooms, vec!["!missing:example".to_owned()]);
             assert_eq!(config.expect_room_activities.len(), 1);
             assert_eq!(config.expect_room_activities[0].room_id, "!ops:example");
             assert_eq!(
@@ -980,6 +1049,56 @@ mod cli {
             assert_eq!(
                 config.expect_direct_rooms,
                 vec!["!direct:example".to_owned()]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_room_membership_expectation() {
+            let config = parse_args(
+                ["--expect-room-membership", "!invite:example::join"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_room_memberships,
+                vec![RoomMembershipExpectation {
+                    room_id: "!invite:example".to_owned(),
+                    membership: RoomMembership::Join,
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_malformed_room_membership_expectation() {
+            let error = parse_args(
+                ["--expect-room-membership", "!invite:example"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert_eq!(
+                error,
+                "invalid --expect-room-membership value \"!invite:example\"; expected <room_id>::<join|invite>"
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_unknown_room_membership_value() {
+            let error = parse_args(
+                ["--expect-room-membership", "!invite:example::leave"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert_eq!(
+                error,
+                "invalid --expect-room-membership value \"!invite:example::leave\"; expected <room_id>::<join|invite>"
             );
         }
 
@@ -1258,6 +1377,43 @@ fn collect_navigation_path_matches<'a, F>(
     }
 }
 
+#[cfg(any(windows, test))]
+fn assert_room_membership(
+    rooms: &[mmatrix_testkit::Room],
+    room_id: &str,
+    expected_membership: mmatrix_core::RoomMembership,
+) -> Result<(), String> {
+    let room = rooms.iter().find(|room| room.room_id == room_id).ok_or_else(|| {
+        format!("room membership assertion failed: missing room {room_id}")
+    })?;
+    if room.membership != expected_membership {
+        return Err(format!(
+            "room membership assertion failed: room {room_id} expected {}, found {}",
+            format_room_membership(&expected_membership),
+            format_room_membership(&room.membership)
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn assert_no_room(rooms: &[mmatrix_testkit::Room], room_id: &str) -> Result<(), String> {
+    if rooms.iter().any(|room| room.room_id == room_id) {
+        return Err(format!(
+            "room absence assertion failed: unexpected room {room_id}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn format_room_membership(membership: &mmatrix_core::RoomMembership) -> &'static str {
+    match membership {
+        mmatrix_core::RoomMembership::Join => "join",
+        mmatrix_core::RoomMembership::Invite => "invite",
+    }
+}
+
 #[cfg(test)]
 mod navigation_lookup_tests {
     use super::find_navigation_node_by_path_or_label;
@@ -1320,6 +1476,71 @@ mod navigation_lookup_tests {
         );
 
         assert!(find_navigation_node_by_path_or_label(&navigation, "Beta").is_none());
+    }
+}
+
+#[cfg(test)]
+mod room_assertion_tests {
+    use super::{assert_no_room, assert_room_membership};
+    use mmatrix_core::RoomMembership;
+    use mmatrix_testkit::Room;
+
+    fn room(room_id: &str, membership: RoomMembership) -> Room {
+        Room {
+            room_id: room_id.to_owned(),
+            display_name: room_id.to_owned(),
+            membership,
+            encrypted: false,
+            is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
+            space_children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn room_membership_assertion_accepts_matching_membership() {
+        let rooms = vec![room("!invite:example", RoomMembership::Invite)];
+
+        assert!(assert_room_membership(&rooms, "!invite:example", RoomMembership::Invite).is_ok());
+    }
+
+    #[test]
+    fn room_membership_assertion_rejects_missing_room() {
+        let rooms = vec![room("!invite:example", RoomMembership::Invite)];
+
+        assert_eq!(
+            assert_room_membership(&rooms, "!missing:example", RoomMembership::Invite).unwrap_err(),
+            "room membership assertion failed: missing room !missing:example"
+        );
+    }
+
+    #[test]
+    fn room_membership_assertion_rejects_wrong_membership() {
+        let rooms = vec![room("!invite:example", RoomMembership::Invite)];
+
+        assert_eq!(
+            assert_room_membership(&rooms, "!invite:example", RoomMembership::Join).unwrap_err(),
+            "room membership assertion failed: room !invite:example expected join, found invite"
+        );
+    }
+
+    #[test]
+    fn room_absence_assertion_accepts_missing_room() {
+        let rooms = vec![room("!invite:example", RoomMembership::Invite)];
+
+        assert!(assert_no_room(&rooms, "!missing:example").is_ok());
+    }
+
+    #[test]
+    fn room_absence_assertion_rejects_present_room() {
+        let rooms = vec![room("!invite:example", RoomMembership::Invite)];
+
+        assert_eq!(
+            assert_no_room(&rooms, "!invite:example").unwrap_err(),
+            "room absence assertion failed: unexpected room !invite:example"
+        );
     }
 }
 
@@ -1416,6 +1637,20 @@ mod windows_main {
                 ));
             }
             println!("PASS room {expected_room_id}");
+        }
+
+        for expectation in &config.expect_room_memberships {
+            crate::assert_room_membership(&model.rooms, &expectation.room_id, expectation.membership.clone())?;
+            println!(
+                "PASS room membership {} {}",
+                expectation.room_id,
+                crate::format_room_membership(&expectation.membership)
+            );
+        }
+
+        for room_id in &config.expect_no_rooms {
+            crate::assert_no_room(&model.rooms, room_id)?;
+            println!("PASS no room {room_id}");
         }
 
         if let Some(expected_flow_id) = config.expect_verification.as_deref() {

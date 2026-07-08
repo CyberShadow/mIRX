@@ -1,0 +1,28 @@
+[
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!beta:example",
+        "display_name": "Beta",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      },
+      {
+        "room_id": "!invite:example",
+        "display_name": "Lobby",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  }
+]
