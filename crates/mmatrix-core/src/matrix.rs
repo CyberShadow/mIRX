@@ -1798,7 +1798,7 @@ pub(crate) fn start_room_read_state_update_task(
                     let Some(room) = client
                         .joined_rooms()
                         .into_iter()
-                        .find(|room| room.room_id() == &update.room_id)
+                        .find(|room| room.room_id() == update.room_id)
                     else {
                         continue;
                     };
