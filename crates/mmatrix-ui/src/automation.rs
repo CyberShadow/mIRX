@@ -1070,8 +1070,10 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
         Operation::JoinRoom => "join_room",
+        Operation::AcceptRoomInvite => "accept_room_invite",
         Operation::CreateDirectRoom => "create_direct_room",
         Operation::LeaveRoom => "leave_room",
+        Operation::RejectRoomInvite => "reject_room_invite",
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
         Operation::EditMessage => "edit_message",
@@ -1596,9 +1598,9 @@ mod tests {
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
         RoomImageInfo, RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
-        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
-        VerificationState, VerificationStateEvent,
+        RoomMembership, RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary,
+        RoomTagSummary, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1907,7 +1909,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -1918,6 +1920,7 @@ mod tests {
                         Event::SyncedRooms(vec![RoomSummary {
                             room_id: "!room:example".to_owned(),
                             display_name: "Room".to_owned(),
+                            membership: RoomMembership::Join,
                             encrypted: true,
                             is_space: false,
                             is_direct: false,
@@ -2287,6 +2290,7 @@ mod tests {
             Event::SyncedRooms(vec![RoomSummary {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: false,
@@ -2317,7 +2321,7 @@ mod tests {
             serde_json::to_value(&events).unwrap(),
             json!([
                 "Started",
-                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},
+                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
                 {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","message":"send failed"}}
@@ -2354,7 +2358,7 @@ mod tests {
     fn load_command_rejects_unknown_fields_inside_event_payloads() {
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}]}}"#,
         )
         .unwrap_err();
 
@@ -2365,14 +2369,14 @@ mod tests {
                 "ok":false,
                 "err":{
                     "code":"invalid_args",
-                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"
                 }
             })
         );
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}]}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}]}]}]}}"#,
         )
         .unwrap_err();
 
@@ -2390,7 +2394,7 @@ mod tests {
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[]}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[]}]}]}}"#,
         )
         .unwrap_err();
 
@@ -4014,6 +4018,7 @@ mod tests {
             super::dump_room_from_summary(&RoomSummary {
                 room_id: "!room:example".to_owned(),
                 display_name: "Room".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: true,
                 is_direct: true,

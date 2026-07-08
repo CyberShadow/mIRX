@@ -15,6 +15,7 @@ use mmatrix_core::{
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomMemberSummary, RoomMembers,
+    RoomMembership,
     RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
@@ -256,6 +257,7 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
+        membership: RoomMembership::Join,
         encrypted,
         is_space: false,
         is_direct: false,
@@ -1876,6 +1878,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
             RoomSummary {
                 room_id: "!space:example".to_owned(),
                 display_name: "Space".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: true,
                 is_direct: false,
@@ -6354,6 +6357,7 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
             RoomSummary {
                 room_id: "!direct:example".to_owned(),
                 display_name: "Direct".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: true,
@@ -6418,6 +6422,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
             RoomSummary {
                 room_id: "!direct-one:example".to_owned(),
                 display_name: "Direct One".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: true,
@@ -6428,6 +6433,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
             RoomSummary {
                 room_id: "!direct-two:example".to_owned(),
                 display_name: "Direct Two".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: true,

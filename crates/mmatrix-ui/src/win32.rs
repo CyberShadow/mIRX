@@ -23,11 +23,11 @@ use mmatrix_core::{
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia,
     RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageReplyTarget,
-    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -7651,6 +7651,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             RoomSummary {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: false,
@@ -7661,6 +7662,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             RoomSummary {
                 room_id: "!two:example".to_owned(),
                 display_name: "Two".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: false,
                 is_direct: false,
@@ -9630,8 +9632,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
         Operation::JoinRoom => "join room",
+        Operation::AcceptRoomInvite => "accept room invitation",
         Operation::CreateDirectRoom => "create direct room",
         Operation::LeaveRoom => "leave room",
+        Operation::RejectRoomInvite => "reject room invitation",
         Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
         Operation::EditMessage => "edit message",
@@ -9723,6 +9727,7 @@ mod tests {
         RoomSummary {
             room_id: room_id.to_owned(),
             display_name: display_name.to_owned(),
+            membership: RoomMembership::Join,
             encrypted,
             is_space: false,
             is_direct: false,
@@ -9736,6 +9741,7 @@ mod tests {
         RoomSummary {
             room_id: room_id.to_owned(),
             display_name: display_name.to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: true,
             is_direct: false,
