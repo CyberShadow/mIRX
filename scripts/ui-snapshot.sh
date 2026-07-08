@@ -1011,6 +1011,10 @@ configure_case_expectations() {
         --expect-room '!alpha:example'
         --expect-room '!beta:example'
       )
+      room_read_target_expect_args=(
+        --expect-room-read-target '!alpha:example::null'
+        --expect-room-read-target '!beta:example::$beta-activity'
+      )
       room_view_expect_args=(
         --expect-room-view '!alpha:example::Room: Alpha (!alpha:example)'
         --expect-room-view '!alpha:example::alpha parent room content'

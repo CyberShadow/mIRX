@@ -3,10 +3,12 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::ptr::{copy_nonoverlapping, null_mut};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
@@ -40,12 +42,13 @@ use windows_sys::Win32::System::DataExchange::{
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO,
-    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE,
-    WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
+    WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -57,10 +60,12 @@ const SESSION_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/session/v1";
 const CF_UNICODETEXT: u32 = 13;
 const EDIT_ID: i32 = 1003;
 const MDI_ID: i32 = 1002;
+const SWITCHBAR_ID: i32 = 1005;
 const VIEW_CONTENT_ID: i32 = 2001;
 const WM_TIMELINE_GET_TOP_LINE: u32 = 0x8000 + 100;
 // Intentionally duplicated from production to exercise the real switchbar toolbar command range.
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
@@ -125,6 +130,53 @@ fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {
         local_app_data,
         frame_size: None,
     }
+}
+
+struct GuiTestApp {
+    app: MmatrixApp,
+    _gui_test_guard: MutexGuard<'static, ()>,
+}
+
+impl Deref for GuiTestApp {
+    type Target = MmatrixApp;
+
+    fn deref(&self) -> &Self::Target {
+        &self.app
+    }
+}
+
+fn gui_test_lock() -> &'static Mutex<()> {
+    static GUI_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    GUI_TEST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn launch_app(
+    exe_path: &Path,
+    args: &[OsString],
+) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let guard = gui_test_lock()
+        .lock()
+        .map_err(|_| "GUI test lock poisoned")?;
+    let app = mmatrix_testkit::MmatrixApp::launch(exe_path, args)?;
+    Ok(GuiTestApp {
+        app,
+        _gui_test_guard: guard,
+    })
+}
+
+fn launch_app_with_options(
+    exe_path: &Path,
+    args: &[OsString],
+    options: LaunchOptions,
+) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let guard = gui_test_lock()
+        .lock()
+        .map_err(|_| "GUI test lock poisoned")?;
+    let app = mmatrix_testkit::MmatrixApp::launch_with_options(exe_path, args, options)?;
+    Ok(GuiTestApp {
+        app,
+        _gui_test_guard: guard,
+    })
 }
 
 fn stored_session() -> StoredSession {
@@ -1220,6 +1272,77 @@ fn activate_switchbar_item_by_command(
     Ok(())
 }
 
+unsafe fn mdi_client_hwnd(app: &MmatrixApp) -> HWND {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };
+    assert!(!mdi_client.is_null(), "MDI client control must exist");
+    mdi_client
+}
+
+unsafe fn mdi_child_hwnd_by_title(app: &MmatrixApp, title: &str) -> HWND {
+    let mdi_client = unsafe { mdi_client_hwnd(app) };
+    let mut child =
+        unsafe { FindWindowExW(mdi_client, 0 as HWND, std::ptr::null(), std::ptr::null()) };
+    while !child.is_null() {
+        if unsafe { read_window_text(child) } == title {
+            return child;
+        }
+        child = unsafe { FindWindowExW(mdi_client, child, std::ptr::null(), std::ptr::null()) };
+    }
+    panic!("missing MDI child window with title {title:?}");
+}
+
+fn native_activate_mdi_view(
+    app: &MmatrixApp,
+    identity: &ViewIdentity,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ui_state = app.dump_ui_state()?;
+    let title = find_view(&ui_state, identity).title.clone();
+    let mdi_client = unsafe { mdi_client_hwnd(app) };
+    let child = unsafe { mdi_child_hwnd_by_title(app, &title) };
+    unsafe {
+        SendMessageW(mdi_client, WM_MDIACTIVATE, child as WPARAM, 0);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+fn assert_raw_switchbar_state(
+    app: &MmatrixApp,
+    ui_state: &UiState,
+    identity: &ViewIdentity,
+    checked: bool,
+    marked: bool,
+) {
+    let index = ui_state
+        .switchbar
+        .items
+        .iter()
+        .position(|item| &item.identity == identity)
+        .unwrap_or_else(|| panic!("missing switchbar item for {identity:?}"));
+    let frame = app.automation_frame_hwnd() as HWND;
+    let switchbar = unsafe { GetDlgItem(frame, SWITCHBAR_ID) };
+    assert!(!switchbar.is_null(), "switchbar toolbar control must exist");
+    let state = unsafe {
+        SendMessageW(
+            switchbar,
+            TB_GETSTATE,
+            (SWITCHBAR_COMMAND_FIRST + index) as WPARAM,
+            0,
+        )
+    } as usize;
+    assert_eq!(
+        state & TBSTATE_CHECKED as usize != 0,
+        checked,
+        "unexpected raw checked state for {identity:?}"
+    );
+    assert_eq!(
+        state & TBSTATE_MARKED as usize != 0,
+        marked,
+        "unexpected raw marked state for {identity:?}"
+    );
+}
+
 unsafe fn compose_edit_hwnd(app: &MmatrixApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
@@ -1251,9 +1374,18 @@ unsafe fn focused_hwnd(app: &MmatrixApp) -> HWND {
 }
 
 fn assert_compose_has_focus(app: &MmatrixApp) {
-    let focused = unsafe { focused_hwnd(app) };
     let compose = unsafe { compose_edit_hwnd(app) };
-    assert_eq!(focused, compose, "compose edit must have Win32 focus");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let focused = unsafe { focused_hwnd(app) };
+        if focused == compose {
+            return;
+        }
+        if Instant::now() >= deadline {
+            assert_eq!(focused, compose, "compose edit must have Win32 focus");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
 
 fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
@@ -1325,7 +1457,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let model = app.dump_model()?;
@@ -1455,7 +1587,7 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
@@ -1490,7 +1622,7 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -1552,7 +1684,7 @@ fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting(
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -1602,7 +1734,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
@@ -1769,7 +1901,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
@@ -1835,7 +1967,7 @@ fn automation_driver_lifecycle_commands_fail_cleanly_in_render_state_mode()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(
+    let app = launch_app_with_options(
         &exe_path,
         &args,
         launch_options(Some(local_app_data.clone())),
@@ -1882,7 +2014,7 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(
+    let app = launch_app_with_options(
         &exe_path,
         &args,
         launch_options(Some(local_app_data.clone())),
@@ -1969,7 +2101,7 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.load_events(&serde_json::to_string(&vec![
@@ -2012,7 +2144,7 @@ fn automation_driver_submits_verification_actions_for_current_flow_without_local
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.load_events(&serde_json::to_string(&vec![
@@ -2099,7 +2231,7 @@ fn automation_driver_submits_verification_action_for_explicit_flow()
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.load_events(&serde_json::to_string(&vec![
@@ -2136,7 +2268,7 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.recover_e2ee("sample recovery secret")?;
@@ -2174,7 +2306,7 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let model = app.dump_model()?;
@@ -2260,7 +2392,7 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     app.select_room("!members:example")?;
@@ -2314,7 +2446,7 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_idle(Duration::from_secs(5))?;
     let frame = app.automation_frame_hwnd() as HWND;
     let rect = unsafe { window_rect(frame) };
@@ -2379,7 +2511,7 @@ fn automation_driver_replaces_room_members_on_append_and_state_reload()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     app.select_room("!members:example")?;
@@ -2442,7 +2574,7 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
     for index in 0..80 {
@@ -2561,7 +2693,7 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
     events.push(text_event(
@@ -2610,7 +2742,7 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
     events.push(text_event(
@@ -2659,7 +2791,7 @@ fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     let mut events = base_events();
     let long_body =
@@ -2877,7 +3009,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     let fixture_path = fixture_state_path("space-hierarchy.json");
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events_from_file(&fixture_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3164,7 +3296,7 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
@@ -3299,7 +3431,7 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3340,7 +3472,7 @@ fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivate
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3411,7 +3543,7 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3503,7 +3635,7 @@ fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::e
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3585,7 +3717,7 @@ fn automation_driver_applies_receive_side_reactions_redactions()
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3668,7 +3800,7 @@ fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3828,7 +3960,7 @@ fn automation_driver_thread_root_message_edit_updates_thread_titles()
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3886,7 +4018,7 @@ fn automation_driver_rejects_invalid_append_message_edit_update_without_exiting(
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -3962,7 +4094,7 @@ fn automation_driver_thread_me_submission_preserves_active_thread_view()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -4000,7 +4132,7 @@ fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -4034,7 +4166,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
@@ -4154,7 +4286,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
@@ -4306,7 +4438,7 @@ fn automation_driver_renders_room_typing_only_for_selected_room_view()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let typing_line = "* @alice:example.org is typing";
@@ -4374,7 +4506,7 @@ fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_lis
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let typing_line = "* @alice:example.org, @bob:example.org are typing";
@@ -4488,7 +4620,7 @@ fn automation_driver_clears_room_typing_on_logged_out_event()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     app.select_room("!alpha:example")?;
@@ -4530,7 +4662,7 @@ fn automation_driver_loads_typing_indicator_fixture_via_file_api()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
@@ -4582,7 +4714,7 @@ fn automation_driver_can_activate_status_view_and_return_to_room()
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     app.select_status_view()?;
@@ -4610,7 +4742,7 @@ fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -4666,7 +4798,7 @@ fn automation_driver_activation_returns_keyboard_to_compose()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -4713,7 +4845,7 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -4736,7 +4868,7 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [OsString::from("--automation")];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -4813,6 +4945,98 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 }
 
 #[test]
+fn automation_driver_native_mdi_activation_reconciles_shell_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("shell-activity.json");
+    let update_path = fixture_update_path("shell-activity.json");
+    let args = [OsString::from("--automation")];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let loaded_state = app.dump_ui_state()?;
+    let alpha_room_path =
+        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+    let beta_room_path =
+        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Beta"]);
+    let alpha_thread_path = navigation_path_by_substrings(
+        &loaded_state.navigation,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+    );
+
+    app.select_navigation_path(&alpha_thread_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_navigation_path(&alpha_room_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let alpha_room_identity = room_identity("!alpha:example");
+    let beta_room_identity = room_identity("!beta:example");
+    let alpha_thread_identity = thread_identity("!alpha:example", "$alpha-thread-root");
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(initial_state.mdi.active, alpha_room_identity);
+    assert_active_switchbar_item(&initial_state, &alpha_room_identity);
+    assert_eq!(app.selected_navigation_path()?, alpha_room_path);
+    assert_switchbar_activity(&initial_state, &beta_room_identity, true);
+    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_switchbar_activity(&initial_state, &alpha_thread_identity, true);
+    assert_navigation_activity(
+        &initial_state,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        true,
+    );
+    assert_switchbar_activity(&initial_state, &alpha_room_identity, false);
+    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_raw_switchbar_state(&app, &initial_state, &alpha_room_identity, true, false);
+    assert_raw_switchbar_state(&app, &initial_state, &beta_room_identity, false, true);
+    assert_raw_switchbar_state(&app, &initial_state, &alpha_thread_identity, false, true);
+
+    native_activate_mdi_view(&app, &alpha_thread_identity)?;
+    let thread_state = app.dump_ui_state()?;
+    assert_eq!(thread_state.mdi.active, alpha_thread_identity);
+    assert_active_switchbar_item(&thread_state, &alpha_thread_identity);
+    assert_eq!(app.selected_navigation_path()?, alpha_thread_path);
+    assert_compose_has_focus(&app);
+    assert_switchbar_activity(&thread_state, &alpha_thread_identity, false);
+    assert_navigation_activity(
+        &thread_state,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        false,
+    );
+    assert_switchbar_activity(&thread_state, &beta_room_identity, true);
+    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_switchbar_activity(&thread_state, &alpha_room_identity, false);
+    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_raw_switchbar_state(&app, &thread_state, &alpha_thread_identity, true, false);
+    assert_raw_switchbar_state(&app, &thread_state, &beta_room_identity, false, true);
+
+    native_activate_mdi_view(&app, &beta_room_identity)?;
+    let beta_state = app.dump_ui_state()?;
+    assert_eq!(beta_state.mdi.active, beta_room_identity);
+    assert_active_switchbar_item(&beta_state, &beta_room_identity);
+    assert_eq!(app.selected_navigation_path()?, beta_room_path);
+    assert_compose_has_focus(&app);
+    assert_switchbar_activity(&beta_state, &beta_room_identity, false);
+    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Beta"], false);
+    assert_switchbar_activity(&beta_state, &alpha_thread_identity, false);
+    assert_navigation_activity(
+        &beta_state,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        false,
+    );
+    assert_switchbar_activity(&beta_state, &alpha_room_identity, false);
+    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_raw_switchbar_state(&app, &beta_state, &beta_room_identity, true, false);
+
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_shell_constrained_layout_fixture()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
@@ -4832,7 +5056,7 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_idle(Duration::from_secs(5))?;
     let frame = app.automation_frame_hwnd() as HWND;
     let rect = unsafe { window_rect(frame) };
@@ -4910,7 +5134,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(
@@ -5056,7 +5280,7 @@ fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
     let cleared_state = app.dump_ui_state()?;
 
@@ -5099,7 +5323,7 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5158,7 +5382,7 @@ fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_med
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5194,7 +5418,7 @@ fn automation_driver_renders_failed_image_message_fixture_and_exposes_failed_med
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5229,7 +5453,7 @@ fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_met
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5288,7 +5512,7 @@ fn automation_driver_renders_encrypted_loaded_image_and_exposes_loaded_media_sta
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5324,7 +5548,7 @@ fn automation_driver_renders_encrypted_failed_image_and_exposes_failed_media_sta
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5359,7 +5583,7 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
@@ -5450,7 +5674,7 @@ fn automation_driver_compose_history_keys_are_noops_without_history()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch(&exe_path, &args)?;
+    let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.wait_for_min_rooms(2, Duration::from_secs(5))?;
 
@@ -5492,7 +5716,7 @@ fn automation_driver_compose_history_recalls_accepted_submissions()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5534,7 +5758,7 @@ fn automation_driver_compose_history_ignores_rejected_submissions()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
     app.set_compose_text("no selected room")?;
@@ -5561,7 +5785,7 @@ fn automation_driver_compose_history_ignores_empty_submission()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5589,7 +5813,7 @@ fn automation_driver_setting_text_exits_compose_history_navigation()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5626,7 +5850,7 @@ fn automation_driver_typing_exits_compose_history_navigation()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5672,7 +5896,7 @@ fn automation_driver_paste_exits_compose_history_navigation()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5719,7 +5943,7 @@ fn automation_driver_return_compose_key_submits_through_edit_control()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5756,7 +5980,7 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5801,7 +6025,7 @@ fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn 
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5838,7 +6062,7 @@ fn automation_driver_slash_window_switches_by_room_id_and_display_name()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5904,7 +6128,7 @@ fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
         ),
     ];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -5955,7 +6179,7 @@ fn automation_driver_slash_join_records_submitted_membership_without_creating_ro
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6023,7 +6247,7 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6108,7 +6332,7 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
         ),
     ];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6188,7 +6412,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
         ),
     ];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6224,7 +6448,7 @@ fn automation_driver_literal_query_submission_is_sent_as_text()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6274,7 +6498,7 @@ fn automation_driver_slash_query_existing_direct_room_activates_room_without_sub
     direct_room.is_direct = true;
     direct_room.direct_user_ids = vec!["@alice:example.org".to_owned()];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -6338,7 +6562,7 @@ fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
     direct_two.is_direct = true;
     direct_two.direct_user_ids = vec!["@alice:example.org".to_owned()];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -6401,7 +6625,7 @@ fn automation_driver_slash_part_active_room_waits_for_synced_rooms_removal()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6481,7 +6705,7 @@ fn automation_driver_slash_part_from_status_reports_no_room_selected()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6512,7 +6736,7 @@ fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
     let args = [OsString::from("--automation")];
     let fixture_path = fixture_state_path("thread-hierarchy.json");
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6591,7 +6815,7 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6680,7 +6904,7 @@ fn automation_driver_slash_react_records_submitted_reaction_without_appending_te
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6721,7 +6945,7 @@ fn automation_driver_slash_react_preserves_key_text() -> Result<(), Box<dyn std:
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6759,7 +6983,7 @@ fn automation_driver_slash_reply_records_submitted_reply_without_appending_text(
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6801,7 +7025,7 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6845,7 +7069,7 @@ fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6890,7 +7114,7 @@ fn automation_driver_slash_redact_records_submitted_redaction_without_appending_
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6931,7 +7155,7 @@ fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -6970,7 +7194,7 @@ fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7013,7 +7237,7 @@ fn automation_driver_invalid_react_reports_usage_without_recording_commands()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7056,7 +7280,7 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7100,7 +7324,7 @@ fn automation_driver_literal_react_submission_is_sent_as_text()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7149,7 +7373,7 @@ fn automation_driver_literal_edit_submission_is_sent_as_text()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7202,7 +7426,7 @@ fn automation_driver_literal_reply_submission_is_sent_as_text()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7253,7 +7477,7 @@ fn automation_driver_slash_react_from_thread_targets_parent_room()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7297,7 +7521,7 @@ fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7344,7 +7568,7 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7389,7 +7613,7 @@ fn automation_driver_slash_redact_from_thread_targets_parent_room()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7431,7 +7655,7 @@ fn automation_driver_slash_clear_clears_only_active_room_timeline()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7491,7 +7715,7 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -7569,7 +7793,7 @@ fn automation_driver_slash_clear_in_status_view_is_a_no_op()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7615,7 +7839,7 @@ fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7659,7 +7883,7 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7704,7 +7928,7 @@ fn automation_driver_me_submission_uses_edit_control_path_and_preserves_history(
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7743,7 +7967,7 @@ fn automation_driver_empty_me_reports_usage_without_sending()
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&serde_json::to_string(&base_events())?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7800,7 +8024,7 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, options.clone())?;
+    let app = launch_app_with_options(&exe_path, &args, options.clone())?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.login(&homeserver_url, &username, &password, None)?;
     app.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
@@ -7827,7 +8051,7 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
 
     drop(app);
 
-    let restored = MmatrixApp::launch_with_options(&exe_path, &args, options)?;
+    let restored = launch_app_with_options(&exe_path, &args, options)?;
     restored.wait_for_lifecycle_state("authenticated", Duration::from_secs(120))?;
     restored.wait_for_lifecycle_state("ready", Duration::from_secs(120))?;
     restored.wait_for_min_rooms(1, Duration::from_secs(120))?;

@@ -2915,6 +2915,14 @@ unsafe extern "system" fn mdi_child_window_proc(
             }
             0
         }
+        WM_MDIACTIVATE => {
+            if lparam as HWND == hwnd {
+                if let Err(message) = handle_native_mdi_child_activation(hwnd) {
+                    eprintln!("{message}");
+                }
+            }
+            DefMDIChildProcW(hwnd, message, wparam, lparam)
+        }
         WM_NCDESTROY => {
             unregister_destroyed_view(hwnd);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -5929,11 +5937,17 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
     Ok(())
 }
 
-unsafe fn activate_view(
+struct AppliedActivation {
+    child: HWND,
+    cleared_view_activity: bool,
+    rebuild_switchbar_after_activation: bool,
+}
+
+unsafe fn apply_view_activation_state(
     hwnd: HWND,
     view_id: &ViewId,
     preferred_tree_item: Option<isize>,
-) -> Result<(), String> {
+) -> Result<AppliedActivation, String> {
     let mut cleared_view_activity = false;
     let rebuild_switchbar_after_activation = !state_ref(hwnd).switchbar_views.contains(view_id);
     let child = match view_id {
@@ -5972,16 +5986,52 @@ unsafe fn activate_view(
     refresh_view_content(hwnd, view_id)?;
     select_tree_item(hwnd, view_id, preferred_tree_item);
 
-    let mdi_client = state_ref(hwnd).controls.mdi_client;
-    SendMessageW(mdi_client, WM_MDIACTIVATE, child as WPARAM, 0);
-    SendMessageW(mdi_client, WM_MDIMAXIMIZE, child as WPARAM, 0);
-    if cleared_view_activity || rebuild_switchbar_after_activation {
+    Ok(AppliedActivation {
+        child,
+        cleared_view_activity,
+        rebuild_switchbar_after_activation,
+    })
+}
+
+unsafe fn finish_view_activation_chrome(
+    hwnd: HWND,
+    applied: &AppliedActivation,
+) -> Result<(), String> {
+    if applied.cleared_view_activity || applied.rebuild_switchbar_after_activation {
         rebuild_switchbar(hwnd)?;
     } else {
         refresh_switchbar_state(hwnd)?;
     }
     SetFocus(state_ref(hwnd).controls.edit);
     Ok(())
+}
+
+unsafe fn activate_view(
+    hwnd: HWND,
+    view_id: &ViewId,
+    preferred_tree_item: Option<isize>,
+) -> Result<(), String> {
+    let applied = apply_view_activation_state(hwnd, view_id, preferred_tree_item)?;
+
+    let mdi_client = state_ref(hwnd).controls.mdi_client;
+    SendMessageW(mdi_client, WM_MDIACTIVATE, applied.child as WPARAM, 0);
+    SendMessageW(mdi_client, WM_MDIMAXIMIZE, applied.child as WPARAM, 0);
+    finish_view_activation_chrome(hwnd, &applied)?;
+    Ok(())
+}
+
+unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> {
+    let mdi_client = GetParent(child);
+    let frame = GetParent(mdi_client);
+    let Some(view_id) = state_ref(frame).hwnd_views.get(&(child as isize)).cloned() else {
+        return Ok(());
+    };
+    if state_ref(frame).active_view == view_id {
+        return Ok(());
+    }
+
+    let applied = apply_view_activation_state(frame, &view_id, None)?;
+    finish_view_activation_chrome(frame, &applied)
 }
 
 unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
@@ -7855,7 +7905,9 @@ unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
 
     let view_id = state_ref(hwnd).tree_items.get(&selected_item).cloned();
     if let Some(view_id) = view_id {
-        let _ = activate_view(hwnd, &view_id, Some(selected_item));
+        if let Err(message) = activate_view(hwnd, &view_id, Some(selected_item)) {
+            show_error_message(hwnd, "Treebar", &message);
+        }
     }
 
     true
