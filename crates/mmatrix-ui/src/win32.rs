@@ -22,13 +22,13 @@ use mmatrix_core::{
     LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
     RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
-    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageReplyTarget,
-    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    RoomActivityUpdateTarget, RoomAudioInfo, RoomFileInfo, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -300,6 +300,8 @@ enum TimelineRowKind {
         send_state: TimelineMessageSendState,
     },
     Image,
+    File,
+    Audio,
     Unsupported,
     StateNotice,
     Plain,
@@ -532,8 +534,10 @@ impl RoomViewModel {
                     }
                 }
             }
-            RoomActivityKind::Image(_) => self.activities.push(activity),
-            RoomActivityKind::UnsupportedMessage(_) => self.activities.push(activity),
+            RoomActivityKind::Image(_)
+            | RoomActivityKind::File(_)
+            | RoomActivityKind::Audio(_)
+            | RoomActivityKind::UnsupportedMessage(_) => self.activities.push(activity),
             RoomActivityKind::StateNotice(notice) => {
                 if let RoomStateNoticeContent::Topic { topic } = &notice.content {
                     self.topic = Some(topic.clone());
@@ -1329,6 +1333,32 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             ),
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::File(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[file] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::Audio(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[audio] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::StateNotice(_) => None,
         RoomActivityKind::Redacted(_) => None,
     }
@@ -1340,6 +1370,8 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
             !matches!(send_state, &RoomMessageSendState::Pending)
         }
         RoomActivityKind::Image(_) => true,
+        RoomActivityKind::File(_) => true,
+        RoomActivityKind::Audio(_) => true,
         RoomActivityKind::UnsupportedMessage(_) => true,
         RoomActivityKind::StateNotice(_) => true,
         RoomActivityKind::Redacted(_) => true,
@@ -1353,6 +1385,8 @@ fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
             ..
         }) => Some(event_id.as_str()),
         RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::File(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::Audio(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
         RoomActivityKind::Redacted(activity) => Some(activity.event_id.as_str()),
@@ -1374,6 +1408,20 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
     match &activity.kind {
         RoomActivityKind::Message(message) => Some(message.body.clone()),
         RoomActivityKind::Image(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::File(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::Audio(message) => Some(
             message
                 .filename
                 .as_deref()
@@ -1449,6 +1497,8 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
             room_activity_event_id(activity)
         }
         RoomActivityKind::Image(_)
+        | RoomActivityKind::File(_)
+        | RoomActivityKind::Audio(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::StateNotice(_)
         | RoomActivityKind::Redacted(_) => room_activity_event_id(activity),
@@ -3700,7 +3750,9 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
             send_state: TimelineMessageSendState::Sent,
         } => rgb(0x24, 0x5E, 0x7A),
         TimelineRowKind::Message { .. } => rgb(0x00, 0x00, 0x00),
-        TimelineRowKind::Image => rgb(0x1F, 0x64, 0x5A),
+        TimelineRowKind::Image | TimelineRowKind::File | TimelineRowKind::Audio => {
+            rgb(0x1F, 0x64, 0x5A)
+        }
         TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
         TimelineRowKind::StateNotice => rgb(0x3D, 0x67, 0x35),
     }
@@ -5059,6 +5111,32 @@ fn push_room_activity_row(
             row.image_state = image_state;
             rows.push(row);
         }
+        RoomActivityKind::File(message) => {
+            let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
+            let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());
+            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+            let body = format!("sent file: {display_name}{metadata_suffix}");
+            rows.push(TimelineRow::log(
+                TimelineRowKind::File,
+                format!("* {timestamp} {} {body}", message.sender),
+                timestamp,
+                format!("* {}", message.sender),
+                body,
+            ));
+        }
+        RoomActivityKind::Audio(message) => {
+            let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
+            let metadata_suffix = format_room_audio_metadata_suffix(message.info.as_ref());
+            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+            let body = format!("sent audio: {display_name}{metadata_suffix}");
+            rows.push(TimelineRow::log(
+                TimelineRowKind::Audio,
+                format!("* {timestamp} {} {body}", message.sender),
+                timestamp,
+                format!("* {}", message.sender),
+                body,
+            ));
+        }
         RoomActivityKind::UnsupportedMessage(message) => {
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent unsupported {}: {}", message.msgtype, message.body);
@@ -5205,6 +5283,49 @@ fn format_room_image_metadata_suffix(info: Option<&RoomImageInfo>) -> String {
     }
     if let Some(size) = info.size {
         parts.push(format!("{size} bytes"));
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+fn format_room_file_metadata_suffix(info: Option<&RoomFileInfo>) -> String {
+    let Some(info) = info else {
+        return String::new();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(mimetype) = info.mimetype.as_deref() {
+        parts.push(mimetype.to_owned());
+    }
+    if let Some(size) = info.size {
+        parts.push(format!("{size} bytes"));
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+fn format_room_audio_metadata_suffix(info: Option<&RoomAudioInfo>) -> String {
+    let Some(info) = info else {
+        return String::new();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(mimetype) = info.mimetype.as_deref() {
+        parts.push(mimetype.to_owned());
+    }
+    if let Some(size) = info.size {
+        parts.push(format!("{size} bytes"));
+    }
+    if let Some(duration_ms) = info.duration_ms {
+        parts.push(format!("{duration_ms} ms"));
     }
 
     if parts.is_empty() {
@@ -10617,6 +10738,60 @@ mod tests {
         }
     }
 
+    fn file_activity(
+        room_id: &str,
+        event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        body: &str,
+        filename: Option<&str>,
+        info: Option<RoomFileInfo>,
+    ) -> RoomActivity {
+        RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{event_id}"),
+            timestamp_ms,
+            relation: None,
+            kind: RoomActivityKind::File(Box::new(mmatrix_core::RoomFileActivity {
+                event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                body: body.to_owned(),
+                filename: filename.map(str::to_owned),
+                source: mmatrix_core::RoomMediaSource::Plain {
+                    url: "mxc://example.org/report".to_owned(),
+                },
+                info,
+            })),
+        }
+    }
+
+    fn audio_activity(
+        room_id: &str,
+        event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        body: &str,
+        filename: Option<&str>,
+        info: Option<RoomAudioInfo>,
+    ) -> RoomActivity {
+        RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{event_id}"),
+            timestamp_ms,
+            relation: None,
+            kind: RoomActivityKind::Audio(Box::new(mmatrix_core::RoomAudioActivity {
+                event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                body: body.to_owned(),
+                filename: filename.map(str::to_owned),
+                source: mmatrix_core::RoomMediaSource::Plain {
+                    url: "mxc://example.org/audio".to_owned(),
+                },
+                info,
+            })),
+        }
+    }
+
     fn image_message(
         room_id: &str,
         event_id: &str,
@@ -12376,8 +12551,8 @@ mod tests {
                 "$image1:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.image",
-                "diagram.png",
+                "m.video",
+                "clip.mp4",
             ),
         )
         .unwrap();
@@ -12708,13 +12883,46 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            unsupported_message(
+            Event::RoomActivity(Box::new(file_activity(
+                "!ops:example",
+                "$file1:example.org",
+                "@alice:example.org",
+                1_710_000_060_000,
+                "Quarterly report",
+                Some("report.pdf"),
+                Some(RoomFileInfo {
+                    mimetype: Some("application/pdf".to_owned()),
+                    size: Some(45_678),
+                }),
+            ))),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(audio_activity(
                 "!ops:example",
                 "$audio1:example.org",
                 "@alice:example.org",
-                1_710_000_060_000,
-                "m.audio",
-                "voice-note.ogg",
+                1_710_000_120_000,
+                "Voice note",
+                Some("voice-note.ogg"),
+                Some(RoomAudioInfo {
+                    mimetype: Some("audio/ogg".to_owned()),
+                    size: Some(23_456),
+                    duration_ms: Some(12_000),
+                }),
+            ))),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            unsupported_message(
+                "!ops:example",
+                "$video1:example.org",
+                "@alice:example.org",
+                1_710_000_180_000,
+                "m.video",
+                "clip.mp4",
             ),
         )
         .unwrap();
@@ -12758,6 +12966,8 @@ mod tests {
                     send_state: TimelineMessageSendState::Failed,
                 },
                 TimelineRowKind::Image,
+                TimelineRowKind::File,
+                TimelineRowKind::Audio,
                 TimelineRowKind::Unsupported,
                 TimelineRowKind::StateNotice,
                 TimelineRowKind::StateNotice,
@@ -12781,7 +12991,11 @@ mod tests {
                 "[22:13] @alice:example: failed local echo (failed)".to_owned(),
                 "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
                     .to_owned(),
-                "* [16:01] @alice:example.org sent unsupported m.audio: voice-note.ogg"
+                "* [16:01] @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)"
+                    .to_owned(),
+                "* [16:02] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)"
+                    .to_owned(),
+                "* [16:03] @alice:example.org sent unsupported m.video: clip.mp4"
                     .to_owned(),
                 "* [22:15] carol joined".to_owned(),
                 "* [22:15] @dave:example left".to_owned(),
@@ -12830,11 +13044,27 @@ mod tests {
             TimelineRowVisual::Log {
                 timestamp: "[16:01]".to_owned(),
                 sender_prefix: "* @alice:example.org".to_owned(),
-                body: "sent unsupported m.audio: voice-note.ogg".to_owned(),
+                body: "sent file: report.pdf (application/pdf, 45678 bytes)".to_owned(),
             }
         );
         assert_eq!(
             rows[11].visual.clone(),
+            TimelineRowVisual::Log {
+                timestamp: "[16:02]".to_owned(),
+                sender_prefix: "* @alice:example.org".to_owned(),
+                body: "sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)".to_owned(),
+            }
+        );
+        assert_eq!(
+            rows[12].visual.clone(),
+            TimelineRowVisual::Log {
+                timestamp: "[16:03]".to_owned(),
+                sender_prefix: "* @alice:example.org".to_owned(),
+                body: "sent unsupported m.video: clip.mp4".to_owned(),
+            }
+        );
+        assert_eq!(
+            rows[13].visual.clone(),
             TimelineRowVisual::Log {
                 timestamp: "[22:15]".to_owned(),
                 sender_prefix: "*".to_owned(),
@@ -12842,7 +13072,7 @@ mod tests {
             }
         );
         assert_eq!(
-            rows[12].visual.clone(),
+            rows[14].visual.clone(),
             TimelineRowVisual::Log {
                 timestamp: "[22:15]".to_owned(),
                 sender_prefix: "*".to_owned(),
@@ -13108,8 +13338,8 @@ mod tests {
                 "$image1:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.image",
-                "diagram.png",
+                "m.video",
+                "clip.mp4",
             ),
         )
         .unwrap();
@@ -13118,7 +13348,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent unsupported m.image: diagram.png".to_owned(),
+                "* [16:00] @alice:example.org sent unsupported m.video: clip.mp4".to_owned(),
             ]
         );
     }
@@ -13134,8 +13364,8 @@ mod tests {
                 "$unsupported:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.audio",
-                "voice-note.ogg",
+                "m.video",
+                "clip.mp4",
             ),
         )
         .unwrap();
@@ -13151,8 +13381,8 @@ mod tests {
 
         let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
-        assert!(!rendered.contains("m.audio"));
-        assert!(!rendered.contains("voice-note.ogg"));
+        assert!(!rendered.contains("m.video"));
+        assert!(!rendered.contains("clip.mp4"));
     }
 
     #[test]
@@ -14072,10 +14302,10 @@ mod tests {
             image_row,
             TimelineRow::log(
                 TimelineRowKind::Unsupported,
-                "* [16:01] @alice:example.org sent unsupported m.audio: voice-note.ogg".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported m.video: clip.mp4".to_owned(),
                 "[16:01]".to_owned(),
                 "* @alice:example.org".to_owned(),
-                "sent unsupported m.audio: voice-note.ogg".to_owned(),
+                "sent unsupported m.video: clip.mp4".to_owned(),
             ),
         ];
 
@@ -14086,7 +14316,7 @@ mod tests {
             logical_lines,
             vec![
                 "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
-                "* [16:01] @alice:example.org sent unsupported m.audio: voice-note.ogg".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported m.video: clip.mp4".to_owned(),
             ]
         );
         assert_eq!(
@@ -14110,7 +14340,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "[16:00]|* @alice:example.org|sent image: diagram.png".to_owned(),
-                "[16:01]|* @alice:example.org|sent unsupported m.audio: voice-note.ogg".to_owned(),
+                "[16:01]|* @alice:example.org|sent unsupported m.video: clip.mp4".to_owned(),
             ]
         );
         assert_eq!(
@@ -15832,8 +16062,8 @@ mod tests {
                 "$image1:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.image",
-                "diagram.png",
+                "m.video",
+                "clip.mp4",
             ),
         )
         .unwrap();
@@ -15893,6 +16123,136 @@ mod tests {
                 .get(&room_view_id("!inactive:example"))
                 .map(String::as_str),
             Some("$image1:example.org")
+        );
+    }
+
+    #[test]
+    fn inactive_file_messages_record_room_activity_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(file_activity(
+                "!inactive:example",
+                "$file1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "Quarterly report",
+                Some("report.pdf"),
+                Some(RoomFileInfo {
+                    mimetype: Some("application/pdf".to_owned()),
+                    size: Some(45_678),
+                }),
+            ))),
+        )
+        .unwrap();
+
+        assert!(
+            state
+                .room_activity
+                .contains(&room_view_id("!inactive:example"))
+        );
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get(&room_view_id("!inactive:example"))
+                .map(String::as_str),
+            Some("$file1:example.org")
+        );
+    }
+
+    #[test]
+    fn inactive_audio_messages_record_room_activity_read_targets() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            room("!inactive:example", "Inactive", false),
+        ];
+        state.active_view = ViewId::Room("!active:example".to_owned());
+
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(audio_activity(
+                "!inactive:example",
+                "$audio1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+                "Voice note",
+                Some("voice-note.ogg"),
+                Some(RoomAudioInfo {
+                    mimetype: Some("audio/ogg".to_owned()),
+                    size: Some(23_456),
+                    duration_ms: Some(12_000),
+                }),
+            ))),
+        )
+        .unwrap();
+
+        assert!(
+            state
+                .room_activity
+                .contains(&room_view_id("!inactive:example"))
+        );
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get(&room_view_id("!inactive:example"))
+                .map(String::as_str),
+            Some("$audio1:example.org")
+        );
+    }
+
+    #[test]
+    fn file_and_audio_room_activities_expose_event_ids_read_targets_and_thread_labels() {
+        let file = file_activity(
+            "!media:example.org",
+            "$file1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "Quarterly report",
+            Some("report.pdf"),
+            Some(RoomFileInfo {
+                mimetype: Some("application/pdf".to_owned()),
+                size: Some(45_678),
+            }),
+        );
+        let audio = audio_activity(
+            "!media:example.org",
+            "$audio1:example.org",
+            "@alice:example.org",
+            1_710_000_060_000,
+            "Voice note",
+            Some("voice-note.ogg"),
+            Some(RoomAudioInfo {
+                mimetype: Some("audio/ogg".to_owned()),
+                size: Some(23_456),
+                duration_ms: Some(12_000),
+            }),
+        );
+
+        assert_eq!(room_activity_event_id(&file), Some("$file1:example.org"));
+        assert_eq!(
+            read_target_for_room_activity(&file),
+            Some("$file1:example.org")
+        );
+        assert_eq!(
+            room_activity_thread_root_label(&file),
+            Some("report.pdf".to_owned())
+        );
+
+        assert_eq!(room_activity_event_id(&audio), Some("$audio1:example.org"));
+        assert_eq!(
+            read_target_for_room_activity(&audio),
+            Some("$audio1:example.org")
+        );
+        assert_eq!(
+            room_activity_thread_root_label(&audio),
+            Some("voice-note.ogg".to_owned())
         );
     }
 
@@ -16091,8 +16451,8 @@ mod tests {
             "$image1:example.org",
             "@alice:example.org",
             1_710_000_000_000,
-            "m.image",
-            "diagram.png",
+            "m.video",
+            "clip.mp4",
         );
 
         assert_eq!(
@@ -16104,7 +16464,7 @@ mod tests {
                 sender: "@alice:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
                 presentation: RoomMessagePresentationKind::Text,
-                body: "[unsupported m.image] diagram.png".to_owned(),
+                body: "[unsupported m.video] clip.mp4".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             })
         );
@@ -16139,6 +16499,67 @@ mod tests {
                 timestamp_ms: 1_710_000_000_000,
                 presentation: RoomMessagePresentationKind::Text,
                 body: "[image] diagram.png".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn file_room_activity_updates_last_activity_preview() {
+        let activity = file_activity(
+            "!media:example.org",
+            "$file1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "Quarterly report",
+            Some("report.pdf"),
+            Some(RoomFileInfo {
+                mimetype: Some("application/pdf".to_owned()),
+                size: Some(45_678),
+            }),
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$file1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[file] report.pdf".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn audio_room_activity_updates_last_activity_preview() {
+        let activity = audio_activity(
+            "!media:example.org",
+            "$audio1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "Voice note",
+            Some("voice-note.ogg"),
+            Some(RoomAudioInfo {
+                mimetype: Some("audio/ogg".to_owned()),
+                size: Some(23_456),
+                duration_ms: Some(12_000),
+            }),
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$audio1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[audio] voice-note.ogg".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             })
         );

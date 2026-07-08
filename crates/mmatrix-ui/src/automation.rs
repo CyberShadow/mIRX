@@ -4,11 +4,11 @@ use std::fmt;
 
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    RoomTagSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationState,
-    VerificationStateEvent,
+    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -931,6 +931,8 @@ pub(crate) enum DumpRoomActivityRelation {
 pub(crate) enum DumpRoomActivityKind {
     Message(DumpRoomMessageActivity),
     Image(Box<DumpRoomImageActivity>),
+    File(Box<DumpRoomFileActivity>),
+    Audio(Box<DumpRoomAudioActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     StateNotice(DumpRoomStateNoticeActivity),
     Redacted(DumpRoomRedactedActivity),
@@ -957,6 +959,28 @@ pub(crate) struct DumpRoomImageActivity {
     pub(crate) source: DumpRoomMediaSource,
     pub(crate) info: Option<DumpRoomImageInfo>,
     pub(crate) media_state: Option<DumpRoomImageMediaState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomFileActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) body: String,
+    pub(crate) filename: Option<String>,
+    pub(crate) source: DumpRoomMediaSource,
+    pub(crate) info: Option<DumpRoomFileInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomAudioActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) body: String,
+    pub(crate) filename: Option<String>,
+    pub(crate) source: DumpRoomMediaSource,
+    pub(crate) info: Option<DumpRoomAudioInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1007,6 +1031,21 @@ pub(crate) struct DumpRoomImageInfo {
     pub(crate) height: Option<u64>,
     pub(crate) is_animated: Option<bool>,
     pub(crate) thumbnail_source: Option<DumpRoomMediaSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomFileInfo {
+    pub(crate) mimetype: Option<String>,
+    pub(crate) size: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomAudioInfo {
+    pub(crate) mimetype: Option<String>,
+    pub(crate) size: Option<u64>,
+    pub(crate) duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1205,6 +1244,12 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::Image(image) => {
             DumpRoomActivityKind::Image(Box::new(dump_room_image_activity_from_core(image)))
         }
+        RoomActivityKind::File(file) => {
+            DumpRoomActivityKind::File(Box::new(dump_room_file_activity_from_core(file)))
+        }
+        RoomActivityKind::Audio(audio) => {
+            DumpRoomActivityKind::Audio(Box::new(dump_room_audio_activity_from_core(audio)))
+        }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
         ),
@@ -1260,6 +1305,30 @@ pub(crate) fn dump_room_image_activity_from_core(
     }
 }
 
+pub(crate) fn dump_room_file_activity_from_core(file: &RoomFileActivity) -> DumpRoomFileActivity {
+    DumpRoomFileActivity {
+        event_id: file.event_id.clone(),
+        sender: file.sender.clone(),
+        body: file.body.clone(),
+        filename: file.filename.clone(),
+        source: dump_room_media_source_from_core(&file.source),
+        info: file.info.as_ref().map(dump_room_file_info_from_core),
+    }
+}
+
+pub(crate) fn dump_room_audio_activity_from_core(
+    audio: &RoomAudioActivity,
+) -> DumpRoomAudioActivity {
+    DumpRoomAudioActivity {
+        event_id: audio.event_id.clone(),
+        sender: audio.sender.clone(),
+        body: audio.body.clone(),
+        filename: audio.filename.clone(),
+        source: dump_room_media_source_from_core(&audio.source),
+        info: audio.info.as_ref().map(dump_room_audio_info_from_core),
+    }
+}
+
 pub(crate) fn dump_room_media_source_from_core(source: &RoomMediaSource) -> DumpRoomMediaSource {
     match source {
         RoomMediaSource::Plain { url } => DumpRoomMediaSource::Plain { url: url.clone() },
@@ -1298,6 +1367,21 @@ pub(crate) fn dump_room_image_info_from_core(info: &RoomImageInfo) -> DumpRoomIm
             .thumbnail_source
             .as_ref()
             .map(dump_room_media_source_from_core),
+    }
+}
+
+pub(crate) fn dump_room_file_info_from_core(info: &RoomFileInfo) -> DumpRoomFileInfo {
+    DumpRoomFileInfo {
+        mimetype: info.mimetype.clone(),
+        size: info.size,
+    }
+}
+
+pub(crate) fn dump_room_audio_info_from_core(info: &RoomAudioInfo) -> DumpRoomAudioInfo {
+    DumpRoomAudioInfo {
+        mimetype: info.mimetype.clone(),
+        size: info.size,
+        duration_ms: info.duration_ms,
     }
 }
 
@@ -1602,12 +1686,12 @@ mod tests {
     use mmatrix_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
-        RoomImageInfo, RoomMediaSource, RoomMembership, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-        RoomSummary, RoomTagSummary, SpaceChildSummary, StoredSession,
-        UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+        RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+        RoomMediaSource, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+        RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
+        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
+        VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1624,7 +1708,8 @@ mod tests {
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomImageActivity,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
@@ -4327,30 +4412,30 @@ mod tests {
         );
         let unsupported_activity = RoomActivity {
             room_id: "!room:example".to_owned(),
-            activity_id: "event:$audio1:example.org".to_owned(),
+            activity_id: "event:$video1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-                event_id: "$audio1:example.org".to_owned(),
+                event_id: "$video1:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),
-                msgtype: "m.audio".to_owned(),
-                body: "voice-note.ogg".to_owned(),
+                msgtype: "m.video".to_owned(),
+                body: "clip.mp4".to_owned(),
             }),
         };
         assert_eq!(
             super::dump_room_activity_from_activity(&unsupported_activity),
             DumpRoomActivity {
                 room_id: "!room:example".to_owned(),
-                activity_id: "event:$audio1:example.org".to_owned(),
+                activity_id: "event:$video1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::UnsupportedMessage(
                     DumpUnsupportedRoomMessageActivity {
-                        event_id: "$audio1:example.org".to_owned(),
+                        event_id: "$video1:example.org".to_owned(),
                         sender: "@alice:example.org".to_owned(),
-                        msgtype: "m.audio".to_owned(),
-                        body: "voice-note.ogg".to_owned(),
+                        msgtype: "m.video".to_owned(),
+                        body: "clip.mp4".to_owned(),
                     }
                 ),
             }
@@ -4362,16 +4447,16 @@ mod tests {
             .expect("serialize unsupported dump room activity"),
             json!({
                 "room_id":"!room:example",
-                "activity_id":"event:$audio1:example.org",
+                "activity_id":"event:$video1:example.org",
                 "timestamp_ms":1710000000000u64,
                 "relation":null,
                 "reactions":[],
                 "kind":{
                     "type":"unsupported_message",
-                    "event_id":"$audio1:example.org",
+                    "event_id":"$video1:example.org",
                     "sender":"@alice:example.org",
-                    "msgtype":"m.audio",
-                    "body":"voice-note.ogg"
+                    "msgtype":"m.video",
+                    "body":"clip.mp4"
                 }
             })
         );
@@ -4492,6 +4577,161 @@ mod tests {
             super::dump_room_message_activity_line_from_activity(&image_activity),
             None
         );
+        let file_activity = RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$file1:example.org".to_owned(),
+            timestamp_ms: 1_710_000_015_000,
+            relation: None,
+            kind: RoomActivityKind::File(Box::new(RoomFileActivity {
+                event_id: "$file1:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                body: "Quarterly report".to_owned(),
+                filename: Some("report.pdf".to_owned()),
+                source: sample_encrypted_room_media_source("mxc://example.org/report"),
+                info: Some(RoomFileInfo {
+                    mimetype: Some("application/pdf".to_owned()),
+                    size: Some(45_678),
+                }),
+            })),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&file_activity),
+            DumpRoomActivity {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$file1:example.org".to_owned(),
+                timestamp_ms: 1_710_000_015_000,
+                relation: None,
+                reactions: Vec::new(),
+                kind: DumpRoomActivityKind::File(Box::new(DumpRoomFileActivity {
+                    event_id: "$file1:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "Quarterly report".to_owned(),
+                    filename: Some("report.pdf".to_owned()),
+                    source: sample_dump_encrypted_room_media_source("mxc://example.org/report"),
+                    info: Some(DumpRoomFileInfo {
+                        mimetype: Some("application/pdf".to_owned()),
+                        size: Some(45_678),
+                    }),
+                })),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(super::dump_room_activity_from_activity(&file_activity))
+                .expect("serialize file dump room activity"),
+            json!({
+                "room_id":"!room:example",
+                "activity_id":"event:$file1:example.org",
+                "timestamp_ms":1710000015000u64,
+                "relation":null,
+                "reactions":[],
+                "kind":{
+                    "type":"file",
+                    "event_id":"$file1:example.org",
+                    "sender":"@alice:example.org",
+                    "body":"Quarterly report",
+                    "filename":"report.pdf",
+                    "source":{
+                        "type":"encrypted",
+                        "url":"mxc://example.org/report",
+                        "key":{
+                            "kty":"oct",
+                            "key_ops":["encrypt","decrypt"],
+                            "alg":"A256CTR",
+                            "k":"base64url-key",
+                            "ext":true
+                        },
+                        "iv":"base64-iv",
+                        "hashes":{
+                            "sha256":"base64-sha256"
+                        },
+                        "v":"v2"
+                    },
+                    "info":{
+                        "mimetype":"application/pdf",
+                        "size":45678u64
+                    }
+                }
+            })
+        );
+        let audio_activity = RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$audio2:example.org".to_owned(),
+            timestamp_ms: 1_710_000_016_000,
+            relation: None,
+            kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
+                event_id: "$audio2:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                body: "Voice note".to_owned(),
+                filename: Some("voice-note.ogg".to_owned()),
+                source: sample_encrypted_room_media_source("mxc://example.org/audio"),
+                info: Some(RoomAudioInfo {
+                    mimetype: Some("audio/ogg".to_owned()),
+                    size: Some(23_456),
+                    duration_ms: Some(12_000),
+                }),
+            })),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&audio_activity),
+            DumpRoomActivity {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$audio2:example.org".to_owned(),
+                timestamp_ms: 1_710_000_016_000,
+                relation: None,
+                reactions: Vec::new(),
+                kind: DumpRoomActivityKind::Audio(Box::new(DumpRoomAudioActivity {
+                    event_id: "$audio2:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "Voice note".to_owned(),
+                    filename: Some("voice-note.ogg".to_owned()),
+                    source: sample_dump_encrypted_room_media_source("mxc://example.org/audio"),
+                    info: Some(DumpRoomAudioInfo {
+                        mimetype: Some("audio/ogg".to_owned()),
+                        size: Some(23_456),
+                        duration_ms: Some(12_000),
+                    }),
+                })),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(super::dump_room_activity_from_activity(&audio_activity))
+                .expect("serialize audio dump room activity"),
+            json!({
+                "room_id":"!room:example",
+                "activity_id":"event:$audio2:example.org",
+                "timestamp_ms":1710000016000u64,
+                "relation":null,
+                "reactions":[],
+                "kind":{
+                    "type":"audio",
+                    "event_id":"$audio2:example.org",
+                    "sender":"@alice:example.org",
+                    "body":"Voice note",
+                    "filename":"voice-note.ogg",
+                    "source":{
+                        "type":"encrypted",
+                        "url":"mxc://example.org/audio",
+                        "key":{
+                            "kty":"oct",
+                            "key_ops":["encrypt","decrypt"],
+                            "alg":"A256CTR",
+                            "k":"base64url-key",
+                            "ext":true
+                        },
+                        "iv":"base64-iv",
+                        "hashes":{
+                            "sha256":"base64-sha256"
+                        },
+                        "v":"v2"
+                    },
+                    "info":{
+                        "mimetype":"audio/ogg",
+                        "size":23456u64,
+                        "duration_ms":12000u64
+                    }
+                }
+            })
+        );
         let redacted_activity = RoomActivity {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$redacted:example.org".to_owned(),
@@ -4552,7 +4792,7 @@ mod tests {
             "redaction-image-body.png",
             "redaction-image-file.png",
             "mxc://example.org/redaction-image-source",
-            "m.audio",
+            "m.video",
             "redaction unsupported payload should disappear",
             "redaction topic should disappear",
             "state_key",
