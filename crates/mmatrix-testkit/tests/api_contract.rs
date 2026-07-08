@@ -5,31 +5,34 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use mmatrix_core::{
-    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    Event as CoreEvent, FetchRoomImageMediaRequest as CoreFetchRoomImageMediaRequest,
-    RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
-    RoomActivityUpdate as CoreRoomActivityUpdate,
+    BackfillRoomHistoryRequest as CoreBackfillRoomHistoryRequest, E2eeBackupState,
+    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event as CoreEvent,
+    FetchRoomImageMediaRequest as CoreFetchRoomImageMediaRequest, RoomActivity as CoreRoomActivity,
+    RoomActivityKind as CoreRoomActivityKind, RoomActivityUpdate as CoreRoomActivityUpdate,
     RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
-    RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget, RoomImageMedia as CoreRoomImageMedia,
+    RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget,
+    RoomHistoryBackfill as CoreRoomHistoryBackfill,
+    RoomHistoryBackfillEvent as CoreRoomHistoryBackfillEvent, RoomImageMedia as CoreRoomImageMedia,
     RoomImageMediaFormat as CoreRoomImageMediaFormat, RoomImageMediaKind as CoreRoomImageMediaKind,
     RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
 use mmatrix_testkit::{
-    ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
-    MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
-    RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    BackfillRoomHistoryRequest, ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions,
+    LoginArgs, MdiState, MdiView, MembershipCommandAction, Model, NavigationNode,
+    NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
     RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource,
     RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewIdentity,
+    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiError, UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -136,6 +139,61 @@ fn sample_room_audio_activity() -> RoomAudioActivity {
             size: Some(9_876),
             duration_ms: Some(12_345),
         }),
+    }
+}
+
+fn sample_room_history_activity() -> RoomActivity {
+    RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$message:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: "$message:example.org".to_owned(),
+        }),
+    }
+}
+
+fn sample_core_room_history_activity() -> CoreRoomActivity {
+    CoreRoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$message:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_000,
+        relation: None,
+        kind: CoreRoomActivityKind::Redacted(mmatrix_core::RoomRedactedActivity {
+            event_id: "$message:example.org".to_owned(),
+        }),
+    }
+}
+
+fn sample_room_history_activity_update() -> RoomActivityUpdate {
+    RoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: RoomActivityUpdateTarget::Event {
+            event_id: "$message:example.org".to_owned(),
+        },
+        kind: RoomActivityUpdateKind::ReactionAdded {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            sender: "@bob:example.org".to_owned(),
+            timestamp_ms: 1_700_000_000_100,
+            key: "heart".to_owned(),
+        },
+    }
+}
+
+fn sample_core_room_history_activity_update() -> CoreRoomActivityUpdate {
+    CoreRoomActivityUpdate {
+        room_id: "!ops:example.org".to_owned(),
+        target: CoreRoomActivityUpdateTarget::Event {
+            event_id: "$message:example.org".to_owned(),
+        },
+        kind: CoreRoomActivityUpdateKind::ReactionAdded {
+            reaction_event_id: "$reaction:example.org".to_owned(),
+            sender: "@bob:example.org".to_owned(),
+            timestamp_ms: 1_700_000_000_100,
+            key: "heart".to_owned(),
+        },
     }
 }
 
@@ -349,6 +407,7 @@ fn data_models_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
@@ -2575,6 +2634,387 @@ fn encrypted_fetch_room_image_media_request_round_trips_through_json() {
 }
 
 #[test]
+fn backfill_room_history_request_round_trips_through_json_across_packages() {
+    for (request, core_request, json) in [
+        (
+            BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: None,
+                limit: 50,
+            },
+            CoreBackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: None,
+                limit: 50,
+            },
+            serde_json::json!({
+                "room_id": "!room:example",
+                "from": null,
+                "limit": 50
+            }),
+        ),
+        (
+            BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: Some("token".to_owned()),
+                limit: 50,
+            },
+            CoreBackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: Some("token".to_owned()),
+                limit: 50,
+            },
+            serde_json::json!({
+                "room_id": "!room:example",
+                "from": "token",
+                "limit": 50
+            }),
+        ),
+    ] {
+        assert_eq!(
+            serde_json::to_value(&request).expect("serialize testkit backfill request"),
+            json.clone()
+        );
+        assert_eq!(
+            serde_json::from_value::<BackfillRoomHistoryRequest>(json.clone())
+                .expect("deserialize testkit backfill request"),
+            request
+        );
+        assert_eq!(
+            serde_json::to_value(&core_request).expect("serialize core backfill request"),
+            json.clone()
+        );
+        assert_eq!(
+            serde_json::from_value::<CoreBackfillRoomHistoryRequest>(json)
+                .expect("deserialize core backfill request"),
+            core_request
+        );
+    }
+}
+
+#[test]
+fn room_history_backfill_event_activity_ingests_core_json_and_defaults_reactions() {
+    let core_json = serde_json::json!({
+        "type": "activity",
+        "room_id": "!ops:example.org",
+        "activity_id": "event:$message:example.org",
+        "timestamp_ms": 1700000000000u64,
+        "relation": null,
+        "kind": {
+            "type": "redacted",
+            "event_id": "$message:example.org"
+        }
+    });
+    let event = RoomHistoryBackfillEvent::Activity(Box::new(sample_room_history_activity()));
+    let testkit_json = serde_json::json!({
+        "type": "activity",
+        "room_id": "!ops:example.org",
+        "activity_id": "event:$message:example.org",
+        "timestamp_ms": 1700000000000u64,
+        "relation": null,
+        "reactions": [],
+        "kind": {
+            "type": "redacted",
+            "event_id": "$message:example.org"
+        }
+    });
+
+    assert_eq!(
+        serde_json::from_value::<RoomHistoryBackfillEvent>(core_json.clone())
+            .expect("deserialize core-shaped history activity event into testkit"),
+        event
+    );
+    assert_eq!(
+        serde_json::to_value(&event).expect("serialize testkit backfill activity event"),
+        testkit_json
+    );
+
+    let core_event =
+        CoreRoomHistoryBackfillEvent::Activity(Box::new(sample_core_room_history_activity()));
+
+    assert_eq!(
+        serde_json::to_value(&core_event).expect("serialize core backfill activity event"),
+        core_json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomHistoryBackfillEvent>(core_json)
+            .expect("deserialize core backfill activity event"),
+        core_event
+    );
+}
+
+#[test]
+fn room_history_backfill_event_activity_update_round_trips_through_json_across_packages() {
+    let event = RoomHistoryBackfillEvent::ActivityUpdate(sample_room_history_activity_update());
+    let json = serde_json::json!({
+        "type": "activity_update",
+        "room_id": "!ops:example.org",
+        "target": {
+            "type": "event",
+            "event_id": "$message:example.org"
+        },
+        "kind": {
+            "type": "reaction_added",
+            "reaction_event_id": "$reaction:example.org",
+            "sender": "@bob:example.org",
+            "timestamp_ms": 1700000000100u64,
+            "key": "heart"
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&event).expect("serialize testkit backfill activity update event"),
+        json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomHistoryBackfillEvent>(json.clone())
+            .expect("deserialize testkit backfill activity update event"),
+        event
+    );
+
+    let core_event =
+        CoreRoomHistoryBackfillEvent::ActivityUpdate(sample_core_room_history_activity_update());
+    assert_eq!(
+        serde_json::to_value(&core_event).expect("serialize core backfill activity update event"),
+        json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomHistoryBackfillEvent>(json)
+            .expect("deserialize core backfill activity update event"),
+        core_event
+    );
+}
+
+#[test]
+fn room_history_backfill_with_updates_round_trips_through_json_across_packages() {
+    let backfill = RoomHistoryBackfill {
+        room_id: "!ops:example.org".to_owned(),
+        start: "t4747337_219380_2603".to_owned(),
+        end: Some("t4747337_219379_2603".to_owned()),
+        events: vec![RoomHistoryBackfillEvent::ActivityUpdate(
+            sample_room_history_activity_update(),
+        )],
+    };
+    let json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "start": "t4747337_219380_2603",
+        "end": "t4747337_219379_2603",
+        "events": [
+            {
+                "type": "activity_update",
+                "room_id": "!ops:example.org",
+                "target": {
+                    "type": "event",
+                    "event_id": "$message:example.org"
+                },
+                "kind": {
+                    "type": "reaction_added",
+                    "reaction_event_id": "$reaction:example.org",
+                    "sender": "@bob:example.org",
+                    "timestamp_ms": 1700000000100u64,
+                    "key": "heart"
+                }
+            }
+        ]
+    });
+
+    assert_eq!(
+        serde_json::to_value(&backfill).expect("serialize testkit room history backfill"),
+        json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomHistoryBackfill>(json.clone())
+            .expect("deserialize testkit room history backfill"),
+        backfill
+    );
+
+    let core_backfill = CoreRoomHistoryBackfill {
+        room_id: "!ops:example.org".to_owned(),
+        start: "t4747337_219380_2603".to_owned(),
+        end: Some("t4747337_219379_2603".to_owned()),
+        events: vec![CoreRoomHistoryBackfillEvent::ActivityUpdate(
+            sample_core_room_history_activity_update(),
+        )],
+    };
+
+    assert_eq!(
+        serde_json::to_value(&core_backfill).expect("serialize core room history backfill"),
+        json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomHistoryBackfill>(json)
+            .expect("deserialize core room history backfill"),
+        core_backfill
+    );
+}
+
+#[test]
+fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions() {
+    let backfill = RoomHistoryBackfill {
+        room_id: "!ops:example.org".to_owned(),
+        start: "t4747337_219380_2603".to_owned(),
+        end: Some("t4747337_219379_2603".to_owned()),
+        events: vec![
+            RoomHistoryBackfillEvent::Activity(Box::new(sample_room_history_activity())),
+            RoomHistoryBackfillEvent::ActivityUpdate(sample_room_history_activity_update()),
+        ],
+    };
+    let testkit_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "start": "t4747337_219380_2603",
+        "end": "t4747337_219379_2603",
+        "events": [
+            {
+                "type": "activity",
+                "room_id": "!ops:example.org",
+                "activity_id": "event:$message:example.org",
+                "timestamp_ms": 1700000000000u64,
+                "relation": null,
+                "reactions": [],
+                "kind": {
+                    "type": "redacted",
+                    "event_id": "$message:example.org"
+                }
+            },
+            {
+                "type": "activity_update",
+                "room_id": "!ops:example.org",
+                "target": {
+                    "type": "event",
+                    "event_id": "$message:example.org"
+                },
+                "kind": {
+                    "type": "reaction_added",
+                    "reaction_event_id": "$reaction:example.org",
+                    "sender": "@bob:example.org",
+                    "timestamp_ms": 1700000000100u64,
+                    "key": "heart"
+                }
+            }
+        ]
+    });
+    let core_json = serde_json::json!({
+        "room_id": "!ops:example.org",
+        "start": "t4747337_219380_2603",
+        "end": "t4747337_219379_2603",
+        "events": [
+            {
+                "type": "activity",
+                "room_id": "!ops:example.org",
+                "activity_id": "event:$message:example.org",
+                "timestamp_ms": 1700000000000u64,
+                "relation": null,
+                "kind": {
+                    "type": "redacted",
+                    "event_id": "$message:example.org"
+                }
+            },
+            {
+                "type": "activity_update",
+                "room_id": "!ops:example.org",
+                "target": {
+                    "type": "event",
+                    "event_id": "$message:example.org"
+                },
+                "kind": {
+                    "type": "reaction_added",
+                    "reaction_event_id": "$reaction:example.org",
+                    "sender": "@bob:example.org",
+                    "timestamp_ms": 1700000000100u64,
+                    "key": "heart"
+                }
+            }
+        ]
+    });
+
+    assert_eq!(
+        serde_json::from_value::<RoomHistoryBackfill>(core_json.clone())
+            .expect("deserialize core-shaped room history backfill into testkit"),
+        backfill
+    );
+    assert_eq!(
+        serde_json::to_value(&backfill).expect("serialize testkit room history backfill"),
+        testkit_json
+    );
+
+    let core_backfill = CoreRoomHistoryBackfill {
+        room_id: "!ops:example.org".to_owned(),
+        start: "t4747337_219380_2603".to_owned(),
+        end: Some("t4747337_219379_2603".to_owned()),
+        events: vec![
+            CoreRoomHistoryBackfillEvent::Activity(Box::new(sample_core_room_history_activity())),
+            CoreRoomHistoryBackfillEvent::ActivityUpdate(sample_core_room_history_activity_update()),
+        ],
+    };
+
+    assert_eq!(
+        serde_json::to_value(&core_backfill).expect("serialize core room history backfill"),
+        core_json.clone()
+    );
+    assert_eq!(
+        serde_json::from_value::<CoreRoomHistoryBackfill>(core_json)
+            .expect("deserialize core room history backfill"),
+        core_backfill
+    );
+}
+
+#[test]
+fn backfill_room_history_request_rejects_unknown_fields_in_testkit_and_core() {
+    let json = r#"{"room_id":"!room:example","from":null,"limit":50,"unexpected":"value"}"#;
+
+    assert!(
+        serde_json::from_str::<BackfillRoomHistoryRequest>(json).is_err(),
+        "testkit backfill request must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<CoreBackfillRoomHistoryRequest>(json).is_err(),
+        "core backfill request must reject unknown fields"
+    );
+}
+
+#[test]
+fn room_history_backfill_rejects_unknown_fields_in_testkit_and_core() {
+    let json = r#"{"room_id":"!room:example.org","start":"t1","end":null,"events":[],"unexpected":"value"}"#;
+
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfill>(json).is_err(),
+        "testkit room history backfill must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomHistoryBackfill>(json).is_err(),
+        "core room history backfill must reject unknown fields"
+    );
+}
+
+#[test]
+fn room_history_backfill_event_rejects_invalid_tags_in_testkit_and_core() {
+    let json = r#"{"type":"unknown","room_id":"!room:example.org"}"#;
+
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfillEvent>(json).is_err(),
+        "testkit room history backfill event must reject unknown tags"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomHistoryBackfillEvent>(json).is_err(),
+        "core room history backfill event must reject unknown tags"
+    );
+}
+
+#[test]
+fn room_history_backfill_event_rejects_unknown_nested_fields_in_testkit_and_core() {
+    let json = r#"{"type":"activity_update","room_id":"!room:example.org","target":{"type":"event","event_id":"$event:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@alice:example.org","timestamp_ms":1700000000000,"key":"+1","unexpected":"value"}}"#;
+
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfillEvent>(json).is_err(),
+        "testkit room history backfill event must reject unknown nested fields"
+    );
+    assert!(
+        serde_json::from_str::<CoreRoomHistoryBackfillEvent>(json).is_err(),
+        "core room history backfill event must reject unknown nested fields"
+    );
+}
+
+#[test]
 fn room_image_media_round_trips_through_json() {
     let loaded = RoomImageMedia {
         room_id: "!room:example".to_owned(),
@@ -2930,6 +3370,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
@@ -2992,6 +3433,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3067,6 +3509,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3147,6 +3590,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3235,6 +3679,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3304,6 +3749,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
             thread: None,
         }],
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3376,6 +3822,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
             }),
         }],
         submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3451,6 +3898,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
             room_id: "!ops:example.org".to_owned(),
             event_id: "$reaction:example.org".to_owned(),
         }],
+        submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
         selected_room: None,
@@ -3572,6 +4020,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 room_id: "!ops:example.org".to_owned(),
                 event_id: "$reaction:example.org".to_owned(),
             }],
+            submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
             selected_room: None,
@@ -3613,6 +4062,130 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             "last_error": null,
             "selected_room": null
         })
+    );
+}
+
+#[test]
+fn model_submitted_history_commands_round_trip_through_json() {
+    let model = Model {
+        status: "synced".to_owned(),
+        lifecycle_state: "ready".to_owned(),
+        rooms: vec![],
+        last_activity: None,
+        e2ee_status: None,
+        last_verification: None,
+        submitted_membership_commands: Vec::new(),
+        submitted_direct_room_commands: Vec::new(),
+        submitted_room_topic_commands: Vec::new(),
+        submitted_reaction_commands: Vec::new(),
+        submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
+        submitted_redaction_commands: Vec::new(),
+        submitted_history_commands: vec![
+            SubmittedHistoryCommand {
+                room_id: "!room:example".to_owned(),
+                from: None,
+                limit: 50,
+            },
+            SubmittedHistoryCommand {
+                room_id: "!room:example".to_owned(),
+                from: Some("token".to_owned()),
+                limit: 50,
+            },
+        ],
+        submitted_verification_actions: Vec::new(),
+        last_error: None,
+        selected_room: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&model).expect("serialize model with history commands"),
+        serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": null,
+            "e2ee_status": null,
+            "last_verification": null,
+            "submitted_history_commands": [
+                {
+                    "room_id": "!room:example",
+                    "from": null,
+                    "limit": 50
+                },
+                {
+                    "room_id": "!room:example",
+                    "from": "token",
+                    "limit": 50
+                }
+            ],
+            "last_error": null,
+            "selected_room": null
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<Model>(serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": null,
+            "e2ee_status": null,
+            "last_verification": null,
+            "submitted_history_commands": [
+                {
+                    "room_id": "!room:example",
+                    "from": null,
+                    "limit": 50
+                },
+                {
+                    "room_id": "!room:example",
+                    "from": "token",
+                    "limit": 50
+                }
+            ],
+            "last_error": null,
+            "selected_room": null
+        }))
+        .expect("deserialize model with history commands"),
+        model
+    );
+}
+
+#[test]
+fn model_submitted_history_commands_default_to_empty_when_omitted() {
+    let model = serde_json::from_value::<Model>(serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "last_error": null,
+        "selected_room": null
+    }))
+    .expect("deserialize model without history commands field");
+
+    assert_eq!(
+        model,
+        Model {
+            status: "synced".to_owned(),
+            lifecycle_state: "ready".to_owned(),
+            rooms: vec![],
+            last_activity: None,
+            e2ee_status: None,
+            last_verification: None,
+            submitted_membership_commands: Vec::new(),
+            submitted_direct_room_commands: Vec::new(),
+            submitted_room_topic_commands: Vec::new(),
+            submitted_reaction_commands: Vec::new(),
+            submitted_edit_commands: Vec::new(),
+            submitted_reply_commands: Vec::new(),
+            submitted_redaction_commands: Vec::new(),
+            submitted_history_commands: Vec::new(),
+            submitted_verification_actions: Vec::new(),
+            last_error: None,
+            selected_room: None,
+        }
     );
 }
 
@@ -3806,6 +4379,35 @@ fn model_submitted_redaction_commands_reject_unknown_nested_fields() {
             {
                 "room_id": "!ops:example.org",
                 "event_id": "$reaction:example.org",
+                "unexpected": true
+            }
+        ],
+        "last_error": null,
+        "selected_room": null
+    }))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `unexpected`"));
+}
+
+#[test]
+fn model_submitted_history_commands_reject_unknown_nested_fields() {
+    let error = serde_json::from_value::<Model>(serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "submitted_membership_commands": [],
+        "submitted_direct_room_commands": [],
+        "submitted_room_topic_commands": [],
+        "submitted_reaction_commands": [],
+        "submitted_history_commands": [
+            {
+                "room_id": "!room:example",
+                "from": "token",
+                "limit": 50,
                 "unexpected": true
             }
         ],

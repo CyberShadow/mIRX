@@ -232,6 +232,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_redaction_commands: Vec<SubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_history_commands: Vec<SubmittedHistoryCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
@@ -295,6 +297,14 @@ pub struct SubmittedReplyThreadTarget {
 pub struct SubmittedRedactionCommand {
     pub room_id: String,
     pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedHistoryCommand {
+    pub room_id: String,
+    pub from: Option<String>,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -507,6 +517,14 @@ pub enum RoomMediaSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct BackfillRoomHistoryRequest {
+    pub room_id: String,
+    pub from: Option<String>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FetchRoomImageMediaRequest {
     pub room_id: String,
     pub activity_id: String,
@@ -638,6 +656,22 @@ pub enum RoomActivityUpdateKind {
     ActivityRedacted {
         redaction_event_id: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomHistoryBackfillEvent {
+    Activity(Box<RoomActivity>),
+    ActivityUpdate(RoomActivityUpdate),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomHistoryBackfill {
+    pub room_id: String,
+    pub start: String,
+    pub end: Option<String>,
+    pub events: Vec<RoomHistoryBackfillEvent>,
 }
 
 impl RoomActivity {

@@ -95,11 +95,12 @@ use crate::{
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
-        DumpSubmittedEditCommand, DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedVerificationAction, DumpVerificationActionKind,
-        FailureEnvelope, GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse,
-        MdiState, MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
+        DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
         ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
         SwitchbarState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
@@ -9497,6 +9498,17 @@ fn dump_submitted_redaction_command(command: &Command) -> Option<DumpSubmittedRe
     }
 }
 
+fn dump_submitted_history_command(command: &Command) -> Option<DumpSubmittedHistoryCommand> {
+    match command {
+        Command::BackfillRoomHistory(request) => Some(DumpSubmittedHistoryCommand {
+            room_id: request.room_id.clone(),
+            from: request.from.clone(),
+            limit: request.limit,
+        }),
+        _ => None,
+    }
+}
+
 fn submitted_membership_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMembershipCommand> {
@@ -9563,6 +9575,14 @@ fn submitted_redaction_commands_from_state(
         .collect()
 }
 
+fn submitted_history_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedHistoryCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_history_command)
+        .collect()
+}
+
 fn dump_submitted_verification_action(
     command: &Command,
 ) -> Option<DumpSubmittedVerificationAction> {
@@ -9612,6 +9632,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_edit_commands: submitted_edit_commands_from_state(state),
         submitted_reply_commands: submitted_reply_commands_from_state(state),
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
+        submitted_history_commands: submitted_history_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
