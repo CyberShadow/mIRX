@@ -1107,7 +1107,7 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
     DumpRoom {
         room_id: room.room_id.clone(),
         display_name: room.display_name.clone(),
-        membership: room.membership.clone(),
+        membership: room.membership,
         encrypted: room.encrypted,
         is_space: room.is_space,
         is_direct: room.is_direct,

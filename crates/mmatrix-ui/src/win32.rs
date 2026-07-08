@@ -6238,7 +6238,7 @@ unsafe fn refresh_tree(hwnd: HWND) {
             })
             .collect::<BTreeSet<_>>();
 
-        let mut rendered_roots = rooms
+        let mut rendered_roots = joined_room_tree_source
             .iter()
             .filter(|room| room.is_space && !child_space_ids.contains(&room.room_id))
             .map(|room| room.room_id.clone())
@@ -6252,7 +6252,7 @@ unsafe fn refresh_tree(hwnd: HWND) {
                 root_id,
             );
         }
-        for room in rooms.iter().filter(|room| room.is_space) {
+        for room in joined_room_tree_source.iter().filter(|room| room.is_space) {
             if covered_space_ids.contains(&room.room_id) {
                 continue;
             }
@@ -9192,7 +9192,9 @@ unsafe extern "system" fn edit_window_proc(
     }
 
     if message == WM_KEYDOWN && wparam == VK_RETURN_KEY {
-        let _ = submit_compose_from_edit(parent);
+        if let Err(message) = submit_compose_from_edit(parent) {
+            let _ = set_local_command_status(parent, message);
+        }
         return 0;
     }
 

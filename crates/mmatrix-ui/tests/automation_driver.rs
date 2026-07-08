@@ -273,6 +273,35 @@ fn invited_room_summary(room_id: &str, display_name: &str, encrypted: bool) -> R
     }
 }
 
+fn joined_space_summary(
+    room_id: &str,
+    display_name: &str,
+    children: Vec<SpaceChildSummary>,
+) -> RoomSummary {
+    RoomSummary {
+        room_id: room_id.to_owned(),
+        display_name: display_name.to_owned(),
+        membership: RoomMembership::Join,
+        encrypted: false,
+        is_space: true,
+        is_direct: false,
+        direct_user_ids: Vec::new(),
+        tags: Vec::new(),
+        space_children: children,
+    }
+}
+
+fn invited_space_summary(
+    room_id: &str,
+    display_name: &str,
+    children: Vec<SpaceChildSummary>,
+) -> RoomSummary {
+    RoomSummary {
+        membership: RoomMembership::Invite,
+        ..joined_space_summary(room_id, display_name, children)
+    }
+}
+
 fn listed_room(room_id: &str, display_name: &str, encrypted: bool) -> Room {
     listed_room_with_metadata(
         room_id,
@@ -410,6 +439,31 @@ fn invite_target_events() -> Vec<Event> {
             invited_room_summary("!invite-target:example", "Lobby", false),
             invited_room_summary("!shared-one:example", "Shared", false),
             invited_room_summary("!shared-two:example", "Shared", false),
+        ]),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta latest",
+        ),
+    ]
+}
+
+fn hierarchical_invite_space_events() -> Vec<Event> {
+    vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            joined_space_summary(
+                "!space:example",
+                "Space",
+                vec![SpaceChildSummary {
+                    room_id: "!beta:example".to_owned(),
+                    suggested: false,
+                    order: None,
+                }],
+            ),
+            room_summary("!beta:example", "Beta", false),
+            invited_space_summary("!invite-space:example", "Invite Space", Vec::new()),
         ]),
         text_event(
             "!beta:example",
@@ -6525,7 +6579,7 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
     assert_eq!(app.compose_text()?, "hello invite");
 
     let after_text = app.dump_model()?;
-    assert_eq!(after_text.status, before.status);
+    assert_eq!(after_text.status, "room is not joined: !invite:example");
     assert_eq!(after_text.last_error, None);
     assert!(after_text.submitted_membership_commands.is_empty());
     assert!(after_text.submitted_room_topic_commands.is_empty());
@@ -6577,6 +6631,32 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
             .text
             .contains("invited: Lobby (!invite:example)")
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_hierarchical_tree_ignores_invited_spaces()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&hierarchical_invite_space_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let state = app.dump_ui_state()?;
+    assert!(navigation_contains(&state.navigation, "rooms: 1"));
+    assert!(navigation_contains(&state.navigation, "Space"));
+    assert!(navigation_contains(&state.navigation, "Beta"));
+    assert!(navigation_contains(&state.navigation, "invites: 0"));
+    assert_navigation_not_contains(&state.navigation, "Invite Space");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
