@@ -10,12 +10,12 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
-    AcceptRoomInviteRequest, Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest,
-    E2eeRecoveryOperation, E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest,
-    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomMembers,
-    RoomMembership, RoomReadState, RoomSummary, SendReactionRequest, SetRoomTopicRequest,
-    VerificationFlowId,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig, CoreErrorEvent,
+    CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySucceeded, EditMessageRequest,
+    Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
+    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
+    SetRoomTopicRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -204,6 +204,9 @@ async fn handle_command(
         Command::SendReaction(request) => handle_send_reaction(event_tx, state, request).await,
         Command::RedactEvent(request) => handle_redact_event(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
+        Command::BackfillRoomHistory(request) => {
+            handle_backfill_room_history(event_tx, state, request).await
+        }
         Command::FetchRoomImageMedia(request) => {
             handle_fetch_room_image_media(event_tx, state, request).await
         }
@@ -683,6 +686,28 @@ async fn handle_mark_room_read(
 
     if let Err(err) = matrix::mark_room_read(client, &request).await {
         emit_matrix_error(event_tx, Operation::MarkRoomRead, err);
+    }
+
+    false
+}
+
+async fn handle_backfill_room_history(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: BackfillRoomHistoryRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::BackfillRoomHistory,
+            "backfill room history requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::backfill_room_history(client, request).await {
+        Ok(backfill) => emit_event(event_tx, Event::RoomHistoryBackfill(backfill)),
+        Err(err) => emit_matrix_error(event_tx, Operation::BackfillRoomHistory, err),
     }
 
     false

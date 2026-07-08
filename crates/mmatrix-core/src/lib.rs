@@ -6,22 +6,24 @@ pub const APP_NAME: &str = "mmatrix";
 pub const FOUNDATION_PHASE: &str = "bootstrap";
 
 pub use api::{
-    AcceptRoomInviteRequest, Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest,
-    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
-    E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig, CoreErrorEvent,
+    CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+    E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
+    EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
+    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

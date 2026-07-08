@@ -1,21 +1,23 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    AcceptRoomInviteRequest, Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState,
-    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState,
-    E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
-    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest,
-    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig,
+    CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
+    E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
+    EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
+    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -424,6 +426,19 @@ fn fetch_room_image_media_before_login_emits_fetch_room_image_media_error() {
 }
 
 #[test]
+fn backfill_room_history_before_login_emits_backfill_room_history_error() {
+    assert_invalid_authenticated_command(
+        Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+            room_id: "!ops:example.org".to_owned(),
+            from: Some("t123-456".to_owned()),
+            limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+        }),
+        Operation::BackfillRoomHistory,
+        "backfill room history requires an authenticated session",
+    );
+}
+
+#[test]
 fn accept_verification_before_login_emits_verification_error() {
     assert_invalid_verification_command(Command::AcceptVerification(verification_flow_id()));
 }
@@ -719,6 +734,47 @@ fn mark_room_read_request_round_trips_through_serde() {
     let restored: MarkRoomReadRequest =
         serde_json::from_str(&json).expect("deserialize mark room read request");
     assert_eq!(restored, request);
+}
+
+#[test]
+fn backfill_room_history_request_round_trips_through_serde() {
+    for (request, json) in [
+        (
+            BackfillRoomHistoryRequest {
+                room_id: "!room:example.org".to_owned(),
+                from: None,
+                limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+            },
+            r#"{"room_id":"!room:example.org","from":null,"limit":50}"#,
+        ),
+        (
+            BackfillRoomHistoryRequest {
+                room_id: "!room:example.org".to_owned(),
+                from: Some("t4747337_219380_2603".to_owned()),
+                limit: ROOM_HISTORY_BACKFILL_LIMIT_MAX,
+            },
+            r#"{"room_id":"!room:example.org","from":"t4747337_219380_2603","limit":50}"#,
+        ),
+    ] {
+        let serialized =
+            serde_json::to_string(&request).expect("serialize backfill room history request");
+        assert_eq!(serialized, json);
+
+        let restored: BackfillRoomHistoryRequest =
+            serde_json::from_str(json).expect("deserialize backfill room history request");
+        assert_eq!(restored, request);
+    }
+}
+
+#[test]
+fn backfill_room_history_request_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<BackfillRoomHistoryRequest>(
+            r#"{"room_id":"!room:example.org","from":null,"limit":50,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "backfill room history request must reject unknown fields"
+    );
 }
 
 #[test]
@@ -1705,6 +1761,97 @@ fn reaction_removed_update_rejects_missing_or_extra_fields() {
         )
         .is_err(),
         "reaction removed update must reject unknown fields"
+    );
+}
+
+#[test]
+fn room_history_backfill_event_round_trips_through_serde() {
+    let event = Event::RoomHistoryBackfill(RoomHistoryBackfill {
+        room_id: "!ops:example.org".to_owned(),
+        start: "t4747337_219380_2603".to_owned(),
+        end: Some("t4747337_219379_2603".to_owned()),
+        events: vec![
+            RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                room_id: "!ops:example.org".to_owned(),
+                activity_id: "event:$message:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                relation: None,
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$message:example.org".to_owned()),
+                    transaction_id: None,
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "older message".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            })),
+            RoomHistoryBackfillEvent::ActivityUpdate(RoomActivityUpdate {
+                room_id: "!ops:example.org".to_owned(),
+                target: RoomActivityUpdateTarget::Event {
+                    event_id: "$message:example.org".to_owned(),
+                },
+                kind: RoomActivityUpdateKind::ReactionAdded {
+                    reaction_event_id: "$reaction:example.org".to_owned(),
+                    sender: "@bob:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_000_100,
+                    key: "heart".to_owned(),
+                },
+            }),
+        ],
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize room history backfill event");
+    assert_eq!(
+        json,
+        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","start":"t4747337_219380_2603","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":"@alice:example.org","presentation":"text","body":"older message","send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
+    );
+
+    let restored: Event =
+        serde_json::from_str(&json).expect("deserialize room history backfill event");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn room_history_backfill_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfill>(
+            r#"{"room_id":"!room:example.org","start":"t1","end":null,"events":[],"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room history backfill must reject unknown fields"
+    );
+}
+
+#[test]
+fn room_history_backfill_rejects_invalid_nested_event_tag() {
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfill>(
+            r#"{"room_id":"!room:example.org","start":"t1","end":null,"events":[{"type":"unknown","room_id":"!room:example.org"}]}"#
+        )
+        .is_err(),
+        "room history backfill must reject events with unknown tags"
+    );
+}
+
+#[test]
+fn room_history_backfill_event_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfillEvent>(
+            r#"{"type":"activity","room_id":"!room:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":null,"sender":"@alice:example.org","presentation":"text","body":"hello","send_state":{"state":"sent"}},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room history backfill event must reject unknown fields"
+    );
+}
+
+#[test]
+fn room_history_backfill_event_rejects_invalid_tag() {
+    assert!(
+        serde_json::from_str::<RoomHistoryBackfillEvent>(
+            r#"{"type":"unknown","room_id":"!room:example.org"}"#
+        )
+        .is_err(),
+        "room history backfill event must reject unknown tags"
     );
 }
 

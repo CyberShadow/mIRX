@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 use std::{fmt, fmt::Formatter};
 
+pub const ROOM_HISTORY_BACKFILL_LIMIT_MAX: u32 = 50;
+pub const ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT: u32 = 50;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreConfig {
     pub profile_dir: PathBuf,
@@ -23,6 +26,7 @@ pub enum Command {
     SendReaction(SendReactionRequest),
     RedactEvent(RedactEventRequest),
     MarkRoomRead(MarkRoomReadRequest),
+    BackfillRoomHistory(BackfillRoomHistoryRequest),
     FetchRoomImageMedia(FetchRoomImageMediaRequest),
     RefreshE2eeStatus,
     RecoverE2ee(RecoverE2eeRequest),
@@ -143,6 +147,14 @@ pub struct SetRoomTopicRequest {
 pub struct MarkRoomReadRequest {
     pub room_id: String,
     pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackfillRoomHistoryRequest {
+    pub room_id: String,
+    pub from: Option<String>,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -406,6 +418,22 @@ pub struct RoomActivityUpdate {
     pub room_id: String,
     pub target: RoomActivityUpdateTarget,
     pub kind: RoomActivityUpdateKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomHistoryBackfillEvent {
+    Activity(Box<RoomActivity>),
+    ActivityUpdate(RoomActivityUpdate),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomHistoryBackfill {
+    pub room_id: String,
+    pub start: String,
+    pub end: Option<String>,
+    pub events: Vec<RoomHistoryBackfillEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -688,6 +716,7 @@ pub enum Operation {
     SendReaction,
     RedactEvent,
     MarkRoomRead,
+    BackfillRoomHistory,
     FetchRoomImageMedia,
     RoomList,
     RoomReadState,
@@ -708,6 +737,7 @@ pub enum Event {
     SyncedRooms(Vec<RoomSummary>),
     RoomActivity(Box<RoomActivity>),
     RoomActivityUpdate(RoomActivityUpdate),
+    RoomHistoryBackfill(RoomHistoryBackfill),
     RoomImageMedia(RoomImageMedia),
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),

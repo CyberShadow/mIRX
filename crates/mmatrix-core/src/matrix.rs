@@ -8,7 +8,7 @@ use matrix_sdk::{
     Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    deserialized_responses::SyncOrStrippedState,
+    deserialized_responses::{SyncOrStrippedState, TimelineEvent},
     encryption::{
         BackupDownloadStrategy, EncryptionSettings,
         backups::BackupState,
@@ -20,8 +20,8 @@ use matrix_sdk::{
         },
     },
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
-    room::Receipts,
     room::edit::EditedContent,
+    room::{MessagesOptions, Receipts},
     ruma::{
         EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
         RoomId, RoomOrAliasId, UInt, UserId,
@@ -58,20 +58,21 @@ use matrix_sdk_crypto::CrossSigningStatus;
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
-    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    BackfillRoomHistoryRequest, CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
+    FetchRoomImageMediaRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomTyping, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -2583,6 +2584,124 @@ pub(crate) async fn mark_room_read(
     Ok(())
 }
 
+pub(crate) async fn backfill_room_history(
+    client: &Client,
+    request: BackfillRoomHistoryRequest,
+) -> Result<RoomHistoryBackfill, MatrixCoreError> {
+    if !(1..=ROOM_HISTORY_BACKFILL_LIMIT_MAX).contains(&request.limit) {
+        return Err(MatrixCoreError::new(
+            "room history backfill limit must be between 1 and 50",
+        ));
+    }
+
+    let room = joined_room_by_id(client, &request.room_id)?;
+    let limit = UInt::from(request.limit);
+    let mut options = MessagesOptions::backward().from(request.from.as_deref());
+    options.limit = limit;
+    options.filter.limit = Some(limit);
+
+    let response = room.messages(options).await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to backfill Matrix room history: {err}"))
+    })?;
+    let events = room_history_backfill_events_from_timeline(
+        room.room_id().as_str(),
+        response.chunk,
+        room.clone_info().room_version_rules_or_default().redaction,
+    );
+
+    Ok(RoomHistoryBackfill {
+        room_id: request.room_id,
+        start: response.start,
+        end: response.end,
+        events,
+    })
+}
+
+fn room_history_backfill_events_from_timeline(
+    room_id: &str,
+    chunk: Vec<TimelineEvent>,
+    redaction_rules: matrix_sdk::ruma::room_version_rules::RedactionRules,
+) -> Vec<RoomHistoryBackfillEvent> {
+    let mut reaction_index = BTreeMap::new();
+
+    chunk
+        .into_iter()
+        .rev()
+        .filter_map(|event| {
+            room_history_backfill_event_from_timeline_event(
+                room_id,
+                &event,
+                &redaction_rules,
+                &mut reaction_index,
+            )
+        })
+        .collect()
+}
+
+fn room_history_backfill_event_from_timeline_event(
+    room_id: &str,
+    event: &TimelineEvent,
+    redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
+    reaction_index: &mut BTreeMap<String, ReactionEventIndexEntry>,
+) -> Option<RoomHistoryBackfillEvent> {
+    let raw = event.raw();
+
+    if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMessageEvent>() {
+        return match room_timeline_event_from_sync_message(room_id, &event)? {
+            Event::RoomActivity(activity) => Some(RoomHistoryBackfillEvent::Activity(activity)),
+            Event::RoomActivityUpdate(update) => {
+                Some(RoomHistoryBackfillEvent::ActivityUpdate(update))
+            }
+            _ => None,
+        };
+    }
+
+    if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncReactionEvent>() {
+        reaction_index.insert(
+            event.event_id.to_string(),
+            ReactionEventIndexEntry {
+                target_event_id: event.content.relates_to.event_id.to_string(),
+                key: event.content.relates_to.key.clone(),
+            },
+        );
+        return Some(RoomHistoryBackfillEvent::ActivityUpdate(
+            room_activity_update_from_sync_reaction(room_id, &event),
+        ));
+    }
+
+    if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomRedactionEvent>() {
+        let redacted_event_id = event.redacts(redaction_rules).to_string();
+        if let Some(entry) = reaction_index.remove(redacted_event_id.as_str()) {
+            return Some(RoomHistoryBackfillEvent::ActivityUpdate(
+                room_activity_update_from_indexed_reaction_redaction(
+                    room_id,
+                    redacted_event_id,
+                    &event,
+                    entry,
+                ),
+            ));
+        }
+
+        return Some(RoomHistoryBackfillEvent::ActivityUpdate(
+            room_activity_update_from_sync_redaction(room_id, &event, redacted_event_id),
+        ));
+    }
+
+    if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomTopicEvent>() {
+        return Some(RoomHistoryBackfillEvent::Activity(Box::new(
+            room_activity_from_sync_topic(room_id, &event),
+        )));
+    }
+
+    if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>() {
+        return Some(RoomHistoryBackfillEvent::Activity(Box::new(
+            room_activity_from_sync_member(room_id, &event),
+        )));
+    }
+
+    None
+}
+
 pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
     client
         .logout()
@@ -2607,36 +2726,41 @@ mod tests {
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
         ReactionEventIndexEntry, attach_reply_relation, attach_thread_relation,
-        attach_thread_reply_relation, cancelled_state, direct_user_ids_by_room_from_content,
-        fetch_room_image_media, insert_pending_outgoing_kind, map_cross_signing_status,
-        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        attach_thread_reply_relation, backfill_room_history, cancelled_state,
+        direct_user_ids_by_room_from_content, fetch_room_image_media, insert_pending_outgoing_kind,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
         outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
         room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
-        room_image_media_request_parameters, room_list_update_is_relevant, room_members_from_parts,
-        room_message_event_content, room_message_event_content_without_relation,
-        room_read_state_from_parts, room_read_update_is_relevant, room_tag_summaries_from_tags,
+        room_history_backfill_event_from_timeline_event,
+        room_history_backfill_events_from_timeline, room_image_media_request_parameters,
+        room_list_update_is_relevant, room_members_from_parts, room_message_event_content,
+        room_message_event_content_without_relation, room_read_state_from_parts,
+        room_read_update_is_relevant, room_tag_summaries_from_tags,
         room_timeline_event_from_sync_message, room_typing_from_sync_typing,
         sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
-        CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
-        FetchRoomImageMediaRequest, Operation, RoomActivity, RoomActivityKind,
-        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-        RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-        RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMediaFormat,
-        RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
-        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        BackfillRoomHistoryRequest, CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus,
+        E2eeRecoveryState, Event, FetchRoomImageMediaRequest, Operation,
+        ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind, RoomActivityRelation,
+        RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+        RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
+        RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
+        RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
+        SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
+        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, SessionMeta,
+        deserialized_responses::TimelineEvent,
         encryption::{
             backups::BackupState,
             recovery::RecoveryState,
@@ -2666,6 +2790,7 @@ mod tests {
                 typing::SyncTypingEvent,
             },
             room_version_rules::RedactionRules,
+            serde::Raw,
         },
         send_queue::{LocalEchoContent, RoomSendQueue, RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
@@ -2860,6 +2985,14 @@ mod tests {
             hashes: encrypted_file_hashes(),
             v: "v2".to_owned(),
         }
+    }
+
+    fn timeline_event(event: serde_json::Value) -> TimelineEvent {
+        TimelineEvent::from_plaintext(
+            Raw::new(&event)
+                .expect("serialize raw timeline event")
+                .cast_unchecked(),
+        )
     }
 
     #[test]
@@ -3447,6 +3580,204 @@ mod tests {
     }
 
     #[test]
+    fn room_backfill_message_with_top_level_room_id_maps_to_activity() {
+        let event = timeline_event(serde_json::json!({
+            "type": "m.room.message",
+            "room_id": "!history:example.org",
+            "content": {
+                "msgtype": "m.text",
+                "body": "older message"
+            },
+            "event_id": "$history:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000000100u64
+        }));
+
+        let mapped = room_history_backfill_event_from_timeline_event(
+            "!room:example.org",
+            &event,
+            &RedactionRules::V1,
+            &mut BTreeMap::new(),
+        );
+
+        assert_eq!(
+            mapped,
+            Some(RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$history:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_100,
+                relation: None,
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some("$history:example.org".to_owned()),
+                    transaction_id: None,
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "older message".to_owned(),
+                    send_state: RoomMessageSendState::Sent,
+                }),
+            })))
+        );
+    }
+
+    #[test]
+    fn room_backfill_edit_maps_to_message_replaced_update() {
+        let event = timeline_event(serde_json::json!({
+            "type": "m.room.message",
+            "room_id": "!history:example.org",
+            "content": {
+                "msgtype": "m.text",
+                "body": "* edited body",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": "edited body"
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$original:example.org"
+                }
+            },
+            "event_id": "$edit:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001000u64
+        }));
+
+        let mapped = room_history_backfill_event_from_timeline_event(
+            "!room:example.org",
+            &event,
+            &RedactionRules::V1,
+            &mut BTreeMap::new(),
+        );
+
+        assert_eq!(
+            mapped,
+            Some(RoomHistoryBackfillEvent::ActivityUpdate(
+                RoomActivityUpdate {
+                    room_id: "!room:example.org".to_owned(),
+                    target: RoomActivityUpdateTarget::Event {
+                        event_id: "$original:example.org".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::MessageReplaced {
+                        replacement_event_id: "$edit:example.org".to_owned(),
+                        sender: "@alice:example.org".to_owned(),
+                        timestamp_ms: 1_700_000_001_000,
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "edited body".to_owned(),
+                    },
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn room_backfill_reaction_maps_to_reaction_added_update() {
+        let event = timeline_event(serde_json::json!({
+            "type": "m.reaction",
+            "room_id": "!history:example.org",
+            "content": {
+                "m.relates_to": {
+                    "rel_type": "m.annotation",
+                    "event_id": "$original:example.org",
+                    "key": "heart"
+                }
+            },
+            "event_id": "$reaction:example.org",
+            "sender": "@alice:example.org",
+            "origin_server_ts": 1700000001500u64
+        }));
+
+        let mapped = room_history_backfill_event_from_timeline_event(
+            "!room:example.org",
+            &event,
+            &RedactionRules::V1,
+            &mut BTreeMap::new(),
+        );
+
+        assert_eq!(
+            mapped,
+            Some(RoomHistoryBackfillEvent::ActivityUpdate(
+                RoomActivityUpdate {
+                    room_id: "!room:example.org".to_owned(),
+                    target: RoomActivityUpdateTarget::Event {
+                        event_id: "$original:example.org".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ReactionAdded {
+                        reaction_event_id: "$reaction:example.org".to_owned(),
+                        sender: "@alice:example.org".to_owned(),
+                        timestamp_ms: 1_700_000_001_500,
+                        key: "heart".to_owned(),
+                    },
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn room_backfill_normalizes_backward_page_to_oldest_first() {
+        let events = room_history_backfill_events_from_timeline(
+            "!room:example.org",
+            vec![
+                timeline_event(serde_json::json!({
+                    "type": "m.room.message",
+                    "room_id": "!history:example.org",
+                    "content": {
+                        "msgtype": "m.text",
+                        "body": "newer"
+                    },
+                    "event_id": "$newer:example.org",
+                    "sender": "@alice:example.org",
+                    "origin_server_ts": 1700000000200u64
+                })),
+                timeline_event(serde_json::json!({
+                    "type": "m.room.message",
+                    "room_id": "!history:example.org",
+                    "content": {
+                        "msgtype": "m.text",
+                        "body": "older"
+                    },
+                    "event_id": "$older:example.org",
+                    "sender": "@alice:example.org",
+                    "origin_server_ts": 1700000000100u64
+                })),
+            ],
+            RedactionRules::V1,
+        );
+
+        assert_eq!(
+            events,
+            vec![
+                RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                    room_id: "!room:example.org".to_owned(),
+                    activity_id: "event:$older:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_000_100,
+                    relation: None,
+                    kind: RoomActivityKind::Message(RoomMessageActivity {
+                        event_id: Some("$older:example.org".to_owned()),
+                        transaction_id: None,
+                        sender: "@alice:example.org".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "older".to_owned(),
+                        send_state: RoomMessageSendState::Sent,
+                    }),
+                })),
+                RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                    room_id: "!room:example.org".to_owned(),
+                    activity_id: "event:$newer:example.org".to_owned(),
+                    timestamp_ms: 1_700_000_000_200,
+                    relation: None,
+                    kind: RoomActivityKind::Message(RoomMessageActivity {
+                        event_id: Some("$newer:example.org".to_owned()),
+                        transaction_id: None,
+                        sender: "@alice:example.org".to_owned(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "newer".to_owned(),
+                        send_state: RoomMessageSendState::Sent,
+                    }),
+                })),
+            ]
+        );
+    }
+
+    #[test]
     fn reaction_redaction_maps_to_reaction_removed_when_indexed() {
         let reaction_event: OriginalSyncReactionEvent = serde_json::from_value(serde_json::json!({
             "type": "m.reaction",
@@ -3506,6 +3837,36 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn room_backfill_rejects_invalid_limits_before_matrix_request() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let client = build_test_client();
+
+        for limit in [0, ROOM_HISTORY_BACKFILL_LIMIT_MAX + 1] {
+            let err = runtime
+                .block_on(async {
+                    backfill_room_history(
+                        &client,
+                        BackfillRoomHistoryRequest {
+                            room_id: "!room:example.org".to_owned(),
+                            from: None,
+                            limit,
+                        },
+                    )
+                    .await
+                })
+                .expect_err("reject invalid room history backfill limit");
+
+            assert_eq!(
+                err.to_string(),
+                "room history backfill limit must be between 1 and 50"
+            );
+        }
     }
 
     #[test]
