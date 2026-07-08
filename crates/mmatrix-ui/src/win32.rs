@@ -25,9 +25,9 @@ use mmatrix_core::{
     RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, StoredSession,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    SendMessageReplyTarget, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -95,7 +95,8 @@ use crate::{
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
         MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
@@ -2050,6 +2051,10 @@ enum LocalSlashCommand<'a> {
     React {
         target_event_id: String,
         key: String,
+    },
+    Reply {
+        target_event_id: String,
+        body: String,
     },
     Edit {
         target_event_id: String,
@@ -8015,6 +8020,7 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
             target: Some(argument.to_owned()),
         },
         "react" => parse_react_slash_command(argument),
+        "reply" => parse_reply_slash_command(argument),
         "edit" => parse_edit_slash_command(argument),
         "redact" => parse_redact_slash_command(argument),
         "unreact" => parse_unreact_slash_command(argument),
@@ -8097,6 +8103,25 @@ fn parse_edit_slash_command(argument: &str) -> LocalSlashCommand<'_> {
     }
 }
 
+fn parse_reply_slash_command(argument: &str) -> LocalSlashCommand<'_> {
+    let Some(target_end) = argument.bytes().position(|byte| byte.is_ascii_whitespace()) else {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /reply <event-id> <message>".to_owned(),
+        };
+    };
+    let target_event_id = &argument[..target_end];
+    let body = argument[target_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
+    if target_event_id.is_empty() || body.is_empty() {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /reply <event-id> <message>".to_owned(),
+        };
+    }
+    LocalSlashCommand::Reply {
+        target_event_id: target_event_id.to_owned(),
+        body: body.to_owned(),
+    }
+}
+
 fn parse_unreact_slash_command(argument: &str) -> LocalSlashCommand<'_> {
     if argument.is_empty() || argument.bytes().any(|byte| byte.is_ascii_whitespace()) {
         return LocalSlashCommand::Invalid {
@@ -8173,6 +8198,7 @@ fn submit_compose_with_history_entry(
         presentation,
         body: send_body,
         thread: destination.thread,
+        reply: None,
     });
     sender
         .send(command.clone())
@@ -8334,6 +8360,18 @@ unsafe fn execute_local_slash_command(
             let result = {
                 let state = state_mut(hwnd);
                 submit_react_slash_command(state, target_event_id, key)
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
+        LocalSlashCommand::Reply {
+            target_event_id,
+            body,
+        } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_reply_slash_command(state, target_event_id, body)
             };
             match result {
                 Ok(message) | Err(message) => set_local_command_status(hwnd, message),
@@ -8614,6 +8652,36 @@ fn submit_edit_slash_command(
         .map_err(|err| format!("failed to enqueue edit message command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("Edit queued for {target_event_id}"))
+}
+
+fn submit_reply_slash_command(
+    state: &mut WindowState,
+    target_event_id: String,
+    body: String,
+) -> Result<String, String> {
+    let destination = resolve_compose_destination(state, None)?;
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let clears_active_thread_marker = destination.thread.is_some();
+    let command = Command::SendMessage(SendMessageRequest {
+        room_id: destination.room_id.clone(),
+        presentation: RoomMessagePresentationKind::Text,
+        body,
+        thread: destination.thread,
+        reply: Some(SendMessageReplyTarget {
+            event_id: target_event_id.clone(),
+        }),
+    });
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
+    state.recorded_commands.push(command);
+    if clears_active_thread_marker {
+        clear_view_activity_marker(state, &state.active_view.clone());
+    }
+    Ok(format!("Reply queued for {target_event_id}"))
 }
 
 fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Result<(), String> {
@@ -8957,6 +9025,26 @@ fn dump_submitted_edit_command(command: &Command) -> Option<DumpSubmittedEditCom
     }
 }
 
+fn dump_submitted_reply_command(command: &Command) -> Option<DumpSubmittedReplyCommand> {
+    match command {
+        Command::SendMessage(request) => request.reply.as_ref().map(|reply| {
+            DumpSubmittedReplyCommand {
+                room_id: request.room_id.clone(),
+                target_event_id: reply.event_id.clone(),
+                body: request.body.clone(),
+                thread: request
+                    .thread
+                    .as_ref()
+                    .map(|thread| DumpSubmittedReplyThreadTarget {
+                        thread_root_event_id: thread.thread_root_event_id.clone(),
+                        latest_event_id: thread.latest_event_id.clone(),
+                    }),
+            }
+        }),
+        _ => None,
+    }
+}
+
 fn dump_submitted_redaction_command(command: &Command) -> Option<DumpSubmittedRedactionCommand> {
     match command {
         Command::RedactEvent(request) => Some(DumpSubmittedRedactionCommand {
@@ -9012,6 +9100,14 @@ fn submitted_edit_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedE
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_edit_command)
+        .collect()
+}
+
+fn submitted_reply_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedReplyCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_reply_command)
         .collect()
 }
 
@@ -9072,6 +9168,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
         submitted_edit_commands: submitted_edit_commands_from_state(state),
+        submitted_reply_commands: submitted_reply_commands_from_state(state),
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
@@ -16456,6 +16553,13 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_compose_submission("//reply $event thanks"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/reply $event thanks".to_owned()),
+            }
+        );
+        assert_eq!(
             parse_compose_submission("///status"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
@@ -16668,10 +16772,24 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_slash_command("/reply $event-to-reply hello there"),
+            LocalSlashCommand::Reply {
+                target_event_id: "$event-to-reply".to_owned(),
+                body: "hello there".to_owned(),
+            }
+        );
+        assert_eq!(
             parse_slash_command("/EDIT   $event-to-edit   replacement text   "),
             LocalSlashCommand::Edit {
                 target_event_id: "$event-to-edit".to_owned(),
                 body: "replacement text".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/REPLY   $event-to-reply   hello there   "),
+            LocalSlashCommand::Reply {
+                target_event_id: "$event-to-reply".to_owned(),
+                body: "hello there".to_owned(),
             }
         );
         assert_eq!(
@@ -16766,6 +16884,24 @@ mod tests {
             parse_slash_command("/edit $event-to-edit   "),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/reply"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /reply <event-id> <message>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/reply $event-to-reply"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /reply <event-id> <message>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/reply $event-to-reply   "),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /reply <event-id> <message>".to_owned(),
             }
         );
         assert_eq!(
@@ -17066,6 +17202,153 @@ mod tests {
         assert_eq!(
             submit_react_slash_command(&mut state, "$react-normal".to_owned(), "+1".to_owned(),),
             Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_reply_slash_command_from_active_room_records_typed_request_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = room_view_id("!room:example");
+
+        let status = submit_reply_slash_command(
+            &mut state,
+            "$target".to_owned(),
+            "hello there".to_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(status, "Reply queued for $target");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SendMessage(SendMessageRequest {
+                room_id: "!room:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello there".to_owned(),
+                thread: None,
+                reply: Some(SendMessageReplyTarget {
+                    event_id: "$target".to_owned(),
+                }),
+            })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_reply_commands,
+            vec![DumpSubmittedReplyCommand {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$target".to_owned(),
+                body: "hello there".to_owned(),
+                thread: None,
+            }]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_reply_slash_command_from_thread_uses_compose_thread_destination() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root:example",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$thread-1:example",
+                None,
+                Some(thread_relation("$thread-root:example")),
+                RoomMessagePresentationKind::Text,
+                "durable reply",
+                1_700_000_120_000,
+            ),
+        )
+        .unwrap();
+        state.active_view = thread_view_id("!ops:example", "$thread-root:example");
+        state
+            .room_activity
+            .insert(thread_view_id("!ops:example", "$thread-root:example"));
+        state.room_activity_read_targets.insert(
+            thread_view_id("!ops:example", "$thread-root:example"),
+            "$thread-1:example".to_owned(),
+        );
+
+        let status = submit_reply_slash_command(
+            &mut state,
+            "$target".to_owned(),
+            "threaded acknowledgement".to_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(status, "Reply queued for $target");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SendMessage(SendMessageRequest {
+                room_id: "!ops:example".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "threaded acknowledgement".to_owned(),
+                thread: Some(SendMessageThreadTarget {
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                    latest_event_id: "$thread-1:example".to_owned(),
+                }),
+                reply: Some(SendMessageReplyTarget {
+                    event_id: "$target".to_owned(),
+                }),
+            })]
+        );
+        assert!(
+            !state
+                .room_activity
+                .contains(&thread_view_id("!ops:example", "$thread-root:example"))
+        );
+        assert!(
+            !state
+                .room_activity_read_targets
+                .contains_key(&thread_view_id("!ops:example", "$thread-root:example"))
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_reply_commands,
+            vec![DumpSubmittedReplyCommand {
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$target".to_owned(),
+                body: "threaded acknowledgement".to_owned(),
+                thread: Some(DumpSubmittedReplyThreadTarget {
+                    thread_root_event_id: "$thread-root:example".to_owned(),
+                    latest_event_id: "$thread-1:example".to_owned(),
+                }),
+            }]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_reply_slash_command_from_status_returns_no_room_selected() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_reply_slash_command(&mut state, "$target".to_owned(), "hello".to_owned()),
+            Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_reply_slash_command_requires_available_command_sender() {
+        let mut state = test_state();
+        state.active_view = room_view_id("!room:example");
+
+        assert_eq!(
+            submit_reply_slash_command(&mut state, "$target".to_owned(), "hello".to_owned()),
+            Err("core command sender is not available".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
     }
@@ -17426,12 +17709,14 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     thread: None,
+                    reply: None,
                 }),
                 Command::SendMessage(SendMessageRequest {
                     room_id: "!selected:example".to_owned(),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
                     thread: None,
+                    reply: None,
                 }),
             ]
         );
@@ -17469,6 +17754,7 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 body: "/status".to_owned(),
                 thread: None,
+                reply: None,
             })]
         );
         let dump = dump_model_from_state(&state);
@@ -17559,6 +17845,7 @@ mod tests {
                         thread_root_event_id: "$thread-root:example".to_owned(),
                         latest_event_id: "$thread-1:example".to_owned(),
                     }),
+                    reply: None,
                 }),
                 Command::SendMessage(SendMessageRequest {
                     room_id: "!ops:example".to_owned(),
@@ -17568,6 +17855,7 @@ mod tests {
                         thread_root_event_id: "$thread-root:example".to_owned(),
                         latest_event_id: "$thread-1:example".to_owned(),
                     }),
+                    reply: None,
                 }),
             ]
         );
@@ -17618,6 +17906,7 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 thread: None,
+                reply: None,
             })]
         );
 

@@ -62,11 +62,17 @@ pub struct SendMessageThreadTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendMessageReplyTarget {
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendMessageRequest {
     pub room_id: String,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub thread: Option<SendMessageThreadTarget>,
+    pub reply: Option<SendMessageReplyTarget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

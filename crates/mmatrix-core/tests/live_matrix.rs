@@ -424,6 +424,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
                 presentation: RoomMessagePresentationKind::Text,
                 body: format!("mmatrix live test {nonce}"),
                 thread: None,
+                reply: None,
             }))
             .expect("send message");
     }

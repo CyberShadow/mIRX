@@ -228,6 +228,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_edit_commands: Vec<SubmittedEditCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_reply_commands: Vec<SubmittedReplyCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_redaction_commands: Vec<SubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
@@ -269,6 +271,23 @@ pub struct SubmittedEditCommand {
     pub room_id: String,
     pub target_event_id: String,
     pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedReplyCommand {
+    pub room_id: String,
+    pub target_event_id: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<SubmittedReplyThreadTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedReplyThreadTarget {
+    pub thread_root_event_id: String,
+    pub latest_event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

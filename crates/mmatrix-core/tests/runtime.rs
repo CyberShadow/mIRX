@@ -206,6 +206,7 @@ fn invalid_command_ordering_emits_typed_error_events() {
             presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             thread: None,
+            reply: None,
         }))
         .expect("send message");
     handle

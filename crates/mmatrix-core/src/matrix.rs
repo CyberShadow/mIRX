@@ -33,7 +33,7 @@ use matrix_sdk::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
             reaction::{OriginalSyncReactionEvent, ReactionEventContent},
-            relation::{Annotation, Thread},
+            relation::{Annotation, Reply, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
@@ -66,10 +66,11 @@ use crate::api::{
     RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
     RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -2199,6 +2200,9 @@ fn message_presentation_and_body_from_serialized_event(
     };
 
     let relation = match content.relates_to.as_ref() {
+        Some(MessageContentRelation::Reply(reply)) => Some(RoomActivityRelation::Reply {
+            in_reply_to_event_id: reply.in_reply_to.event_id.to_string(),
+        }),
         Some(MessageContentRelation::Thread(thread)) => Some(RoomActivityRelation::Thread {
             thread_root_event_id: thread.event_id.to_string(),
             in_reply_to_event_id: thread
@@ -2283,18 +2287,39 @@ fn attach_thread_relation(
     content: &mut RoomMessageEventContent,
     thread: SendMessageThreadTarget,
 ) -> Result<(), MatrixCoreError> {
-    let thread_root_event_id = <&EventId>::try_from(thread.thread_root_event_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
-        .to_owned();
-    let latest_event_id = <&EventId>::try_from(thread.latest_event_id.as_str())
-        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?
-        .to_owned();
+    let thread_root_event_id = owned_event_id_from_str(&thread.thread_root_event_id)?;
+    let latest_event_id = owned_event_id_from_str(&thread.latest_event_id)?;
 
     content.relates_to = Some(MessageContentRelation::Thread(Thread::plain(
         thread_root_event_id,
         latest_event_id,
     )));
 
+    Ok(())
+}
+
+fn attach_reply_relation(
+    content: &mut RoomMessageEventContent,
+    reply: SendMessageReplyTarget,
+) -> Result<(), MatrixCoreError> {
+    let reply_event_id = owned_event_id_from_str(&reply.event_id)?;
+    content.relates_to = Some(MessageContentRelation::Reply(Reply::with_event_id(
+        reply_event_id,
+    )));
+    Ok(())
+}
+
+fn attach_thread_reply_relation(
+    content: &mut RoomMessageEventContent,
+    thread: SendMessageThreadTarget,
+    reply: SendMessageReplyTarget,
+) -> Result<(), MatrixCoreError> {
+    let thread_root_event_id = owned_event_id_from_str(&thread.thread_root_event_id)?;
+    let reply_event_id = owned_event_id_from_str(&reply.event_id)?;
+    content.relates_to = Some(MessageContentRelation::Thread(Thread::reply(
+        thread_root_event_id,
+        reply_event_id,
+    )));
     Ok(())
 }
 
@@ -2333,8 +2358,11 @@ pub(crate) async fn send_message(
     let room = joined_room_by_id(client, &request.room_id)?;
 
     let mut content = room_message_event_content(request.presentation, request.body);
-    if let Some(thread) = request.thread {
-        attach_thread_relation(&mut content, thread)?;
+    match (request.thread, request.reply) {
+        (None, None) => {}
+        (Some(thread), None) => attach_thread_relation(&mut content, thread)?,
+        (None, Some(reply)) => attach_reply_relation(&mut content, reply)?,
+        (Some(thread), Some(reply)) => attach_thread_reply_relation(&mut content, thread, reply)?,
     }
 
     room.send_queue()
@@ -2448,10 +2476,11 @@ mod tests {
 
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
-        ReactionEventIndexEntry, attach_thread_relation, cancelled_state,
-        direct_user_ids_by_room_from_content, fetch_room_image_media, insert_pending_outgoing_kind,
-        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        ReactionEventIndexEntry, attach_reply_relation, attach_thread_relation,
+        attach_thread_reply_relation, cancelled_state, direct_user_ids_by_room_from_content,
+        fetch_room_image_media, insert_pending_outgoing_kind, map_cross_signing_status,
+        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
         outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
         room_activity_from_sync_member, room_activity_from_sync_message,
@@ -2472,8 +2501,9 @@ mod tests {
         RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
         RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
-        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
+        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, SessionMeta,
@@ -4610,6 +4640,33 @@ mod tests {
     }
 
     #[test]
+    fn reply_local_echo_message_extracts_reply_relation() {
+        let mut content = RoomMessageEventContent::text_plain("hello in reply");
+        attach_reply_relation(
+            &mut content,
+            SendMessageReplyTarget {
+                event_id: "$parent:example.org".to_owned(),
+            },
+        )
+        .expect("attach reply relation");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize reply text event");
+
+        assert_eq!(
+            message_presentation_and_body_from_serialized_event(&serialized_event)
+                .expect("read local echo body"),
+            Some(LocalEchoMessageDetails {
+                presentation: RoomMessagePresentationKind::Text,
+                body: "hello in reply".to_owned(),
+                relation: Some(RoomActivityRelation::Reply {
+                    in_reply_to_event_id: "$parent:example.org".to_owned(),
+                }),
+            })
+        );
+    }
+
+    #[test]
     fn local_threaded_queue_mapping_preserves_thread_relation() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
         let mut content = RoomMessageEventContent::text_plain("hello from thread");
@@ -4652,6 +4709,52 @@ mod tests {
                     sender: "@alice:example.org".to_owned(),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn local_reply_queue_mapping_preserves_reply_relation() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let mut content = RoomMessageEventContent::text_plain("hello in reply");
+        attach_reply_relation(
+            &mut content,
+            SendMessageReplyTarget {
+                event_id: "$parent:example.org".to_owned(),
+            },
+        )
+        .expect("attach reply relation");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize reply text event");
+
+        let activity = map_local_message_activity(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+        )
+        .expect("map local reply")
+        .expect("reply local echo");
+
+        assert_eq!(
+            activity,
+            RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                relation: Some(RoomActivityRelation::Reply {
+                    in_reply_to_event_id: "$parent:example.org".to_owned(),
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello in reply".to_owned(),
                     send_state: RoomMessageSendState::Pending,
                 }),
             }
@@ -5069,6 +5172,54 @@ mod tests {
     }
 
     #[test]
+    fn restored_reply_local_echo_hydrates_to_pending_room_activity() {
+        let created_at = MilliSecondsSinceUnixEpoch::now();
+        let pending = pending_outgoing_registry();
+        let mut content = RoomMessageEventContent::text_plain("hello in reply");
+        attach_reply_relation(
+            &mut content,
+            SendMessageReplyTarget {
+                event_id: "$parent:example.org".to_owned(),
+            },
+        )
+        .expect("attach reply relation");
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(content))
+                .expect("serialize reply text event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            created_at,
+            &serialized_event,
+            None,
+            &pending,
+        )
+        .expect("map restored local echo");
+
+        assert_eq!(
+            events,
+            vec![Event::RoomActivity(Box::new(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "txn:txn-1".to_owned(),
+                timestamp_ms: created_at.get().into(),
+                relation: Some(RoomActivityRelation::Reply {
+                    in_reply_to_event_id: "$parent:example.org".to_owned(),
+                }),
+                kind: RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: None,
+                    transaction_id: Some("txn-1".to_owned()),
+                    sender: "@alice:example.org".to_owned(),
+                    presentation: RoomMessagePresentationKind::Text,
+                    body: "hello in reply".to_owned(),
+                    send_state: RoomMessageSendState::Pending,
+                }),
+            }))]
+        );
+    }
+
+    #[test]
     fn restored_failed_local_echo_re_emits_error_surface() {
         let created_at = MilliSecondsSinceUnixEpoch::now();
         let pending = pending_outgoing_registry();
@@ -5424,6 +5575,114 @@ mod tests {
             owned_event_id_from_str("not-an-event-id").expect_err("reject invalid reaction id");
 
         assert!(err.to_string().contains("invalid Matrix event id"));
+    }
+
+    #[test]
+    fn reply_room_message_content_serializes_reply_relation() {
+        for (presentation, body, msgtype) in [
+            (RoomMessagePresentationKind::Text, "hello", "m.text"),
+            (RoomMessagePresentationKind::Notice, "heads up", "m.notice"),
+            (RoomMessagePresentationKind::Emote, "waves", "m.emote"),
+        ] {
+            let mut content = room_message_event_content(presentation, body.to_owned());
+            attach_reply_relation(
+                &mut content,
+                SendMessageReplyTarget {
+                    event_id: "$parent:example.org".to_owned(),
+                },
+            )
+            .expect("attach reply relation");
+
+            let serialized = serde_json::to_value(content).expect("serialize reply content");
+
+            assert_eq!(serialized["msgtype"], msgtype);
+            assert_eq!(serialized["body"], body);
+            assert_eq!(
+                serialized["m.relates_to"]["m.in_reply_to"]["event_id"],
+                "$parent:example.org"
+            );
+            assert!(serialized["m.relates_to"].get("rel_type").is_none());
+        }
+    }
+
+    #[test]
+    fn thread_reply_room_message_content_serializes_thread_reply_relation() {
+        let mut content =
+            room_message_event_content(RoomMessagePresentationKind::Text, "hello".to_owned());
+        attach_thread_reply_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "$latest-thread:example.org".to_owned(),
+            },
+            SendMessageReplyTarget {
+                event_id: "$reply-target:example.org".to_owned(),
+            },
+        )
+        .expect("attach thread reply relation");
+
+        let serialized = serde_json::to_value(content).expect("serialize threaded reply content");
+
+        assert_eq!(serialized["m.relates_to"]["rel_type"], "m.thread");
+        assert_eq!(
+            serialized["m.relates_to"]["event_id"],
+            "$thread-root:example.org"
+        );
+        assert_eq!(
+            serialized["m.relates_to"]["m.in_reply_to"]["event_id"],
+            "$reply-target:example.org"
+        );
+        assert!(serialized["m.relates_to"].get("is_falling_back").is_none());
+    }
+
+    #[test]
+    fn reply_room_message_content_rejects_invalid_target_event_id() {
+        let mut content =
+            room_message_event_content(RoomMessagePresentationKind::Text, "hello".to_owned());
+        let err = attach_reply_relation(
+            &mut content,
+            SendMessageReplyTarget {
+                event_id: "not-an-event-id".to_owned(),
+            },
+        )
+        .expect_err("reject invalid reply event id");
+
+        assert!(err.to_string().contains("invalid Matrix event id"));
+    }
+
+    #[test]
+    fn thread_reply_room_message_content_rejects_invalid_event_ids() {
+        let mut content =
+            room_message_event_content(RoomMessagePresentationKind::Text, "hello".to_owned());
+        let invalid_thread_root = attach_thread_reply_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "not-an-event-id".to_owned(),
+                latest_event_id: "$latest-thread:example.org".to_owned(),
+            },
+            SendMessageReplyTarget {
+                event_id: "$reply-target:example.org".to_owned(),
+            },
+        )
+        .expect_err("reject invalid thread root");
+        assert!(invalid_thread_root
+            .to_string()
+            .contains("invalid Matrix event id"));
+
+        let invalid_reply_target = attach_thread_reply_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "$latest-thread:example.org".to_owned(),
+            },
+            SendMessageReplyTarget {
+                event_id: "not-an-event-id".to_owned(),
+            },
+        )
+        .expect_err("reject invalid reply target");
+        assert!(invalid_reply_target
+            .to_string()
+            .contains("invalid Matrix event id"));
     }
 
     #[test]

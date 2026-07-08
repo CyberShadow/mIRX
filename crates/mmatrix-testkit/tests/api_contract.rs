@@ -24,8 +24,9 @@ use mmatrix_testkit::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
     StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedRoomTopicCommand, SwitchbarItem,
-    SwitchbarState, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
     VerificationEmoji, VerificationState, ViewIdentity,
 };
@@ -310,6 +311,7 @@ fn data_models_round_trip_through_json() {
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: Some(UiError {
@@ -2787,6 +2789,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
@@ -2848,6 +2851,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
@@ -2922,6 +2926,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
@@ -3001,6 +3006,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         }],
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
@@ -3088,6 +3094,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
             key: "+1".to_owned(),
         }],
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         last_error: None,
@@ -3138,6 +3145,155 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
 }
 
 #[test]
+fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
+    let model = Model {
+        status: "synced".to_owned(),
+        lifecycle_state: "ready".to_owned(),
+        rooms: vec![],
+        last_activity: None,
+        e2ee_status: None,
+        last_verification: None,
+        submitted_membership_commands: Vec::new(),
+        submitted_direct_room_commands: Vec::new(),
+        submitted_room_topic_commands: Vec::new(),
+        submitted_reaction_commands: Vec::new(),
+        submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: vec![SubmittedReplyCommand {
+            room_id: "!ops:example.org".to_owned(),
+            target_event_id: "$target:example.org".to_owned(),
+            body: "follow-up".to_owned(),
+            thread: None,
+        }],
+        submitted_redaction_commands: Vec::new(),
+        submitted_verification_actions: Vec::new(),
+        last_error: None,
+        selected_room: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&model).expect("serialize model with reply commands"),
+        serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": null,
+            "e2ee_status": null,
+            "last_verification": null,
+            "submitted_reply_commands": [
+                {
+                    "room_id": "!ops:example.org",
+                    "target_event_id": "$target:example.org",
+                    "body": "follow-up"
+                }
+            ],
+            "last_error": null,
+            "selected_room": null
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<Model>(serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": null,
+            "e2ee_status": null,
+            "last_verification": null,
+            "submitted_reply_commands": [
+                {
+                    "room_id": "!ops:example.org",
+                    "target_event_id": "$target:example.org",
+                    "body": "follow-up"
+                }
+            ],
+            "last_error": null,
+            "selected_room": null
+        }))
+        .expect("deserialize model with reply commands"),
+        model
+    );
+}
+
+#[test]
+fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
+    let model = Model {
+        status: "synced".to_owned(),
+        lifecycle_state: "ready".to_owned(),
+        rooms: vec![],
+        last_activity: None,
+        e2ee_status: None,
+        last_verification: None,
+        submitted_membership_commands: Vec::new(),
+        submitted_direct_room_commands: Vec::new(),
+        submitted_room_topic_commands: Vec::new(),
+        submitted_reaction_commands: Vec::new(),
+        submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: vec![SubmittedReplyCommand {
+            room_id: "!ops:example.org".to_owned(),
+            target_event_id: "$target:example.org".to_owned(),
+            body: "thread follow-up".to_owned(),
+            thread: Some(SubmittedReplyThreadTarget {
+                thread_root_event_id: "$root:example.org".to_owned(),
+                latest_event_id: "$latest:example.org".to_owned(),
+            }),
+        }],
+        submitted_redaction_commands: Vec::new(),
+        submitted_verification_actions: Vec::new(),
+        last_error: None,
+        selected_room: None,
+    };
+
+    assert_eq!(
+        serde_json::to_value(&model).expect("serialize model with threaded reply commands"),
+        serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": null,
+            "e2ee_status": null,
+            "last_verification": null,
+            "submitted_reply_commands": [
+                {
+                    "room_id": "!ops:example.org",
+                    "target_event_id": "$target:example.org",
+                    "body": "thread follow-up",
+                    "thread": {
+                        "thread_root_event_id": "$root:example.org",
+                        "latest_event_id": "$latest:example.org"
+                    }
+                }
+            ],
+            "last_error": null,
+            "selected_room": null
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<Model>(serde_json::json!({
+            "status": "synced",
+            "lifecycle_state": "ready",
+            "rooms": [],
+            "last_activity": null,
+            "e2ee_status": null,
+            "last_verification": null,
+            "submitted_reply_commands": [
+                {
+                    "room_id": "!ops:example.org",
+                    "target_event_id": "$target:example.org",
+                    "body": "thread follow-up",
+                    "thread": {
+                        "thread_root_event_id": "$root:example.org",
+                        "latest_event_id": "$latest:example.org"
+                    }
+                }
+            ],
+            "last_error": null,
+            "selected_room": null
+        }))
+        .expect("deserialize model with threaded reply commands"),
+        model
+    );
+}
+
+#[test]
 fn model_submitted_redaction_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
@@ -3151,6 +3307,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
         submitted_edit_commands: Vec::new(),
+        submitted_reply_commands: Vec::new(),
         submitted_redaction_commands: vec![SubmittedRedactionCommand {
             room_id: "!ops:example.org".to_owned(),
             event_id: "$reaction:example.org".to_owned(),
@@ -3202,7 +3359,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
 }
 
 #[test]
-fn model_full_payload_round_trips_submitted_reaction_and_redaction_command_fields() {
+fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command_fields() {
     let input_json = serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
@@ -3213,6 +3370,17 @@ fn model_full_payload_round_trips_submitted_reaction_and_redaction_command_field
         "submitted_membership_commands": [],
         "submitted_direct_room_commands": [],
         "submitted_room_topic_commands": [],
+        "submitted_reply_commands": [
+            {
+                "room_id": "!ops:example.org",
+                "target_event_id": "$target:example.org",
+                "body": "thread follow-up",
+                "thread": {
+                    "thread_root_event_id": "$root:example.org",
+                    "latest_event_id": "$latest:example.org"
+                }
+            }
+        ],
         "submitted_reaction_commands": [
             {
                 "room_id": "!ops:example.org",
@@ -3232,7 +3400,7 @@ fn model_full_payload_round_trips_submitted_reaction_and_redaction_command_field
     });
 
     let model = serde_json::from_value::<Model>(input_json)
-        .expect("deserialize full model payload with reaction and redaction command fields");
+        .expect("deserialize full model payload with reply, reaction, and redaction command fields");
     assert_eq!(
         model,
         Model {
@@ -3251,6 +3419,15 @@ fn model_full_payload_round_trips_submitted_reaction_and_redaction_command_field
                 key: "+1".to_owned(),
             }],
             submitted_edit_commands: Vec::new(),
+            submitted_reply_commands: vec![SubmittedReplyCommand {
+                room_id: "!ops:example.org".to_owned(),
+                target_event_id: "$target:example.org".to_owned(),
+                body: "thread follow-up".to_owned(),
+                thread: Some(SubmittedReplyThreadTarget {
+                    thread_root_event_id: "$root:example.org".to_owned(),
+                    latest_event_id: "$latest:example.org".to_owned(),
+                }),
+            }],
             submitted_redaction_commands: vec![SubmittedRedactionCommand {
                 room_id: "!ops:example.org".to_owned(),
                 event_id: "$reaction:example.org".to_owned(),
@@ -3269,6 +3446,17 @@ fn model_full_payload_round_trips_submitted_reaction_and_redaction_command_field
             "last_activity": null,
             "e2ee_status": null,
             "last_verification": null,
+            "submitted_reply_commands": [
+                {
+                    "room_id": "!ops:example.org",
+                    "target_event_id": "$target:example.org",
+                    "body": "thread follow-up",
+                    "thread": {
+                        "thread_root_event_id": "$root:example.org",
+                        "latest_event_id": "$latest:example.org"
+                    }
+                }
+            ],
             "submitted_reaction_commands": [
                 {
                     "room_id": "!ops:example.org",
@@ -3302,6 +3490,70 @@ fn model_submitted_membership_commands_reject_unknown_nested_fields() {
                 "action": "join",
                 "target": "#ops:example.org",
                 "unexpected": true
+            }
+        ],
+        "submitted_reaction_commands": [],
+        "submitted_redaction_commands": [],
+        "last_error": null,
+        "selected_room": null
+    }))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `unexpected`"));
+}
+
+#[test]
+fn model_submitted_reply_commands_reject_unknown_nested_fields() {
+    let error = serde_json::from_value::<Model>(serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "submitted_membership_commands": [],
+        "submitted_direct_room_commands": [],
+        "submitted_room_topic_commands": [],
+        "submitted_reply_commands": [
+            {
+                "room_id": "!ops:example.org",
+                "target_event_id": "$target:example.org",
+                "body": "follow-up",
+                "unexpected": true
+            }
+        ],
+        "submitted_reaction_commands": [],
+        "submitted_redaction_commands": [],
+        "last_error": null,
+        "selected_room": null
+    }))
+    .unwrap_err();
+
+    assert!(error.to_string().contains("unknown field `unexpected`"));
+}
+
+#[test]
+fn model_submitted_reply_command_threads_reject_unknown_nested_fields() {
+    let error = serde_json::from_value::<Model>(serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "submitted_membership_commands": [],
+        "submitted_direct_room_commands": [],
+        "submitted_room_topic_commands": [],
+        "submitted_reply_commands": [
+            {
+                "room_id": "!ops:example.org",
+                "target_event_id": "$target:example.org",
+                "body": "thread follow-up",
+                "thread": {
+                    "thread_root_event_id": "$root:example.org",
+                    "latest_event_id": "$latest:example.org",
+                    "unexpected": true
+                }
             }
         ],
         "submitted_reaction_commands": [],
