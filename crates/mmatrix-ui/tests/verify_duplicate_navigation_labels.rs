@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{Event, RoomReadState, RoomSummary, SpaceChildSummary};
+use mmatrix_core::{Event, RoomMembership, RoomReadState, RoomSummary, SpaceChildSummary};
 use mmatrix_testkit::{LaunchOptions, MmatrixApp, NavigationPathSegment};
 
 fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
@@ -50,6 +50,7 @@ fn space(room_id: &str, display_name: &str, children: Vec<&str>) -> RoomSummary 
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
+        membership: RoomMembership::Join,
         encrypted: false,
         is_space: true,
         is_direct: false,
@@ -70,6 +71,7 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
+        membership: RoomMembership::Join,
         encrypted: false,
         is_space: false,
         is_direct: false,

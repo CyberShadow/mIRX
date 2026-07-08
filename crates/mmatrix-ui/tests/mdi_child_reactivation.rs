@@ -10,7 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mmatrix_core::{
     Event, RoomActivity, RoomActivityKind, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomSummary,
+    RoomMembership, RoomMessageSendState, RoomSummary,
 };
 use mmatrix_testkit::{LaunchOptions, MmatrixApp, ViewIdentity};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
@@ -80,6 +80,7 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
+        membership: RoomMembership::Join,
         encrypted,
         is_space: false,
         is_direct: false,
