@@ -157,9 +157,9 @@ mod cli {
                     );
                 }
                 "--expect-room-membership" => {
-                    let value = args.next().ok_or_else(|| {
-                        "missing value for --expect-room-membership".to_owned()
-                    })?;
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-room-membership".to_owned())?;
                     config
                         .expect_room_memberships
                         .push(parse_room_membership_expectation(&value)?);
@@ -1383,9 +1383,10 @@ fn assert_room_membership(
     room_id: &str,
     expected_membership: mmatrix_core::RoomMembership,
 ) -> Result<(), String> {
-    let room = rooms.iter().find(|room| room.room_id == room_id).ok_or_else(|| {
-        format!("room membership assertion failed: missing room {room_id}")
-    })?;
+    let room = rooms
+        .iter()
+        .find(|room| room.room_id == room_id)
+        .ok_or_else(|| format!("room membership assertion failed: missing room {room_id}"))?;
     if room.membership != expected_membership {
         return Err(format!(
             "room membership assertion failed: room {room_id} expected {}, found {}",
@@ -1640,7 +1641,11 @@ mod windows_main {
         }
 
         for expectation in &config.expect_room_memberships {
-            crate::assert_room_membership(&model.rooms, &expectation.room_id, expectation.membership.clone())?;
+            crate::assert_room_membership(
+                &model.rooms,
+                &expectation.room_id,
+                expectation.membership.clone(),
+            )?;
             println!(
                 "PASS room membership {} {}",
                 expectation.room_id,
