@@ -25,16 +25,17 @@ use mmatrix_core::{
 use mmatrix_testkit::{
     ComposeKey, FrameSize, LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp,
     NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
-    RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
-    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedVerificationAction,
+    SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -1121,6 +1122,36 @@ fn image_entry_with_event_id(
     }
 }
 
+fn file_entry_with_event_id(
+    room_id: &str,
+    timestamp_ms: u64,
+    activity: RoomFileActivity,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{}", activity.event_id),
+        timestamp_ms,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::File(Box::new(activity)),
+    }
+}
+
+fn audio_entry_with_event_id(
+    room_id: &str,
+    timestamp_ms: u64,
+    activity: RoomAudioActivity,
+) -> RoomActivity {
+    RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("event:{}", activity.event_id),
+        timestamp_ms,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::Audio(Box::new(activity)),
+    }
+}
+
 fn redacted_entry(
     room_id: &str,
     activity_id: &str,
@@ -1207,6 +1238,39 @@ fn encrypted_fixture_image_activity(media_state: Option<RoomImageMediaState>) ->
         )),
         media_state,
     )
+}
+
+fn fixture_file_activity() -> RoomFileActivity {
+    RoomFileActivity {
+        event_id: "$file1:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        body: "Quarterly report".to_owned(),
+        filename: Some("report.pdf".to_owned()),
+        source: RoomMediaSource::Plain {
+            url: "mxc://example.org/report".to_owned(),
+        },
+        info: Some(RoomFileInfo {
+            mimetype: Some("application/pdf".to_owned()),
+            size: Some(45_678),
+        }),
+    }
+}
+
+fn fixture_audio_activity() -> RoomAudioActivity {
+    RoomAudioActivity {
+        event_id: "$audio1:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        body: "voice-note.ogg".to_owned(),
+        filename: Some("voice-note.ogg".to_owned()),
+        source: RoomMediaSource::Plain {
+            url: "mxc://example.org/audio".to_owned(),
+        },
+        info: Some(RoomAudioInfo {
+            mimetype: Some("audio/ogg".to_owned()),
+            size: Some(23_456),
+            duration_ms: Some(12_000),
+        }),
+    }
 }
 
 fn room_identity(room_id: &str) -> ViewIdentity {
@@ -4025,7 +4089,7 @@ fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
         "redaction-image-body.png",
         "redaction-image-file.png",
         "mxc://example.org/redaction-image-source",
-        "m.audio",
+        "com.example.custom",
         "redaction unsupported payload should disappear",
         "redaction thread root payload should disappear",
         "redaction thread reply payload should disappear",
@@ -5551,6 +5615,177 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
 }
 
 #[test]
+fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("file-message.json");
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(
+        initial_state.mdi.active,
+        room_identity("!media:example.org")
+    );
+    assert_active_switchbar_item(&initial_state, &room_identity("!media:example.org"));
+    let initial_model = app.dump_model()?;
+    assert_eq!(
+        initial_model.selected_room.as_deref(),
+        Some("!media:example.org")
+    );
+    assert_eq!(
+        initial_model.last_activity,
+        Some(RoomMessageActivityLine {
+            room_id: "!media:example.org".to_owned(),
+            activity_id: "event:$file1:example.org".to_owned(),
+            timestamp_ms: 1_710_000_000_000,
+            event_id: Some("$file1:example.org".to_owned()),
+            transaction_id: None,
+            sender: "@alice:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "[file] report.pdf".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        })
+    );
+    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), false);
+    let media_activity = app.room_activity(Some("!media:example.org"))?;
+    assert_eq!(
+        media_activity,
+        vec![file_entry_with_event_id(
+            "!media:example.org",
+            1_710_000_000_000,
+            fixture_file_activity(),
+        )]
+    );
+    let RoomActivityKind::File(activity) = &media_activity[0].kind else {
+        panic!("expected typed file activity");
+    };
+    assert_eq!(activity.event_id, "$file1:example.org");
+    assert_eq!(activity.sender, "@alice:example.org");
+    assert_eq!(activity.body, "Quarterly report");
+    assert_eq!(activity.filename.as_deref(), Some("report.pdf"));
+    assert_eq!(
+        activity.source,
+        RoomMediaSource::Plain {
+            url: "mxc://example.org/report".to_owned(),
+        }
+    );
+    assert_eq!(
+        activity.info,
+        Some(RoomFileInfo {
+            mimetype: Some("application/pdf".to_owned()),
+            size: Some(45_678),
+        })
+    );
+    assert!(
+        media_activity
+            .iter()
+            .all(|entry| !entry.contains("unsupported"))
+    );
+
+    let media_view = find_view(&initial_state, &room_identity("!media:example.org"));
+    assert!(view_contains(
+        media_view,
+        "* [16:00] @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)",
+    ));
+    assert!(!view_contains(media_view, "unsupported"));
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("audio-message.json");
+
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(
+        initial_state.mdi.active,
+        room_identity("!media:example.org")
+    );
+    assert_active_switchbar_item(&initial_state, &room_identity("!media:example.org"));
+    let initial_model = app.dump_model()?;
+    assert_eq!(
+        initial_model.selected_room.as_deref(),
+        Some("!media:example.org")
+    );
+    assert_eq!(
+        initial_model.last_activity,
+        Some(RoomMessageActivityLine {
+            room_id: "!media:example.org".to_owned(),
+            activity_id: "event:$audio1:example.org".to_owned(),
+            timestamp_ms: 1_710_000_060_000,
+            event_id: Some("$audio1:example.org".to_owned()),
+            transaction_id: None,
+            sender: "@alice:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "[audio] voice-note.ogg".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        })
+    );
+    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), false);
+    let media_activity = app.room_activity(Some("!media:example.org"))?;
+    assert_eq!(
+        media_activity,
+        vec![audio_entry_with_event_id(
+            "!media:example.org",
+            1_710_000_060_000,
+            fixture_audio_activity(),
+        )]
+    );
+    let RoomActivityKind::Audio(activity) = &media_activity[0].kind else {
+        panic!("expected typed audio activity");
+    };
+    assert_eq!(activity.event_id, "$audio1:example.org");
+    assert_eq!(activity.sender, "@alice:example.org");
+    assert_eq!(activity.body, "voice-note.ogg");
+    assert_eq!(activity.filename.as_deref(), Some("voice-note.ogg"));
+    assert_eq!(
+        activity.source,
+        RoomMediaSource::Plain {
+            url: "mxc://example.org/audio".to_owned(),
+        }
+    );
+    assert_eq!(
+        activity.info,
+        Some(RoomAudioInfo {
+            mimetype: Some("audio/ogg".to_owned()),
+            size: Some(23_456),
+            duration_ms: Some(12_000),
+        })
+    );
+    assert!(
+        media_activity
+            .iter()
+            .all(|entry| !entry.contains("unsupported"))
+    );
+
+    let media_view = find_view(&initial_state, &room_identity("!media:example.org"));
+    assert!(view_contains(
+        media_view,
+        "* [16:01] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)",
+    ));
+    assert!(!view_contains(media_view, "unsupported"));
+
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
@@ -5780,13 +6015,13 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
         initial_model.last_activity,
         Some(RoomMessageActivityLine {
             room_id: "!media:example.org".to_owned(),
-            activity_id: "event:$audio1:example.org".to_owned(),
+            activity_id: "event:$unsupported1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
-            event_id: Some("$audio1:example.org".to_owned()),
+            event_id: Some("$unsupported1:example.org".to_owned()),
             transaction_id: None,
             sender: "@alice:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
-            body: "[unsupported m.audio] voice-note.ogg".to_owned(),
+            body: "[unsupported com.example.custom] custom payload".to_owned(),
             send_state: RoomMessageSendState::Sent,
         })
     );
@@ -5797,11 +6032,11 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
         media_activity,
         vec![unsupported_entry_with_event_id(
             "!media:example.org",
-            "$audio1:example.org",
+            "$unsupported1:example.org",
             "@alice:example.org",
             1_710_000_000_000,
-            "m.audio",
-            "voice-note.ogg",
+            "com.example.custom",
+            "custom payload",
         )]
     );
     assert!(
@@ -5811,7 +6046,7 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
     );
     assert!(view_contains(
         find_view(&initial_state, &room_identity("!media:example.org")),
-        "* [16:00] @alice:example.org sent unsupported m.audio: voice-note.ogg",
+        "* [16:00] @alice:example.org sent unsupported com.example.custom: custom payload",
     ));
     assert!(!view_contains(
         find_view(&initial_state, &room_identity("!media:example.org")),
@@ -6680,7 +6915,12 @@ fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
         invite_view,
         "Use /accept or /reject to respond."
     ));
-    assert!(state.status_bar.text.contains("invited: Lobby (!invite:example)"));
+    assert!(
+        state
+            .status_bar
+            .text
+            .contains("invited: Lobby (!invite:example)")
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -6724,7 +6964,10 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
     let invite_room = find_ui_room(&state, "!invite-direct:example");
     assert_eq!(invite_room.membership, RoomMembership::Invite);
     assert!(invite_room.is_direct);
-    assert_eq!(invite_room.direct_user_ids, vec!["@daria:example".to_owned()]);
+    assert_eq!(
+        invite_room.direct_user_ids,
+        vec!["@daria:example".to_owned()]
+    );
     assert_eq!(
         find_switchbar_item(&state, &room_identity("!invite-direct:example")).title,
         "Daria [invite] [query: @daria:example]"

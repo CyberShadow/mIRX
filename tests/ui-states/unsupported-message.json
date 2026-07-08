@@ -29,14 +29,14 @@
   {
     "RoomActivity": {
       "room_id": "!media:example.org",
-      "activity_id": "event:$audio1:example.org",
+      "activity_id": "event:$unsupported1:example.org",
       "timestamp_ms": 1710000000000,
       "kind": {
         "type": "unsupported_message",
-        "event_id": "$audio1:example.org",
+        "event_id": "$unsupported1:example.org",
         "sender": "@alice:example.org",
-        "msgtype": "m.audio",
-        "body": "voice-note.ogg"
+        "msgtype": "com.example.custom",
+        "body": "custom payload"
       },
       "relation": null
     }

@@ -1062,8 +1062,14 @@ configure_case_expectations() {
         --expect-room-activity '!dense:example::dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-activity '!dense:example::Dense Member Alpha Beta Gamma Delta'
         --expect-room-activity '!dense:example::@dense-leaver:example'
+        --expect-room-activity '!dense:example::"type":"audio"'
+        --expect-room-activity '!dense:example::voice-note.ogg'
+        --expect-room-activity '!dense:example::audio/ogg'
+        --expect-room-activity '!dense:example::23456'
+        --expect-room-activity '!dense:example::12000'
         --expect-room-activity '!dense:example::unsupported_message'
-        --expect-room-activity '!dense:example::dense-audio-alpha-beta-gamma-delta-epsilon-zeta.ogg'
+        --expect-room-activity '!dense:example::com.example.custom'
+        --expect-room-activity '!dense:example::dense custom payload alpha beta gamma delta epsilon zeta'
         --expect-room-activity '!dense:example::dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-activity '!dense:example::dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-activity '!dense:example::"state":"failed"'
@@ -1081,7 +1087,8 @@ configure_case_expectations() {
         --expect-room-view '!dense:example::* [22:16] @alice:example set topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view '!dense:example::* [22:17] Dense Member Alpha Beta Gamma Delta joined'
         --expect-room-view '!dense:example::* [22:17] @dense-leaver:example left'
-        --expect-room-view '!dense:example::* [22:18] @alice:example sent unsupported m.audio: dense-audio-alpha-beta-gamma-delta-epsilon-zeta.ogg'
+        --expect-room-view '!dense:example::* [22:18] @alice:example sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
+        --expect-room-view '!dense:example::* [22:18] @alice:example sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
         --expect-room-view '!dense:example::[22:19] @alice:example: dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
         --expect-room-view '!dense:example::[22:20] @alice:example: dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
         --expect-room-view '!dense:example::* [22:21] @alice:example sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
@@ -1333,12 +1340,12 @@ configure_case_expectations() {
       )
       room_activity_expect_args=(
         --expect-room-activity '!media:example.org::unsupported_message'
-        --expect-room-activity '!media:example.org::m.audio'
-        --expect-room-activity '!media:example.org::voice-note.ogg'
+        --expect-room-activity '!media:example.org::com.example.custom'
+        --expect-room-activity '!media:example.org::custom payload'
       )
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
-        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent unsupported m.audio: voice-note.ogg'
+        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent unsupported com.example.custom: custom payload'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !media:example.org'
@@ -1359,6 +1366,81 @@ configure_case_expectations() {
       view_forbid_args=(
         --expect-no-view 'room:!media:example.org::loading image...'
         --expect-no-view 'room:!media:example.org::image unavailable'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'custom payload'
+      )
+      ;;
+    file-message)
+      expect_selected='!media:example.org'
+      expect_active_view='room:!media:example.org'
+      room_expect_args=(
+        --expect-room '!media:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!media:example.org::"type":"file"'
+        --expect-room-activity '!media:example.org::$file1:example.org'
+        --expect-room-activity '!media:example.org::report.pdf'
+        --expect-room-activity '!media:example.org::mxc://example.org/report'
+        --expect-room-activity '!media:example.org::application/pdf'
+        --expect-room-activity '!media:example.org::45678'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !media:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!media:example.org::Media'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!media:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!media:example.org'
+      view_forbid_args=(
+        --expect-no-view 'room:!media:example.org::unsupported'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'report.pdf'
+      )
+      ;;
+    audio-message)
+      expect_selected='!media:example.org'
+      expect_active_view='room:!media:example.org'
+      room_expect_args=(
+        --expect-room '!media:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!media:example.org::"type":"audio"'
+        --expect-room-activity '!media:example.org::$audio1:example.org'
+        --expect-room-activity '!media:example.org::voice-note.ogg'
+        --expect-room-activity '!media:example.org::mxc://example.org/audio'
+        --expect-room-activity '!media:example.org::audio/ogg'
+        --expect-room-activity '!media:example.org::23456'
+        --expect-room-activity '!media:example.org::12000'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* [16:01] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !media:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!media:example.org::Media'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!media:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!media:example.org'
+      view_forbid_args=(
+        --expect-no-view 'room:!media:example.org::unsupported'
       )
       navigation_forbid_args=(
         --expect-no-navigation-text 'voice-note.ogg'

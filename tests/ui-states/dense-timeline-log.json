@@ -131,14 +131,38 @@
   {
     "RoomActivity": {
       "room_id": "!dense:example",
-      "activity_id": "event:$dense-unsupported-1",
+      "activity_id": "event:$dense-audio-1",
       "timestamp_ms": 1700000300000,
+      "kind": {
+        "type": "audio",
+        "event_id": "$dense-audio-1",
+        "sender": "@alice:example",
+        "body": "voice-note.ogg",
+        "filename": "voice-note.ogg",
+        "source": {
+          "type": "plain",
+          "url": "mxc://example.org/audio"
+        },
+        "info": {
+          "mimetype": "audio/ogg",
+          "size": 23456,
+          "duration_ms": 12000
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!dense:example",
+      "activity_id": "event:$dense-unsupported-1",
+      "timestamp_ms": 1700000330000,
       "kind": {
         "type": "unsupported_message",
         "event_id": "$dense-unsupported-1",
         "sender": "@alice:example",
-        "msgtype": "m.audio",
-        "body": "dense-audio-alpha-beta-gamma-delta-epsilon-zeta.ogg"
+        "msgtype": "com.example.custom",
+        "body": "dense custom payload alpha beta gamma delta epsilon zeta"
       },
       "relation": null
     }

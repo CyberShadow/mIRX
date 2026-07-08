@@ -88,7 +88,7 @@
         "type": "unsupported_message",
         "event_id": "$redact-unsupported",
         "sender": "@dave:example",
-        "msgtype": "m.audio",
+        "msgtype": "com.example.custom",
         "body": "redaction unsupported payload should disappear"
       },
       "relation": null
