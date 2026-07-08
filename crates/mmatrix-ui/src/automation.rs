@@ -4,16 +4,17 @@ use std::fmt;
 
 use mmatrix_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    RoomActivityRelation, RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationState,
+    VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 16;
+pub(crate) const PROTOCOL_VERSION: u32 = 17;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -506,6 +507,7 @@ pub(crate) struct UiState {
 pub(crate) struct UiRoomState {
     pub(crate) room_id: String,
     pub(crate) display_name: String,
+    pub(crate) membership: RoomMembership,
     pub(crate) encrypted: bool,
     pub(crate) is_space: bool,
     pub(crate) is_direct: bool,
@@ -827,6 +829,8 @@ pub(crate) struct DumpSubmittedRedactionCommand {
 pub(crate) enum DumpMembershipCommandAction {
     Join,
     Leave,
+    AcceptInvite,
+    RejectInvite,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -866,6 +870,7 @@ pub(crate) struct DumpRoomTag {
 pub(crate) struct DumpRoom {
     pub(crate) room_id: String,
     pub(crate) display_name: String,
+    pub(crate) membership: RoomMembership,
     pub(crate) encrypted: bool,
     pub(crate) is_space: bool,
     pub(crate) is_direct: bool,
@@ -1102,6 +1107,7 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
     DumpRoom {
         room_id: room.room_id.clone(),
         display_name: room.display_name.clone(),
+        membership: room.membership.clone(),
         encrypted: room.encrypted,
         is_space: room.is_space,
         is_direct: room.is_direct,
@@ -1597,10 +1603,11 @@ mod tests {
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
-        RoomImageInfo, RoomMediaSource, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMembership, RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary,
-        RoomTagSummary, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomImageInfo, RoomMediaSource, RoomMembership, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+        RoomSummary, RoomTagSummary, SpaceChildSummary, StoredSession,
+        UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use serde_json::{Value, json};
 
@@ -1705,8 +1712,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_16() {
-        assert_eq!(PROTOCOL_VERSION, 16);
+    fn protocol_version_is_17() {
+        assert_eq!(PROTOCOL_VERSION, 17);
     }
 
     #[test]
@@ -2929,7 +2936,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":16,
+                    "protocol_version":17,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -2965,6 +2972,7 @@ mod tests {
                     rooms: vec![super::DumpRoom {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
+                        membership: RoomMembership::Join,
                         encrypted: true,
                         is_space: false,
                         is_direct: true,
@@ -2997,7 +3005,7 @@ mod tests {
                 "json":{
                     "status":"ready",
                     "lifecycle_state":"ready",
-                    "rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}],
+                    "rooms":[{"room_id":"!room:example","display_name":"Room","membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}],
                     "last_activity":null,
                     "e2ee_status":{
                         "recovery":"incomplete",
@@ -3203,6 +3211,7 @@ mod tests {
                     rooms: vec![super::DumpRoom {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
+                        membership: RoomMembership::Join,
                         encrypted: true,
                         is_space: false,
                         is_direct: true,
@@ -3219,7 +3228,7 @@ mod tests {
             json!({
                 "id":"rooms",
                 "ok":true,
-                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}]}
+                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}]}
             })
         );
         assert_eq!(
@@ -3387,6 +3396,7 @@ mod tests {
                     rooms: vec![UiRoomState {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
+                        membership: RoomMembership::Join,
                         encrypted: true,
                         is_space: false,
                         is_direct: true,
@@ -3483,6 +3493,7 @@ mod tests {
                         {
                             "room_id":"!room:example",
                             "display_name":"Room",
+                            "membership":"join",
                             "encrypted":true,
                             "is_space":false,
                             "is_direct":true,
@@ -4042,6 +4053,7 @@ mod tests {
             super::DumpRoom {
                 room_id: "!room:example".to_owned(),
                 display_name: "Room".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: true,
                 is_direct: true,

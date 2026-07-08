@@ -14,8 +14,7 @@ use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomMemberSummary, RoomMembers,
-    RoomMembership,
+    RoomActivityUpdateTarget, RoomMemberSummary, RoomMembers, RoomMembership,
     RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
@@ -267,11 +266,30 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
     }
 }
 
+fn invited_room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
+    RoomSummary {
+        membership: RoomMembership::Invite,
+        ..room_summary(room_id, display_name, encrypted)
+    }
+}
+
 fn listed_room(room_id: &str, display_name: &str, encrypted: bool) -> Room {
     listed_room_with_metadata(
         room_id,
         display_name,
         encrypted,
+        false,
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn listed_invited_room(room_id: &str, display_name: &str, encrypted: bool) -> Room {
+    listed_room_with_membership(
+        room_id,
+        display_name,
+        encrypted,
+        RoomMembership::Invite,
         false,
         Vec::new(),
         Vec::new(),
@@ -286,9 +304,30 @@ fn listed_room_with_metadata(
     direct_user_ids: Vec<&str>,
     tags: Vec<RoomTag>,
 ) -> Room {
+    listed_room_with_membership(
+        room_id,
+        display_name,
+        encrypted,
+        RoomMembership::Join,
+        is_direct,
+        direct_user_ids,
+        tags,
+    )
+}
+
+fn listed_room_with_membership(
+    room_id: &str,
+    display_name: &str,
+    encrypted: bool,
+    membership: RoomMembership,
+    is_direct: bool,
+    direct_user_ids: Vec<&str>,
+    tags: Vec<RoomTag>,
+) -> Room {
     Room {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
+        membership,
         encrypted,
         is_space: false,
         is_direct,
@@ -302,6 +341,7 @@ fn listed_space(room_id: &str, display_name: &str, children: Vec<SpaceChild>) ->
     Room {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
+        membership: RoomMembership::Join,
         encrypted: false,
         is_space: true,
         is_direct: false,
@@ -342,6 +382,40 @@ fn base_events() -> Vec<Event> {
             "@bob:example",
             1_700_000_120_000,
             "beta second",
+        ),
+    ]
+}
+
+fn invite_events() -> Vec<Event> {
+    vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", false),
+            invited_room_summary("!invite:example", "Lobby", false),
+        ]),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta latest",
+        ),
+    ]
+}
+
+fn invite_target_events() -> Vec<Event> {
+    vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", false),
+            invited_room_summary("!invite-target:example", "Lobby", false),
+            invited_room_summary("!shared-one:example", "Shared", false),
+            invited_room_summary("!shared-two:example", "Shared", false),
+        ]),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta latest",
         ),
     ]
 }
@@ -1743,7 +1817,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 16);
+    assert_eq!(version.protocol_version, 17);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3157,6 +3231,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         &UiRoomState {
             room_id: "!direct:example".to_owned(),
             display_name: "Direct".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: true,
             is_space: false,
             is_direct: true,
@@ -5225,6 +5300,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         &UiRoomState {
             room_id: "!beta:example".to_owned(),
             display_name: "Beta".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: false,
             is_direct: false,
@@ -5248,6 +5324,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         &UiRoomState {
             room_id: "!alpha:example".to_owned(),
             display_name: "Alpha".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: false,
             is_direct: true,
@@ -5289,6 +5366,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         &UiRoomState {
             room_id: "!alpha:example".to_owned(),
             display_name: "Alpha".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: false,
             is_direct: true,
@@ -6335,6 +6413,520 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
             .iter()
             .map(|view| view.identity.clone())
             .collect::<Vec<_>>()
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let listed_rooms = app.list_rooms()?;
+    assert!(listed_rooms.contains(&listed_room("!beta:example", "Beta", false)));
+    assert!(listed_rooms.contains(&listed_invited_room("!invite:example", "Lobby", false)));
+
+    let initial_model = app.dump_model()?;
+    assert!(initial_model.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Invite
+    }));
+
+    let initial_state = app.dump_ui_state()?;
+    assert_eq!(initial_state.mdi.active, room_identity("!beta:example"));
+    assert!(navigation_contains(&initial_state.navigation, "rooms: 1"));
+    assert!(navigation_contains(&initial_state.navigation, "invites: 1"));
+    assert!(navigation_contains(
+        &initial_state.navigation,
+        "Lobby [invite]"
+    ));
+    assert_eq!(
+        find_ui_room(&initial_state, "!invite:example").membership,
+        RoomMembership::Invite
+    );
+    assert_eq!(
+        find_switchbar_item(&initial_state, &room_identity("!invite:example")).title,
+        "Lobby [invite]"
+    );
+
+    app.select_navigation_path(&nav_path(&["mmatrix", "invites: 1", "Lobby [invite]"]))?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let invite_model = app.dump_model()?;
+    assert_eq!(
+        invite_model.selected_room.as_deref(),
+        Some("!invite:example")
+    );
+
+    let invite_state = app.dump_ui_state()?;
+    assert_eq!(invite_state.mdi.active, room_identity("!invite:example"));
+    assert_active_switchbar_item(&invite_state, &room_identity("!invite:example"));
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "invites: 1", "Lobby [invite]"])
+    );
+    assert_eq!(
+        find_switchbar_item(&invite_state, &room_identity("!invite:example")).title,
+        "Lobby [invite]"
+    );
+    let invite_view = find_view(&invite_state, &room_identity("!invite:example"));
+    assert_eq!(invite_view.title, "Lobby [invite]");
+    assert!(view_contains(invite_view, "Invitation to Lobby"));
+    assert!(view_contains(
+        invite_view,
+        "Use /accept or /reject to respond."
+    ));
+    assert!(invite_view.members.is_empty());
+    assert!(
+        invite_state
+            .status_bar
+            .text
+            .contains("invited: Lobby (!invite:example)")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_invited_room_is_navigable_but_not_sendable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+
+    let before = app.dump_model()?;
+    assert_eq!(before.selected_room.as_deref(), Some("!invite:example"));
+    assert!(app.room_activity(Some("!invite:example"))?.is_empty());
+
+    app.set_compose_text("hello invite")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "hello invite");
+
+    let after_text = app.dump_model()?;
+    assert_eq!(after_text.status, before.status);
+    assert_eq!(after_text.last_error, None);
+    assert!(after_text.submitted_membership_commands.is_empty());
+    assert!(after_text.submitted_room_topic_commands.is_empty());
+    assert!(after_text.submitted_reaction_commands.is_empty());
+    assert!(after_text.submitted_reply_commands.is_empty());
+    assert!(app.room_activity(Some("!invite:example"))?.is_empty());
+    assert!(
+        app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("invited: Lobby (!invite:example)")
+    );
+
+    app.set_compose_text("/topic incident review")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let after_topic = app.dump_model()?;
+    assert_eq!(after_topic.status, "room is not joined: !invite:example");
+    assert!(after_topic.submitted_room_topic_commands.is_empty());
+
+    app.set_compose_text("/reply $invite-root hello there")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let after_reply = app.dump_model()?;
+    assert_eq!(after_reply.status, "room is not joined: !invite:example");
+    assert!(after_reply.submitted_reply_commands.is_empty());
+
+    app.set_compose_text("/react $invite-root +1")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let after_react = app.dump_model()?;
+    assert_eq!(after_react.status, "room is not joined: !invite:example");
+    assert!(after_react.submitted_reaction_commands.is_empty());
+
+    app.set_compose_text("/part")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let after_part = app.dump_model()?;
+    assert_eq!(after_part.status, "room is not joined: !invite:example");
+    assert!(after_part.submitted_membership_commands.is_empty());
+    assert_eq!(after_part.last_error, None);
+    assert!(
+        app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("invited: Lobby (!invite:example)")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_accept_keeps_invite_until_synced_rooms_join()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+
+    app.set_compose_text("/accept")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let accepted = app.dump_model()?;
+    assert_eq!(accepted.status, "accept submitted: !invite:example");
+    assert_eq!(
+        accepted.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::AcceptInvite,
+            target: "!invite:example".to_owned(),
+        }]
+    );
+    assert!(accepted.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Invite
+    }));
+    assert!(
+        app.dump_ui_state()?
+            .status_bar
+            .text
+            .contains("invited: Lobby (!invite:example)")
+    );
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(vec![
+        room_summary("!beta:example", "Beta", false),
+        room_summary("!invite:example", "Lobby", false),
+    ])])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let joined = app.dump_model()?;
+    assert!(joined.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Join
+    }));
+    let joined_state = app.dump_ui_state()?;
+    assert_eq!(joined_state.mdi.active, room_identity("!invite:example"));
+    assert_active_switchbar_item(&joined_state, &room_identity("!invite:example"));
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "rooms: 2", "Lobby"])
+    );
+    assert_eq!(
+        find_switchbar_item(&joined_state, &room_identity("!invite:example")).title,
+        "Lobby"
+    );
+    let joined_view = find_view(&joined_state, &room_identity("!invite:example"));
+    assert_eq!(joined_view.title, "Lobby");
+    assert!(!view_contains(
+        joined_view,
+        "Use /accept or /reject to respond."
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_reject_keeps_invite_until_synced_rooms_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+
+    app.set_compose_text("/reject")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let rejected = app.dump_model()?;
+    assert_eq!(rejected.status, "reject submitted: !invite:example");
+    assert_eq!(
+        rejected.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::RejectInvite,
+            target: "!invite:example".to_owned(),
+        }]
+    );
+    assert!(rejected.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Invite
+    }));
+    assert_eq!(rejected.selected_room.as_deref(), Some("!invite:example"));
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(vec![
+        room_summary("!beta:example", "Beta", false),
+    ])])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let replaced_model = app.dump_model()?;
+    assert_eq!(
+        replaced_model
+            .rooms
+            .iter()
+            .map(|room| room.room_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["!beta:example"]
+    );
+    let replaced_state = app.dump_ui_state()?;
+    assert_eq!(replaced_state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&replaced_state, &room_identity("!beta:example"));
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["mmatrix", "rooms: 1", "Beta"])
+    );
+    assert_navigation_not_contains(&replaced_state.navigation, "Lobby [invite]");
+    assert!(
+        replaced_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("!invite:example"))
+    );
+    assert!(
+        replaced_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!invite:example"))
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_target_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/accept !invite-target:example")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let accepted = app.dump_model()?;
+    assert_eq!(accepted.status, "accept submitted: !invite-target:example");
+    assert_eq!(
+        accepted.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::AcceptInvite,
+            target: "!invite-target:example".to_owned(),
+        }]
+    );
+
+    app.set_compose_text("/reject Lobby")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let rejected = app.dump_model()?;
+    assert_eq!(rejected.status, "reject submitted: !invite-target:example");
+    assert_eq!(
+        rejected.submitted_membership_commands,
+        vec![
+            SubmittedMembershipCommand {
+                action: MembershipCommandAction::AcceptInvite,
+                target: "!invite-target:example".to_owned(),
+            },
+            SubmittedMembershipCommand {
+                action: MembershipCommandAction::RejectInvite,
+                target: "!invite-target:example".to_owned(),
+            },
+        ]
+    );
+
+    app.set_compose_text("/accept Shared")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let ambiguous = app.dump_model()?;
+    assert_eq!(
+        ambiguous.status,
+        "accept failed: ambiguous invited room target: Shared"
+    );
+    assert_eq!(
+        ambiguous.submitted_membership_commands,
+        rejected.submitted_membership_commands
+    );
+
+    app.set_compose_text("/reject !beta:example")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let joined_target = app.dump_model()?;
+    assert_eq!(
+        joined_target.status,
+        "reject failed: room is not invited: !beta:example"
+    );
+    assert_eq!(
+        joined_target.submitted_membership_commands,
+        rejected.submitted_membership_commands
+    );
+
+    app.set_compose_text("/accept Missing")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let missing = app.dump_model()?;
+    assert_eq!(
+        missing.status,
+        "accept failed: invited room not found: Missing"
+    );
+    assert_eq!(
+        missing.submitted_membership_commands,
+        rejected.submitted_membership_commands
+    );
+
+    app.select_room("!beta:example")?;
+    app.set_compose_text("/reject")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let no_target = app.dump_model()?;
+    assert_eq!(no_target.status, "reject failed: no invited room selected");
+    assert_eq!(
+        no_target.submitted_membership_commands,
+        rejected.submitted_membership_commands
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_join_part_and_verify_regressions_keep_original_command_types()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", false),
+            room_summary("!alpha:example", "Alpha", false),
+        ]),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_120_000,
+            "beta latest",
+        ),
+        verification_state_event(
+            "flow-current",
+            "@alice:example",
+            CoreVerificationState::SasReady {
+                emojis: vec![CoreVerificationEmoji {
+                    symbol: "🐶".to_owned(),
+                    description: "dog".to_owned(),
+                }],
+                decimals: CoreVerificationDecimals {
+                    first: 1234,
+                    second: 5678,
+                    third: 9012,
+                },
+            },
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/join #ops:example.org")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("/part")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("/verify accept")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("/verify reject")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![
+            SubmittedMembershipCommand {
+                action: MembershipCommandAction::Join,
+                target: "#ops:example.org".to_owned(),
+            },
+            SubmittedMembershipCommand {
+                action: MembershipCommandAction::Leave,
+                target: "!beta:example".to_owned(),
+            },
+        ]
+    );
+    assert_eq!(
+        model.submitted_verification_actions,
+        vec![
+            SubmittedVerificationAction {
+                action: VerificationActionKind::Accept,
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            },
+            SubmittedVerificationAction {
+                action: VerificationActionKind::RejectSas,
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            },
+        ]
     );
 
     drop(app);

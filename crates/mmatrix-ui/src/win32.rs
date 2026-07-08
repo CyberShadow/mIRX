@@ -16,18 +16,19 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
-    E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RestoreSessionRequest,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    AcceptRoomInviteRequest, Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle,
+    CreateDirectRoomRequest, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
+    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageReplyTarget,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -1595,7 +1596,7 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
     let target_view_id = room_activity_target_view_id(&activity);
     if room_activity_marks_inactive_room(&activity)
         && state.active_view != target_view_id
-        && actionable_room_by_id(&state.model.rooms, &activity.room_id).is_some()
+        && sendable_room_by_id(&state.model.rooms, &activity.room_id).is_some()
     {
         state.room_activity.insert(target_view_id.clone());
         if !state.synthetic_load_in_progress
@@ -1627,7 +1628,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
         .then(|| failed_room_activity_update_view_id(state, &update));
     if let Some(target_view_id) = target_view_id
         && state.active_view != target_view_id
-        && actionable_room_by_id(&state.model.rooms, &update.room_id).is_some()
+        && sendable_room_by_id(&state.model.rooms, &update.room_id).is_some()
     {
         state.room_activity.insert(target_view_id);
     }
@@ -1807,7 +1808,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
 
 fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadState) {
     let room_id = read_state.room_id.clone();
-    if actionable_room_by_id(&state.model.rooms, &room_id).is_none() {
+    if sendable_room_by_id(&state.model.rooms, &room_id).is_none() {
         return;
     }
     state
@@ -2043,6 +2044,12 @@ enum LocalSlashCommand<'a> {
     },
     Query {
         user_id: String,
+    },
+    Accept {
+        target: Option<String>,
+    },
+    Reject {
+        target: Option<String>,
     },
     Part {
         target: Option<String>,
@@ -4795,21 +4802,19 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
                 .model
                 .selected_room
                 .as_deref()
-                .is_some_and(|room_id| actionable_room_by_id(&rooms, room_id).is_none())
+                .is_some_and(|room_id| navigable_room_by_id(&rooms, room_id).is_none())
             {
                 state.model.selected_room = None;
             }
             state.room_activity.retain(|view_id| {
-                view_id
-                    .room_id()
-                    .is_some_and(|room_id| actionable_room_by_id(&rooms, room_id).is_some())
+                view_id_is_valid_for_rooms(&rooms, &state.model.room_views, view_id)
             });
             let tracked_room_activity = state.room_activity.clone();
             state
                 .room_activity_read_targets
                 .retain(|view_id, _| tracked_room_activity.contains(view_id));
             for (room_id, room_view) in &mut state.model.room_views {
-                if actionable_room_by_id(&rooms, room_id).is_none() {
+                if sendable_room_by_id(&rooms, room_id).is_none() {
                     room_view.typing_user_ids.clear();
                     room_view.members.clear();
                 }
@@ -4817,7 +4822,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state
                 .model
                 .room_read_states
-                .retain(|room_id, _| actionable_room_by_id(&rooms, room_id).is_some());
+                .retain(|room_id, _| sendable_room_by_id(&rooms, room_id).is_some());
             state.model.rooms = rooms;
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
@@ -4882,8 +4887,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
 fn preserves_submission_status(status: &str, operation: Operation) -> bool {
     match operation {
         Operation::JoinRoom => status.starts_with("join submitted: "),
+        Operation::AcceptRoomInvite => status.starts_with("accept submitted: "),
         Operation::CreateDirectRoom => status.starts_with("query submitted: "),
         Operation::LeaveRoom => status.starts_with("part submitted: "),
+        Operation::RejectRoomInvite => status.starts_with("reject submitted: "),
         Operation::SetRoomTopic => status.starts_with("topic change submitted for "),
         _ => false,
     }
@@ -4898,6 +4905,9 @@ fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMes
 }
 
 fn append_room_label_markers(label: &mut String, room: &RoomSummary) {
+    if is_invited_room(room) {
+        label.push_str(" [invite]");
+    }
     if room.is_direct {
         if room.direct_user_ids.is_empty() {
             label.push_str(" [query]");
@@ -4944,6 +4954,19 @@ fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
     append_room_label_markers(&mut header, room);
     header.push_str(&format!(" ({})", room.room_id));
     TimelineRow::full_width(TimelineRowKind::Header, header)
+}
+
+fn build_invite_timeline_rows(room: &RoomSummary) -> Vec<TimelineRow> {
+    vec![
+        TimelineRow::full_width(
+            TimelineRowKind::Header,
+            format!("Invitation to {}", room.display_name),
+        ),
+        TimelineRow::full_width(
+            TimelineRowKind::Plain,
+            "Use /accept or /reject to respond.".to_owned(),
+        ),
+    ]
 }
 
 fn push_room_context_rows(
@@ -5123,6 +5146,9 @@ fn push_room_activity_row(
 
 fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
+    if is_invited_room(room) {
+        return build_invite_timeline_rows(room);
+    }
     let mut rows = Vec::new();
     let room_view = model.room_views.get(room_id);
     push_room_context_rows(&mut rows, room, room_view);
@@ -5272,8 +5298,15 @@ fn render_status_lines(model: &UiModel) -> Vec<String> {
     lines
 }
 
-fn frame_status_text(model: &UiModel) -> String {
-    let mut text = model.status.clone();
+fn frame_status_text(state: &WindowState) -> String {
+    let model = &state.model;
+    let mut text = match &state.active_view {
+        ViewId::Room(room_id) => room_by_id(&model.rooms, room_id)
+            .filter(|room| is_invited_room(room))
+            .map(|room| format!("invited: {} ({})", room.display_name, room.room_id))
+            .unwrap_or_else(|| model.status.clone()),
+        _ => model.status.clone(),
+    };
 
     if let Some(event) = &model.last_verification {
         text.push_str(" | verification: ");
@@ -5307,7 +5340,7 @@ unsafe fn refresh_status_bar(hwnd: HWND) -> Result<(), String> {
         return Err("status bar control was not created".to_owned());
     }
 
-    let text = wide_null(&frame_status_text(&state_ref(hwnd).model));
+    let text = wide_null(&frame_status_text(state_ref(hwnd)));
     if SendMessageW(status_bar, SB_SETTEXTW, 0, text.as_ptr() as LPARAM) == 0 {
         return Err("failed to update status bar text".to_owned());
     }
@@ -5326,7 +5359,7 @@ fn resolve_active_view(
 ) -> ViewId {
     match active_view {
         ViewId::Status => ViewId::Status,
-        ViewId::Room(room_id) if actionable_room_by_id(&model.rooms, room_id).is_some() => {
+        ViewId::Room(room_id) if navigable_room_by_id(&model.rooms, room_id).is_some() => {
             ViewId::Room(room_id.clone())
         }
         ViewId::Thread {
@@ -5338,17 +5371,15 @@ fn resolve_active_view(
                 thread_root_event_id: thread_root_event_id.clone(),
             }
         }
-        ViewId::Thread { room_id, .. }
-            if actionable_room_by_id(&model.rooms, room_id).is_some() =>
-        {
+        ViewId::Thread { room_id, .. } if navigable_room_by_id(&model.rooms, room_id).is_some() => {
             ViewId::Room(room_id.clone())
         }
         ViewId::Room(_) | ViewId::Thread { .. } => {
             if let Some(room_id) = selected_room
-                .filter(|room_id| actionable_room_by_id(&model.rooms, room_id).is_some())
+                .filter(|room_id| navigable_room_by_id(&model.rooms, room_id).is_some())
             {
                 ViewId::Room(room_id.to_owned())
-            } else if let Some(room) = model.rooms.iter().find(|room| is_actionable_room(room)) {
+            } else if let Some(room) = model.rooms.iter().find(|room| is_navigable_room(room)) {
                 ViewId::Room(room.room_id.clone())
             } else {
                 ViewId::Status
@@ -5388,16 +5419,56 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
     removed
 }
 
-fn is_actionable_room(room: &RoomSummary) -> bool {
-    !room.is_space
+fn is_joined_message_room(room: &RoomSummary) -> bool {
+    room.membership == RoomMembership::Join && !room.is_space
+}
+
+fn is_invited_room(room: &RoomSummary) -> bool {
+    room.membership == RoomMembership::Invite && !room.is_space
+}
+
+fn is_navigable_room(room: &RoomSummary) -> bool {
+    is_joined_message_room(room) || is_invited_room(room)
+}
+
+fn is_sendable_room(room: &RoomSummary) -> bool {
+    is_joined_message_room(room)
+}
+
+fn is_invite_command_target(room: &RoomSummary) -> bool {
+    is_invited_room(room)
 }
 
 fn room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
     rooms.iter().find(|room| room.room_id == room_id)
 }
 
-fn actionable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
-    room_by_id(rooms, room_id).filter(|room| is_actionable_room(room))
+fn navigable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
+    room_by_id(rooms, room_id).filter(|room| is_navigable_room(room))
+}
+
+fn sendable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
+    room_by_id(rooms, room_id).filter(|room| is_sendable_room(room))
+}
+
+fn view_id_is_valid_for_rooms(
+    rooms: &[RoomSummary],
+    room_views: &BTreeMap<String, RoomViewModel>,
+    view_id: &ViewId,
+) -> bool {
+    match view_id {
+        ViewId::Status => true,
+        ViewId::Room(room_id) => navigable_room_by_id(rooms, room_id).is_some(),
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => {
+            sendable_room_by_id(rooms, room_id).is_some()
+                && room_views
+                    .get(room_id)
+                    .is_some_and(|room_view| room_view.threads.contains_key(thread_root_event_id))
+        }
+    }
 }
 
 fn projected_thread_by_id<'a>(
@@ -5405,7 +5476,7 @@ fn projected_thread_by_id<'a>(
     room_id: &str,
     thread_root_event_id: &str,
 ) -> Option<&'a ThreadViewModel> {
-    actionable_room_by_id(&model.rooms, room_id)?;
+    sendable_room_by_id(&model.rooms, room_id)?;
     model
         .room_views
         .get(room_id)?
@@ -5416,7 +5487,7 @@ fn projected_thread_by_id<'a>(
 fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
     match view_id {
         ViewId::Status => true,
-        ViewId::Room(room_id) => actionable_room_by_id(&model.rooms, room_id).is_some(),
+        ViewId::Room(room_id) => navigable_room_by_id(&model.rooms, room_id).is_some(),
         ViewId::Thread {
             room_id,
             thread_root_event_id,
@@ -5695,7 +5766,7 @@ unsafe fn ensure_status_view(hwnd: HWND) -> Result<HWND, String> {
 }
 
 unsafe fn ensure_room_view(hwnd: HWND, room_id: &str) -> Result<HWND, String> {
-    if actionable_room_by_id(&state_ref(hwnd).model.rooms, room_id).is_none() {
+    if navigable_room_by_id(&state_ref(hwnd).model.rooms, room_id).is_none() {
         return Err(format!("unknown room id: {room_id}"));
     }
 
@@ -5707,7 +5778,7 @@ unsafe fn ensure_thread_view(
     room_id: &str,
     thread_root_event_id: &str,
 ) -> Result<HWND, String> {
-    if actionable_room_by_id(&state_ref(hwnd).model.rooms, room_id).is_none() {
+    if sendable_room_by_id(&state_ref(hwnd).model.rooms, room_id).is_none() {
         return Err(format!("unknown room id: {room_id}"));
     }
     if projected_thread_by_id(&state_ref(hwnd).model, room_id, thread_root_event_id).is_none() {
@@ -5881,21 +5952,31 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
         ViewId::Room(room_id) => {
             let (rows, member_rows, image_requests) = {
                 let state = state_ref(hwnd);
+                let room = room_by_id(&state.model.rooms, room_id)
+                    .expect("room view must target an existing room");
                 let room_view = state.model.room_views.get(room_id);
                 let rows = build_room_timeline_rows(&state.model, room_id);
-                let image_requests = room_view
-                    .map(|room_view| {
-                        collect_lazy_room_image_media_requests(
-                            room_view,
-                            room_view.activities.iter(),
-                        )
-                    })
-                    .unwrap_or_default();
-                let member_rows = room_member_view_rows(
+                let image_requests = if is_sendable_room(room) {
                     room_view
-                        .map(|room_view| room_view.members.as_slice())
-                        .unwrap_or_default(),
-                );
+                        .map(|room_view| {
+                            collect_lazy_room_image_media_requests(
+                                room_view,
+                                room_view.activities.iter(),
+                            )
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let member_rows = if is_sendable_room(room) {
+                    room_member_view_rows(
+                        room_view
+                            .map(|room_view| room_view.members.as_slice())
+                            .unwrap_or_default(),
+                    )
+                } else {
+                    Vec::new()
+                };
                 (rows, member_rows, image_requests)
             };
             dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
@@ -6002,6 +6083,7 @@ unsafe fn finish_view_activation_chrome(
     } else {
         refresh_switchbar_state(hwnd)?;
     }
+    refresh_status_bar(hwnd)?;
     SetFocus(state_ref(hwnd).controls.edit);
     Ok(())
 }
@@ -6041,7 +6123,7 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         .model
         .rooms
         .iter()
-        .filter(|room| is_actionable_room(room))
+        .filter(|room| is_navigable_room(room))
         .map(|room| room.room_id.clone())
         .collect::<Vec<_>>();
     destroy_stale_room_views(hwnd);
@@ -6085,32 +6167,42 @@ unsafe fn refresh_tree(hwnd: HWND) {
     let status = insert_mapped_tree_item(state, root, "status", ViewId::Status);
 
     let rooms = state.model.rooms.clone();
-    let actionable_rooms = rooms
+    let joined_rooms = rooms
         .iter()
-        .filter(|room| is_actionable_room(room))
+        .filter(|room| is_joined_message_room(room))
+        .cloned()
+        .collect::<Vec<_>>();
+    let invited_rooms = rooms
+        .iter()
+        .filter(|room| is_invited_room(room))
         .cloned()
         .collect::<Vec<_>>();
     let rooms_label = if rooms.is_empty() {
         "rooms: offline".to_owned()
     } else {
-        format!("rooms: {}", actionable_rooms.len())
+        format!("rooms: {}", joined_rooms.len())
     };
     let rooms_root = insert_tree_item(tree, root, &rooms_label);
 
-    let flat_mode = rooms
+    let joined_room_tree_source = rooms
+        .iter()
+        .filter(|room| room.membership == RoomMembership::Join)
+        .cloned()
+        .collect::<Vec<_>>();
+    let flat_mode = joined_room_tree_source
         .iter()
         .all(|room| !room.is_space && room.space_children.is_empty());
     if flat_mode {
-        for room in &actionable_rooms {
+        for room in &joined_rooms {
             render_room_tree_leaf(state, rooms_root, room);
         }
     } else {
-        let room_map = rooms
+        let room_map = joined_room_tree_source
             .iter()
             .cloned()
             .map(|room| (room.room_id.clone(), room))
             .collect::<BTreeMap<_, _>>();
-        let valid_space_children = rooms
+        let valid_space_children = joined_room_tree_source
             .iter()
             .filter(|room| room.is_space)
             .map(|room| {
@@ -6183,7 +6275,7 @@ unsafe fn refresh_tree(hwnd: HWND) {
             );
         }
 
-        let unspaced_rooms = actionable_rooms
+        let unspaced_rooms = joined_rooms
             .into_iter()
             .filter(|room| !rooted_room_ids.contains(&room.room_id))
             .collect::<Vec<_>>();
@@ -6197,8 +6289,14 @@ unsafe fn refresh_tree(hwnd: HWND) {
         }
     }
 
+    let invites_root = insert_tree_item(tree, root, &format!("invites: {}", invited_rooms.len()));
+    for room in &invited_rooms {
+        render_room_tree_leaf(state, invites_root, room);
+    }
+
     expand_tree_item(tree, root);
     expand_tree_item(tree, rooms_root);
+    expand_tree_item(tree, invites_root);
     debug_assert_eq!(
         status,
         *state.primary_tree_items.get(&ViewId::Status).unwrap()
@@ -6303,6 +6401,9 @@ unsafe fn render_room_tree_leaf(state: &mut WindowState, parent: isize, room: &R
         &room_navigation_label(&state.model, room),
         ViewId::Room(room.room_id.clone()),
     );
+    if !is_sendable_room(room) {
+        return;
+    }
     let threads = state
         .model
         .room_views
@@ -6985,7 +7086,7 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
     }
 
     for room in &state.model.rooms {
-        if !is_actionable_room(room) {
+        if !is_joined_message_room(room) {
             continue;
         }
         let view_id = ViewId::Room(room.room_id.clone());
@@ -7005,13 +7106,23 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
         }
     }
 
+    for room in &state.model.rooms {
+        if !is_invited_room(room) {
+            continue;
+        }
+        let view_id = ViewId::Room(room.room_id.clone());
+        if state.views.contains_key(&view_id) {
+            ordered.push(view_id);
+        }
+    }
+
     let mut remaining = state
         .views
         .keys()
         .filter_map(|view_id| match view_id {
             ViewId::Status => None,
             ViewId::Room(room_id)
-                if actionable_room_by_id(&state.model.rooms, room_id).is_none() =>
+                if navigable_room_by_id(&state.model.rooms, room_id).is_none() =>
             {
                 Some(room_id.clone())
             }
@@ -7382,7 +7493,7 @@ unsafe fn dump_status_bar_state(hwnd: HWND) -> Result<StatusBarState, String> {
     }
 
     Ok(StatusBarState {
-        text: frame_status_text(&state_ref(hwnd).model),
+        text: frame_status_text(state_ref(hwnd)),
     })
 }
 
@@ -7447,14 +7558,19 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                 },
                 members: match &view_id {
                     ViewId::Status => Vec::new(),
-                    ViewId::Room(room_id) => room_member_view_rows(
-                        state_ref(hwnd)
-                            .model
-                            .room_views
-                            .get(room_id)
-                            .map(|room_view| room_view.members.as_slice())
-                            .unwrap_or_default(),
-                    ),
+                    ViewId::Room(room_id) => room_by_id(&state_ref(hwnd).model.rooms, room_id)
+                        .filter(|room| is_sendable_room(room))
+                        .map(|_| {
+                            room_member_view_rows(
+                                state_ref(hwnd)
+                                    .model
+                                    .room_views
+                                    .get(room_id)
+                                    .map(|room_view| room_view.members.as_slice())
+                                    .unwrap_or_default(),
+                            )
+                        })
+                        .unwrap_or_default(),
                     ViewId::Thread { room_id, .. } => room_member_view_rows(
                         state_ref(hwnd)
                             .model
@@ -7513,6 +7629,7 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .map(|room| UiRoomState {
                 room_id: room.room_id.clone(),
                 display_name: room.display_name.clone(),
+                membership: room.membership.clone(),
                 encrypted: room.encrypted,
                 is_space: room.is_space,
                 is_direct: room.is_direct,
@@ -7859,7 +7976,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
             .model
             .rooms
             .iter()
-            .find(|room| is_actionable_room(room))
+            .find(|room| is_navigable_room(room))
             .map(|room| room.room_id.clone());
 
         let active_view = match selected_room {
@@ -7916,7 +8033,7 @@ unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
 }
 
 fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
-    if actionable_room_by_id(&state.model.rooms, room_id).is_none() {
+    if navigable_room_by_id(&state.model.rooms, room_id).is_none() {
         return Err(format!("unknown room id: {room_id}"));
     }
 
@@ -8067,6 +8184,14 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         },
         "query" => LocalSlashCommand::Invalid {
             feedback: "usage: /query <mxid>".to_owned(),
+        },
+        "accept" if argument.is_empty() => LocalSlashCommand::Accept { target: None },
+        "accept" => LocalSlashCommand::Accept {
+            target: Some(argument.to_owned()),
+        },
+        "reject" if argument.is_empty() => LocalSlashCommand::Reject { target: None },
+        "reject" => LocalSlashCommand::Reject {
+            target: Some(argument.to_owned()),
         },
         "part" if argument.is_empty() => LocalSlashCommand::Part { target: None },
         "part" => LocalSlashCommand::Part {
@@ -8277,23 +8402,28 @@ fn resolve_compose_destination(
     explicit_room_id: Option<&str>,
 ) -> Result<ComposeDestination, String> {
     if let Some(room_id) = explicit_room_id {
-        if actionable_room_by_id(&state.model.rooms, room_id).is_none() {
-            return Err(format!("unknown room id: {room_id}"));
+        if sendable_room_by_id(&state.model.rooms, room_id).is_some() {
+            return Ok(ComposeDestination {
+                room_id: room_id.to_owned(),
+                thread: None,
+            });
         }
-        return Ok(ComposeDestination {
-            room_id: room_id.to_owned(),
-            thread: None,
-        });
+        if room_by_id(&state.model.rooms, room_id).is_some() {
+            return Err(format!("room is not joined: {room_id}"));
+        }
+        return Err(format!("unknown room id: {room_id}"));
     }
 
     match &state.active_view {
         ViewId::Room(room_id) => {
-            actionable_room_by_id(&state.model.rooms, room_id)
-                .expect("active room compose must target an existing actionable room");
-            Ok(ComposeDestination {
-                room_id: room_id.clone(),
-                thread: None,
-            })
+            if sendable_room_by_id(&state.model.rooms, room_id).is_some() {
+                Ok(ComposeDestination {
+                    room_id: room_id.clone(),
+                    thread: None,
+                })
+            } else {
+                Err(format!("room is not joined: {room_id}"))
+            }
         }
         ViewId::Thread {
             room_id,
@@ -8395,6 +8525,24 @@ unsafe fn execute_local_slash_command(
                         Ok(message) | Err(message) => set_local_command_status(hwnd, message),
                     }
                 }
+            }
+        }
+        LocalSlashCommand::Accept { target } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_accept_slash_command(state, target.as_deref())
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
+        LocalSlashCommand::Reject { target } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_reject_slash_command(state, target.as_deref())
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
             }
         }
         LocalSlashCommand::Part { target } => {
@@ -8564,13 +8712,13 @@ fn resolve_room_command_target(
     rooms: &[RoomSummary],
     target: &str,
 ) -> Result<String, WindowTargetError> {
-    if let Some(room) = actionable_room_by_id(rooms, target) {
+    if let Some(room) = navigable_room_by_id(rooms, target) {
         return Ok(room.room_id.clone());
     }
 
     let mut matches = rooms
         .iter()
-        .filter(|room| is_actionable_room(room) && room.display_name == target);
+        .filter(|room| is_navigable_room(room) && room.display_name == target);
     let Some(room) = matches.next() else {
         return Err(WindowTargetError::Unknown);
     };
@@ -8600,17 +8748,83 @@ fn resolve_part_slash_command_room_id(
 ) -> Result<String, String> {
     let Some(target) = target else {
         return match &state.active_view {
-            ViewId::Room(room_id) => Ok(room_id.clone()),
+            ViewId::Room(room_id) => {
+                if sendable_room_by_id(&state.model.rooms, room_id).is_some() {
+                    Ok(room_id.clone())
+                } else {
+                    Err(format!("room is not joined: {room_id}"))
+                }
+            }
             ViewId::Thread { room_id, .. } => Ok(room_id.clone()),
             ViewId::Status => Err("no room selected".to_owned()),
         };
     };
 
     match resolve_room_command_target(&state.model.rooms, target) {
-        Ok(room_id) => Ok(room_id),
+        Ok(room_id) => {
+            if sendable_room_by_id(&state.model.rooms, &room_id).is_some() {
+                Ok(room_id)
+            } else {
+                Err(format!("room is not joined: {target}"))
+            }
+        }
         Err(WindowTargetError::Unknown) => Err(format!("unknown part target: {target}")),
         Err(WindowTargetError::Ambiguous) => Err(format!("ambiguous part target: {target}")),
     }
+}
+
+fn resolve_invite_command_room_id(
+    state: &WindowState,
+    action: &str,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let Some(target) = target else {
+        return match &state.active_view {
+            ViewId::Room(room_id)
+                if room_by_id(&state.model.rooms, room_id)
+                    .is_some_and(is_invite_command_target) =>
+            {
+                Ok(room_id.clone())
+            }
+            _ => Err(format!("{action} failed: no invited room selected")),
+        };
+    };
+
+    if let Some(room) = room_by_id(&state.model.rooms, target) {
+        return if is_invite_command_target(room) {
+            Ok(room.room_id.clone())
+        } else if is_navigable_room(room) {
+            Err(format!("{action} failed: room is not invited: {target}"))
+        } else {
+            Err(format!("{action} failed: invited room not found: {target}"))
+        };
+    }
+
+    let invited_matches = state
+        .model
+        .rooms
+        .iter()
+        .filter(|room| is_invite_command_target(room) && room.display_name == target)
+        .collect::<Vec<_>>();
+    if invited_matches.len() > 1 {
+        return Err(format!(
+            "{action} failed: ambiguous invited room target: {target}"
+        ));
+    }
+    if let Some(room) = invited_matches.first() {
+        return Ok(room.room_id.clone());
+    }
+
+    if state
+        .model
+        .rooms
+        .iter()
+        .any(|room| is_joined_message_room(room) && room.display_name == target)
+    {
+        return Err(format!("{action} failed: room is not invited: {target}"));
+    }
+
+    Err(format!("{action} failed: invited room not found: {target}"))
 }
 
 fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<String, String> {
@@ -8641,6 +8855,44 @@ fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Resul
         .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("query submitted: {user_id}"))
+}
+
+fn submit_accept_slash_command(
+    state: &mut WindowState,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let room_id = resolve_invite_command_room_id(state, "accept", target)?;
+    let command = Command::AcceptRoomInvite(AcceptRoomInviteRequest {
+        room_id: room_id.clone(),
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue accept room invite command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("accept submitted: {room_id}"))
+}
+
+fn submit_reject_slash_command(
+    state: &mut WindowState,
+    target: Option<&str>,
+) -> Result<String, String> {
+    let room_id = resolve_invite_command_room_id(state, "reject", target)?;
+    let command = Command::RejectRoomInvite(RejectRoomInviteRequest {
+        room_id: room_id.clone(),
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue reject room invite command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("reject submitted: {room_id}"))
 }
 
 fn submit_part_slash_command(
@@ -9029,8 +9281,16 @@ fn dump_submitted_membership_command(command: &Command) -> Option<DumpSubmittedM
             action: DumpMembershipCommandAction::Join,
             target: request.room_or_alias.clone(),
         }),
+        Command::AcceptRoomInvite(request) => Some(DumpSubmittedMembershipCommand {
+            action: DumpMembershipCommandAction::AcceptInvite,
+            target: request.room_id.clone(),
+        }),
         Command::LeaveRoom(request) => Some(DumpSubmittedMembershipCommand {
             action: DumpMembershipCommandAction::Leave,
+            target: request.room_id.clone(),
+        }),
+        Command::RejectRoomInvite(request) => Some(DumpSubmittedMembershipCommand {
+            action: DumpMembershipCommandAction::RejectInvite,
             target: request.room_id.clone(),
         }),
         _ => None,
@@ -9618,7 +9878,7 @@ fn resolve_timeline_room_id(
             .ok_or_else(|| "no room selected".to_owned())?,
     };
 
-    if actionable_room_by_id(&state.model.rooms, &room_id).is_some() {
+    if navigable_room_by_id(&state.model.rooms, &room_id).is_some() {
         Ok(room_id)
     } else {
         Err(format!("unknown room id: {room_id}"))
@@ -9729,6 +9989,20 @@ mod tests {
             display_name: display_name.to_owned(),
             membership: RoomMembership::Join,
             encrypted,
+            is_space: false,
+            is_direct: false,
+            direct_user_ids: Vec::new(),
+            tags: Vec::new(),
+            space_children: Vec::new(),
+        }
+    }
+
+    fn invited_room(room_id: &str, display_name: &str) -> RoomSummary {
+        RoomSummary {
+            room_id: room_id.to_owned(),
+            display_name: display_name.to_owned(),
+            membership: RoomMembership::Invite,
+            encrypted: false,
             is_space: false,
             is_direct: false,
             direct_user_ids: Vec::new(),
@@ -14214,7 +14488,7 @@ mod tests {
         let mut state = test_state();
         state.model.status = "authenticated".to_owned();
 
-        assert_eq!(frame_status_text(&state.model), "authenticated");
+        assert_eq!(frame_status_text(&state), "authenticated");
     }
 
     #[test]
@@ -14222,7 +14496,7 @@ mod tests {
         let mut state = test_state();
         state.model.status = "authenticated".to_owned();
 
-        assert_eq!(frame_status_text(&state.model), "authenticated");
+        assert_eq!(frame_status_text(&state), "authenticated");
 
         apply_core_event(
             &mut state,
@@ -14237,7 +14511,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            frame_status_text(&state.model),
+            frame_status_text(&state),
             "e2ee status updated | e2ee: recovery incomplete, backup enabled"
         );
     }
@@ -14253,7 +14527,7 @@ mod tests {
         });
 
         assert_eq!(
-            frame_status_text(&state.model),
+            frame_status_text(&state),
             "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example"
         );
     }
@@ -14268,8 +14542,21 @@ mod tests {
         });
 
         assert_eq!(
-            frame_status_text(&state.model),
+            frame_status_text(&state),
             "error during send text | error: send text: message send failed"
+        );
+    }
+
+    #[test]
+    fn frame_status_text_shows_active_invite_context() {
+        let mut state = test_state();
+        state.model.status = "synced 1 room(s)".to_owned();
+        state.model.rooms = vec![invited_room("!invite:example", "Invite")];
+        state.active_view = room_view_id("!invite:example");
+
+        assert_eq!(
+            frame_status_text(&state),
+            "invited: Invite (!invite:example)"
         );
     }
 
@@ -14297,6 +14584,27 @@ mod tests {
             })
         );
 
+        state.model.status = "accept submitted: !invite:example".to_owned();
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::AcceptRoomInvite,
+                message: "accept room invitation requires an authenticated session".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.status, "accept submitted: !invite:example");
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+        assert_eq!(
+            state.model.last_error,
+            Some(CoreErrorEvent {
+                operation: Operation::AcceptRoomInvite,
+                message: "accept room invitation requires an authenticated session".to_owned(),
+            })
+        );
+
         state.model.status = "part submitted: !beta:example".to_owned();
 
         apply_core_event(
@@ -14315,6 +14623,27 @@ mod tests {
             Some(CoreErrorEvent {
                 operation: Operation::LeaveRoom,
                 message: "leave room requires an authenticated session".to_owned(),
+            })
+        );
+
+        state.model.status = "reject submitted: !invite:example".to_owned();
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::RejectRoomInvite,
+                message: "reject room invitation requires an authenticated session".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.status, "reject submitted: !invite:example");
+        assert_eq!(state.model.lifecycle_state, LifecycleState::Error);
+        assert_eq!(
+            state.model.last_error,
+            Some(CoreErrorEvent {
+                operation: Operation::RejectRoomInvite,
+                message: "reject room invitation requires an authenticated session".to_owned(),
             })
         );
 
@@ -14379,7 +14708,7 @@ mod tests {
         });
 
         assert_eq!(
-            frame_status_text(&state.model),
+            frame_status_text(&state),
             "verification accepted with @alice:example | verification: accepted flow-verify-123 from @alice:example | error: send text: message send failed"
         );
     }
@@ -16620,6 +16949,20 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_compose_submission("//accept"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/accept".to_owned()),
+            }
+        );
+        assert_eq!(
+            parse_compose_submission("//reject"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/reject".to_owned()),
+            }
+        );
+        assert_eq!(
             parse_compose_submission("///status"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
@@ -16879,6 +17222,56 @@ mod tests {
     }
 
     #[test]
+    fn parse_slash_command_accepts_accept_and_reject_forms() {
+        assert_eq!(
+            parse_slash_command("/accept"),
+            LocalSlashCommand::Accept { target: None }
+        );
+        assert_eq!(
+            parse_slash_command("/accept    "),
+            LocalSlashCommand::Accept { target: None }
+        );
+        assert_eq!(
+            parse_slash_command("/accept !room:example.org"),
+            LocalSlashCommand::Accept {
+                target: Some("!room:example.org".to_owned()),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/accept Invite Name"),
+            LocalSlashCommand::Accept {
+                target: Some("Invite Name".to_owned()),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/reject"),
+            LocalSlashCommand::Reject { target: None }
+        );
+        assert_eq!(
+            parse_slash_command("/reject Invite Name"),
+            LocalSlashCommand::Reject {
+                target: Some("Invite Name".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_slash_command_keeps_verification_accept_and_reject_distinct_from_invite_commands() {
+        assert_eq!(
+            parse_slash_command("/verify accept"),
+            LocalSlashCommand::Verify {
+                action: VerificationAction::Accept,
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/verify reject"),
+            LocalSlashCommand::Verify {
+                action: VerificationAction::Reject,
+            }
+        );
+    }
+
+    #[test]
     fn parse_slash_command_rejects_join_without_target() {
         assert_eq!(
             parse_slash_command("/join"),
@@ -17083,6 +17476,45 @@ mod tests {
     }
 
     #[test]
+    fn resolve_invite_command_room_id_rejects_ambiguous_joined_unknown_and_missing_active_invites()
+    {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            invited_room("!invite-one:example", "Shared"),
+            invited_room("!invite-two:example", "Shared"),
+            invited_room("!invite-unique:example", "Unique"),
+            room("!joined:example", "Joined", false),
+        ];
+
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", Some("Shared")),
+            Err("accept failed: ambiguous invited room target: Shared".to_owned())
+        );
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", Some("!joined:example")),
+            Err("accept failed: room is not invited: !joined:example".to_owned())
+        );
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", Some("Joined")),
+            Err("accept failed: room is not invited: Joined".to_owned())
+        );
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", Some("Missing")),
+            Err("accept failed: invited room not found: Missing".to_owned())
+        );
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", None),
+            Err("accept failed: no invited room selected".to_owned())
+        );
+
+        state.active_view = room_view_id("!joined:example");
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "reject", None),
+            Err("reject failed: no invited room selected".to_owned())
+        );
+    }
+
+    #[test]
     fn submit_join_slash_command_records_typed_join_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
 
@@ -17094,6 +17526,58 @@ mod tests {
             vec![Command::JoinRoom(JoinRoomRequest {
                 room_or_alias: "#ops:example.org".to_owned(),
             })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_accept_slash_command_records_typed_accept_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![invited_room("!invite:example", "Invite")];
+        state.active_view = room_view_id("!invite:example");
+
+        let status = submit_accept_slash_command(&mut state, None).unwrap();
+
+        assert_eq!(status, "accept submitted: !invite:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::AcceptRoomInvite(AcceptRoomInviteRequest {
+                room_id: "!invite:example".to_owned(),
+            })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_membership_commands,
+            vec![DumpSubmittedMembershipCommand {
+                action: DumpMembershipCommandAction::AcceptInvite,
+                target: "!invite:example".to_owned(),
+            }]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_reject_slash_command_records_typed_reject_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![invited_room("!invite:example", "Invite")];
+        state.active_view = room_view_id("!invite:example");
+
+        let status = submit_reject_slash_command(&mut state, None).unwrap();
+
+        assert_eq!(status, "reject submitted: !invite:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RejectRoomInvite(RejectRoomInviteRequest {
+                room_id: "!invite:example".to_owned(),
+            })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_membership_commands,
+            vec![DumpSubmittedMembershipCommand {
+                action: DumpMembershipCommandAction::RejectInvite,
+                target: "!invite:example".to_owned(),
+            }]
         );
 
         stop_test_core(handle);

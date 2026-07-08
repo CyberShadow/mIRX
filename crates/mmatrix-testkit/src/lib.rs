@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mmatrix_core::E2eeStatus;
+use mmatrix_core::{E2eeStatus, RoomMembership};
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -302,6 +302,8 @@ pub struct SubmittedRedactionCommand {
 pub enum MembershipCommandAction {
     Join,
     Leave,
+    AcceptInvite,
+    RejectInvite,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +343,7 @@ pub struct RoomTag {
 pub struct Room {
     pub room_id: String,
     pub display_name: String,
+    pub membership: RoomMembership,
     pub encrypted: bool,
     pub is_space: bool,
     pub is_direct: bool,
@@ -750,6 +753,7 @@ pub struct UiState {
 pub struct UiRoomState {
     pub room_id: String,
     pub display_name: String,
+    pub membership: RoomMembership,
     pub encrypted: bool,
     pub is_space: bool,
     pub is_direct: bool,

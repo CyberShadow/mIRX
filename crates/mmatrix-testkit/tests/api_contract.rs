@@ -12,7 +12,7 @@ use mmatrix_core::{
     RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
     RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget, RoomImageMedia as CoreRoomImageMedia,
     RoomImageMediaFormat as CoreRoomImageMediaFormat, RoomImageMediaKind as CoreRoomImageMediaKind,
-    RoomMediaSource as CoreRoomMediaSource, RoomReadState,
+    RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
 use mmatrix_testkit::{
     ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
@@ -215,6 +215,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!space:example".to_owned(),
                 display_name: "Space".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: true,
                 is_direct: false,
@@ -236,6 +237,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!alpha:example".to_owned(),
                 display_name: "Alpha".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: false,
                 is_direct: true,
@@ -255,6 +257,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!beta:example".to_owned(),
                 display_name: "Beta".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: false,
@@ -265,6 +268,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!lobby:example".to_owned(),
                 display_name: "Lobby".to_owned(),
+                membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
                 is_direct: false,
@@ -426,6 +430,7 @@ fn data_models_round_trip_through_json() {
         rooms: vec![UiRoomState {
             room_id: "!room:example".to_owned(),
             display_name: "Room".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: true,
             is_space: false,
             is_direct: true,
@@ -665,6 +670,7 @@ fn data_models_round_trip_through_json() {
                 {
                     "room_id": "!room:example",
                     "display_name": "Room",
+                    "membership": "join",
                     "encrypted": true,
                     "is_space": false,
                     "is_direct": true,
@@ -706,6 +712,7 @@ fn room_summary_metadata_serializes_to_expected_json_shape() {
     let room = mmatrix_testkit::Room {
         room_id: "!alpha:example".to_owned(),
         display_name: "Alpha".to_owned(),
+        membership: RoomMembership::Join,
         encrypted: true,
         is_space: false,
         is_direct: true,
@@ -728,6 +735,7 @@ fn room_summary_metadata_serializes_to_expected_json_shape() {
         serde_json::json!({
             "room_id": "!alpha:example",
             "display_name": "Alpha",
+            "membership": "join",
             "encrypted": true,
             "is_space": false,
             "is_direct": true,
