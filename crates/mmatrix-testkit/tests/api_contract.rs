@@ -18,17 +18,18 @@ use mmatrix_testkit::{
     ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
     MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
     RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageActivity,
-    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState,
-    RoomMediaSource, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState,
-    StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewIdentity,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource,
+    RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -104,6 +105,37 @@ fn sample_room_image_activity(media_state: Option<RoomImageMediaState>) -> RoomI
             thumbnail_source: None,
         }),
         media_state,
+    }
+}
+
+fn sample_room_file_activity() -> RoomFileActivity {
+    RoomFileActivity {
+        event_id: "$file1:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        body: "report.pdf".to_owned(),
+        filename: Some("incident-report.pdf".to_owned()),
+        source: RoomMediaSource::Plain {
+            url: "mxc://example.org/report".to_owned(),
+        },
+        info: Some(RoomFileInfo {
+            mimetype: Some("application/pdf".to_owned()),
+            size: Some(54_321),
+        }),
+    }
+}
+
+fn sample_room_audio_activity() -> RoomAudioActivity {
+    RoomAudioActivity {
+        event_id: "$audio1:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        body: "voice-note.ogg".to_owned(),
+        filename: Some("voice-note.ogg".to_owned()),
+        source: sample_encrypted_room_media_source("mxc://example.org/voice-note"),
+        info: Some(RoomAudioInfo {
+            mimetype: Some("audio/ogg".to_owned()),
+            size: Some(9_876),
+            duration_ms: Some(12_345),
+        }),
     }
 }
 
@@ -1088,30 +1120,30 @@ fn room_activity_member_state_notice_round_trips_through_json() {
 fn room_activity_unsupported_message_round_trips_through_json() {
     let activity = RoomActivity {
         room_id: "!room:example".to_owned(),
-        activity_id: "event:$audio1:example.org".to_owned(),
+        activity_id: "event:$video1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-            event_id: "$audio1:example.org".to_owned(),
+            event_id: "$video1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.audio".to_owned(),
-            body: "voice-note.ogg".to_owned(),
+            msgtype: "m.video".to_owned(),
+            body: "clip.mp4".to_owned(),
         }),
     };
 
     let json = serde_json::json!({
         "room_id": "!room:example",
-        "activity_id": "event:$audio1:example.org",
+        "activity_id": "event:$video1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
         "reactions": [],
         "kind": {
             "type": "unsupported_message",
-            "event_id": "$audio1:example.org",
+            "event_id": "$video1:example.org",
             "sender": "@alice:example.org",
-            "msgtype": "m.audio",
-            "body": "voice-note.ogg"
+            "msgtype": "m.video",
+            "body": "clip.mp4"
         }
     });
 
@@ -1171,6 +1203,107 @@ fn room_activity_image_round_trips_through_json() {
     );
     assert_eq!(
         serde_json::from_value::<RoomActivity>(json).expect("deserialize image activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_file_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$file1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_010_000,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::File(Box::new(sample_room_file_activity())),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$file1:example.org",
+        "timestamp_ms": 1710000010000u64,
+        "relation": null,
+        "reactions": [],
+        "kind": {
+            "type": "file",
+            "event_id": "$file1:example.org",
+            "sender": "@alice:example.org",
+            "body": "report.pdf",
+            "filename": "incident-report.pdf",
+            "source": {
+                "type": "plain",
+                "url": "mxc://example.org/report"
+            },
+            "info": {
+                "mimetype": "application/pdf",
+                "size": 54321u64
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize file activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize file activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_audio_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$audio1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_020_000,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::Audio(Box::new(sample_room_audio_activity())),
+    };
+
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "event:$audio1:example.org",
+        "timestamp_ms": 1710000020000u64,
+        "relation": null,
+        "reactions": [],
+        "kind": {
+            "type": "audio",
+            "event_id": "$audio1:example.org",
+            "sender": "@alice:example.org",
+            "body": "voice-note.ogg",
+            "filename": "voice-note.ogg",
+            "source": {
+                "type": "encrypted",
+                "url": "mxc://example.org/voice-note",
+                "key": {
+                    "kty": "oct",
+                    "key_ops": ["encrypt", "decrypt"],
+                    "alg": "A256CTR",
+                    "k": "base64url-key",
+                    "ext": true
+                },
+                "iv": "base64-iv",
+                "hashes": {
+                    "sha256": "base64-sha256"
+                },
+                "v": "v2"
+            },
+            "info": {
+                "mimetype": "audio/ogg",
+                "size": 9876u64,
+                "duration_ms": 12345u64
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize audio activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize audio activity"),
         activity
     );
 }
@@ -2577,12 +2710,10 @@ fn room_image_media_dtos_reject_unknown_fields() {
         .is_err()
     );
 
-    assert!(
-        serde_json::from_str::<RoomImageMediaKind>(
-            r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":true}"#
-        )
-        .is_err()
-    );
+    assert!(serde_json::from_str::<RoomImageMediaKind>(
+        r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":true}"#
+    )
+    .is_err());
 }
 
 #[test]
@@ -2695,21 +2826,21 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
 fn room_activity_contains_matches_unsupported_message_fields() {
     let activity = RoomActivity {
         room_id: "!room:example".to_owned(),
-        activity_id: "event:$audio1:example.org".to_owned(),
+        activity_id: "event:$video1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-            event_id: "$audio1:example.org".to_owned(),
+            event_id: "$video1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.audio".to_owned(),
-            body: "voice-note.ogg".to_owned(),
+            msgtype: "m.video".to_owned(),
+            body: "clip.mp4".to_owned(),
         }),
     };
 
     assert!(activity.contains("\"type\":\"unsupported_message\""));
-    assert!(activity.contains("\"msgtype\":\"m.audio\""));
-    assert!(activity.contains("voice-note.ogg"));
+    assert!(activity.contains("\"msgtype\":\"m.video\""));
+    assert!(activity.contains("clip.mp4"));
 }
 
 #[test]
@@ -3844,6 +3975,34 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
+        serde_json::from_str::<RoomFileActivity>(
+            r#"{
+            "event_id":"$file1:example.org",
+            "sender":"@alice:example.org",
+            "body":"report.pdf",
+            "filename":"incident-report.pdf",
+            "source":{"type":"plain","url":"mxc://example.org/report"},
+            "info":{"mimetype":"application/pdf","size":54321},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomAudioActivity>(
+            r#"{
+            "event_id":"$audio1:example.org",
+            "sender":"@alice:example.org",
+            "body":"voice-note.ogg",
+            "filename":"voice-note.ogg",
+            "source":{"type":"plain","url":"mxc://example.org/voice-note"},
+            "info":{"mimetype":"audio/ogg","size":9876,"duration_ms":12345},
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
         serde_json::from_str::<RoomMediaSource>(
             r#"{
             "type":"plain",
@@ -3867,12 +4026,33 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
+        serde_json::from_str::<RoomFileInfo>(
+            r#"{
+            "mimetype":"application/pdf",
+            "size":54321,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomAudioInfo>(
+            r#"{
+            "mimetype":"audio/ogg",
+            "size":9876,
+            "duration_ms":12345,
+            "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
         serde_json::from_str::<UnsupportedRoomMessageActivity>(
             r#"{
-            "event_id":"$audio1:example.org",
+            "event_id":"$video1:example.org",
             "sender":"@alice:example.org",
-            "msgtype":"m.audio",
-            "body":"voice-note.ogg",
+            "msgtype":"m.video",
+            "body":"clip.mp4",
             "unexpected":true
         }"#
         )
@@ -3908,10 +4088,10 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomActivityKind>(
             r#"{
             "type":"unsupported_message",
-            "event_id":"$audio1:example.org",
+            "event_id":"$video1:example.org",
             "sender":"@alice:example.org",
-            "msgtype":"m.audio",
-            "body":"voice-note.ogg",
+            "msgtype":"m.video",
+            "body":"clip.mp4",
             "unexpected":true
         }"#
         )
