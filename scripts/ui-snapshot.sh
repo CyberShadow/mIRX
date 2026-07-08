@@ -1110,6 +1110,43 @@ configure_case_expectations() {
         --expect-no-navigation-text 'dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
       )
       ;;
+    history-backfill)
+      expect_selected='!history:example'
+      expect_active_view='room:!history:example'
+      append_events_path="$root_dir/tests/ui-state-updates/history-backfill.json"
+      room_expect_args=(
+        --expect-room '!history:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!history:example::older room line one'
+        --expect-room-activity '!history:example::older room line two'
+        --expect-room-activity '!history:example::current room line one'
+        --expect-room-activity '!history:example::current room line two'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::older room line one'
+        --expect-room-view '!history:example::older room line two'
+        --expect-room-view '!history:example::current room line one'
+        --expect-room-view '!history:example::current room line two'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!history:example::History'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!history:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'History'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'History'
+        --expect-no-navigation-activity 'status'
+      )
+      expect_switchbar_active='room:!history:example'
+      ;;
     member-list)
       expect_selected='!members:example'
       expect_active_view='room:!members:example'

@@ -1,0 +1,65 @@
+[
+  {
+    "RoomHistoryBackfill": {
+      "room_id": "!history:example",
+      "start": "s-current",
+      "end": "s-before-1",
+      "events": [
+        {
+          "type": "activity",
+          "room_id": "!history:example",
+          "activity_id": "event:$history-old-1",
+          "timestamp_ms": 1700001080000,
+          "kind": {
+            "type": "message",
+            "event_id": "$history-old-1",
+            "transaction_id": null,
+            "sender": "@alice:example",
+            "presentation": "text",
+            "body": "older room line one",
+            "send_state": {
+              "state": "sent"
+            }
+          },
+          "relation": null
+        },
+        {
+          "type": "activity",
+          "room_id": "!history:example",
+          "activity_id": "event:$history-old-2",
+          "timestamp_ms": 1700001140000,
+          "kind": {
+            "type": "message",
+            "event_id": "$history-old-2",
+            "transaction_id": null,
+            "sender": "@alice:example",
+            "presentation": "text",
+            "body": "older room line two",
+            "send_state": {
+              "state": "sent"
+            }
+          },
+          "relation": null
+        },
+        {
+          "type": "activity",
+          "room_id": "!history:example",
+          "activity_id": "event:$history-current-1",
+          "timestamp_ms": 1700001200000,
+          "kind": {
+            "type": "message",
+            "event_id": "$history-current-1",
+            "transaction_id": null,
+            "sender": "@alice:example",
+            "presentation": "text",
+            "body": "current room line one",
+            "send_state": {
+              "state": "sent"
+            }
+          },
+          "relation": null
+        }
+      ]
+    }
+  }
+]
