@@ -2923,10 +2923,10 @@ unsafe extern "system" fn mdi_child_window_proc(
             0
         }
         WM_MDIACTIVATE => {
-            if lparam as HWND == hwnd {
-                if let Err(message) = handle_native_mdi_child_activation(hwnd) {
-                    eprintln!("{message}");
-                }
+            if lparam as HWND == hwnd
+                && let Err(message) = handle_native_mdi_child_activation(hwnd)
+            {
+                eprintln!("{message}");
             }
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
@@ -8023,10 +8023,10 @@ unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
     }
 
     let view_id = state_ref(hwnd).tree_items.get(&selected_item).cloned();
-    if let Some(view_id) = view_id {
-        if let Err(message) = activate_view(hwnd, &view_id, Some(selected_item)) {
-            show_error_message(hwnd, "Treebar", &message);
-        }
+    if let Some(view_id) = view_id
+        && let Err(message) = activate_view(hwnd, &view_id, Some(selected_item))
+    {
+        show_error_message(hwnd, "Treebar", &message);
     }
 
     true
