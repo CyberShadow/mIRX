@@ -27,12 +27,11 @@ use mmatrix_testkit::{
     RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
-    SubmittedEditCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedRoomTopicCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
+    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedRoomTopicCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionKind, VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -7095,7 +7094,10 @@ fn automation_driver_literal_edit_submission_is_sent_as_text()
     );
 
     app.send_compose_key(ComposeKey::Up)?;
-    assert_eq!(app.compose_text()?, "//edit $event-to-edit replacement text");
+    assert_eq!(
+        app.compose_text()?,
+        "//edit $event-to-edit replacement text"
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

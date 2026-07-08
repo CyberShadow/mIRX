@@ -1608,9 +1608,8 @@ mod tests {
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
         SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
         SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
-        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {

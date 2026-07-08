@@ -20,8 +20,8 @@ use matrix_sdk::{
         },
     },
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
-    room::edit::EditedContent,
     room::Receipts,
+    room::edit::EditedContent,
     ruma::{
         EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
         RoomId, RoomOrAliasId, UInt, UserId,
@@ -63,14 +63,13 @@ use crate::api::{
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
+    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -1923,12 +1922,12 @@ fn map_send_queue_update(
                         message,
                     }),
                 ],
-                Some(PendingOutgoingKind::MessageEdit { .. }) => vec![Event::Error(
-                    CoreErrorEvent {
+                Some(PendingOutgoingKind::MessageEdit { .. }) => {
+                    vec![Event::Error(CoreErrorEvent {
                         operation: Operation::EditMessage,
                         message,
-                    },
-                )],
+                    })]
+                }
                 Some(PendingOutgoingKind::Reaction { .. }) => vec![Event::Error(CoreErrorEvent {
                     operation: Operation::SendReaction,
                     message,
@@ -2045,9 +2044,9 @@ fn outgoing_events_from_local_echo_event(
     send_error: Option<String>,
     pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
-    if let Some(target_event_id) = edited_message_target_event_id_from_serialized_event(
-        serialized_event,
-    )? {
+    if let Some(target_event_id) =
+        edited_message_target_event_id_from_serialized_event(serialized_event)?
+    {
         insert_pending_outgoing_kind(
             pending,
             transaction_id,
@@ -2373,12 +2372,13 @@ pub(crate) async fn edit_message(
     let edit_event = room
         .make_edit_event(target_event_id, EditedContent::RoomMessage(new_content))
         .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to create Matrix message edit: {err}")))?;
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to create Matrix message edit: {err}"))
+        })?;
 
-    room.send_queue()
-        .send(edit_event)
-        .await
-        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message edit: {err}")))?;
+    room.send_queue().send(edit_event).await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to send Matrix message edit: {err}"))
+    })?;
 
     Ok(())
 }
@@ -2460,10 +2460,9 @@ mod tests {
         room_image_media_request_parameters, room_list_update_is_relevant, room_members_from_parts,
         room_message_event_content, room_message_event_content_without_relation,
         room_read_state_from_parts, room_read_update_is_relevant, room_tag_summaries_from_tags,
-        room_timeline_event_from_sync_message,
-        room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
-        verification_flow_id_from_to_device, verification_request_from_to_device,
-        verification_requested_state_event,
+        room_timeline_event_from_sync_message, room_typing_from_sync_typing,
+        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
@@ -2497,8 +2496,7 @@ mod tests {
                 room::{
                     member::OriginalSyncRoomMemberEvent,
                     message::{
-                        OriginalSyncRoomMessageEvent, ReplacementMetadata,
-                        RoomMessageEventContent,
+                        OriginalSyncRoomMessageEvent, ReplacementMetadata, RoomMessageEventContent,
                     },
                     redaction::OriginalSyncRoomRedactionEvent,
                     topic::OriginalSyncRoomTopicEvent,
