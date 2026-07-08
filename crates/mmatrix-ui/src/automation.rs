@@ -1124,6 +1124,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SendReaction => "send_reaction",
         Operation::RedactEvent => "redact_event",
         Operation::MarkRoomRead => "mark_room_read",
+        Operation::BackfillRoomHistory => "backfill_room_history",
         Operation::FetchRoomImageMedia => "fetch_room_image_media",
         Operation::RoomList => "room_list",
         Operation::RoomReadState => "room_read_state",

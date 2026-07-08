@@ -4879,6 +4879,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
+        Event::RoomHistoryBackfill(_) => {}
         Event::RoomImageMedia(media) => apply_room_image_media_event(state, media),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
@@ -10027,6 +10028,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SendReaction => "send reaction",
         Operation::RedactEvent => "redact event",
         Operation::MarkRoomRead => "mark room read",
+        Operation::BackfillRoomHistory => "backfill room history",
         Operation::FetchRoomImageMedia => "fetch room image media",
         Operation::RoomList => "room list",
         Operation::RoomReadState => "room read state",
