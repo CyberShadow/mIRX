@@ -5037,6 +5037,50 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
 }
 
 #[test]
+fn automation_driver_render_state_append_records_room_read_target()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("shell-activity.json");
+    let update_path = fixture_update_path("shell-activity.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let loaded_state = app.dump_ui_state()?;
+    let alpha_room_path =
+        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+    let alpha_thread_path = navigation_path_by_substrings(
+        &loaded_state.navigation,
+        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+    );
+
+    app.select_navigation_path(&alpha_thread_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_navigation_path(&alpha_room_path)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let updated_state = app.dump_ui_state()?;
+    assert_eq!(
+        find_ui_room(&updated_state, "!alpha:example").read_target_event_id,
+        None
+    );
+    assert_eq!(
+        find_ui_room(&updated_state, "!beta:example")
+            .read_target_event_id
+            .as_deref(),
+        Some("$beta-activity")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_shell_constrained_layout_fixture()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

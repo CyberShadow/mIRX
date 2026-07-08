@@ -6756,9 +6756,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             validate_synthetic_room_activity_events(&room_views, &args.events).map_err(
                 |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
             )?;
-            unsafe { apply_synthetic_events_and_refresh(hwnd, args.events) }.map_err(
-                |message| failure_response(Some(id.clone()), "invalid_synthetic_state", message),
-            )?;
+            unsafe { apply_events_and_refresh(hwnd, args.events) }.map_err(|message| {
+                failure_response(Some(id.clone()), "invalid_synthetic_state", message)
+            })?;
             let rooms = state_ref(hwnd).model.rooms.len();
             let timeline_events = state_ref(hwnd)
                 .model
