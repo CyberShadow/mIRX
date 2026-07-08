@@ -14,8 +14,8 @@ use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity as CoreRoomMessageActivity,
+    RoomActivityUpdateTarget, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
     StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
@@ -30,12 +30,12 @@ use mmatrix_testkit::{
     RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
+    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -47,9 +47,9 @@ use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MAR
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO,
-    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
-    WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_PAGEUP, SB_VERT,
+    SCROLLINFO, SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -631,6 +631,28 @@ fn text_event_with_event_id(
         CoreRoomMessagePresentationKind::Text,
         body,
     )
+}
+
+fn history_backfill_event_from_event(event: Event) -> RoomHistoryBackfillEvent {
+    match event {
+        Event::RoomActivity(activity) => RoomHistoryBackfillEvent::Activity(activity),
+        Event::RoomActivityUpdate(update) => RoomHistoryBackfillEvent::ActivityUpdate(update),
+        other => panic!("expected room history backfill event payload, got {other:?}"),
+    }
+}
+
+fn room_history_backfill_event(
+    room_id: &str,
+    start: &str,
+    end: Option<&str>,
+    events: Vec<RoomHistoryBackfillEvent>,
+) -> Event {
+    Event::RoomHistoryBackfill(RoomHistoryBackfill {
+        room_id: room_id.to_owned(),
+        start: start.to_owned(),
+        end: end.map(str::to_owned),
+        events,
+    })
 }
 
 fn pending_message_event_with_presentation(
@@ -2887,6 +2909,179 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 }
 
 #[test]
+fn custom_room_timeline_history_backfill_submits_once_while_loading()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    for index in 0..80 {
+        let body = format!("history row {index:02}");
+        events.push(text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_001_000_000 + index * 60_000,
+            &body,
+        ));
+    }
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "history row 79",
+        Duration::from_secs(5),
+    )?;
+
+    trigger_timeline_history_backfill(&app);
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_history_commands.first(),
+        Some(&SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: None,
+            limit: 50,
+        })
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_history_backfill_prepends_older_messages_without_disturbing_active_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!beta:example", "Beta", false)]),
+        text_event_with_event_id(
+            "!beta:example",
+            "$current-1",
+            "@bob:example",
+            1_700_000_060_000,
+            "current row 1",
+        ),
+        text_event_with_event_id(
+            "!beta:example",
+            "$current-2",
+            "@bob:example",
+            1_700_000_120_000,
+            "current row 2",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let expected_path = nav_path(&["mmatrix", "rooms: 1", "Beta"]);
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!beta:example")
+    );
+    assert_eq!(app.selected_navigation_path()?, expected_path);
+    assert_compose_has_focus(&app);
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!beta:example",
+        "token-older",
+        Some("token-next"),
+        vec![
+            history_backfill_event_from_event(text_event_with_event_id(
+                "!beta:example",
+                "$older-1",
+                "@bob:example",
+                1_699_999_940_000,
+                "older row 1",
+            )),
+            history_backfill_event_from_event(text_event_with_event_id(
+                "!beta:example",
+                "$older-2",
+                "@bob:example",
+                1_700_000_000_000,
+                "older row 2",
+            )),
+            history_backfill_event_from_event(text_event_with_event_id(
+                "!beta:example",
+                "$current-1",
+                "@bob:example",
+                1_700_000_060_000,
+                "duplicate current row 1",
+            )),
+        ],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.room_activity(Some("!beta:example"))?,
+        vec![
+            text_entry_with_event_id(
+                "!beta:example",
+                "$older-1",
+                "@bob:example",
+                1_699_999_940_000,
+                "older row 1",
+            ),
+            text_entry_with_event_id(
+                "!beta:example",
+                "$older-2",
+                "@bob:example",
+                1_700_000_000_000,
+                "older row 2",
+            ),
+            text_entry_with_event_id(
+                "!beta:example",
+                "$current-1",
+                "@bob:example",
+                1_700_000_060_000,
+                "current row 1",
+            ),
+            text_entry_with_event_id(
+                "!beta:example",
+                "$current-2",
+                "@bob:example",
+                1_700_000_120_000,
+                "current row 2",
+            ),
+        ]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        app.dump_model()?.selected_room.as_deref(),
+        Some("!beta:example")
+    );
+    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    assert_active_switchbar_item(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(app.selected_navigation_path()?, expected_path);
+    assert_compose_has_focus(&app);
+    assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), false);
+    assert_navigation_activity(&ui_state, &["mmatrix", "rooms: 1", "Beta"], false);
+    assert!(!find_ui_room(&ui_state, "!beta:example").has_activity);
+    assert_eq!(
+        find_ui_room(&ui_state, "!beta:example").read_target_event_id,
+        None
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn custom_room_timeline_gettext_normalizes_multiline_bodies()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
@@ -3173,6 +3368,31 @@ unsafe fn read_window_text(hwnd: HWND) -> String {
 
 unsafe fn timeline_top_line(hwnd: HWND) -> i32 {
     unsafe { SendMessageW(hwnd, WM_TIMELINE_GET_TOP_LINE, 0, 0) as i32 }
+}
+
+fn send_timeline_scroll(app: &MmatrixApp, command: WPARAM) {
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(app) };
+    unsafe {
+        SendMessageW(timeline_hwnd, WM_VSCROLL, command, 0);
+    }
+}
+
+fn trigger_timeline_history_backfill(app: &MmatrixApp) {
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(app) };
+    if unsafe { timeline_top_line(timeline_hwnd) } == 0 {
+        send_timeline_scroll(app, SB_PAGEDOWN as WPARAM);
+        assert!(
+            unsafe { timeline_top_line(timeline_hwnd) } > 0,
+            "page-down must move the timeline away from the top before requesting history backfill"
+        );
+    }
+
+    send_timeline_scroll(app, SB_PAGEUP as WPARAM);
+    assert_eq!(
+        unsafe { timeline_top_line(timeline_hwnd) },
+        0,
+        "page-up at the top boundary must land at the top line"
+    );
 }
 
 unsafe fn scrollbar_info(hwnd: HWND) -> Option<SCROLLINFO> {

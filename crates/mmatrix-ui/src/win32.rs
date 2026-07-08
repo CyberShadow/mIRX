@@ -16,19 +16,20 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    AcceptRoomInviteRequest, Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle,
-    CreateDirectRoomRequest, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
-    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioInfo, RoomFileInfo, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CommandSender, CoreConfig,
+    CoreErrorEvent, CoreHandle, CreateDirectRoomRequest, E2eeBackupState, E2eeCrossSigningStatus,
+    E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
+    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioInfo, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTyping, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -371,6 +372,34 @@ impl Default for TimelineState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RoomHistoryBackfillStatus {
+    Idle,
+    Loading {
+        from: Option<String>,
+    },
+    Exhausted,
+    Failed {
+        from: Option<String>,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoomHistoryBackfillState {
+    next_token: Option<String>,
+    status: RoomHistoryBackfillStatus,
+}
+
+impl Default for RoomHistoryBackfillState {
+    fn default() -> Self {
+        Self {
+            next_token: None,
+            status: RoomHistoryBackfillStatus::Idle,
+        }
+    }
+}
+
 #[derive(Default)]
 struct UiModel {
     status: String,
@@ -394,6 +423,15 @@ struct RoomViewModel {
     image_media: BTreeMap<String, RoomImageMediaState>,
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
+    history: RoomHistoryBackfillState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineBackfillAnchor {
+    room_id: String,
+    source_row: TimelineRow,
+    source_row_index: usize,
+    source_row_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -551,6 +589,93 @@ impl RoomViewModel {
             }
         }
         self.rebuild_threads();
+    }
+
+    fn apply_history_backfill(&mut self, room_id: &str, backfill: RoomHistoryBackfill) {
+        assert_eq!(
+            backfill.room_id, room_id,
+            "room history backfill must target the mutated room view"
+        );
+
+        let mut prepended_count = 0usize;
+        let mut changed = false;
+        for event in backfill.events {
+            match event {
+                RoomHistoryBackfillEvent::Activity(activity) => {
+                    assert_eq!(
+                        activity.room_id, room_id,
+                        "room history activity must target the mutated room view"
+                    );
+                    if room_activity_event_id(&activity).is_some_and(|event_id| {
+                        self.find_activity_index_by_event_id(event_id).is_some()
+                    }) {
+                        continue;
+                    }
+
+                    self.activities.insert(prepended_count, *activity);
+                    prepended_count += 1;
+                    changed = true;
+                }
+                RoomHistoryBackfillEvent::ActivityUpdate(update) => {
+                    assert_eq!(
+                        update.room_id, room_id,
+                        "room history activity update must target the mutated room view"
+                    );
+                    if self.validate_update(&update).is_err() {
+                        continue;
+                    }
+
+                    let applied = match (&update.target, &update.kind) {
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::MessageReplaced {
+                                presentation, body, ..
+                            },
+                        ) => self.replace_message(
+                            event_id,
+                            MessageReplacementFields {
+                                presentation: *presentation,
+                                body: body.clone(),
+                            },
+                        ),
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::ActivityRedacted { .. },
+                        ) => self.redact_activity(event_id),
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::ReactionAdded {
+                                reaction_event_id,
+                                sender,
+                                timestamp_ms,
+                                key,
+                            },
+                        ) => self.add_reaction(
+                            event_id,
+                            reaction_event_id,
+                            sender,
+                            *timestamp_ms,
+                            key,
+                        ),
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::ReactionRemoved {
+                                reaction_event_id,
+                                key,
+                                ..
+                            },
+                        ) => self.remove_reaction(event_id, reaction_event_id, key),
+                        _ => false,
+                    };
+                    changed |= applied;
+                }
+            }
+        }
+
+        if changed {
+            self.rebuild_threads();
+            self.retain_image_media_for_visible_activities();
+        }
     }
 
     fn replace_typing(&mut self, typing: RoomTyping) {
@@ -1855,6 +1980,39 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
     {
         state.model.last_activity = last_activity_from_room_activity(updated_activity);
     }
+}
+
+fn apply_room_history_backfill_event(state: &mut WindowState, backfill: RoomHistoryBackfill) {
+    let room_id = backfill.room_id.clone();
+    state.model.status = format!("timeline update from {room_id}");
+    let end = backfill.end.clone();
+    let room_view = state.model.room_views.entry(room_id.clone()).or_default();
+    room_view.apply_history_backfill(&room_id, backfill);
+    room_view.history.next_token = end.clone();
+    room_view.history.status = match end {
+        Some(_) => RoomHistoryBackfillStatus::Idle,
+        None => RoomHistoryBackfillStatus::Exhausted,
+    };
+    prune_decoded_images(state);
+}
+
+fn apply_backfill_room_history_error(state: &mut WindowState, message: String) {
+    let Some(room_id) = loading_room_history_room_id(&state.model.room_views) else {
+        return;
+    };
+    let room_view = state
+        .model
+        .room_views
+        .get_mut(&room_id)
+        .expect("loading room history state must resolve to an existing room view");
+    let RoomHistoryBackfillStatus::Loading { from } = &room_view.history.status else {
+        panic!("loading room history room must stay loading until backfill completion");
+    };
+    let from = from.clone();
+    room_view.history.status = RoomHistoryBackfillStatus::Failed {
+        from: from.clone(),
+        message,
+    };
 }
 
 fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadState) {
@@ -3459,6 +3617,38 @@ unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
     apply_timeline_content(hwnd, rows.to_vec(), rendered_text, lines, paint_lines);
 }
 
+unsafe fn timeline_source_row_paint_line_count(hwnd: HWND, row: &TimelineRow) -> usize {
+    timeline_row_paint_lines(hwnd, std::slice::from_ref(row), timeline_client_width(hwnd)).len()
+}
+
+unsafe fn timeline_source_row_index_for_top_line(
+    hwnd: HWND,
+    rows: &[TimelineRow],
+    top_line: usize,
+) -> Option<usize> {
+    let mut next_top_line = 0usize;
+    for (index, row) in rows.iter().enumerate() {
+        let line_count = timeline_source_row_paint_line_count(hwnd, row);
+        if top_line < next_top_line + line_count {
+            return Some(index);
+        }
+        next_top_line += line_count;
+    }
+
+    (!rows.is_empty()).then_some(rows.len() - 1)
+}
+
+unsafe fn timeline_top_line_for_source_row_index(
+    hwnd: HWND,
+    rows: &[TimelineRow],
+    source_row_index: usize,
+) -> usize {
+    rows.iter()
+        .take(source_row_index)
+        .map(|row| timeline_source_row_paint_line_count(hwnd, row))
+        .sum()
+}
+
 unsafe fn set_room_member_list(hwnd: HWND, rows: &[RoomMemberView]) {
     SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
     for row in rows {
@@ -3568,6 +3758,78 @@ unsafe fn update_timeline_scrollbar(hwnd: HWND) {
     }
 }
 
+unsafe fn capture_room_history_backfill_anchor(
+    state: &WindowState,
+    room_id: &str,
+) -> Option<TimelineBackfillAnchor> {
+    let ViewId::Room(active_room_id) = &state.active_view else {
+        return None;
+    };
+    if active_room_id != room_id {
+        return None;
+    }
+
+    let view = state.views.get(&state.active_view)?;
+    let timeline = room_content_timeline(view.content);
+    let timeline_state = timeline_state_ref(timeline);
+    let source_row_index = timeline_source_row_index_for_top_line(
+        timeline,
+        &timeline_state.source_rows,
+        timeline_state.top_line,
+    )?;
+    Some(TimelineBackfillAnchor {
+        room_id: room_id.to_owned(),
+        source_row: timeline_state.source_rows.get(source_row_index)?.clone(),
+        source_row_index,
+        source_row_count: timeline_state.source_rows.len(),
+    })
+}
+
+unsafe fn restore_room_history_backfill_anchor(hwnd: HWND, anchor: TimelineBackfillAnchor) {
+    let state = state_ref(hwnd);
+    let ViewId::Room(active_room_id) = &state.active_view else {
+        return;
+    };
+    if *active_room_id != anchor.room_id {
+        return;
+    }
+
+    let Some(view) = state.views.get(&state.active_view) else {
+        return;
+    };
+    let timeline = room_content_timeline(view.content);
+    let timeline_state = timeline_state_ref(timeline);
+    if timeline_state.source_rows.is_empty() {
+        return;
+    }
+
+    let source_row_index = timeline_state
+        .source_rows
+        .iter()
+        .position(|row| row == &anchor.source_row)
+        .unwrap_or_else(|| {
+            anchor
+                .source_row_index
+                .saturating_add(
+                    timeline_state
+                        .source_rows
+                        .len()
+                        .saturating_sub(anchor.source_row_count),
+                )
+                .min(timeline_state.source_rows.len().saturating_sub(1))
+        });
+    let top_line = timeline_top_line_for_source_row_index(
+        timeline,
+        &timeline_state.source_rows,
+        source_row_index,
+    );
+    let visible_rows = timeline_visible_rows(timeline);
+    let max_top_line = timeline_max_top_line(timeline_state.paint_lines.len(), visible_rows);
+    timeline_state_mut(timeline).top_line = top_line.min(max_top_line);
+    update_timeline_scrollbar(timeline);
+    InvalidateRect(timeline, null(), 1);
+}
+
 unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     let command = (wparam & 0xffff) as i32;
     let visible_rows = timeline_visible_rows(hwnd);
@@ -3605,6 +3867,15 @@ unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
         timeline_state_mut(hwnd).top_line = next;
         update_timeline_scrollbar(hwnd);
         InvalidateRect(hwnd, null(), 1);
+    }
+
+    if matches!(
+        command,
+        SB_TOP | SB_PAGEUP | SB_THUMBPOSITION | SB_THUMBTRACK
+    ) && next == 0
+        && let Err(message) = submit_backfill_room_history(hwnd)
+    {
+        eprintln!("{message}");
     }
 
     0
@@ -3873,6 +4144,27 @@ unsafe fn timeline_window_state(hwnd: HWND) -> &'static WindowState {
     let frame = GetParent(mdi_client);
     assert!(!frame.is_null(), "mdi client must have a frame parent");
     state_ref(frame)
+}
+
+unsafe fn timeline_window_state_mut(hwnd: HWND) -> &'static mut WindowState {
+    let room_content = GetParent(hwnd);
+    assert!(
+        !room_content.is_null(),
+        "timeline control must have a room content parent"
+    );
+    let mdi_child = GetParent(room_content);
+    assert!(
+        !mdi_child.is_null(),
+        "room content must have an mdi child parent"
+    );
+    let mdi_client = GetParent(mdi_child);
+    assert!(
+        !mdi_client.is_null(),
+        "mdi child must have an mdi client parent"
+    );
+    let frame = GetParent(mdi_client);
+    assert!(!frame.is_null(), "mdi client must have a frame parent");
+    state_mut(frame)
 }
 
 fn scaled_thumbnail_dimensions(
@@ -4880,7 +5172,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         }
         Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
-        Event::RoomHistoryBackfill(_) => {}
+        Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
         Event::RoomImageMedia(media) => apply_room_image_media_event(state, media),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
@@ -4928,6 +5220,9 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.lifecycle_state = LifecycleState::Syncing;
         }
         Event::Error(error) => {
+            if error.operation == Operation::BackfillRoomHistory {
+                apply_backfill_room_history_error(state, error.message.clone());
+            }
             if !preserves_submission_status(&state.model.status, error.operation) {
                 state.model.status = format!("error during {}", operation_name(error.operation));
             }
@@ -8053,15 +8348,25 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
         return Ok(());
     }
 
+    let mut history_backfill_anchor = None;
     {
         let state = state_mut(hwnd);
         for event in events {
+            if history_backfill_anchor.is_none()
+                && let Event::RoomHistoryBackfill(backfill) = &event
+            {
+                history_backfill_anchor =
+                    capture_room_history_backfill_anchor(state, &backfill.room_id);
+            }
             apply_core_event(state, event)?;
             state.event_generation += 1;
         }
     }
 
     sync_views_and_tree(hwnd)?;
+    if let Some(anchor) = history_backfill_anchor {
+        restore_room_history_backfill_anchor(hwnd, anchor);
+    }
     Ok(())
 }
 
@@ -9837,6 +10142,97 @@ fn submit_mark_room_read(
     Ok(())
 }
 
+fn loading_room_history_room_id(room_views: &BTreeMap<String, RoomViewModel>) -> Option<String> {
+    let mut loading_room_ids = room_views
+        .iter()
+        .filter(|(_, room_view)| {
+            matches!(
+                room_view.history.status,
+                RoomHistoryBackfillStatus::Loading { .. }
+            )
+        })
+        .map(|(room_id, _)| room_id.clone());
+    let loading_room_id = loading_room_ids.next();
+    #[cfg(test)]
+    {
+        assert!(
+            loading_room_ids.next().is_none(),
+            "room history backfill must keep a single in-flight loading room"
+        );
+    }
+    loading_room_id
+}
+
+fn submit_backfill_room_history_for_room(
+    state: &mut WindowState,
+    room_id: &str,
+) -> Result<bool, String> {
+    if sendable_room_by_id(&state.model.rooms, room_id).is_none() {
+        return Ok(false);
+    }
+    if loading_room_history_room_id(&state.model.room_views).is_some() {
+        return Ok(false);
+    }
+
+    let Some(sender) = state.command_sender.as_ref().cloned() else {
+        return Ok(false);
+    };
+
+    let command = {
+        let room_view = state
+            .model
+            .room_views
+            .entry(room_id.to_owned())
+            .or_default();
+        if matches!(
+            room_view.history.status,
+            RoomHistoryBackfillStatus::Exhausted
+        ) {
+            return Ok(false);
+        }
+
+        let from = room_view.history.next_token.clone();
+        room_view.history.status = RoomHistoryBackfillStatus::Loading { from: from.clone() };
+        Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+            room_id: room_id.to_owned(),
+            from,
+            limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+        })
+    };
+
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue backfill room history command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(true)
+}
+
+unsafe fn submit_backfill_room_history(hwnd: HWND) -> Result<(), String> {
+    let room_content = GetParent(hwnd);
+    if room_content.is_null() {
+        return Ok(());
+    }
+    let mdi_child = GetParent(room_content);
+    if mdi_child.is_null() {
+        return Ok(());
+    }
+
+    let state = timeline_window_state_mut(hwnd);
+    let ViewId::Room(room_id) = &state.active_view else {
+        return Ok(());
+    };
+    let room_id = room_id.clone();
+    let Some(active_view) = state.views.get(&state.active_view) else {
+        return Ok(());
+    };
+    if active_view.child != mdi_child {
+        return Ok(());
+    }
+
+    let _ = submit_backfill_room_history_for_room(state, &room_id)?;
+    Ok(())
+}
+
 fn clear_view_activity_marker(state: &mut WindowState, view_id: &ViewId) -> (bool, Option<String>) {
     let read_target = state.room_activity_read_targets.remove(view_id);
     let cleared_view_activity = state.room_activity.remove(view_id);
@@ -10599,6 +10995,28 @@ mod tests {
             num_unread,
             num_notifications,
             num_mentions,
+        })
+    }
+
+    fn history_backfill_event_from_event(event: Event) -> RoomHistoryBackfillEvent {
+        match event {
+            Event::RoomActivity(activity) => RoomHistoryBackfillEvent::Activity(activity),
+            Event::RoomActivityUpdate(update) => RoomHistoryBackfillEvent::ActivityUpdate(update),
+            other => panic!("expected room history backfill event payload, got {other:?}"),
+        }
+    }
+
+    fn room_history_backfill(
+        room_id: &str,
+        start: &str,
+        end: Option<&str>,
+        events: Vec<RoomHistoryBackfillEvent>,
+    ) -> Event {
+        Event::RoomHistoryBackfill(RoomHistoryBackfill {
+            room_id: room_id.to_owned(),
+            start: start.to_owned(),
+            end: end.map(str::to_owned),
+            events,
         })
     }
 
@@ -15222,6 +15640,7 @@ mod tests {
                 image_media: BTreeMap::new(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
+                history: RoomHistoryBackfillState::default(),
             },
         );
         state.model.last_activity = Some(LastMessageActivity {
@@ -18044,6 +18463,217 @@ mod tests {
             vec![Command::CreateDirectRoom(CreateDirectRoomRequest {
                 user_id: "@alice:example.org".to_owned(),
             })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_history_backfill_submit_records_initial_loading_command() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: None,
+                limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+            })]
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|room_view| &room_view.history),
+            Some(&RoomHistoryBackfillState {
+                next_token: None,
+                status: RoomHistoryBackfillStatus::Loading { from: None },
+            })
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_history_backfill_submit_ignores_repeat_submit_while_loading() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(false)
+        );
+        assert_eq!(state.recorded_commands.len(), 1);
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|room_view| &room_view.history),
+            Some(&RoomHistoryBackfillState {
+                next_token: None,
+                status: RoomHistoryBackfillStatus::Loading { from: None },
+            })
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_history_backfill_success_sets_next_token_and_reuses_it_on_retry() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        apply_core_event(
+            &mut state,
+            room_history_backfill(
+                "!room:example",
+                "token-1",
+                Some("token-2"),
+                vec![history_backfill_event_from_event(timeline(
+                    "!room:example",
+                    "older row",
+                ))],
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|room_view| &room_view.history),
+            Some(&RoomHistoryBackfillState {
+                next_token: Some("token-2".to_owned()),
+                status: RoomHistoryBackfillStatus::Idle,
+            })
+        );
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        assert_eq!(
+            state.recorded_commands.last(),
+            Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: Some("token-2".to_owned()),
+                limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+            }))
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_history_backfill_success_with_no_end_exhausts_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        apply_core_event(
+            &mut state,
+            room_history_backfill(
+                "!room:example",
+                "token-1",
+                None,
+                vec![history_backfill_event_from_event(timeline(
+                    "!room:example",
+                    "older row",
+                ))],
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|room_view| &room_view.history),
+            Some(&RoomHistoryBackfillState {
+                next_token: None,
+                status: RoomHistoryBackfillStatus::Exhausted,
+            })
+        );
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(false)
+        );
+        assert_eq!(state.recorded_commands.len(), 1);
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_history_backfill_error_preserves_retry_token_and_allows_retry() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state
+            .model
+            .room_views
+            .entry("!room:example".to_owned())
+            .or_default()
+            .history
+            .next_token = Some("token-2".to_owned());
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::BackfillRoomHistory,
+                message: "temporary backfill failure".to_owned(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|room_view| &room_view.history),
+            Some(&RoomHistoryBackfillState {
+                next_token: Some("token-2".to_owned()),
+                status: RoomHistoryBackfillStatus::Failed {
+                    from: Some("token-2".to_owned()),
+                    message: "temporary backfill failure".to_owned(),
+                },
+            })
+        );
+
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+        assert_eq!(
+            state.recorded_commands.last(),
+            Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: Some("token-2".to_owned()),
+                limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+            }))
         );
 
         stop_test_core(handle);
