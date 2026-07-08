@@ -1097,11 +1097,7 @@ mod tests {
         RoomSummary,
     };
 
-    fn room_summary(
-        room_id: &str,
-        display_name: &str,
-        membership: RoomMembership,
-    ) -> RoomSummary {
+    fn room_summary(room_id: &str, display_name: &str, membership: RoomMembership) -> RoomSummary {
         RoomSummary {
             room_id: room_id.to_owned(),
             display_name: display_name.to_owned(),
