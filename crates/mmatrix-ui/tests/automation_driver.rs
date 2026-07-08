@@ -3298,6 +3298,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
                         ),
                     ],
                 ),
+                nav("invites: 0", vec![]),
             ],
         )
     );

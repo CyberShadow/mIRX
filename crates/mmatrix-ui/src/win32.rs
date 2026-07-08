@@ -8529,10 +8529,10 @@ fn resolve_compose_destination(
                 thread: None,
             });
         }
-        if let Some(room) = room_by_id(&state.model.rooms, room_id) {
-            if is_invited_room(room) {
-                return Err(format!("room is not joined: {room_id}"));
-            }
+        if let Some(room) = room_by_id(&state.model.rooms, room_id)
+            && is_invited_room(room)
+        {
+            return Err(format!("room is not joined: {room_id}"));
         }
         return Err(format!("unknown room id: {room_id}"));
     }
