@@ -2315,6 +2315,7 @@ fn attach_thread_reply_relation(
     reply: SendMessageReplyTarget,
 ) -> Result<(), MatrixCoreError> {
     let thread_root_event_id = owned_event_id_from_str(&thread.thread_root_event_id)?;
+    let _latest_event_id = owned_event_id_from_str(&thread.latest_event_id)?;
     let reply_event_id = owned_event_id_from_str(&reply.event_id)?;
     content.relates_to = Some(MessageContentRelation::Thread(Thread::reply(
         thread_root_event_id,
@@ -5665,9 +5666,28 @@ mod tests {
             },
         )
         .expect_err("reject invalid thread root");
-        assert!(invalid_thread_root
-            .to_string()
-            .contains("invalid Matrix event id"));
+        assert!(
+            invalid_thread_root
+                .to_string()
+                .contains("invalid Matrix event id")
+        );
+
+        let invalid_latest_event = attach_thread_reply_relation(
+            &mut content,
+            SendMessageThreadTarget {
+                thread_root_event_id: "$thread-root:example.org".to_owned(),
+                latest_event_id: "not-an-event-id".to_owned(),
+            },
+            SendMessageReplyTarget {
+                event_id: "$reply-target:example.org".to_owned(),
+            },
+        )
+        .expect_err("reject invalid latest event id");
+        assert!(
+            invalid_latest_event
+                .to_string()
+                .contains("invalid Matrix event id")
+        );
 
         let invalid_reply_target = attach_thread_reply_relation(
             &mut content,
@@ -5680,9 +5700,11 @@ mod tests {
             },
         )
         .expect_err("reject invalid reply target");
-        assert!(invalid_reply_target
-            .to_string()
-            .contains("invalid Matrix event id"));
+        assert!(
+            invalid_reply_target
+                .to_string()
+                .contains("invalid Matrix event id")
+        );
     }
 
     #[test]

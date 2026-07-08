@@ -24,10 +24,10 @@ use mmatrix_core::{
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia,
     RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageRequest,
-    SendMessageReplyTarget, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, SendMessageReplyTarget,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -95,11 +95,10 @@ use crate::{
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
-        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedVerificationAction, DumpVerificationActionKind,
+        FailureEnvelope, GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse,
+        MdiState, MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
         ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
         SwitchbarState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
@@ -9027,20 +9026,23 @@ fn dump_submitted_edit_command(command: &Command) -> Option<DumpSubmittedEditCom
 
 fn dump_submitted_reply_command(command: &Command) -> Option<DumpSubmittedReplyCommand> {
     match command {
-        Command::SendMessage(request) => request.reply.as_ref().map(|reply| {
-            DumpSubmittedReplyCommand {
-                room_id: request.room_id.clone(),
-                target_event_id: reply.event_id.clone(),
-                body: request.body.clone(),
-                thread: request
-                    .thread
-                    .as_ref()
-                    .map(|thread| DumpSubmittedReplyThreadTarget {
-                        thread_root_event_id: thread.thread_root_event_id.clone(),
-                        latest_event_id: thread.latest_event_id.clone(),
-                    }),
-            }
-        }),
+        Command::SendMessage(request) => {
+            request
+                .reply
+                .as_ref()
+                .map(|reply| DumpSubmittedReplyCommand {
+                    room_id: request.room_id.clone(),
+                    target_event_id: reply.event_id.clone(),
+                    body: request.body.clone(),
+                    thread: request
+                        .thread
+                        .as_ref()
+                        .map(|thread| DumpSubmittedReplyThreadTarget {
+                            thread_root_event_id: thread.thread_root_event_id.clone(),
+                            latest_event_id: thread.latest_event_id.clone(),
+                        }),
+                })
+        }
         _ => None,
     }
 }
@@ -17209,14 +17211,12 @@ mod tests {
     #[test]
     fn submit_reply_slash_command_from_active_room_records_typed_request_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
-        let status = submit_reply_slash_command(
-            &mut state,
-            "$target".to_owned(),
-            "hello there".to_owned(),
-        )
-        .unwrap();
+        let status =
+            submit_reply_slash_command(&mut state, "$target".to_owned(), "hello there".to_owned())
+                .unwrap();
 
         assert_eq!(status, "Reply queued for $target");
         assert_eq!(
@@ -17344,6 +17344,7 @@ mod tests {
     #[test]
     fn submit_reply_slash_command_requires_available_command_sender() {
         let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         assert_eq!(

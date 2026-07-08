@@ -26,9 +26,9 @@ use mmatrix_testkit::{
     StoredSession, SubmittedDirectRoomCommand, SubmittedMembershipCommand,
     SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    TestkitError, UiError, UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -3399,8 +3399,9 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
         "selected_room": null
     });
 
-    let model = serde_json::from_value::<Model>(input_json)
-        .expect("deserialize full model payload with reply, reaction, and redaction command fields");
+    let model = serde_json::from_value::<Model>(input_json).expect(
+        "deserialize full model payload with reply, reaction, and redaction command fields",
+    );
     assert_eq!(
         model,
         Model {

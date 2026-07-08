@@ -1623,13 +1623,13 @@ mod tests {
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
         DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs,
-        ResponseEnvelope, RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs,
-        SelectRoomArgs, SelectRoomResponse, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
-        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiRoomReadState,
-        UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
-        WaitIdleResponse, failure_response, parse_command_request, success_response,
+        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
+        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiRoomReadState, UiRoomState, UiState,
+        VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -3801,7 +3801,8 @@ mod tests {
     }
 
     #[test]
-    fn dump_model_round_trips_threaded_submitted_reply_commands_and_rejects_unknown_thread_fields() {
+    fn dump_model_round_trips_threaded_submitted_reply_commands_and_rejects_unknown_thread_fields()
+    {
         let model = DumpModel {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
