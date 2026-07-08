@@ -17,6 +17,7 @@ pub enum Command {
     LeaveRoom(LeaveRoomRequest),
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
+    EditMessage(EditMessageRequest),
     SendReaction(SendReactionRequest),
     RedactEvent(RedactEventRequest),
     MarkRoomRead(MarkRoomReadRequest),
@@ -66,6 +67,15 @@ pub struct SendMessageRequest {
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub thread: Option<SendMessageThreadTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditMessageRequest {
+    pub room_id: String,
+    pub target_event_id: String,
+    pub presentation: RoomMessagePresentationKind,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -605,6 +615,7 @@ pub enum Operation {
     LeaveRoom,
     SetRoomTopic,
     SendMessage,
+    EditMessage,
     SendReaction,
     RedactEvent,
     MarkRoomRead,

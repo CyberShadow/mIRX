@@ -3,17 +3,18 @@ use std::time::Duration;
 use mmatrix_core::{
     Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
-    E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
-    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest,
-    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
+    RedactEventRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -337,6 +338,20 @@ fn send_reaction_before_login_emits_send_reaction_error() {
         }),
         Operation::SendReaction,
         "send reaction requires an authenticated session",
+    );
+}
+
+#[test]
+fn edit_message_before_login_emits_edit_message_error() {
+    assert_invalid_authenticated_command(
+        Command::EditMessage(EditMessageRequest {
+            room_id: "!ops:example.org".to_owned(),
+            target_event_id: "$event:example.org".to_owned(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: "edited body".to_owned(),
+        }),
+        Operation::EditMessage,
+        "edit message requires an authenticated session",
     );
 }
 
@@ -1924,6 +1939,47 @@ fn reaction_request_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "redact event request must reject unknown fields"
+    );
+}
+
+#[test]
+fn edit_message_request_round_trips_through_json() {
+    let request = EditMessageRequest {
+        room_id: "!ops:example.org".to_owned(),
+        target_event_id: "$event:example.org".to_owned(),
+        presentation: RoomMessagePresentationKind::Notice,
+        body: "updated incident note".to_owned(),
+    };
+
+    assert_eq!(
+        serde_json::to_value(&request).expect("serialize edit message request"),
+        serde_json::json!({
+            "room_id": "!ops:example.org",
+            "target_event_id": "$event:example.org",
+            "presentation": "notice",
+            "body": "updated incident note"
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<EditMessageRequest>(serde_json::json!({
+            "room_id": "!ops:example.org",
+            "target_event_id": "$event:example.org",
+            "presentation": "notice",
+            "body": "updated incident note"
+        }))
+        .expect("deserialize edit message request"),
+        request
+    );
+}
+
+#[test]
+fn edit_message_request_rejects_unknown_fields() {
+    assert!(
+        serde_json::from_str::<EditMessageRequest>(
+            r#"{"room_id":"!ops:example.org","target_event_id":"$event:example.org","presentation":"text","body":"edited body","unexpected":"value"}"#
+        )
+        .is_err(),
+        "edit message request must reject unknown fields"
     );
 }
 

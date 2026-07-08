@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use mmatrix_core::{
     Command, CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
-    E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event,
-    FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
+    E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
+    Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
     MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RestoreSessionRequest,
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomImageInfo, RoomImageMedia,
@@ -94,7 +94,7 @@ use crate::{
         ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedEditCommand, DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRedactionCommand, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
@@ -2050,6 +2050,10 @@ enum LocalSlashCommand<'a> {
     React {
         target_event_id: String,
         key: String,
+    },
+    Edit {
+        target_event_id: String,
+        body: String,
     },
     Redact {
         event_id: String,
@@ -8011,6 +8015,7 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
             target: Some(argument.to_owned()),
         },
         "react" => parse_react_slash_command(argument),
+        "edit" => parse_edit_slash_command(argument),
         "redact" => parse_redact_slash_command(argument),
         "unreact" => parse_unreact_slash_command(argument),
         "topic" if !argument.is_empty() => LocalSlashCommand::Topic {
@@ -8070,6 +8075,25 @@ fn parse_react_slash_command(argument: &str) -> LocalSlashCommand<'_> {
     LocalSlashCommand::React {
         target_event_id: target_event_id.to_owned(),
         key: key.to_owned(),
+    }
+}
+
+fn parse_edit_slash_command(argument: &str) -> LocalSlashCommand<'_> {
+    let Some(target_end) = argument.bytes().position(|byte| byte.is_ascii_whitespace()) else {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
+        };
+    };
+    let target_event_id = &argument[..target_end];
+    let body = argument[target_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
+    if target_event_id.is_empty() || body.is_empty() {
+        return LocalSlashCommand::Invalid {
+            feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
+        };
+    }
+    LocalSlashCommand::Edit {
+        target_event_id: target_event_id.to_owned(),
+        body: body.to_owned(),
     }
 }
 
@@ -8315,6 +8339,18 @@ unsafe fn execute_local_slash_command(
                 Ok(message) | Err(message) => set_local_command_status(hwnd, message),
             }
         }
+        LocalSlashCommand::Edit {
+            target_event_id,
+            body,
+        } => {
+            let result = {
+                let state = state_mut(hwnd);
+                submit_edit_slash_command(state, target_event_id, body)
+            };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
         LocalSlashCommand::Redact { event_id } => {
             let result = {
                 let state = state_mut(hwnd);
@@ -8555,6 +8591,29 @@ fn submit_react_slash_command(
         .map_err(|err| format!("failed to enqueue send reaction command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("Reaction queued for {target_event_id}"))
+}
+
+fn submit_edit_slash_command(
+    state: &mut WindowState,
+    target_event_id: String,
+    body: String,
+) -> Result<String, String> {
+    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let command = Command::EditMessage(EditMessageRequest {
+        room_id: room_id.clone(),
+        target_event_id: target_event_id.clone(),
+        presentation: RoomMessagePresentationKind::Text,
+        body,
+    });
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue edit message command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("Edit queued for {target_event_id}"))
 }
 
 fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Result<(), String> {
@@ -8887,6 +8946,17 @@ fn dump_submitted_reaction_command(command: &Command) -> Option<DumpSubmittedRea
     }
 }
 
+fn dump_submitted_edit_command(command: &Command) -> Option<DumpSubmittedEditCommand> {
+    match command {
+        Command::EditMessage(request) => Some(DumpSubmittedEditCommand {
+            room_id: request.room_id.clone(),
+            target_event_id: request.target_event_id.clone(),
+            body: request.body.clone(),
+        }),
+        _ => None,
+    }
+}
+
 fn dump_submitted_redaction_command(command: &Command) -> Option<DumpSubmittedRedactionCommand> {
     match command {
         Command::RedactEvent(request) => Some(DumpSubmittedRedactionCommand {
@@ -8934,6 +9004,14 @@ fn submitted_reaction_commands_from_state(
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_reaction_command)
+        .collect()
+}
+
+fn submitted_edit_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedEditCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_edit_command)
         .collect()
 }
 
@@ -8993,6 +9071,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
+        submitted_edit_commands: submitted_edit_commands_from_state(state),
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
@@ -9404,6 +9483,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::LeaveRoom => "leave room",
         Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
+        Operation::EditMessage => "edit message",
         Operation::SendReaction => "send reaction",
         Operation::RedactEvent => "redact event",
         Operation::MarkRoomRead => "mark room read",
@@ -16369,6 +16449,13 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_compose_submission("//edit $event replacement text"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/edit $event replacement text".to_owned()),
+            }
+        );
+        assert_eq!(
             parse_compose_submission("///status"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
@@ -16574,6 +16661,20 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_slash_command("/edit $event-to-edit replacement text"),
+            LocalSlashCommand::Edit {
+                target_event_id: "$event-to-edit".to_owned(),
+                body: "replacement text".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/EDIT   $event-to-edit   replacement text   "),
+            LocalSlashCommand::Edit {
+                target_event_id: "$event-to-edit".to_owned(),
+                body: "replacement text".to_owned(),
+            }
+        );
+        assert_eq!(
             parse_slash_command("/unreact $reaction-alice-plus-one"),
             LocalSlashCommand::Unreact {
                 reaction_event_id: "$reaction-alice-plus-one".to_owned(),
@@ -16647,6 +16748,24 @@ mod tests {
             parse_slash_command("/react $react-normal   "),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /react <event-id> <key>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/edit"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/edit $event-to-edit"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/edit $event-to-edit   "),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
             }
         );
         assert_eq!(
@@ -16947,6 +17066,97 @@ mod tests {
         assert_eq!(
             submit_react_slash_command(&mut state, "$react-normal".to_owned(), "+1".to_owned(),),
             Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_edit_slash_command_from_active_room_records_typed_request_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = room_view_id("!room:example");
+
+        let status = submit_edit_slash_command(
+            &mut state,
+            "$event-to-edit".to_owned(),
+            "replacement text".to_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(status, "Edit queued for $event-to-edit");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::EditMessage(EditMessageRequest {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$event-to-edit".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "replacement text".to_owned(),
+            })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_edit_commands,
+            vec![DumpSubmittedEditCommand {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$event-to-edit".to_owned(),
+                body: "replacement text".to_owned(),
+            }]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_edit_slash_command_from_thread_targets_parent_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.active_view = thread_view_id("!room:example", "$thread-root");
+
+        let status = submit_edit_slash_command(
+            &mut state,
+            "$event-to-edit".to_owned(),
+            "replacement text".to_owned(),
+        )
+        .unwrap();
+
+        assert_eq!(status, "Edit queued for $event-to-edit");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::EditMessage(EditMessageRequest {
+                room_id: "!room:example".to_owned(),
+                target_event_id: "$event-to-edit".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+                body: "replacement text".to_owned(),
+            })]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_edit_slash_command_from_status_returns_no_room_selected() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_edit_slash_command(
+                &mut state,
+                "$event-to-edit".to_owned(),
+                "replacement text".to_owned(),
+            ),
+            Err("no room selected".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn submit_edit_slash_command_requires_available_command_sender() {
+        let mut state = test_state();
+        state.active_view = room_view_id("!room:example");
+
+        assert_eq!(
+            submit_edit_slash_command(
+                &mut state,
+                "$event-to-edit".to_owned(),
+                "replacement text".to_owned(),
+            ),
+            Err("core command sender is not available".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
     }

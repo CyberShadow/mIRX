@@ -11,10 +11,10 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation,
-    E2eeRecoverySucceeded, Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RestoreSessionRequest,
-    RoomMembers, RoomReadState, RoomSummary, SendReactionRequest, SetRoomTopicRequest,
-    VerificationFlowId,
+    E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
+    RestoreSessionRequest, RoomMembers, RoomReadState, RoomSummary, SendReactionRequest,
+    SetRoomTopicRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -193,6 +193,7 @@ async fn handle_command(
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
         Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
+        Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
         Command::SendReaction(request) => handle_send_reaction(event_tx, state, request).await,
         Command::RedactEvent(request) => handle_redact_event(event_tx, state, request).await,
         Command::MarkRoomRead(request) => handle_mark_room_read(event_tx, state, request).await,
@@ -539,6 +540,27 @@ async fn handle_send_reaction(
 
     if let Err(err) = matrix::send_reaction(client, request).await {
         emit_matrix_error(event_tx, Operation::SendReaction, err);
+    }
+
+    false
+}
+
+async fn handle_edit_message(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: EditMessageRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::EditMessage,
+            "edit message requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::edit_message(client, request).await {
+        emit_matrix_error(event_tx, Operation::EditMessage, err);
     }
 
     false

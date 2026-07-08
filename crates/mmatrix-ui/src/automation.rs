@@ -751,6 +751,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_reaction_commands: Vec<DumpSubmittedReactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_edit_commands: Vec<DumpSubmittedEditCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_redaction_commands: Vec<DumpSubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
@@ -784,6 +786,14 @@ pub(crate) struct DumpSubmittedReactionCommand {
     pub(crate) room_id: String,
     pub(crate) target_event_id: String,
     pub(crate) key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedEditCommand {
+    pub(crate) room_id: String,
+    pub(crate) target_event_id: String,
+    pub(crate) body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1045,6 +1055,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::LeaveRoom => "leave_room",
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
+        Operation::EditMessage => "edit_message",
         Operation::SendReaction => "send_reaction",
         Operation::RedactEvent => "redact_event",
         Operation::MarkRoomRead => "mark_room_read",
@@ -1589,16 +1600,17 @@ mod tests {
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedRoomTopicCommand,
-        DumpUnsupportedRoomMessageActivity, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
-        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiRoomReadState, UiRoomState, UiState,
-        VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        DumpSubmittedEditCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
+        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
+        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
+        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
+        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2947,6 +2959,7 @@ mod tests {
                     submitted_direct_room_commands: Vec::new(),
                     submitted_room_topic_commands: Vec::new(),
                     submitted_reaction_commands: Vec::new(),
+                    submitted_edit_commands: Vec::new(),
                     submitted_redaction_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     last_error: None,
@@ -3504,6 +3517,7 @@ mod tests {
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
+            submitted_edit_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
@@ -3577,6 +3591,7 @@ mod tests {
                 topic: "incident review".to_owned(),
             }],
             submitted_reaction_commands: Vec::new(),
+            submitted_edit_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             last_error: None,
@@ -3612,6 +3627,80 @@ mod tests {
     }
 
     #[test]
+    fn dump_model_round_trips_submitted_edit_commands_and_rejects_unknown_nested_fields() {
+        let model = DumpModel {
+            status: "ready".to_owned(),
+            lifecycle_state: LifecycleState::Ready,
+            rooms: Vec::new(),
+            last_activity: None,
+            e2ee_status: None,
+            last_verification: None,
+            submitted_membership_commands: Vec::new(),
+            submitted_direct_room_commands: Vec::new(),
+            submitted_room_topic_commands: Vec::new(),
+            submitted_reaction_commands: Vec::new(),
+            submitted_edit_commands: vec![DumpSubmittedEditCommand {
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$target:example".to_owned(),
+                body: "replacement text".to_owned(),
+            }],
+            submitted_redaction_commands: Vec::new(),
+            submitted_verification_actions: Vec::new(),
+            last_error: None,
+            selected_room: Some("!ops:example".to_owned()),
+        };
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "status":"ready",
+                "lifecycle_state":"ready",
+                "rooms":[],
+                "last_activity":null,
+                "e2ee_status":null,
+                "last_verification":null,
+                "submitted_edit_commands":[
+                    {
+                        "room_id":"!ops:example",
+                        "target_event_id":"$target:example",
+                        "body":"replacement text"
+                    }
+                ],
+                "last_error":null,
+                "selected_room":"!ops:example"
+            })
+        );
+        assert_eq!(serde_json::from_value::<DumpModel>(json).unwrap(), model);
+
+        let error = serde_json::from_value::<DumpModel>(json!({
+            "status":"ready",
+            "lifecycle_state":"ready",
+            "rooms":[],
+            "last_activity":null,
+            "e2ee_status":null,
+            "last_verification":null,
+            "submitted_membership_commands":[],
+            "submitted_direct_room_commands":[],
+            "submitted_room_topic_commands":[],
+            "submitted_reaction_commands":[],
+            "submitted_edit_commands":[
+                {
+                    "room_id":"!ops:example",
+                    "target_event_id":"$target:example",
+                    "body":"replacement text",
+                    "unexpected":true
+                }
+            ],
+            "submitted_redaction_commands":[],
+            "last_error":null,
+            "selected_room":"!ops:example"
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field `unexpected`"));
+    }
+
+    #[test]
     fn dump_model_round_trips_submitted_reaction_commands_and_rejects_unknown_nested_fields() {
         let model = DumpModel {
             status: "ready".to_owned(),
@@ -3628,6 +3717,7 @@ mod tests {
                 target_event_id: "$target:example".to_owned(),
                 key: "+1".to_owned(),
             }],
+            submitted_edit_commands: Vec::new(),
             submitted_redaction_commands: vec![DumpSubmittedRedactionCommand {
                 room_id: "!ops:example".to_owned(),
                 event_id: "$reaction:example".to_owned(),

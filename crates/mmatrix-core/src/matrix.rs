@@ -20,6 +20,7 @@ use matrix_sdk::{
         },
     },
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
+    room::edit::EditedContent,
     room::Receipts,
     ruma::{
         EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
@@ -58,15 +59,16 @@ use tokio::task::JoinHandle;
 
 use crate::api::{
     CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryState, E2eeStatus, Event, FetchRoomImageMediaRequest, LoginRequest,
-    MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
-    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
-    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession,
     UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
@@ -804,6 +806,9 @@ struct ReactionEventIndexEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingOutgoingKind {
     Message,
+    MessageEdit {
+        target_event_id: String,
+    },
     Reaction {
         target_event_id: String,
         key: String,
@@ -1890,6 +1895,7 @@ fn map_send_queue_update(
                         },
                     })]
                 }
+                Some(PendingOutgoingKind::MessageEdit { .. }) => Vec::new(),
                 Some(PendingOutgoingKind::Reaction { .. })
                 | Some(PendingOutgoingKind::Redaction { .. })
                 | None => Vec::new(),
@@ -1917,6 +1923,12 @@ fn map_send_queue_update(
                         message,
                     }),
                 ],
+                Some(PendingOutgoingKind::MessageEdit { .. }) => vec![Event::Error(
+                    CoreErrorEvent {
+                        operation: Operation::EditMessage,
+                        message,
+                    },
+                )],
                 Some(PendingOutgoingKind::Reaction { .. }) => vec![Event::Error(CoreErrorEvent {
                     operation: Operation::SendReaction,
                     message,
@@ -2033,6 +2045,26 @@ fn outgoing_events_from_local_echo_event(
     send_error: Option<String>,
     pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
+    if let Some(target_event_id) = edited_message_target_event_id_from_serialized_event(
+        serialized_event,
+    )? {
+        insert_pending_outgoing_kind(
+            pending,
+            transaction_id,
+            PendingOutgoingKind::MessageEdit { target_event_id },
+        );
+
+        let mut events = Vec::new();
+        if let Some(send_error) = send_error {
+            events.push(Event::Error(CoreErrorEvent {
+                operation: Operation::EditMessage,
+                message: send_error,
+            }));
+        }
+
+        return Ok(events);
+    }
+
     if let Some(activity) = map_local_message_activity(
         room_id.clone(),
         transaction_id.clone(),
@@ -2186,6 +2218,24 @@ fn message_presentation_and_body_from_serialized_event(
     }))
 }
 
+fn edited_message_target_event_id_from_serialized_event(
+    serialized_event: &SerializableEventContent,
+) -> Result<Option<String>, MatrixCoreError> {
+    let AnyMessageLikeEventContent::RoomMessage(content) = serialized_event
+        .deserialize()
+        .map_err(|err| MatrixCoreError::new(format!("failed to deserialize local echo: {err}")))?
+    else {
+        return Ok(None);
+    };
+
+    match content.relates_to {
+        Some(MessageContentRelation::Replacement(replacement)) => {
+            Ok(Some(replacement.event_id.to_string()))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn reaction_target_and_key_from_serialized_event(
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<(String, String)>, MatrixCoreError> {
@@ -2210,6 +2260,23 @@ fn room_message_event_content(
         RoomMessagePresentationKind::Text => RoomMessageEventContent::text_plain(body),
         RoomMessagePresentationKind::Notice => RoomMessageEventContent::notice_plain(body),
         RoomMessagePresentationKind::Emote => RoomMessageEventContent::emote_plain(body),
+    }
+}
+
+fn room_message_event_content_without_relation(
+    presentation: RoomMessagePresentationKind,
+    body: String,
+) -> RoomMessageEventContentWithoutRelation {
+    match presentation {
+        RoomMessagePresentationKind::Text => {
+            RoomMessageEventContentWithoutRelation::text_plain(body)
+        }
+        RoomMessagePresentationKind::Notice => {
+            RoomMessageEventContentWithoutRelation::notice_plain(body)
+        }
+        RoomMessagePresentationKind::Emote => {
+            RoomMessageEventContentWithoutRelation::emote_plain(body)
+        }
     }
 }
 
@@ -2294,6 +2361,28 @@ pub(crate) async fn send_reaction(
     Ok(())
 }
 
+pub(crate) async fn edit_message(
+    client: &Client,
+    request: EditMessageRequest,
+) -> Result<(), MatrixCoreError> {
+    let room = joined_room_by_id(client, &request.room_id)?;
+    let target_event_id = <&EventId>::try_from(request.target_event_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix event id: {err}")))?;
+    let new_content =
+        room_message_event_content_without_relation(request.presentation, request.body);
+    let edit_event = room
+        .make_edit_event(target_event_id, EditedContent::RoomMessage(new_content))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to create Matrix message edit: {err}")))?;
+
+    room.send_queue()
+        .send(edit_event)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message edit: {err}")))?;
+
+    Ok(())
+}
+
 pub(crate) async fn redact_event(
     client: &Client,
     request: RedactEventRequest,
@@ -2369,8 +2458,9 @@ mod tests {
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_image_media_request_parameters, room_list_update_is_relevant, room_members_from_parts,
-        room_message_event_content, room_read_state_from_parts, room_read_update_is_relevant,
-        room_tag_summaries_from_tags, room_timeline_event_from_sync_message,
+        room_message_event_content, room_message_event_content_without_relation,
+        room_read_state_from_parts, room_read_update_is_relevant, room_tag_summaries_from_tags,
+        room_timeline_event_from_sync_message,
         room_typing_from_sync_typing, sorted_room_member_summaries_from_parts,
         verification_flow_id_from_to_device, verification_request_from_to_device,
         verification_requested_state_event,
@@ -2406,7 +2496,10 @@ mod tests {
                 room::MediaSource,
                 room::{
                     member::OriginalSyncRoomMemberEvent,
-                    message::{OriginalSyncRoomMessageEvent, RoomMessageEventContent},
+                    message::{
+                        OriginalSyncRoomMessageEvent, ReplacementMetadata,
+                        RoomMessageEventContent,
+                    },
                     redaction::OriginalSyncRoomRedactionEvent,
                     topic::OriginalSyncRoomTopicEvent,
                 },
@@ -4647,6 +4740,33 @@ mod tests {
     }
 
     #[test]
+    fn edit_send_queue_sent_update_emits_no_message_sent() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(
+            &pending,
+            "txn-1".to_owned(),
+            PendingOutgoingKind::MessageEdit {
+                target_event_id: "$target:example.org".to_owned(),
+            },
+        );
+
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SentEvent {
+                    transaction_id: transaction_id(),
+                    event_id: event_id(),
+                },
+            },
+            "@alice:example.org",
+            &pending,
+        )
+        .expect("map edit sent update");
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
     fn redaction_send_queue_sent_update_emits_no_message_sent() {
         let pending = pending_outgoing_registry();
         insert_pending_outgoing_kind(
@@ -4700,6 +4820,39 @@ mod tests {
             Some(&PendingOutgoingKind::Reaction {
                 target_event_id: "$target:example.org".to_owned(),
                 key: "+1".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn restored_edit_local_echo_registers_pending_edit_without_room_activity() {
+        let pending = pending_outgoing_registry();
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(
+                room_message_event_content_without_relation(
+                    RoomMessagePresentationKind::Text,
+                    "edited body".to_owned(),
+                )
+                .make_replacement(ReplacementMetadata::new(event_id(), None)),
+            ))
+            .expect("serialize edit event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            MilliSecondsSinceUnixEpoch::now(),
+            &serialized_event,
+            None,
+            &pending,
+        )
+        .expect("map restored edit local echo");
+
+        assert!(events.is_empty());
+        assert_eq!(
+            pending.lock().expect("lock pending registry").get("txn-1"),
+            Some(&PendingOutgoingKind::MessageEdit {
+                target_event_id: "$event:example.org".to_owned(),
             })
         );
     }
@@ -4973,6 +5126,45 @@ mod tests {
     }
 
     #[test]
+    fn restored_failed_edit_local_echo_re_emits_edit_error_surface() {
+        let pending = pending_outgoing_registry();
+        let serialized_event =
+            SerializableEventContent::new(&AnyMessageLikeEventContent::RoomMessage(
+                room_message_event_content_without_relation(
+                    RoomMessagePresentationKind::Text,
+                    "edited body".to_owned(),
+                )
+                .make_replacement(ReplacementMetadata::new(event_id(), None)),
+            ))
+            .expect("serialize failed edit event");
+
+        let events = outgoing_events_from_local_echo_event(
+            "!room:example.org".to_owned(),
+            "txn-1".to_owned(),
+            "@alice:example.org",
+            MilliSecondsSinceUnixEpoch::now(),
+            &serialized_event,
+            Some("edit send failed".to_owned()),
+            &pending,
+        )
+        .expect("map restored failed edit local echo");
+
+        assert_eq!(
+            events,
+            vec![Event::Error(CoreErrorEvent {
+                operation: Operation::EditMessage,
+                message: "edit send failed".to_owned(),
+            })]
+        );
+        assert_eq!(
+            pending.lock().expect("lock pending registry").get("txn-1"),
+            Some(&PendingOutgoingKind::MessageEdit {
+                target_event_id: "$event:example.org".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn send_queue_error_maps_to_failed_activity_update_and_error_surface() {
         let pending = pending_outgoing_registry();
         insert_pending_outgoing_kind(&pending, "txn-1".to_owned(), PendingOutgoingKind::Message);
@@ -5010,6 +5202,42 @@ mod tests {
                     message: "send failed".to_owned(),
                 }),
             ]
+        );
+    }
+
+    #[test]
+    fn edit_send_queue_error_emits_typed_error_only() {
+        let pending = pending_outgoing_registry();
+        insert_pending_outgoing_kind(
+            &pending,
+            "txn-1".to_owned(),
+            PendingOutgoingKind::MessageEdit {
+                target_event_id: "$target:example.org".to_owned(),
+            },
+        );
+
+        let events = map_send_queue_update(
+            SendQueueUpdate {
+                room_id: room_id(),
+                update: RoomSendQueueUpdate::SendError {
+                    transaction_id: transaction_id(),
+                    error: Arc::new(matrix_sdk::Error::from(std::io::Error::other(
+                        "edit send failed",
+                    ))),
+                    is_recoverable: true,
+                },
+            },
+            "@alice:example.org",
+            &pending,
+        )
+        .expect("map edit send error");
+
+        assert_eq!(
+            events,
+            vec![Event::Error(CoreErrorEvent {
+                operation: Operation::EditMessage,
+                message: "edit send failed".to_owned(),
+            })]
         );
     }
 
@@ -5107,6 +5335,64 @@ mod tests {
         assert_eq!(text["msgtype"], "m.text");
         assert_eq!(notice["msgtype"], "m.notice");
         assert_eq!(emote["msgtype"], "m.emote");
+    }
+
+    #[test]
+    fn room_message_event_content_without_relation_serializes_expected_shapes() {
+        let text = serde_json::to_value(room_message_event_content_without_relation(
+            RoomMessagePresentationKind::Text,
+            "hello".to_owned(),
+        ))
+        .expect("serialize text content without relation");
+        let notice = serde_json::to_value(room_message_event_content_without_relation(
+            RoomMessagePresentationKind::Notice,
+            "heads up".to_owned(),
+        ))
+        .expect("serialize notice content without relation");
+        let emote = serde_json::to_value(room_message_event_content_without_relation(
+            RoomMessagePresentationKind::Emote,
+            "waves".to_owned(),
+        ))
+        .expect("serialize emote content without relation");
+
+        assert_eq!(text["msgtype"], "m.text");
+        assert_eq!(text["body"], "hello");
+        assert!(text.get("m.relates_to").is_none());
+
+        assert_eq!(notice["msgtype"], "m.notice");
+        assert_eq!(notice["body"], "heads up");
+        assert!(notice.get("m.relates_to").is_none());
+
+        assert_eq!(emote["msgtype"], "m.emote");
+        assert_eq!(emote["body"], "waves");
+        assert!(emote.get("m.relates_to").is_none());
+    }
+
+    #[test]
+    fn room_message_edit_content_serializes_replacement_shape() {
+        let content = room_message_event_content_without_relation(
+            RoomMessagePresentationKind::Text,
+            "edited body".to_owned(),
+        )
+        .make_replacement(ReplacementMetadata::new(event_id(), None));
+
+        assert_eq!(
+            serde_json::to_value(content).expect("serialize replacement content"),
+            serde_json::json!({
+                "msgtype": "m.text",
+                "body": "* edited body",
+                "format": "org.matrix.custom.html",
+                "formatted_body": "* ",
+                "m.new_content": {
+                    "msgtype": "m.text",
+                    "body": "edited body",
+                },
+                "m.relates_to": {
+                    "rel_type": "m.replace",
+                    "event_id": "$event:example.org",
+                }
+            })
+        );
     }
 
     #[test]

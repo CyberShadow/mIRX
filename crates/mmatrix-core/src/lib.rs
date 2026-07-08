@@ -8,7 +8,8 @@ pub const FOUNDATION_PHASE: &str = "bootstrap";
 pub use api::{
     Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState,
-    E2eeRecoverySucceeded, E2eeStatus, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
+    E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
+    JoinRoomRequest,
     LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
     RedactEventRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
