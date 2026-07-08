@@ -13,8 +13,10 @@ pub enum Command {
     RestoreSession(RestoreSessionRequest),
     StartSync,
     JoinRoom(JoinRoomRequest),
+    AcceptRoomInvite(AcceptRoomInviteRequest),
     CreateDirectRoom(CreateDirectRoomRequest),
     LeaveRoom(LeaveRoomRequest),
+    RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
     EditMessage(EditMessageRequest),
@@ -119,6 +121,18 @@ pub struct LeaveRoomRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AcceptRoomInviteRequest {
+    pub room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RejectRoomInviteRequest {
+    pub room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SetRoomTopicRequest {
     pub room_id: String,
     pub topic: String,
@@ -177,11 +191,19 @@ pub struct RoomTagSummary {
     pub order: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMembership {
+    Join,
+    Invite,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomSummary {
     pub room_id: String,
     pub display_name: String,
+    pub membership: RoomMembership,
     pub encrypted: bool,
     pub is_space: bool,
     pub is_direct: bool,
@@ -617,8 +639,10 @@ pub enum Operation {
     SessionUpdate,
     StartSync,
     JoinRoom,
+    AcceptRoomInvite,
     CreateDirectRoom,
     LeaveRoom,
+    RejectRoomInvite,
     SetRoomTopic,
     SendMessage,
     EditMessage,

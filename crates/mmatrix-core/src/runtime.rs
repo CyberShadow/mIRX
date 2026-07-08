@@ -10,11 +10,12 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
-    Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation,
-    E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest, LeaveRoomRequest,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RestoreSessionRequest, RoomMembers, RoomReadState, RoomSummary, SendReactionRequest,
-    SetRoomTopicRequest, VerificationFlowId,
+    AcceptRoomInviteRequest, Command, CoreConfig, CoreErrorEvent, CreateDirectRoomRequest,
+    E2eeRecoveryOperation, E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomMembers,
+    RoomMembership, RoomReadState, RoomSummary, SendReactionRequest, SetRoomTopicRequest,
+    VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -187,10 +188,16 @@ async fn handle_command(
         }
         Command::StartSync => handle_start_sync(event_tx, state),
         Command::JoinRoom(request) => handle_join_room(event_tx, state, request).await,
+        Command::AcceptRoomInvite(request) => {
+            handle_accept_room_invite(event_tx, state, request).await
+        }
         Command::CreateDirectRoom(request) => {
             handle_create_direct_room(event_tx, state, request).await
         }
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
+        Command::RejectRoomInvite(request) => {
+            handle_reject_room_invite(event_tx, state, request).await
+        }
         Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -444,8 +451,34 @@ async fn handle_join_room(
         return false;
     }
 
-    if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
         emit_matrix_error(event_tx, Operation::JoinRoom, err);
+    }
+
+    false
+}
+
+async fn handle_accept_room_invite(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: AcceptRoomInviteRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::AcceptRoomInvite,
+            "accept room invitation requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::accept_room_invite(client, &request.room_id).await {
+        emit_matrix_error(event_tx, Operation::AcceptRoomInvite, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::AcceptRoomInvite, err);
     }
 
     false
@@ -470,7 +503,7 @@ async fn handle_create_direct_room(
         return false;
     }
 
-    if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
         emit_matrix_error(event_tx, Operation::CreateDirectRoom, err);
     }
 
@@ -496,8 +529,34 @@ async fn handle_leave_room(
         return false;
     }
 
-    if let Err(err) = matrix::emit_joined_room_snapshot(client, event_tx).await {
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
         emit_matrix_error(event_tx, Operation::LeaveRoom, err);
+    }
+
+    false
+}
+
+async fn handle_reject_room_invite(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: RejectRoomInviteRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::RejectRoomInvite,
+            "reject room invitation requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::reject_room_invite(client, &request.room_id).await {
+        emit_matrix_error(event_tx, Operation::RejectRoomInvite, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::RejectRoomInvite, err);
     }
 
     false
@@ -935,12 +994,22 @@ fn emit_initial_synced_rooms_members_and_read_states(
     room_members: Vec<RoomMembers>,
     room_read_states: Vec<RoomReadState>,
 ) {
+    let joined_room_ids = rooms
+        .iter()
+        .filter(|room| room.membership == RoomMembership::Join)
+        .map(|room| room.room_id.clone())
+        .collect::<std::collections::HashSet<_>>();
+
     emit_event(event_tx, Event::SyncedRooms(rooms));
     for members in room_members {
-        emit_event(event_tx, Event::RoomMembers(members));
+        if joined_room_ids.contains(&members.room_id) {
+            emit_event(event_tx, Event::RoomMembers(members));
+        }
     }
     for read_state in room_read_states {
-        emit_event(event_tx, Event::RoomReadState(read_state));
+        if joined_room_ids.contains(&read_state.room_id) {
+            emit_event(event_tx, Event::RoomReadState(read_state));
+        }
     }
 }
 
@@ -1024,13 +1093,19 @@ mod tests {
     };
     use crate::api::CoreConfig;
     use crate::api::{
-        Event, Operation, RoomMemberSummary, RoomMembers, RoomReadState, RoomSummary,
+        Event, Operation, RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState,
+        RoomSummary,
     };
 
-    fn room_summary(room_id: &str, display_name: &str) -> RoomSummary {
+    fn room_summary(
+        room_id: &str,
+        display_name: &str,
+        membership: RoomMembership,
+    ) -> RoomSummary {
         RoomSummary {
             room_id: room_id.to_owned(),
             display_name: display_name.to_owned(),
+            membership,
             encrypted: true,
             is_space: false,
             is_direct: false,
@@ -1135,11 +1210,12 @@ mod tests {
     }
 
     #[test]
-    fn initial_room_members_and_read_states_follow_synced_rooms() {
+    fn initial_room_members_and_read_states_follow_joined_synced_rooms() {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let rooms = vec![
-            room_summary("!ops:example.org", "Ops"),
-            room_summary("!eng:example.org", "Eng"),
+            room_summary("!ops:example.org", "Ops", RoomMembership::Join),
+            room_summary("!eng:example.org", "Eng", RoomMembership::Join),
+            room_summary("!invite:example.org", "Invite", RoomMembership::Invite),
         ];
         let room_members = vec![
             room_members(
@@ -1150,6 +1226,10 @@ mod tests {
                 ],
             ),
             room_members("!eng:example.org", &[("@carol:example.org", Some("Carol"))]),
+            room_members(
+                "!invite:example.org",
+                &[("@dave:example.org", Some("Dave"))],
+            ),
         ];
         let read_states = vec![
             room_read_state(
@@ -1161,6 +1241,11 @@ mod tests {
                 "!eng:example.org",
                 "$latest-eng:example.org",
                 "$fully-read-eng:example.org",
+            ),
+            room_read_state(
+                "!invite:example.org",
+                "$latest-invite:example.org",
+                "$fully-read-invite:example.org",
             ),
         ];
 
@@ -1177,7 +1262,7 @@ mod tests {
                 .expect("synced rooms event"),
             Event::SyncedRooms(rooms)
         );
-        for members in room_members {
+        for members in room_members.into_iter().take(2) {
             assert_eq!(
                 event_rx
                     .recv_timeout(Duration::from_secs(2))
@@ -1185,7 +1270,7 @@ mod tests {
                 Event::RoomMembers(members)
             );
         }
-        for read_state in read_states {
+        for read_state in read_states.into_iter().take(2) {
             assert_eq!(
                 event_rx
                     .recv_timeout(Duration::from_secs(2))

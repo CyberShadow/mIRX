@@ -64,13 +64,13 @@ use crate::api::{
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
-    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
-    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -186,7 +186,7 @@ pub(crate) async fn initial_room_sync(
         .await
         .map_err(|err| MatrixCoreError::new(format!("initial Matrix sync failed: {err}")))?;
 
-    summarize_joined_rooms(client).await
+    summarize_rooms(client).await
 }
 
 pub(crate) fn map_e2ee_recovery_state(state: RecoveryState) -> E2eeRecoveryState {
@@ -303,9 +303,7 @@ fn room_tag_summaries_from_tags(tags: Option<Tags>) -> Vec<RoomTagSummary> {
         .collect()
 }
 
-pub(crate) async fn summarize_joined_rooms(
-    client: &Client,
-) -> Result<Vec<RoomSummary>, MatrixCoreError> {
+pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>, MatrixCoreError> {
     let direct_content = client
         .account()
         .account_data::<DirectEventContent>()
@@ -324,7 +322,8 @@ pub(crate) async fn summarize_joined_rooms(
         .iter()
         .map(|room| room.room_id().to_string())
         .collect::<BTreeSet<_>>();
-    let mut rooms = Vec::with_capacity(joined_rooms.len());
+    let invited_rooms = client.invited_rooms();
+    let mut rooms = Vec::with_capacity(joined_rooms.len() + invited_rooms.len());
 
     for room in joined_rooms {
         let display_name = room.display_name().await.map_err(|err| {
@@ -355,6 +354,7 @@ pub(crate) async fn summarize_joined_rooms(
         rooms.push(RoomSummary {
             room_id: room.room_id().to_string(),
             display_name: display_name.to_string(),
+            membership: RoomMembership::Join,
             encrypted: encrypted.is_encrypted(),
             is_space,
             is_direct: !direct_user_ids.is_empty(),
@@ -363,6 +363,38 @@ pub(crate) async fn summarize_joined_rooms(
             space_children,
         });
     }
+
+    let mut invited_summaries = Vec::with_capacity(invited_rooms.len());
+    for room in invited_rooms {
+        let display_name = room.display_name().await.map_err(|err| {
+            MatrixCoreError::new(format!("failed to read room display name: {err}"))
+        })?;
+        let encrypted = room.latest_encryption_state().await.map_err(|err| {
+            MatrixCoreError::new(format!("failed to read room encryption state: {err}"))
+        })?;
+        let direct_user_ids = direct_user_ids_by_room
+            .get(room.room_id().as_str())
+            .cloned()
+            .unwrap_or_default();
+
+        invited_summaries.push(RoomSummary {
+            room_id: room.room_id().to_string(),
+            display_name: display_name.to_string(),
+            membership: RoomMembership::Invite,
+            encrypted: encrypted.is_encrypted(),
+            is_space: room.is_space(),
+            is_direct: !direct_user_ids.is_empty(),
+            direct_user_ids,
+            tags: Vec::new(),
+            space_children: Vec::new(),
+        });
+    }
+    invited_summaries.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then_with(|| left.room_id.cmp(&right.room_id))
+    });
+    rooms.extend(invited_summaries);
 
     Ok(rooms)
 }
@@ -375,6 +407,26 @@ pub(crate) async fn join_room(client: &Client, room_or_alias: &str) -> Result<()
         .join_room_by_id_or_alias(room_or_alias, &[])
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to join Matrix room: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn accept_room_invite(
+    client: &Client,
+    room_id: &str,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(room_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+
+    let room = client
+        .invited_rooms()
+        .into_iter()
+        .find(|room| room.room_id().as_str() == room_id.as_str())
+        .ok_or_else(|| MatrixCoreError::new(format!("invited room not found: {room_id}")))?;
+
+    room.join().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to accept Matrix room invitation: {err}"))
+    })?;
 
     Ok(())
 }
@@ -413,6 +465,26 @@ pub(crate) async fn leave_joined_room(
     Ok(())
 }
 
+pub(crate) async fn reject_room_invite(
+    client: &Client,
+    room_id: &str,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(room_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+
+    let room = client
+        .invited_rooms()
+        .into_iter()
+        .find(|room| room.room_id().as_str() == room_id.as_str())
+        .ok_or_else(|| MatrixCoreError::new(format!("invited room not found: {room_id}")))?;
+
+    room.leave().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to reject Matrix room invitation: {err}"))
+    })?;
+
+    Ok(())
+}
+
 pub(crate) async fn set_room_topic(
     client: &Client,
     request: SetRoomTopicRequest,
@@ -433,19 +505,16 @@ pub(crate) async fn set_room_topic(
     Ok(())
 }
 
-pub(crate) async fn emit_joined_room_snapshot(
+pub(crate) async fn emit_room_snapshot(
     client: &Client,
     event_tx: &EventSender,
 ) -> Result<(), MatrixCoreError> {
-    emit_event(
-        event_tx,
-        Event::SyncedRooms(summarize_joined_rooms(client).await?),
-    );
+    emit_event(event_tx, Event::SyncedRooms(summarize_rooms(client).await?));
     Ok(())
 }
 
-async fn emit_joined_room_snapshot_or_room_list_error(client: &Client, events: &EventSender) {
-    if let Err(err) = emit_joined_room_snapshot(client, events).await {
+async fn emit_room_snapshot_or_room_list_error(client: &Client, events: &EventSender) {
+    if let Err(err) = emit_room_snapshot(client, events).await {
         emit_event(
             events,
             Event::Error(CoreErrorEvent {
@@ -825,7 +894,7 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     client.add_event_handler(move |_event: DirectEvent, client: Client| {
         let events = direct_account_data_events.clone();
         async move {
-            emit_joined_room_snapshot_or_room_list_error(&client, &events).await;
+            emit_room_snapshot_or_room_list_error(&client, &events).await;
         }
     });
 
@@ -833,7 +902,7 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     client.add_event_handler(move |_event: TagEvent, _room: Room, client: Client| {
         let events = tag_account_data_events.clone();
         async move {
-            emit_joined_room_snapshot_or_room_list_error(&client, &events).await;
+            emit_room_snapshot_or_room_list_error(&client, &events).await;
         }
     });
 
@@ -1769,7 +1838,7 @@ pub(crate) fn start_room_list_update_task(
                         continue;
                     }
 
-                    emit_joined_room_snapshot_or_room_list_error(&client, &events).await;
+                    emit_room_snapshot_or_room_list_error(&client, &events).await;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(

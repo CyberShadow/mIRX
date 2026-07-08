@@ -1,19 +1,20 @@
 use std::time::Duration;
 
 use mmatrix_core::{
-    Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
-    E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest,
-    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RedactEventRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity,
-    RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
-    RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    AcceptRoomInviteRequest, Command, CoreConfig, CreateDirectRoomRequest, E2eeBackupState,
+    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoveryState,
+    E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
+    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageRequest, SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -325,6 +326,28 @@ fn leave_room_before_login_emits_leave_room_error() {
         }),
         Operation::LeaveRoom,
         "leave room requires an authenticated session",
+    );
+}
+
+#[test]
+fn accept_room_invite_before_login_emits_accept_room_invite_error() {
+    assert_invalid_authenticated_command(
+        Command::AcceptRoomInvite(AcceptRoomInviteRequest {
+            room_id: "!ops:example.org".to_owned(),
+        }),
+        Operation::AcceptRoomInvite,
+        "accept room invitation requires an authenticated session",
+    );
+}
+
+#[test]
+fn reject_room_invite_before_login_emits_reject_room_invite_error() {
+    assert_invalid_authenticated_command(
+        Command::RejectRoomInvite(RejectRoomInviteRequest {
+            room_id: "!ops:example.org".to_owned(),
+        }),
+        Operation::RejectRoomInvite,
+        "reject room invitation requires an authenticated session",
     );
 }
 
@@ -663,6 +686,23 @@ fn leave_room_request_round_trips_through_serde() {
 }
 
 #[test]
+fn room_membership_round_trips_through_serde() {
+    for (membership, json) in [
+        (RoomMembership::Join, r#""join""#),
+        (RoomMembership::Invite, r#""invite""#),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&membership).expect("serialize room membership"),
+            json
+        );
+        assert_eq!(
+            serde_json::from_str::<RoomMembership>(json).expect("deserialize room membership"),
+            membership
+        );
+    }
+}
+
+#[test]
 fn mark_room_read_request_round_trips_through_serde() {
     let request = MarkRoomReadRequest {
         room_id: "!room:example.org".to_owned(),
@@ -853,6 +893,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
         RoomSummary {
             room_id: "!space:example.org".to_owned(),
             display_name: "Space".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: true,
             is_direct: false,
@@ -874,6 +915,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
         RoomSummary {
             room_id: "!alpha:example.org".to_owned(),
             display_name: "Alpha".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: true,
             is_space: false,
             is_direct: false,
@@ -884,6 +926,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
         RoomSummary {
             room_id: "!beta:example.org".to_owned(),
             display_name: "Beta".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: false,
             is_direct: false,
@@ -894,6 +937,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
         RoomSummary {
             room_id: "!lobby:example.org".to_owned(),
             display_name: "Lobby".to_owned(),
+            membership: RoomMembership::Join,
             encrypted: false,
             is_space: false,
             is_direct: false,
@@ -906,7 +950,7 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
     let json = serde_json::to_string(&event).expect("serialize synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}]},{"room_id":"!alpha:example.org","display_name":"Alpha","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]},{"room_id":"!beta:example.org","display_name":"Beta","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]},{"room_id":"!lobby:example.org","display_name":"Lobby","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa"},{"room_id":"!beta:example.org","suggested":false,"order":null}]},{"room_id":"!alpha:example.org","display_name":"Alpha","membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]},{"room_id":"!beta:example.org","display_name":"Beta","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]},{"room_id":"!lobby:example.org","display_name":"Lobby","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");
@@ -916,18 +960,18 @@ fn synced_rooms_event_round_trips_space_hierarchy_payload() {
 #[test]
 fn room_summary_and_space_child_reject_unknown_fields() {
     let room_error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}"#,
     )
     .expect_err("room summary must reject unknown fields");
     assert!(
         room_error
             .to_string()
-            .contains("unknown field `unexpected`, expected one of `room_id`, `display_name`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"),
+            .contains("unknown field `unexpected`, expected one of `room_id`, `display_name`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"),
         "unexpected room summary error: {room_error}"
     );
 
     let child_error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}]}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!alpha:example.org","suggested":true,"order":"aaa","unexpected":true}]}]}"#,
     )
     .expect_err("space child summary must reject unknown fields");
     assert!(
@@ -939,10 +983,23 @@ fn room_summary_and_space_child_reject_unknown_fields() {
 }
 
 #[test]
+fn room_summary_requires_membership() {
+    let error = serde_json::from_str::<Event>(
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#,
+    )
+    .expect_err("room summary must require membership");
+    assert!(
+        error.to_string().contains("missing field `membership`"),
+        "unexpected room summary missing-membership error: {error}"
+    );
+}
+
+#[test]
 fn flat_room_summary_payload_round_trips_with_explicit_space_defaults() {
     let event = Event::SyncedRooms(vec![RoomSummary {
         room_id: "!ops:example.org".to_owned(),
         display_name: "Ops".to_owned(),
+        membership: RoomMembership::Join,
         encrypted: true,
         is_space: false,
         is_direct: false,
@@ -954,7 +1011,7 @@ fn flat_room_summary_payload_round_trips_with_explicit_space_defaults() {
     let json = serde_json::to_string(&event).expect("serialize flat synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize flat synced rooms");
@@ -966,6 +1023,7 @@ fn synced_rooms_event_round_trips_account_data_metadata_payload() {
     let event = Event::SyncedRooms(vec![RoomSummary {
         room_id: "!dm:example.org".to_owned(),
         display_name: "Alice".to_owned(),
+        membership: RoomMembership::Join,
         encrypted: true,
         is_space: false,
         is_direct: true,
@@ -986,7 +1044,7 @@ fn synced_rooms_event_round_trips_account_data_metadata_payload() {
     let json = serde_json::to_string(&event).expect("serialize synced rooms");
     assert_eq!(
         json,
-        r#"{"SyncedRooms":[{"room_id":"!dm:example.org","display_name":"Alice","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example.org"],"tags":[{"tag":"m.favourite","order":"0.25"},{"tag":"u.work","order":null}],"space_children":[]}]}"#
+        r#"{"SyncedRooms":[{"room_id":"!dm:example.org","display_name":"Alice","membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example.org"],"tags":[{"tag":"m.favourite","order":"0.25"},{"tag":"u.work","order":null}],"space_children":[]}]}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize synced rooms");
@@ -1855,6 +1913,25 @@ fn join_room_request_rejects_unknown_fields() {
         )
         .is_err(),
         "join room request must reject unknown fields"
+    );
+}
+
+#[test]
+fn invite_request_dtos_reject_unknown_fields() {
+    assert!(
+        serde_json::from_str::<AcceptRoomInviteRequest>(
+            r#"{"room_id":"!ops:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "accept room invite request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RejectRoomInviteRequest>(
+            r#"{"room_id":"!ops:example.org","unexpected":"value"}"#
+        )
+        .is_err(),
+        "reject room invite request must reject unknown fields"
     );
 }
 
