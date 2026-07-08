@@ -8529,8 +8529,10 @@ fn resolve_compose_destination(
                 thread: None,
             });
         }
-        if room_by_id(&state.model.rooms, room_id).is_some() {
-            return Err(format!("room is not joined: {room_id}"));
+        if let Some(room) = room_by_id(&state.model.rooms, room_id) {
+            if is_invited_room(room) {
+                return Err(format!("room is not joined: {room_id}"));
+            }
         }
         return Err(format!("unknown room id: {room_id}"));
     }
@@ -18888,6 +18890,7 @@ mod tests {
         let mut state = test_state();
         state.model.rooms = vec![
             room("!room:example", "Room", false),
+            invited_room("!invite:example", "Invite"),
             space("!space:example", "Space"),
         ];
 
@@ -18910,6 +18913,16 @@ mod tests {
                 Some("!missing:example"),
             ),
             Err("unknown room id: !missing:example".to_owned())
+        );
+        assert!(state.compose_history.entries.is_empty());
+        assert_eq!(
+            submit_compose(
+                &mut state,
+                RoomMessagePresentationKind::Emote,
+                "waves".to_owned(),
+                Some("!invite:example"),
+            ),
+            Err("room is not joined: !invite:example".to_owned())
         );
         assert!(state.compose_history.entries.is_empty());
         assert_eq!(

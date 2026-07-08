@@ -151,13 +151,22 @@ fn gui_test_lock() -> &'static Mutex<()> {
     GUI_TEST_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn lock_gui_test() -> MutexGuard<'static, ()> {
+    let lock = gui_test_lock();
+    match lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            lock.clear_poison();
+            poisoned.into_inner()
+        }
+    }
+}
+
 fn launch_app(
     exe_path: &Path,
     args: &[OsString],
 ) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let guard = gui_test_lock()
-        .lock()
-        .map_err(|_| "GUI test lock poisoned")?;
+    let guard = lock_gui_test();
     let app = mmatrix_testkit::MmatrixApp::launch(exe_path, args)?;
     Ok(GuiTestApp {
         app,
@@ -170,9 +179,7 @@ fn launch_app_with_options(
     args: &[OsString],
     options: LaunchOptions,
 ) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let guard = gui_test_lock()
-        .lock()
-        .map_err(|_| "GUI test lock poisoned")?;
+    let guard = lock_gui_test();
     let app = mmatrix_testkit::MmatrixApp::launch_with_options(exe_path, args, options)?;
     Ok(GuiTestApp {
         app,
