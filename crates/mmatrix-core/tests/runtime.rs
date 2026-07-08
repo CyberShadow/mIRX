@@ -7,14 +7,15 @@ use mmatrix_core::{
     JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
     RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
     RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -1188,22 +1189,61 @@ fn room_activity_events_round_trip_through_serde() {
             }),
         })),
     }));
-    let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
+    let file_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
-        activity_id: "event:$audio1:example.org".to_owned(),
+        activity_id: "event:$file1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_005,
         relation: None,
-        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+        kind: RoomActivityKind::File(Box::new(RoomFileActivity {
+            event_id: "$file1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            body: "Quarterly report".to_owned(),
+            filename: Some("report.pdf".to_owned()),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/file".to_owned(),
+            },
+            info: Some(RoomFileInfo {
+                mimetype: Some("application/pdf".to_owned()),
+                size: Some(65_536),
+            }),
+        })),
+    }));
+    let audio_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$audio1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_006,
+        relation: None,
+        kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.audio".to_owned(),
-            body: "voice.ogg".to_owned(),
+            body: "Voice note".to_owned(),
+            filename: Some("voice-note.ogg".to_owned()),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/audio".to_owned(),
+            },
+            info: Some(RoomAudioInfo {
+                mimetype: Some("audio/ogg".to_owned()),
+                size: Some(8192),
+                duration_ms: Some(12_000),
+            }),
+        })),
+    }));
+    let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$custom1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_007,
+        relation: None,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$custom1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "com.example.custom".to_owned(),
+            body: "Custom body".to_owned(),
         }),
     }));
     let redacted_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$redacted:example.org".to_owned(),
-        timestamp_ms: 1_700_000_000_006,
+        timestamp_ms: 1_700_000_000_008,
         relation: None,
         kind: RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: "$redacted:example.org".to_owned(),
@@ -1268,6 +1308,8 @@ fn room_activity_events_round_trip_through_serde() {
         member_notice_event,
         image_event,
         encrypted_image_event,
+        file_event,
+        audio_event,
         unsupported_message_event,
         redacted_event,
         sent_update_event,
@@ -1336,22 +1378,61 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             }),
         })),
     }));
-    let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
+    let file_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
-        activity_id: "event:$audio1:example.org".to_owned(),
+        activity_id: "event:$file1:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_004,
         relation: None,
-        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+        kind: RoomActivityKind::File(Box::new(RoomFileActivity {
+            event_id: "$file1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            body: "Quarterly report".to_owned(),
+            filename: Some("report.pdf".to_owned()),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/file".to_owned(),
+            },
+            info: Some(RoomFileInfo {
+                mimetype: Some("application/pdf".to_owned()),
+                size: Some(65_536),
+            }),
+        })),
+    }));
+    let audio_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$audio1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_005,
+        relation: None,
+        kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
             event_id: "$audio1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.audio".to_owned(),
-            body: "voice.ogg".to_owned(),
+            body: "Voice note".to_owned(),
+            filename: Some("voice-note.ogg".to_owned()),
+            source: RoomMediaSource::Plain {
+                url: "mxc://example.org/audio".to_owned(),
+            },
+            info: Some(RoomAudioInfo {
+                mimetype: Some("audio/ogg".to_owned()),
+                size: Some(8192),
+                duration_ms: Some(12_000),
+            }),
+        })),
+    }));
+    let unsupported_message_event = Event::RoomActivity(Box::new(RoomActivity {
+        room_id: "!ops:example.org".to_owned(),
+        activity_id: "event:$custom1:example.org".to_owned(),
+        timestamp_ms: 1_700_000_000_006,
+        relation: None,
+        kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+            event_id: "$custom1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            msgtype: "com.example.custom".to_owned(),
+            body: "Custom body".to_owned(),
         }),
     }));
     let redacted_event = Event::RoomActivity(Box::new(RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$redacted:example.org".to_owned(),
-        timestamp_ms: 1_700_000_000_005,
+        timestamp_ms: 1_700_000_000_007,
         relation: None,
         kind: RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: "$redacted:example.org".to_owned(),
@@ -1426,13 +1507,21 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
         r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$image1:example.org","timestamp_ms":1700000000003,"relation":null,"kind":{"type":"image","event_id":"$image1:example.org","sender":"@alice:example.org","body":"diagram.png","filename":"Incident diagram.png","source":{"type":"plain","url":"mxc://example.org/image"},"info":{"mimetype":"image/png","size":4096,"width":800,"height":600,"is_animated":false,"thumbnail_source":null}}}}"#
     );
     assert_eq!(
+        serde_json::to_string(&file_event).expect("serialize file room activity"),
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$file1:example.org","timestamp_ms":1700000000004,"relation":null,"kind":{"type":"file","event_id":"$file1:example.org","sender":"@alice:example.org","body":"Quarterly report","filename":"report.pdf","source":{"type":"plain","url":"mxc://example.org/file"},"info":{"mimetype":"application/pdf","size":65536}}}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&audio_event).expect("serialize audio room activity"),
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000005,"relation":null,"kind":{"type":"audio","event_id":"$audio1:example.org","sender":"@alice:example.org","body":"Voice note","filename":"voice-note.ogg","source":{"type":"plain","url":"mxc://example.org/audio"},"info":{"mimetype":"audio/ogg","size":8192,"duration_ms":12000}}}}"#
+    );
+    assert_eq!(
         serde_json::to_string(&unsupported_message_event)
             .expect("serialize unsupported room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"relation":null,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg"}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$custom1:example.org","timestamp_ms":1700000000006,"relation":null,"kind":{"type":"unsupported_message","event_id":"$custom1:example.org","sender":"@alice:example.org","msgtype":"com.example.custom","body":"Custom body"}}}"#
     );
     assert_eq!(
         serde_json::to_string(&redacted_event).expect("serialize redacted room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$redacted:example.org","timestamp_ms":1700000000005,"relation":null,"kind":{"type":"redacted","event_id":"$redacted:example.org"}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$redacted:example.org","timestamp_ms":1700000000007,"relation":null,"kind":{"type":"redacted","event_id":"$redacted:example.org"}}}"#
     );
     assert_eq!(
         serde_json::to_string(&failed_update_event).expect("serialize failed room activity update"),
@@ -2138,6 +2227,22 @@ fn room_activity_dtos_reject_unknown_fields() {
     );
 
     assert!(
+        serde_json::from_str::<RoomFileActivity>(
+            r#"{"event_id":"$file1:example.org","sender":"@alice:example.org","body":"Quarterly report","filename":"report.pdf","source":{"type":"plain","url":"mxc://example.org/file"},"info":{"mimetype":"application/pdf","size":65536},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room file activity must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomAudioActivity>(
+            r#"{"event_id":"$audio1:example.org","sender":"@alice:example.org","body":"Voice note","filename":"voice-note.ogg","source":{"type":"plain","url":"mxc://example.org/audio"},"info":{"mimetype":"audio/ogg","size":8192,"duration_ms":12000},"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room audio activity must reject unknown fields"
+    );
+
+    assert!(
         serde_json::from_str::<RoomMediaSource>(
             r#"{"type":"plain","url":"mxc://example.org/image","unexpected":"value"}"#
         )
@@ -2151,6 +2256,22 @@ fn room_activity_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "room image info must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomFileInfo>(
+            r#"{"mimetype":"application/pdf","size":65536,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room file info must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<RoomAudioInfo>(
+            r#"{"mimetype":"audio/ogg","size":8192,"duration_ms":12000,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "room audio info must reject unknown fields"
     );
 
     assert!(
@@ -2211,7 +2332,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$audio1:example.org","timestamp_ms":1700000000004,"kind":{"type":"unsupported_message","event_id":"$audio1:example.org","sender":"@alice:example.org","msgtype":"m.audio","body":"voice.ogg","unexpected":"value"}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"event:$custom1:example.org","timestamp_ms":1700000000006,"kind":{"type":"unsupported_message","event_id":"$custom1:example.org","sender":"@alice:example.org","msgtype":"com.example.custom","body":"Custom body","unexpected":"value"}}}"#
         )
         .is_err(),
         "unsupported room activity kind must reject unknown fields"

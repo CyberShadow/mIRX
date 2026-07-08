@@ -38,9 +38,9 @@ use matrix_sdk::{
                 EncryptedFile, ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{
-                    MessageType, OriginalSyncRoomMessageEvent, Relation as MessageContentRelation,
-                    Relation as MessageRelation, RoomMessageEventContent,
-                    RoomMessageEventContentWithoutRelation,
+                    AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
+                    Relation as MessageContentRelation, Relation as MessageRelation,
+                    RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
                 },
                 redaction::OriginalSyncRoomRedactionEvent,
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
@@ -62,15 +62,16 @@ use crate::api::{
     E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat,
-    RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
+    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
+    SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -1120,6 +1121,40 @@ fn room_activity_from_sync_message(
         });
     }
 
+    if let MessageType::File(file) = &event.content.msgtype {
+        return Some(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{}", event.event_id),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            relation: relation.clone(),
+            kind: RoomActivityKind::File(Box::new(RoomFileActivity {
+                event_id: event.event_id.to_string(),
+                sender: event.sender.to_string(),
+                body: file.body.clone(),
+                filename: file.filename.clone(),
+                source: room_media_source_from_matrix(&file.source),
+                info: file.info.as_deref().map(room_file_info_from_matrix),
+            })),
+        });
+    }
+
+    if let MessageType::Audio(audio) = &event.content.msgtype {
+        return Some(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{}", event.event_id),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            relation: relation.clone(),
+            kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
+                event_id: event.event_id.to_string(),
+                sender: event.sender.to_string(),
+                body: audio.body.clone(),
+                filename: audio.filename.clone(),
+                source: room_media_source_from_matrix(&audio.source),
+                info: audio.info.as_deref().map(room_audio_info_from_matrix),
+            })),
+        });
+    }
+
     let (msgtype, body) = unsupported_room_message_body(&event.content.msgtype)?;
 
     Some(RoomActivity {
@@ -1130,8 +1165,8 @@ fn room_activity_from_sync_message(
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: event.event_id.to_string(),
             sender: event.sender.to_string(),
-            msgtype: msgtype.to_owned(),
-            body: body.to_owned(),
+            msgtype,
+            body,
         }),
     })
 }
@@ -1269,6 +1304,24 @@ fn room_image_info_from_matrix(info: &ImageInfo) -> RoomImageInfo {
     }
 }
 
+fn room_file_info_from_matrix(info: &FileInfo) -> RoomFileInfo {
+    RoomFileInfo {
+        mimetype: info.mimetype.as_deref().map(str::to_owned),
+        size: info.size.map(u64::from),
+    }
+}
+
+fn room_audio_info_from_matrix(info: &AudioInfo) -> RoomAudioInfo {
+    RoomAudioInfo {
+        mimetype: info.mimetype.as_deref().map(str::to_owned),
+        size: info.size.map(u64::from),
+        duration_ms: info.duration.map(|duration| {
+            u64::try_from(duration.as_millis())
+                .expect("Matrix audio duration exceeds u64 milliseconds")
+        }),
+    }
+}
+
 fn room_message_presentation_and_body_from_message_type(
     message_type: &MessageType,
 ) -> Option<(RoomMessagePresentationKind, String)> {
@@ -1290,18 +1343,21 @@ fn room_message_presentation_and_body_from_message_type(
     }
 }
 
-fn unsupported_room_message_body(message_type: &MessageType) -> Option<(&'static str, &str)> {
+fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, String)> {
     match message_type {
-        MessageType::Image(content) => Some(("m.image", content.body.as_str())),
-        MessageType::Audio(content) => Some(("m.audio", content.body.as_str())),
-        MessageType::File(content) => Some(("m.file", content.body.as_str())),
-        MessageType::Video(content) => Some(("m.video", content.body.as_str())),
+        MessageType::Video(_) => Some(("m.video".to_owned(), message_type.body().to_owned())),
+        MessageType::_Custom(_) => Some((
+            message_type.msgtype().to_owned(),
+            message_type.body().to_owned(),
+        )),
         MessageType::Text(_)
         | MessageType::Notice(_)
         | MessageType::Emote(_)
+        | MessageType::Image(_)
+        | MessageType::Audio(_)
+        | MessageType::File(_)
         | MessageType::Location(_)
-        | MessageType::VerificationRequest(_)
-        | MessageType::_Custom(_) => None,
+        | MessageType::VerificationRequest(_) => None,
         // ruma marks MessageType as non_exhaustive, so a final fallback is required.
         _ => None,
     }
@@ -2571,13 +2627,13 @@ mod tests {
         CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus, E2eeRecoveryState, Event,
         FetchRoomImageMediaRequest, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-        RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomImageActivity, RoomImageInfo,
-        RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
-        SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
-        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+        RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMediaFormat,
+        RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+        RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
+        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, SessionMeta,
@@ -2600,7 +2656,8 @@ mod tests {
                 room::{
                     member::OriginalSyncRoomMemberEvent,
                     message::{
-                        OriginalSyncRoomMessageEvent, ReplacementMetadata, RoomMessageEventContent,
+                        MessageType, OriginalSyncRoomMessageEvent, ReplacementMetadata,
+                        RoomMessageEventContent,
                     },
                     redaction::OriginalSyncRoomRedactionEvent,
                     topic::OriginalSyncRoomTopicEvent,
@@ -4071,13 +4128,19 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_sync_audio_mapping_produces_placeholder() {
+    fn sync_audio_mapping_produces_typed_audio_activity() {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": {
                 "msgtype": "m.audio",
-                "body": "voice.ogg",
-                "url": "mxc://example.org/audio"
+                "body": "Voice note",
+                "filename": "voice-note.ogg",
+                "url": "mxc://example.org/audio",
+                "info": {
+                    "mimetype": "audio/ogg",
+                    "size": 8192u64,
+                    "duration": 12000u64
+                }
             },
             "event_id": "$audio:example.org",
             "sender": "@alice:example.org",
@@ -4092,24 +4155,37 @@ mod tests {
                 activity_id: "event:$audio:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
                 relation: None,
-                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                     event_id: "$audio:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
-                    msgtype: "m.audio".to_owned(),
-                    body: "voice.ogg".to_owned(),
-                }),
+                    body: "Voice note".to_owned(),
+                    filename: Some("voice-note.ogg".to_owned()),
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/audio".to_owned(),
+                    },
+                    info: Some(RoomAudioInfo {
+                        mimetype: Some("audio/ogg".to_owned()),
+                        size: Some(8192),
+                        duration_ms: Some(12_000),
+                    }),
+                })),
             })
         );
     }
 
     #[test]
-    fn unsupported_sync_file_mapping_produces_placeholder() {
+    fn sync_file_mapping_produces_typed_file_activity() {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": {
                 "msgtype": "m.file",
-                "body": "report.pdf",
-                "url": "mxc://example.org/file"
+                "body": "Quarterly report",
+                "filename": "report.pdf",
+                "url": "mxc://example.org/file",
+                "info": {
+                    "mimetype": "application/pdf",
+                    "size": 65536u64
+                }
             },
             "event_id": "$file:example.org",
             "sender": "@alice:example.org",
@@ -4124,12 +4200,19 @@ mod tests {
                 activity_id: "event:$file:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_200,
                 relation: None,
-                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                     event_id: "$file:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
-                    msgtype: "m.file".to_owned(),
-                    body: "report.pdf".to_owned(),
-                }),
+                    body: "Quarterly report".to_owned(),
+                    filename: Some("report.pdf".to_owned()),
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/file".to_owned(),
+                    },
+                    info: Some(RoomFileInfo {
+                        mimetype: Some("application/pdf".to_owned()),
+                        size: Some(65_536),
+                    }),
+                })),
             })
         );
     }
@@ -4188,13 +4271,18 @@ mod tests {
     }
 
     #[test]
-    fn custom_sync_message_mapping_remains_ignored() {
+    fn custom_sync_message_mapping_produces_unsupported_placeholder() {
+        let custom_msgtype = MessageType::new(
+            "com.example.custom",
+            "Custom body".to_owned(),
+            serde_json::Map::new(),
+        )
+        .expect("build custom message type");
+        let content = serde_json::to_value(RoomMessageEventContent::new(custom_msgtype))
+            .expect("serialize custom content");
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
-            "content": {
-                "msgtype": "com.example.custom",
-                "body": "mystery payload"
-            },
+            "content": content,
             "event_id": "$custom:example.org",
             "sender": "@alice:example.org",
             "origin_server_ts": 1700000000450u64
@@ -4203,7 +4291,18 @@ mod tests {
 
         assert_eq!(
             room_activity_from_sync_message("!room:example.org", &event),
-            None
+            Some(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "event:$custom:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_450,
+                relation: None,
+                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                    event_id: "$custom:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    msgtype: "com.example.custom".to_owned(),
+                    body: "Custom body".to_owned(),
+                }),
+            })
         );
     }
 
