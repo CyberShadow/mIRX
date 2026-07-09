@@ -1622,6 +1622,16 @@ mod windows_main {
         }
     }
 
+    fn expected_history_backfill_room_id(config: &Config) -> Option<&str> {
+        config
+            .expect_selected
+            .as_deref()
+            .or_else(|| match config.expect_active_view.as_ref() {
+                Some(ViewIdentity::Room { room_id }) => Some(room_id.as_str()),
+                _ => None,
+            })
+    }
+
     pub(crate) fn run() -> Result<(), String> {
         let config = parse_args(env::args().skip(1))?;
         let app = MmatrixApp::find(config.find_timeout).map_err(|error| {
@@ -1643,6 +1653,21 @@ mod windows_main {
             app.wait_idle(config.wait_idle).map_err(|error| {
                 format!("WAIT_IDLE after TRIGGER_HISTORY_BACKFILL failed: {error}")
             })?;
+            if let Some(expected_room_id) = expected_history_backfill_room_id(&config) {
+                let model = app.dump_model().map_err(|error| {
+                    format!("DUMP_MODEL after TRIGGER_HISTORY_BACKFILL failed: {error}")
+                })?;
+                let submitted = model
+                    .submitted_history_commands
+                    .iter()
+                    .any(|command| command.room_id == expected_room_id);
+                if !submitted {
+                    return Err(format!(
+                        "history backfill assertion failed: no submitted history command recorded for {expected_room_id}"
+                    ));
+                }
+                println!("PASS submitted history command {expected_room_id}");
+            }
         }
 
         if let Some(path) = config.append_events.as_deref() {

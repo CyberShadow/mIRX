@@ -27,6 +27,10 @@ pub struct CommandSender {
 }
 
 impl CommandSender {
+    pub fn new(sender: UnboundedSender<Command>) -> Self {
+        Self { sender }
+    }
+
     pub fn send(&self, command: Command) -> Result<(), SendCommandError> {
         self.sender.send(command).map_err(|_| SendCommandError)
     }
@@ -141,7 +145,7 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
 
     match startup_rx.recv() {
         Ok(Ok(())) => Ok(CoreHandle {
-            command_sender: CommandSender { sender: command_tx },
+            command_sender: CommandSender::new(command_tx),
             events: event_rx,
             worker,
         }),

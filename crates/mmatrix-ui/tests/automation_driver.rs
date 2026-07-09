@@ -2416,7 +2416,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
 }
 
 #[test]
-fn automation_driver_lifecycle_commands_fail_cleanly_in_render_state_mode()
+fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
@@ -2439,26 +2439,14 @@ fn automation_driver_lifecycle_commands_fail_cleanly_in_render_state_mode()
     )?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    for (result, expected_code) in [
-        (
-            app.login("https://matrix.example", "@alice:example", "secret", None),
-            "login_failed",
-        ),
-        (
-            app.restore_session("https://matrix.example", stored_session()),
-            "restore_failed",
-        ),
-        (app.restore_saved_session(), "restore_saved_failed"),
-        (app.start_sync(), "start_sync_failed"),
-        (app.logout(), "logout_failed"),
+    for result in [
+        app.login("https://matrix.example", "@alice:example", "secret", None),
+        app.restore_session("https://matrix.example", stored_session()),
+        app.restore_saved_session(),
+        app.start_sync(),
+        app.logout(),
     ] {
-        match result {
-            Err(TestkitError::Protocol { code, message }) => {
-                assert_eq!(code, expected_code);
-                assert!(message.contains("core command sender is not available"));
-            }
-            other => panic!("expected protocol error {expected_code}, got {other:?}"),
-        }
+        result?;
     }
 
     let _ = fs::remove_file(&state_path);
@@ -3206,6 +3194,49 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn render_state_history_backfill_trigger_records_command_and_shows_loading()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("history-backfill-loading.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!history:example")?;
+    app.wait_for_room_activity_contains(
+        Some("!history:example"),
+        "scroll filler line 30",
+        Duration::from_secs(5),
+    )?;
+
+    app.trigger_active_timeline_history_backfill()?;
+    let model = app.dump_model()?;
+    assert_eq!(model.submitted_history_commands.len(), 1);
+    assert_eq!(
+        model.submitted_history_commands.first(),
+        Some(&SubmittedHistoryCommand {
+            room_id: "!history:example".to_owned(),
+            from: None,
+            limit: 50,
+        })
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    let (room, view) = find_room_state_and_view(&ui_state, "!history:example");
+    assert_eq!(
+        room.history_backfill,
+        UiRoomHistoryBackfillState::Loading { from: None }
+    );
+    assert!(view_contains(view, "* Loading older history..."));
+
     Ok(())
 }
 

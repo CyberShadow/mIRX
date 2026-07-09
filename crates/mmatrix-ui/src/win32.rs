@@ -33,6 +33,7 @@ use mmatrix_core::{
 };
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT,
     RECT, SIZE, WPARAM,
@@ -73,10 +74,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
     ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
-    GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, IDC_ARROW,
-    IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW,
-    MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret,
+    IDC_ARROW, IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT,
+    LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
     SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
     SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
@@ -2326,6 +2327,7 @@ struct WindowState {
     controls: Controls,
     event_queue: Arc<Mutex<VecDeque<Event>>>,
     command_sender: Option<CommandSender>,
+    inert_command_receiver: Option<UnboundedReceiver<Command>>,
     automation: Option<AutomationState>,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
@@ -2404,6 +2406,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         controls: Controls::default(),
         event_queue: Arc::clone(&event_queue),
         command_sender: None,
+        inert_command_receiver: None,
         automation: None,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
@@ -2446,6 +2449,11 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             }
             Some(bridge)
         } else {
+            unsafe {
+                if should_install_inert_command_sender(&command) {
+                    install_inert_command_sender(state_mut(hwnd));
+                }
+            }
             None
         };
 
@@ -2531,6 +2539,19 @@ fn should_start_core_bridge(command: &AppCommand) -> bool {
         AppCommand::AutoClose => true,
         AppCommand::SelfTest | AppCommand::Help => false,
     }
+}
+
+fn should_install_inert_command_sender(command: &AppCommand) -> bool {
+    match command {
+        AppCommand::Run(options) => options.automation && options.render_state.is_some(),
+        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => false,
+    }
+}
+
+fn install_inert_command_sender(state: &mut WindowState) {
+    let (sender, receiver) = unbounded_channel();
+    state.command_sender = Some(CommandSender::new(sender));
+    state.inert_command_receiver = Some(receiver);
 }
 
 fn frame_size_for_command(command: &AppCommand) -> FrameSize {
@@ -6515,7 +6536,11 @@ unsafe fn finish_view_activation_chrome(
         refresh_switchbar_state(hwnd)?;
     }
     refresh_status_bar(hwnd)?;
-    SetFocus(state_ref(hwnd).controls.edit);
+    let state = state_ref(hwnd);
+    SetFocus(state.controls.edit);
+    if state.automation.is_some() {
+        HideCaret(state.controls.edit);
+    }
     Ok(())
 }
 
@@ -11461,6 +11486,7 @@ mod tests {
             controls: Controls::default(),
             event_queue: Arc::new(Mutex::new(VecDeque::new())),
             command_sender: None,
+            inert_command_receiver: None,
             automation: None,
             exit_code: Arc::new(AtomicI32::new(0)),
             event_generation: 0,
