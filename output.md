@@ -4,15 +4,16 @@
 - Branch under verification: `verification-snapshots`
 - Report date: `2026-07-09`
 - Verified implementation commit: `be32fdbf465f8c2afb912109b0a546501d272433`
-- Additional commits already made in this unit before the current `HEAD`:
+- Additional commits already made in this unit before this correction:
   - `152bdb89ec58eddfeedbff47a8082d958b40c949` (`Refresh render-state snapshot baselines`)
   - `68e6e4a5c4f4761a567984fdea7e62cba205512c` (`Repair verification evidence report`)
-- The current report-only repair is the final `HEAD` that contains this file; its exact full hash is returned alongside this report in the implementation summary for this run.
+  - `022b97873785b704851ea4c1723709b854338ec6` (`Make verification report self-contained`)
+- Git self-reference note: a Git commit cannot stably embed its own final full hash inside a tracked file in that same commit, because changing the file changes the commit hash again. The final correction commit hash for this wording repair is therefore reported in the implementation summary for this run, not embedded here.
 
 ## Evidence Policy
 
 - This report is self-contained for the disputed acceptance points. The exact relevant rerun output lines and counts are embedded below and do not depend on `/var/tmp` surviving into a review environment.
-- The untracked harness artifacts in `gate-evidence-final-after-harness/` are non-authoritative for the final acceptance proof of gates `06` and `07`; review should ignore:
+- The ignored stale harness artifacts in `gate-evidence-final-after-harness/` are non-authoritative for the final acceptance proof of gates `06` and `07`; review should ignore:
   - `gate-evidence-final-after-harness/06-automation-driver.log`
   - `gate-evidence-final-after-harness/07-ui-snapshot.log`
 - Earlier stable gates `01` through `05` remain supported only by the preserved harness logs below; they are not used to substantiate the disputed `122` / `41` counts:
