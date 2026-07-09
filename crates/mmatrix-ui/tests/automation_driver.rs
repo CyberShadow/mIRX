@@ -3,6 +3,8 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::ptr::{copy_nonoverlapping, null_mut};
@@ -258,6 +260,238 @@ fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Err
     let state_path = unique_state_path();
     fs::write(&state_path, serde_json::to_vec(events)?)?;
     Ok(state_path)
+}
+
+struct MockBackfillHomeserver {
+    base_url: String,
+}
+
+fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let Ok(read) = stream.read(&mut buffer) else {
+                    break;
+                };
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let request = String::from_utf8_lossy(&request);
+            let request_line = request.lines().next().unwrap_or_default();
+            let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+            if path == "/_matrix/client/versions" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "versions": ["r0.6.1", "v1.1"]
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/sync") {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "next_batch": "s-sync",
+                        "device_one_time_keys_count": {
+                            "signed_curve25519": 0
+                        },
+                        "device_lists": {
+                            "changed": [],
+                            "left": []
+                        },
+                        "rooms": {
+                            "join": {
+                                "!beta:example": {
+                                    "summary": {
+                                        "m.joined_member_count": 1,
+                                        "m.invited_member_count": 0
+                                    },
+                                    "state": {
+                                        "events": [
+                                            {
+                                                "content": {
+                                                    "creator": "@alice:example",
+                                                    "room_version": "10"
+                                                },
+                                                "event_id": "$create",
+                                                "origin_server_ts": 1700000000000u64,
+                                                "sender": "@alice:example",
+                                                "state_key": "",
+                                                "type": "m.room.create"
+                                            },
+                                            {
+                                                "content": {
+                                                    "membership": "join",
+                                                    "displayname": "Alice"
+                                                },
+                                                "event_id": "$member",
+                                                "origin_server_ts": 1700000000001u64,
+                                                "sender": "@alice:example",
+                                                "state_key": "@alice:example",
+                                                "type": "m.room.member"
+                                            },
+                                            {
+                                                "content": {
+                                                    "name": "Beta"
+                                                },
+                                                "event_id": "$name",
+                                                "origin_server_ts": 1700000000002u64,
+                                                "sender": "@alice:example",
+                                                "state_key": "",
+                                                "type": "m.room.name"
+                                            }
+                                        ]
+                                    },
+                                    "timeline": {
+                                        "events": [],
+                                        "limited": false,
+                                        "prev_batch": "s-current"
+                                    },
+                                    "ephemeral": {
+                                        "events": []
+                                    },
+                                    "account_data": {
+                                        "events": []
+                                    },
+                                    "unread_notifications": {
+                                        "notification_count": 0,
+                                        "highlight_count": 0
+                                    }
+                                }
+                            }
+                        }
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/room_keys/version") {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "algorithm": "m.megolm_backup.v1.curve25519-aes-sha2",
+                        "auth_data": {
+                            "public_key": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+                        },
+                        "count": 0,
+                        "etag": "1",
+                        "version": "1"
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/keys/upload") {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "one_time_key_counts": {}
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/keys/query") {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "device_keys": {},
+                        "failures": {},
+                        "master_keys": {},
+                        "self_signing_keys": {},
+                        "user_signing_keys": {}
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/account_data/m.secret_storage.default_key") {
+                respond_json(
+                    &mut stream,
+                    404,
+                    &serde_json::json!({
+                        "errcode": "M_NOT_FOUND",
+                        "error": "not found"
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/rooms/!beta:example/state/m.room.encryption/")
+                || path.contains("/rooms/%21beta%3Aexample/state/m.room.encryption/")
+            {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "content": {
+                            "algorithm": "m.megolm.v1.aes-sha2"
+                        },
+                        "event_id": "$encryption",
+                        "origin_server_ts": 1700000000003u64,
+                        "sender": "@alice:example",
+                        "state_key": "",
+                        "type": "m.room.encryption"
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/rooms/%21beta%3Aexample/messages")
+                || path.contains("/rooms/!beta:example/messages")
+            {
+                std::thread::sleep(Duration::from_secs(60));
+                continue;
+            }
+
+            respond_json(
+                &mut stream,
+                404,
+                &serde_json::json!({
+                    "errcode": "M_UNRECOGNIZED",
+                    "error": format!("unhandled mock homeserver path: {path}")
+                }),
+            );
+        }
+    });
+
+    Ok(MockBackfillHomeserver {
+        base_url: format!("http://{address}"),
+    })
+}
+
+fn respond_json(stream: &mut std::net::TcpStream, status: u16, body: &serde_json::Value) {
+    let reason = match status {
+        200 => "OK",
+        404 => "Not Found",
+        _ => "Error",
+    };
+    let body = serde_json::to_vec(body).expect("mock homeserver response must serialize");
+    let response = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.write_all(&body);
 }
 
 fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
@@ -1339,6 +1573,16 @@ fn find_ui_room<'a>(ui_state: &'a UiState, room_id: &str) -> &'a UiRoomState {
         .iter()
         .find(|room| room.room_id == room_id)
         .unwrap_or_else(|| panic!("missing dumped room state for {room_id}"))
+}
+
+fn find_room_state_and_view<'a>(
+    ui_state: &'a UiState,
+    room_id: &str,
+) -> (&'a UiRoomState, &'a MdiView) {
+    (
+        find_ui_room(ui_state, room_id),
+        find_view(ui_state, &room_identity(room_id)),
+    )
 }
 
 fn assert_active_switchbar_item(ui_state: &UiState, identity: &ViewIdentity) {
@@ -2914,11 +3158,14 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
     let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     let mut events = base_events();
     for index in 0..80 {
         let body = format!("history row {index:02}");
@@ -2940,6 +3187,7 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
 
     app.trigger_active_timeline_history_backfill()?;
     let model = app.dump_model()?;
+    assert_eq!(model.submitted_history_commands.len(), 1);
     assert_eq!(
         model.submitted_history_commands.first(),
         Some(&SubmittedHistoryCommand {
@@ -2948,6 +3196,160 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
             limit: 50,
         })
     );
+    let ui_state = app.dump_ui_state()?;
+    let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
+    assert_eq!(
+        room.history_backfill,
+        UiRoomHistoryBackfillState::Loading { from: None }
+    );
+    assert!(view_contains(view, "* Loading older history..."));
+
+    app.trigger_active_timeline_history_backfill()?;
+    assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    let mut events = base_events();
+    for index in 0..80 {
+        let body = format!("history row {index:02}");
+        events.push(text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_001_000_000 + index * 60_000,
+            &body,
+        ));
+    }
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "history row 79",
+        Duration::from_secs(5),
+    )?;
+
+    app.trigger_active_timeline_history_backfill()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::Error(
+        mmatrix_core::CoreErrorEvent {
+            operation: mmatrix_core::Operation::BackfillRoomHistory,
+            message: "homeserver unavailable".to_owned(),
+        },
+    )])?)?;
+    app.wait_for_lifecycle_state("error", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
+    assert_eq!(
+        room.history_backfill,
+        UiRoomHistoryBackfillState::Failed {
+            from: None,
+            message: "homeserver unavailable".to_owned(),
+        }
+    );
+    assert!(view_contains(
+        view,
+        "* Unable to load older history: homeserver unavailable. Scroll to top to retry."
+    ));
+    assert_eq!(
+        app.dump_model()?.last_error,
+        Some(UiError {
+            operation: "backfill_room_history".to_owned(),
+            message: "homeserver unavailable".to_owned(),
+        })
+    );
+
+    app.trigger_active_timeline_history_backfill()?;
+    let model = app.dump_model()?;
+    assert_eq!(model.submitted_history_commands.len(), 2);
+    assert_eq!(
+        model.submitted_history_commands.last(),
+        Some(&SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: None,
+            limit: 50,
+        })
+    );
+    let ui_state = app.dump_ui_state()?;
+    let (room, _) = find_room_state_and_view(&ui_state, "!beta:example");
+    assert_eq!(
+        room.history_backfill,
+        UiRoomHistoryBackfillState::Loading { from: None }
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    let mut events = base_events();
+    for index in 0..80 {
+        let body = format!("history row {index:02}");
+        events.push(text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_001_000_000 + index * 60_000,
+            &body,
+        ));
+    }
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "history row 79",
+        Duration::from_secs(5),
+    )?;
+
+    app.trigger_active_timeline_history_backfill()?;
+    let model = app.dump_model()?;
+    assert_eq!(model.submitted_history_commands.len(), 1);
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!beta:example",
+        "s-current",
+        None,
+        Vec::new(),
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
+    assert_eq!(room.history_backfill, UiRoomHistoryBackfillState::Exhausted);
+    assert!(view_contains(view, "* No older history available."));
+
+    app.trigger_active_timeline_history_backfill()?;
+    assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -2990,12 +3392,15 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
     let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    app.load_events(&serde_json::to_string(&vec![
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    let mut events = vec![
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!beta:example", "Beta", false)]),
         text_event_with_event_id(
@@ -3012,10 +3417,26 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
             1_700_000_120_000,
             "current row 2",
         ),
-    ])?)?;
+    ];
+    for index in 0..80 {
+        let event_id = format!("$current-extra-{index:02}");
+        let body = format!("current extra row {index:02}");
+        events.push(text_event_with_event_id(
+            "!beta:example",
+            &event_id,
+            "@bob:example",
+            1_700_000_180_000 + index * 60_000,
+            &body,
+        ));
+    }
+    app.load_events(&serde_json::to_string(&events)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!beta:example")?;
-    app.wait_idle(Duration::from_secs(5))?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "current extra row 79",
+        Duration::from_secs(5),
+    )?;
 
     let expected_path = nav_path(&["mmatrix", "rooms: 1", "Beta"]);
     assert_eq!(
@@ -3024,10 +3445,11 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     );
     assert_eq!(app.selected_navigation_path()?, expected_path);
     assert_compose_has_focus(&app);
+    app.trigger_active_timeline_history_backfill()?;
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
         "!beta:example",
-        "token-older",
+        "s-current",
         Some("token-next"),
         vec![
             history_backfill_event_from_event(text_event_with_event_id(
@@ -3055,39 +3477,48 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    assert_eq!(
-        app.room_activity(Some("!beta:example"))?,
-        vec![
-            text_entry_with_event_id(
-                "!beta:example",
-                "$older-1",
-                "@bob:example",
-                1_699_999_940_000,
-                "older row 1",
-            ),
-            text_entry_with_event_id(
-                "!beta:example",
-                "$older-2",
-                "@bob:example",
-                1_700_000_000_000,
-                "older row 2",
-            ),
-            text_entry_with_event_id(
-                "!beta:example",
-                "$current-1",
-                "@bob:example",
-                1_700_000_060_000,
-                "current row 1",
-            ),
-            text_entry_with_event_id(
-                "!beta:example",
-                "$current-2",
-                "@bob:example",
-                1_700_000_120_000,
-                "current row 2",
-            ),
-        ]
-    );
+    let mut expected_activity = vec![
+        text_entry_with_event_id(
+            "!beta:example",
+            "$older-1",
+            "@bob:example",
+            1_699_999_940_000,
+            "older row 1",
+        ),
+        text_entry_with_event_id(
+            "!beta:example",
+            "$older-2",
+            "@bob:example",
+            1_700_000_000_000,
+            "older row 2",
+        ),
+        text_entry_with_event_id(
+            "!beta:example",
+            "$current-1",
+            "@bob:example",
+            1_700_000_060_000,
+            "current row 1",
+        ),
+        text_entry_with_event_id(
+            "!beta:example",
+            "$current-2",
+            "@bob:example",
+            1_700_000_120_000,
+            "current row 2",
+        ),
+    ];
+    for index in 0..80 {
+        let event_id = format!("$current-extra-{index:02}");
+        let body = format!("current extra row {index:02}");
+        expected_activity.push(text_entry_with_event_id(
+            "!beta:example",
+            &event_id,
+            "@bob:example",
+            1_700_000_180_000 + index * 60_000,
+            &body,
+        ));
+    }
+    assert_eq!(app.room_activity(Some("!beta:example"))?, expected_activity);
 
     let ui_state = app.dump_ui_state()?;
     assert_eq!(
@@ -3104,6 +3535,10 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     assert_eq!(
         find_ui_room(&ui_state, "!beta:example").read_target_event_id,
         None
+    );
+    assert_eq!(
+        find_ui_room(&ui_state, "!beta:example").history_backfill,
+        UiRoomHistoryBackfillState::Idle
     );
 
     drop(app);
