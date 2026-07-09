@@ -47,9 +47,9 @@ use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MAR
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_PAGEUP, SB_VERT,
-    SCROLLINFO, SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO,
+    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
+    WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -2938,7 +2938,7 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
         Duration::from_secs(5),
     )?;
 
-    trigger_timeline_history_backfill(&app);
+    app.trigger_active_timeline_history_backfill()?;
     let model = app.dump_model()?;
     assert_eq!(
         model.submitted_history_commands.first(),
@@ -3368,31 +3368,6 @@ unsafe fn read_window_text(hwnd: HWND) -> String {
 
 unsafe fn timeline_top_line(hwnd: HWND) -> i32 {
     unsafe { SendMessageW(hwnd, WM_TIMELINE_GET_TOP_LINE, 0, 0) as i32 }
-}
-
-fn send_timeline_scroll(app: &MmatrixApp, command: WPARAM) {
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(app) };
-    unsafe {
-        SendMessageW(timeline_hwnd, WM_VSCROLL, command, 0);
-    }
-}
-
-fn trigger_timeline_history_backfill(app: &MmatrixApp) {
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(app) };
-    if unsafe { timeline_top_line(timeline_hwnd) } == 0 {
-        send_timeline_scroll(app, SB_PAGEDOWN as WPARAM);
-        assert!(
-            unsafe { timeline_top_line(timeline_hwnd) } > 0,
-            "page-down must move the timeline away from the top before requesting history backfill"
-        );
-    }
-
-    send_timeline_scroll(app, SB_PAGEUP as WPARAM);
-    assert_eq!(
-        unsafe { timeline_top_line(timeline_hwnd) },
-        0,
-        "page-up at the top boundary must land at the top line"
-    );
 }
 
 unsafe fn scrollbar_info(hwnd: HWND) -> Option<SCROLLINFO> {

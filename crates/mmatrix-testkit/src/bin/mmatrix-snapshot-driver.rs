@@ -19,6 +19,7 @@ mod cli {
         pub(crate) find_timeout: Duration,
         pub(crate) wait_idle: Duration,
         pub(crate) select_views: Vec<ViewIdentity>,
+        pub(crate) trigger_history_backfill: bool,
         pub(crate) append_events: Option<String>,
         pub(crate) expect_selected: Option<String>,
         pub(crate) expect_rooms: Vec<String>,
@@ -137,6 +138,9 @@ mod cli {
                     config
                         .select_views
                         .push(parse_view_identity_arg("--select-view", &value)?);
+                }
+                "--trigger-history-backfill" => {
+                    config.trigger_history_backfill = true;
                 }
                 "--append-events" => {
                     config.append_events = Some(
@@ -431,6 +435,7 @@ mod cli {
             "  --find-timeout-ms <ms>",
             "  --wait-idle-ms <ms>",
             "  --select-view <identity> (repeatable)",
+            "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
@@ -656,6 +661,7 @@ mod cli {
                 "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
             ));
             assert!(usage().contains("--select-view <identity> (repeatable)"));
+            assert!(usage().contains("--trigger-history-backfill"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains("--expect-view <identity>::<substring>"));
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
@@ -777,6 +783,18 @@ mod cli {
             );
             assert_eq!(config.find_timeout, Duration::from_secs(10));
             assert_eq!(config.wait_idle, Duration::from_secs(5));
+        }
+
+        #[test]
+        fn parse_args_accepts_trigger_history_backfill_flag() {
+            let config = parse_args(
+                ["--trigger-history-backfill"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert!(config.trigger_history_backfill);
         }
 
         #[test]
@@ -1599,6 +1617,14 @@ mod windows_main {
                 .map_err(|error| format!("SELECT_VIEW failed: {error}"))?;
             app.wait_idle(config.wait_idle)
                 .map_err(|error| format!("WAIT_IDLE after SELECT_VIEW failed: {error}"))?;
+        }
+
+        if config.trigger_history_backfill {
+            app.trigger_active_timeline_history_backfill()
+                .map_err(|error| format!("TRIGGER_HISTORY_BACKFILL failed: {error}"))?;
+            app.wait_idle(config.wait_idle).map_err(|error| {
+                format!("WAIT_IDLE after TRIGGER_HISTORY_BACKFILL failed: {error}")
+            })?;
         }
 
         if let Some(path) = config.append_events.as_deref() {

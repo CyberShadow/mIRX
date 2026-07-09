@@ -196,6 +196,7 @@ configure_case_expectations() {
   expect_verification_state=
   expect_active_view=
   select_views=()
+  trigger_history_backfill=
   append_events_path=
   case_frame_size=
   expect_switchbar_active=
@@ -1759,6 +1760,9 @@ run_case() {
     for select_view in "${select_views[@]}"; do
       driver_args+=(--select-view "$select_view")
     done
+  fi
+  if [[ -n "${trigger_history_backfill:-}" ]]; then
+    driver_args+=(--trigger-history-backfill)
   fi
   if [[ -n "${append_events_path:-}" ]]; then
     append_events_path_win=$(unix_to_wine_path "$append_events_path")

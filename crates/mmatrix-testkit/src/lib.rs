@@ -15,6 +15,8 @@ use serde_json::Value;
 #[cfg(windows)]
 const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
 #[cfg(windows)]
+const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
+#[cfg(windows)]
 const COMMAND_ID_PING: u32 = 1;
 #[cfg(windows)]
 const COMMAND_ID_GET_VERSION: u32 = 2;
@@ -78,6 +80,12 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MMATRIX_TESTKIT_CAPTURE_DIR_WIN";
 #[cfg(windows)]
 const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(windows)]
+const MDI_ID: i32 = 1002;
+#[cfg(windows)]
+const VIEW_CONTENT_ID: i32 = 2001;
+#[cfg(windows)]
+const WM_TIMELINE_GET_TOP_LINE: u32 = 0x8000 + 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameSize {
@@ -1251,6 +1259,10 @@ impl MmatrixApp {
         self.inner.select_status_view()
     }
 
+    pub fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
+        self.inner.trigger_active_timeline_history_backfill()
+    }
+
     pub fn send_text(&self, room_id: Option<&str>, body: &str) -> Result<(), TestkitError> {
         self.send_text_target(room_id, body).map(|_| ())
     }
@@ -1747,6 +1759,12 @@ mod imp {
             ))
         }
 
+        pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn send_text_target(
             &self,
             _room_id: Option<&str>,
@@ -1907,7 +1925,8 @@ mod imp {
         FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetClassNameW, GetWindowThreadProcessId, SendMessageW, WM_COPYDATA,
+        EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId,
+        SB_PAGEDOWN, SB_PAGEUP, SendMessageW, WM_COPYDATA, WM_MDIGETACTIVE, WM_VSCROLL,
     };
 
     use super::*;
@@ -2167,6 +2186,32 @@ mod imp {
 
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
             self.select_view(ViewIdentity::Status)
+        }
+
+        pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
+            let content = self.active_mdi_content_hwnd()?;
+            let timeline_hwnd = self.child_window_with_class(content, TIMELINE_CLASS_NAME)?;
+            let before_top_line = unsafe { timeline_top_line(timeline_hwnd) };
+
+            if before_top_line == 0 {
+                unsafe { send_timeline_scroll(timeline_hwnd, SB_PAGEDOWN as usize) };
+                let after_page_down = unsafe { timeline_top_line(timeline_hwnd) };
+                if after_page_down <= 0 {
+                    return Err(TestkitError::InvalidResponse(format!(
+                        "page-down did not move the active room timeline away from the top: before={before_top_line}, after={after_page_down}"
+                    )));
+                }
+            }
+
+            unsafe { send_timeline_scroll(timeline_hwnd, SB_PAGEUP as usize) };
+            let after_page_up = unsafe { timeline_top_line(timeline_hwnd) };
+            if after_page_up != 0 {
+                return Err(TestkitError::InvalidResponse(format!(
+                    "page-up did not return the active room timeline to the top: top_line={after_page_up}"
+                )));
+            }
+
+            Ok(())
         }
 
         pub(crate) fn send_text_target(
@@ -2469,6 +2514,52 @@ mod imp {
             outcome
         }
 
+        fn active_mdi_content_hwnd(&self) -> Result<HWND, TestkitError> {
+            let mdi_client = unsafe { GetDlgItem(self.hwnd, MDI_ID) };
+            if mdi_client.is_null() {
+                return Err(TestkitError::InvalidResponse(
+                    "MDI client control was not found under the automation frame".to_owned(),
+                ));
+            }
+
+            let active_child = unsafe { SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND };
+            if active_child.is_null() {
+                return Err(TestkitError::InvalidResponse(
+                    "active MDI child was not found under the automation frame".to_owned(),
+                ));
+            }
+
+            let content = unsafe { GetDlgItem(active_child, VIEW_CONTENT_ID) };
+            if content.is_null() {
+                return Err(TestkitError::InvalidResponse(
+                    "active MDI child content was not found".to_owned(),
+                ));
+            }
+
+            Ok(content)
+        }
+
+        fn child_window_with_class(
+            &self,
+            parent: HWND,
+            expected_class_name: &str,
+        ) -> Result<HWND, TestkitError> {
+            let mut child =
+                unsafe { FindWindowExW(parent, 0 as HWND, std::ptr::null(), std::ptr::null()) };
+            while !child.is_null() {
+                let child_class_name = unsafe { class_name(child) };
+                if child_class_name.as_deref() == Some(expected_class_name) {
+                    return Ok(child);
+                }
+                child = unsafe { FindWindowExW(parent, child, std::ptr::null(), std::ptr::null()) };
+            }
+
+            Err(TestkitError::InvalidResponse(format!(
+                "active MDI child is not a room timeline view: expected child class {expected_class_name} under {}",
+                unsafe { class_name(parent) }.unwrap_or_else(|| "<unknown>".to_owned())
+            )))
+        }
+
         fn send_command<Args: Serialize, Response: DeserializeOwned>(
             &self,
             command_id: u32,
@@ -2673,6 +2764,14 @@ mod imp {
             "request-{}",
             REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed)
         )
+    }
+
+    unsafe fn timeline_top_line(hwnd: HWND) -> i32 {
+        unsafe { SendMessageW(hwnd, WM_TIMELINE_GET_TOP_LINE, 0, 0) as i32 }
+    }
+
+    unsafe fn send_timeline_scroll(hwnd: HWND, command: usize) {
+        unsafe { SendMessageW(hwnd, WM_VSCROLL, command, 0) };
     }
 
     fn duration_millis_u64(duration: Duration) -> u64 {
