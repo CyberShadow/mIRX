@@ -104,8 +104,8 @@ use crate::{
         MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
         ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        SwitchbarState, UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs,
+        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
         dump_room_from_summary, dump_room_message_send_state_from_core,
         dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
         parse_command_request, success_response,
@@ -5348,6 +5348,18 @@ fn push_room_context_rows(
     }
 }
 
+fn push_room_history_backfill_row(rows: &mut Vec<TimelineRow>, history: &RoomHistoryBackfillState) {
+    let text = match &history.status {
+        RoomHistoryBackfillStatus::Idle => return,
+        RoomHistoryBackfillStatus::Loading { .. } => "* Loading older history...".to_owned(),
+        RoomHistoryBackfillStatus::Failed { message, .. } => {
+            format!("* Unable to load older history: {message}. Scroll to top to retry.")
+        }
+        RoomHistoryBackfillStatus::Exhausted => "* No older history available.".to_owned(),
+    };
+    rows.push(TimelineRow::full_width(TimelineRowKind::Plain, text));
+}
+
 fn push_room_activity_row(
     rows: &mut Vec<TimelineRow>,
     room_view: Option<&RoomViewModel>,
@@ -5529,6 +5541,7 @@ fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> 
     push_room_context_rows(&mut rows, room, room_view);
 
     if let Some(room_view) = room_view {
+        push_room_history_backfill_row(&mut rows, &room_view.history);
         for activity in &room_view.activities {
             push_room_activity_row(&mut rows, Some(room_view), activity);
         }
@@ -8045,6 +8058,13 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .rooms
             .iter()
             .map(|room| UiRoomState {
+                history_backfill: state
+                    .model
+                    .room_views
+                    .get(&room.room_id)
+                    .map_or(UiRoomHistoryBackfillState::Idle, |room_view| {
+                        dump_ui_room_history_backfill_state(&room_view.history)
+                    }),
                 room_id: room.room_id.clone(),
                 display_name: room.display_name.clone(),
                 membership: room.membership,
@@ -8084,6 +8104,22 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             })
             .collect(),
     })
+}
+
+fn dump_ui_room_history_backfill_state(
+    history: &RoomHistoryBackfillState,
+) -> UiRoomHistoryBackfillState {
+    match &history.status {
+        RoomHistoryBackfillStatus::Idle => UiRoomHistoryBackfillState::Idle,
+        RoomHistoryBackfillStatus::Loading { from } => {
+            UiRoomHistoryBackfillState::Loading { from: from.clone() }
+        }
+        RoomHistoryBackfillStatus::Failed { from, message } => UiRoomHistoryBackfillState::Failed {
+            from: from.clone(),
+            message: message.clone(),
+        },
+        RoomHistoryBackfillStatus::Exhausted => UiRoomHistoryBackfillState::Exhausted,
+    }
 }
 
 unsafe fn send_automation_request(
@@ -13599,6 +13635,170 @@ mod tests {
                 "* [22:15] @dave:example left".to_owned(),
                 "* [22:15] @erin:example membership: ban".to_owned(),
             ]
+        );
+    }
+
+    #[test]
+    fn room_timeline_rows_show_loading_history_backfill_after_context_rows() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+        apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view exists after room activity")
+            .history
+            .status = RoomHistoryBackfillStatus::Loading { from: None };
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Header,
+                TimelineRowKind::Topic,
+                TimelineRowKind::Typing,
+                TimelineRowKind::Plain,
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+            ]
+        );
+        assert_eq!(rows[3].logical_text, "* Loading older history...");
+    }
+
+    #[test]
+    fn room_timeline_rows_show_failed_history_backfill_after_context_rows() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+        apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view exists after room activity")
+            .history
+            .status = RoomHistoryBackfillStatus::Failed {
+            from: Some("token-1".to_owned()),
+            message: "homeserver unavailable".to_owned(),
+        };
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+
+        assert_eq!(rows[3].kind, TimelineRowKind::Plain);
+        assert_eq!(
+            rows[3].logical_text,
+            "* Unable to load older history: homeserver unavailable. Scroll to top to retry."
+        );
+    }
+
+    #[test]
+    fn room_timeline_rows_show_exhausted_history_backfill_after_context_rows() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+        apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .expect("room view exists after room activity")
+            .history
+            .status = RoomHistoryBackfillStatus::Exhausted;
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+
+        assert_eq!(rows[3].kind, TimelineRowKind::Plain);
+        assert_eq!(rows[3].logical_text, "* No older history available.");
+    }
+
+    #[test]
+    fn room_timeline_rows_skip_idle_history_backfill_row() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+        apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Header,
+                TimelineRowKind::Topic,
+                TimelineRowKind::Typing,
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+            ]
+        );
+        assert!(
+            rows.iter()
+                .all(|row| !row.logical_text.contains("older history"))
+        );
+    }
+
+    #[test]
+    fn dump_ui_room_history_backfill_state_projects_all_variants() {
+        assert_eq!(
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState::default()),
+            UiRoomHistoryBackfillState::Idle
+        );
+        assert_eq!(
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState {
+                next_token: None,
+                status: RoomHistoryBackfillStatus::Loading {
+                    from: Some("token-1".to_owned()),
+                },
+            }),
+            UiRoomHistoryBackfillState::Loading {
+                from: Some("token-1".to_owned()),
+            }
+        );
+        assert_eq!(
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState {
+                next_token: Some("token-2".to_owned()),
+                status: RoomHistoryBackfillStatus::Failed {
+                    from: Some("token-1".to_owned()),
+                    message: "homeserver unavailable".to_owned(),
+                },
+            }),
+            UiRoomHistoryBackfillState::Failed {
+                from: Some("token-1".to_owned()),
+                message: "homeserver unavailable".to_owned(),
+            }
+        );
+        assert_eq!(
+            dump_ui_room_history_backfill_state(&RoomHistoryBackfillState {
+                next_token: None,
+                status: RoomHistoryBackfillStatus::Exhausted,
+            }),
+            UiRoomHistoryBackfillState::Exhausted
         );
     }
 

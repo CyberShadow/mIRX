@@ -836,6 +836,21 @@ pub struct UiRoomState {
     pub has_activity: bool,
     pub read_target_event_id: Option<String>,
     pub read_state: Option<UiRoomReadState>,
+    pub history_backfill: UiRoomHistoryBackfillState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UiRoomHistoryBackfillState {
+    Idle,
+    Loading {
+        from: Option<String>,
+    },
+    Failed {
+        from: Option<String>,
+        message: String,
+    },
+    Exhausted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

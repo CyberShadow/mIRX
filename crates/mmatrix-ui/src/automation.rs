@@ -517,6 +517,21 @@ pub(crate) struct UiRoomState {
     pub(crate) has_activity: bool,
     pub(crate) read_target_event_id: Option<String>,
     pub(crate) read_state: Option<UiRoomReadState>,
+    pub(crate) history_backfill: UiRoomHistoryBackfillState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum UiRoomHistoryBackfillState {
+    Idle,
+    Loading {
+        from: Option<String>,
+    },
+    Failed {
+        from: Option<String>,
+        message: String,
+    },
+    Exhausted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1733,8 +1748,9 @@ mod tests {
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
         SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
         SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
-        WaitIdleResponse, failure_response, parse_command_request, success_response,
+        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -3513,6 +3529,7 @@ mod tests {
                             num_notifications: 3,
                             num_mentions: 1,
                         }),
+                        history_backfill: UiRoomHistoryBackfillState::Idle,
                     }],
                 },
             ))
@@ -3611,7 +3628,8 @@ mod tests {
                                 "num_unread":7,
                                 "num_notifications":3,
                                 "num_mentions":1
-                            }
+                            },
+                            "history_backfill":{"state":"idle"}
                         }
                     ]
                 }
@@ -4346,6 +4364,7 @@ mod tests {
             serde_json::from_value::<super::UiRoomState>(json!({
                 "room_id":"!room:example",
                 "display_name":"Room",
+                "membership":"join",
                 "encrypted":true,
                 "is_space":false,
                 "is_direct":false,
@@ -4355,6 +4374,7 @@ mod tests {
                 "has_activity":false,
                 "read_target_event_id":null,
                 "read_state":null,
+                "history_backfill":{"state":"idle"},
                 "unexpected":true
             }))
             .is_err()

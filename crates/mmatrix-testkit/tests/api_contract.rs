@@ -30,9 +30,9 @@ use mmatrix_testkit::{
     SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
     SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewIdentity,
+    TestkitError, UiError, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -541,6 +541,7 @@ fn data_models_round_trip_through_json() {
                 num_notifications: 3,
                 num_mentions: 1,
             }),
+            history_backfill: UiRoomHistoryBackfillState::Idle,
         }],
     };
     let navigation_path = vec![
@@ -783,6 +784,9 @@ fn data_models_round_trip_through_json() {
                         "num_notifications": 3u64,
                         "num_mentions": 1u64,
                     },
+                    "history_backfill": {
+                        "state": "idle",
+                    },
                 }
             ],
         })
@@ -844,6 +848,107 @@ fn room_summary_metadata_serializes_to_expected_json_shape() {
             "space_children": [],
         })
     );
+}
+
+#[test]
+fn ui_room_history_backfill_state_round_trips_through_json() {
+    let cases = vec![
+        (
+            UiRoomHistoryBackfillState::Idle,
+            serde_json::json!({
+                "state": "idle",
+            }),
+        ),
+        (
+            UiRoomHistoryBackfillState::Loading { from: None },
+            serde_json::json!({
+                "state": "loading",
+                "from": null,
+            }),
+        ),
+        (
+            UiRoomHistoryBackfillState::Loading {
+                from: Some("t0".to_owned()),
+            },
+            serde_json::json!({
+                "state": "loading",
+                "from": "t0",
+            }),
+        ),
+        (
+            UiRoomHistoryBackfillState::Failed {
+                from: None,
+                message: "request failed".to_owned(),
+            },
+            serde_json::json!({
+                "state": "failed",
+                "from": null,
+                "message": "request failed",
+            }),
+        ),
+        (
+            UiRoomHistoryBackfillState::Failed {
+                from: Some("t1".to_owned()),
+                message: "request failed".to_owned(),
+            },
+            serde_json::json!({
+                "state": "failed",
+                "from": "t1",
+                "message": "request failed",
+            }),
+        ),
+        (
+            UiRoomHistoryBackfillState::Exhausted,
+            serde_json::json!({
+                "state": "exhausted",
+            }),
+        ),
+    ];
+
+    for (state, json) in cases {
+        assert_eq!(
+            serde_json::to_value(&state).expect("serialize ui room history backfill state"),
+            json.clone()
+        );
+        assert_eq!(
+            serde_json::from_value::<UiRoomHistoryBackfillState>(json)
+                .expect("deserialize ui room history backfill state"),
+            state
+        );
+    }
+}
+
+#[test]
+fn ui_room_history_backfill_state_rejects_unknown_fields() {
+    for json in [
+        serde_json::json!({
+            "state": "loading",
+            "from": null,
+            "unexpected": true,
+        }),
+        serde_json::json!({
+            "state": "loading",
+            "from": "token",
+            "unexpected": true,
+        }),
+        serde_json::json!({
+            "state": "failed",
+            "from": null,
+            "message": "boom",
+            "unexpected": true,
+        }),
+        serde_json::json!({
+            "state": "failed",
+            "from": "token",
+            "message": "boom",
+            "unexpected": true,
+        }),
+    ] {
+        assert!(
+            serde_json::from_value::<UiRoomHistoryBackfillState>(json).is_err(),
+            "ui room history backfill state must reject unknown fields"
+        );
+    }
 }
 
 #[test]
@@ -4801,6 +4906,7 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "room_id":"!room:example",
             "display_name":"Room",
+            "membership":"join",
             "encrypted":true,
             "is_space":false,
             "is_direct":false,
@@ -4810,6 +4916,7 @@ fn data_models_reject_unknown_fields() {
             "has_activity":false,
             "read_target_event_id":null,
             "read_state":null,
+            "history_backfill":{"state":"idle"},
             "unexpected":true
         }"#
         )
