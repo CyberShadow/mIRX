@@ -58,9 +58,9 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
-    BTNS_CHECK, BTNS_SHOWTEXT, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
-    STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
+    BTNS_CHECK, BTNS_SHOWTEXT, EM_GETSEL, EM_SCROLLCARET, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES,
+    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW,
+    SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
     TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE,
     TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTATE_MARKED, TBSTYLE_EX_MIXEDBUTTONS,
     TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
@@ -175,6 +175,7 @@ const TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH: i32 = 160;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT: i32 = 120;
 const TIMELINE_IMAGE_MEDIA_SLOT_LINES: usize = 7;
 const TIMELINE_IMAGE_LEFT_INDENT: i32 = 24;
+const TIMELINE_FIND_HIGHLIGHT_COLOR: u32 = 0x00f0f8d8;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
@@ -242,8 +243,65 @@ struct RoomContentState {
     members: HWND,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum TimelineRowIdentity {
+    ActivityPrimary {
+        activity_id: String,
+    },
+    ActivityReactionSummary {
+        activity_id: String,
+    },
+    Synthetic {
+        label: TimelineSyntheticRowLabel,
+        logical_text: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TimelineSyntheticRowLabel {
+    Header,
+    Topic,
+    Typing,
+    Backfill,
+    Context,
+    Plain,
+}
+
+impl TimelineRowIdentity {
+    fn activity_primary(activity_id: &str) -> Self {
+        Self::ActivityPrimary {
+            activity_id: activity_id.to_owned(),
+        }
+    }
+
+    fn activity_reaction_summary(activity_id: &str) -> Self {
+        Self::ActivityReactionSummary {
+            activity_id: activity_id.to_owned(),
+        }
+    }
+
+    fn synthetic(label: TimelineSyntheticRowLabel, logical_text: &str) -> Self {
+        Self::Synthetic {
+            label,
+            logical_text: logical_text.to_owned(),
+        }
+    }
+
+    fn default_for_row(kind: &TimelineRowKind, logical_text: &str) -> Self {
+        let label = match kind {
+            TimelineRowKind::Header => TimelineSyntheticRowLabel::Header,
+            TimelineRowKind::Topic => TimelineSyntheticRowLabel::Topic,
+            TimelineRowKind::Typing => TimelineSyntheticRowLabel::Typing,
+            TimelineRowKind::Plain => TimelineSyntheticRowLabel::Plain,
+            _ => TimelineSyntheticRowLabel::Context,
+        };
+        Self::synthetic(label, logical_text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TimelineRow {
+    identity: TimelineRowIdentity,
     kind: TimelineRowKind,
     logical_text: String,
     visual: TimelineRowVisual,
@@ -265,6 +323,7 @@ enum TimelineRowVisual {
 impl TimelineRow {
     fn full_width(kind: TimelineRowKind, text: String) -> Self {
         Self {
+            identity: TimelineRowIdentity::default_for_row(&kind, &text),
             kind,
             logical_text: text.clone(),
             visual: TimelineRowVisual::FullWidth { text },
@@ -280,6 +339,7 @@ impl TimelineRow {
         body: String,
     ) -> Self {
         Self {
+            identity: TimelineRowIdentity::default_for_row(&kind, &logical_text),
             kind,
             logical_text,
             visual: TimelineRowVisual::Log {
@@ -289,6 +349,11 @@ impl TimelineRow {
             },
             image_state: None,
         }
+    }
+
+    fn with_identity(mut self, identity: TimelineRowIdentity) -> Self {
+        self.identity = identity;
+        self
     }
 }
 
@@ -336,6 +401,7 @@ struct TimelinePaintLine {
     visual: TimelinePaintLineVisual,
     image_state: Option<TimelineImageState>,
     image_slot_index: Option<usize>,
+    source_row_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,6 +420,7 @@ struct TimelineState {
     rendered_text: String,
     lines: Vec<String>,
     paint_lines: Vec<TimelinePaintLine>,
+    selected_find_source_row_index: Option<usize>,
     top_line: usize,
     line_height: i32,
     vertical_padding: i32,
@@ -366,11 +433,53 @@ impl Default for TimelineState {
             rendered_text: String::new(),
             lines: Vec::new(),
             paint_lines: Vec::new(),
+            selected_find_source_row_index: None,
             top_line: 0,
             line_height: TIMELINE_ROW_HEIGHT,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TimelineFindMatch {
+    row_identity: TimelineRowIdentity,
+    source_row_index: usize,
+    logical_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StatusFindMatch {
+    line_index: usize,
+    utf16_start: usize,
+    utf16_end: usize,
+    line_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FindMatch {
+    Timeline(TimelineFindMatch),
+    Status(StatusFindMatch),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ViewFindState {
+    raw_query: String,
+    folded_query: String,
+    matches: Vec<FindMatch>,
+    selected_match_index: Option<usize>,
+    feedback: String,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveViewFindOutcome {
+    active_view: ViewId,
+    raw_query: String,
+    matched: bool,
+    match_count: usize,
+    current_match_index: Option<usize>,
+    selected_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2341,6 +2450,7 @@ struct WindowState {
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
     active_view: ViewId,
+    find_states: BTreeMap<ViewId, ViewFindState>,
     switchbar_views: Vec<ViewId>,
     room_activity: BTreeSet<ViewId>,
     room_activity_read_targets: BTreeMap<ViewId, String>,
@@ -2425,6 +2535,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         views: BTreeMap::new(),
         hwnd_views: BTreeMap::new(),
         active_view: ViewId::Status,
+        find_states: BTreeMap::new(),
         switchbar_views: Vec::new(),
         room_activity: BTreeSet::new(),
         room_activity_read_targets: BTreeMap::new(),
@@ -3404,6 +3515,7 @@ fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintLine> {
             visual: TimelinePaintLineVisual::FullWidth(text),
             image_state: None,
             image_slot_index: None,
+            source_row_index: None,
         })
         .collect()
 }
@@ -3478,6 +3590,7 @@ fn timeline_full_width_paint_lines(kind: &TimelineRowKind, text: &str) -> Vec<Ti
             visual: TimelinePaintLineVisual::FullWidth(line),
             image_state: None,
             image_slot_index: None,
+            source_row_index: None,
         })
         .collect()
 }
@@ -3492,10 +3605,14 @@ where
 {
     let body_width = timeline_body_column_width(client_width);
     let mut paint_lines = Vec::new();
-    for row in rows {
+    for (source_row_index, row) in rows.iter().enumerate() {
         match &row.visual {
             TimelineRowVisual::FullWidth { text } => {
-                paint_lines.extend(timeline_full_width_paint_lines(&row.kind, text));
+                let mut row_paint_lines = timeline_full_width_paint_lines(&row.kind, text);
+                for line in &mut row_paint_lines {
+                    line.source_row_index = Some(source_row_index);
+                }
+                paint_lines.extend(row_paint_lines);
             }
             TimelineRowVisual::Log {
                 timestamp,
@@ -3513,6 +3630,7 @@ where
                         },
                         image_state: None,
                         image_slot_index: None,
+                        source_row_index: Some(source_row_index),
                     });
                     first_visual_line = false;
                 }
@@ -3525,6 +3643,7 @@ where
                     visual: TimelinePaintLineVisual::ImageSlot,
                     image_state: Some(image_state.clone()),
                     image_slot_index: Some(image_slot_index),
+                    source_row_index: Some(source_row_index),
                 });
             }
         }
@@ -3922,6 +4041,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
     } else {
         SelectObject(hdc, font)
     };
+    let find_highlight_brush = CreateSolidBrush(TIMELINE_FIND_HIGHLIGHT_COLOR);
 
     let state = timeline_state_ref(hwnd);
     let visible_rows = timeline_visible_rows(hwnd);
@@ -3933,6 +4053,17 @@ unsafe fn paint_timeline(hwnd: HWND) {
         .enumerate()
     {
         let line_y = state.vertical_padding + row as i32 * state.line_height;
+        if state.selected_find_source_row_index.is_some()
+            && line.source_row_index == state.selected_find_source_row_index
+        {
+            let rect = RECT {
+                left: 0,
+                top: line_y,
+                right: client_rect.right,
+                bottom: line_y + state.line_height,
+            };
+            FillRect(hdc, &rect, find_highlight_brush);
+        }
         if let Some(image_slot_index) = line.image_slot_index {
             if let Some(image_state) = line.image_state.as_ref() {
                 paint_timeline_image_slot(hwnd, hdc, line_y, image_slot_index, image_state);
@@ -4015,6 +4146,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
         }
     }
 
+    DeleteObject(find_highlight_brush as *mut c_void);
     if !font.is_null() && !previous.is_null() {
         SelectObject(hdc, previous);
     }
@@ -5236,6 +5368,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.room_read_states.clear();
             state.room_activity.clear();
             state.room_activity_read_targets.clear();
+            state.find_states.clear();
             state.decoded_images.clear();
         }
         Event::Stopped => {
@@ -5329,19 +5462,25 @@ fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
     let mut header = format!("Room: {}", room.display_name);
     append_room_label_markers(&mut header, room);
     header.push_str(&format!(" ({})", room.room_id));
-    TimelineRow::full_width(TimelineRowKind::Header, header)
+    TimelineRow::full_width(TimelineRowKind::Header, header.clone()).with_identity(
+        TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Header, &header),
+    )
 }
 
 fn build_invite_timeline_rows(room: &RoomSummary) -> Vec<TimelineRow> {
+    let invite_header = format!("Invitation to {}", room.display_name);
     vec![
-        TimelineRow::full_width(
-            TimelineRowKind::Header,
-            format!("Invitation to {}", room.display_name),
+        TimelineRow::full_width(TimelineRowKind::Header, invite_header.clone()).with_identity(
+            TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Header, &invite_header),
         ),
         TimelineRow::full_width(
             TimelineRowKind::Plain,
             "Use /accept or /reject to respond.".to_owned(),
-        ),
+        )
+        .with_identity(TimelineRowIdentity::synthetic(
+            TimelineSyntheticRowLabel::Context,
+            "Use /accept or /reject to respond.",
+        )),
     ]
 }
 
@@ -5353,10 +5492,12 @@ fn push_room_context_rows(
     rows.push(build_room_timeline_header(room));
 
     if let Some(topic) = room_view.and_then(|view| view.topic.as_deref()) {
-        rows.push(TimelineRow::full_width(
-            TimelineRowKind::Topic,
-            format!("Topic: {topic}"),
-        ));
+        let logical_text = format!("Topic: {topic}");
+        rows.push(
+            TimelineRow::full_width(TimelineRowKind::Topic, logical_text.clone()).with_identity(
+                TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Topic, &logical_text),
+            ),
+        );
     }
 
     if let Some(room_view) = room_view
@@ -5368,10 +5509,12 @@ fn push_room_context_rows(
         } else {
             "are"
         };
-        rows.push(TimelineRow::full_width(
-            TimelineRowKind::Typing,
-            format!("* {users} {verb} typing"),
-        ));
+        let logical_text = format!("* {users} {verb} typing");
+        rows.push(
+            TimelineRow::full_width(TimelineRowKind::Typing, logical_text.clone()).with_identity(
+                TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Typing, &logical_text),
+            ),
+        );
     }
 }
 
@@ -5384,7 +5527,11 @@ fn push_room_history_backfill_row(rows: &mut Vec<TimelineRow>, history: &RoomHis
         }
         RoomHistoryBackfillStatus::Exhausted => "* No older history available.".to_owned(),
     };
-    rows.push(TimelineRow::full_width(TimelineRowKind::Plain, text));
+    rows.push(
+        TimelineRow::full_width(TimelineRowKind::Plain, text.clone()).with_identity(
+            TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Backfill, &text),
+        ),
+    );
 }
 
 fn push_room_activity_row(
@@ -5417,16 +5564,19 @@ fn push_room_activity_row(
                     format!("{}{}", message.body, suffix),
                 ),
             };
-            rows.push(TimelineRow::log(
-                TimelineRowKind::Message {
-                    presentation: message.presentation,
-                    send_state: timeline_message_send_state(&message.send_state),
-                },
-                logical_text,
-                timestamp,
-                sender_prefix,
-                body,
-            ));
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::Message {
+                        presentation: message.presentation,
+                        send_state: timeline_message_send_state(&message.send_state),
+                    },
+                    logical_text,
+                    timestamp,
+                    sender_prefix,
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+            );
         }
         RoomActivityKind::Image(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
@@ -5443,7 +5593,8 @@ fn push_room_activity_row(
                 timestamp,
                 format!("* {}", message.sender),
                 body,
-            );
+            )
+            .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id));
             row.image_state = image_state;
             rows.push(row);
         }
@@ -5452,49 +5603,61 @@ fn push_room_activity_row(
             let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent file: {display_name}{metadata_suffix}");
-            rows.push(TimelineRow::log(
-                TimelineRowKind::File,
-                format!("* {timestamp} {} {body}", message.sender),
-                timestamp,
-                format!("* {}", message.sender),
-                body,
-            ));
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::File,
+                    format!("* {timestamp} {} {body}", message.sender),
+                    timestamp,
+                    format!("* {}", message.sender),
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+            );
         }
         RoomActivityKind::Audio(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_audio_metadata_suffix(message.info.as_ref());
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent audio: {display_name}{metadata_suffix}");
-            rows.push(TimelineRow::log(
-                TimelineRowKind::Audio,
-                format!("* {timestamp} {} {body}", message.sender),
-                timestamp,
-                format!("* {}", message.sender),
-                body,
-            ));
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::Audio,
+                    format!("* {timestamp} {} {body}", message.sender),
+                    timestamp,
+                    format!("* {}", message.sender),
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+            );
         }
         RoomActivityKind::UnsupportedMessage(message) => {
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent unsupported {}: {}", message.msgtype, message.body);
-            rows.push(TimelineRow::log(
-                TimelineRowKind::Unsupported,
-                format!("* {timestamp} {} {body}", message.sender),
-                timestamp,
-                format!("* {}", message.sender),
-                body,
-            ));
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::Unsupported,
+                    format!("* {timestamp} {} {body}", message.sender),
+                    timestamp,
+                    format!("* {}", message.sender),
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+            );
         }
         RoomActivityKind::StateNotice(notice) => match &notice.content {
             RoomStateNoticeContent::Topic { topic } => {
                 let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
                 let body = format!("{} set topic: {topic}", notice.sender);
-                rows.push(TimelineRow::log(
-                    TimelineRowKind::StateNotice,
-                    format!("* {timestamp} {body}"),
-                    timestamp,
-                    "*".to_owned(),
-                    body,
-                ));
+                rows.push(
+                    TimelineRow::log(
+                        TimelineRowKind::StateNotice,
+                        format!("* {timestamp} {body}"),
+                        timestamp,
+                        "*".to_owned(),
+                        body,
+                    )
+                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                );
             }
             RoomStateNoticeContent::Member {
                 membership,
@@ -5512,25 +5675,31 @@ fn push_room_activity_row(
                     }
                     membership => format!("{} membership: {membership}", notice.state_key),
                 };
-                rows.push(TimelineRow::log(
-                    TimelineRowKind::StateNotice,
-                    format!("* {timestamp} {body}"),
-                    timestamp,
-                    "*".to_owned(),
-                    body,
-                ));
+                rows.push(
+                    TimelineRow::log(
+                        TimelineRowKind::StateNotice,
+                        format!("* {timestamp} {body}"),
+                        timestamp,
+                        "*".to_owned(),
+                        body,
+                    )
+                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                );
             }
         },
         RoomActivityKind::Redacted(_) => {
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = "message redacted".to_owned();
-            rows.push(TimelineRow::log(
-                TimelineRowKind::StateNotice,
-                format!("* {timestamp} {body}"),
-                timestamp,
-                "*".to_owned(),
-                body,
-            ));
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::StateNotice,
+                    format!("* {timestamp} {body}"),
+                    timestamp,
+                    "*".to_owned(),
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+            );
         }
     }
 
@@ -5552,10 +5721,12 @@ fn push_room_activity_row(
         .map(|summary| format!("{} x{}", summary.key, summary.count))
         .collect::<Vec<_>>()
         .join("  ");
-    rows.push(TimelineRow::full_width(
-        TimelineRowKind::ReactionSummary,
-        format!("    reactions: {summary_text}"),
-    ));
+    let logical_text = format!("    reactions: {summary_text}");
+    rows.push(
+        TimelineRow::full_width(TimelineRowKind::ReactionSummary, logical_text).with_identity(
+            TimelineRowIdentity::activity_reaction_summary(&activity.activity_id),
+        ),
+    );
 }
 
 fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
@@ -5789,6 +5960,11 @@ fn frame_status_text(state: &WindowState) -> String {
         text.push_str(&error.message);
     }
 
+    if let Some(feedback) = active_view_find_feedback(state) {
+        text.push_str(" | ");
+        text.push_str(feedback);
+    }
+
     text
 }
 
@@ -5808,6 +5984,474 @@ unsafe fn refresh_status_bar(hwnd: HWND) -> Result<(), String> {
 
 fn render_view_text(lines: &[String]) -> String {
     lines.join("\r\n")
+}
+
+fn fold_find_query(query: &str) -> String {
+    query.chars().map(|ch| ch.to_ascii_lowercase()).collect()
+}
+
+fn ascii_case_insensitive_match_range(
+    haystack: &str,
+    folded_query: &str,
+) -> Option<(usize, usize)> {
+    if folded_query.is_empty() {
+        return Some((0, 0));
+    }
+
+    let expected = folded_query.chars().collect::<Vec<_>>();
+    for (start, _) in haystack.char_indices() {
+        let mut next_end = start;
+        let mut matched = true;
+        let mut actual = haystack[start..].chars();
+        for query_char in &expected {
+            let Some(actual_char) = actual.next() else {
+                matched = false;
+                break;
+            };
+            if actual_char.to_ascii_lowercase() != *query_char {
+                matched = false;
+                break;
+            }
+            next_end += actual_char.len_utf8();
+        }
+        if matched {
+            return Some((start, next_end));
+        }
+    }
+
+    None
+}
+
+fn ascii_case_insensitive_contains(haystack: &str, folded_query: &str) -> bool {
+    ascii_case_insensitive_match_range(haystack, folded_query).is_some()
+}
+
+fn ascii_case_insensitive_utf16_range(
+    haystack: &str,
+    folded_query: &str,
+) -> Option<(usize, usize)> {
+    let (start, end) = ascii_case_insensitive_match_range(haystack, folded_query)?;
+    let utf16_start = haystack[..start].encode_utf16().count();
+    let utf16_end = utf16_start + haystack[start..end].encode_utf16().count();
+    Some((utf16_start, utf16_end))
+}
+
+fn compute_timeline_find_matches(rows: &[TimelineRow], folded_query: &str) -> Vec<FindMatch> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| ascii_case_insensitive_contains(&row.logical_text, folded_query))
+        .map(|(source_row_index, row)| {
+            FindMatch::Timeline(TimelineFindMatch {
+                row_identity: row.identity.clone(),
+                source_row_index,
+                logical_text: row.logical_text.clone(),
+            })
+        })
+        .collect()
+}
+
+fn compute_status_find_matches(lines: &[String], folded_query: &str) -> Vec<FindMatch> {
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(line_index, line_text)| {
+            let (utf16_start, utf16_end) =
+                ascii_case_insensitive_utf16_range(line_text, folded_query)?;
+            Some(FindMatch::Status(StatusFindMatch {
+                line_index,
+                utf16_start,
+                utf16_end,
+                line_text: line_text.clone(),
+            }))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FindSelectionStart {
+    TimelineSourceRow(usize),
+    StatusUtf16(usize),
+}
+
+enum FindSelectionMode<'a> {
+    Execute {
+        folded_query: &'a str,
+        previous_state: Option<&'a ViewFindState>,
+        start: FindSelectionStart,
+    },
+    Recompute {
+        previous_state: &'a ViewFindState,
+    },
+}
+
+fn find_match_start(match_item: &FindMatch) -> FindSelectionStart {
+    match match_item {
+        FindMatch::Timeline(item) => FindSelectionStart::TimelineSourceRow(item.source_row_index),
+        FindMatch::Status(item) => FindSelectionStart::StatusUtf16(item.utf16_start),
+    }
+}
+
+fn preserved_find_match_index(matches: &[FindMatch], previous_match: &FindMatch) -> Option<usize> {
+    match previous_match {
+        FindMatch::Timeline(previous) => matches.iter().position(|match_item| {
+            matches!(
+                match_item,
+                FindMatch::Timeline(candidate) if candidate.row_identity == previous.row_identity
+            )
+        }),
+        FindMatch::Status(previous) => matches.iter().position(|match_item| {
+            matches!(
+                match_item,
+                FindMatch::Status(candidate)
+                    if candidate.line_text == previous.line_text
+                        && candidate.utf16_start == previous.utf16_start
+                        && candidate.utf16_end == previous.utf16_end
+            )
+        }),
+    }
+}
+
+fn choose_find_match(matches: &[FindMatch], mode: FindSelectionMode<'_>) -> Option<usize> {
+    if matches.is_empty() {
+        return None;
+    }
+
+    match mode {
+        FindSelectionMode::Execute {
+            folded_query,
+            previous_state,
+            start,
+        } => {
+            if let Some(previous_state) = previous_state
+                && previous_state.folded_query == folded_query
+                && let Some(previous_index) = previous_state.selected_match_index
+                && previous_index < previous_state.matches.len()
+            {
+                return Some((previous_index + 1) % matches.len());
+            }
+
+            matches
+                .iter()
+                .position(|match_item| match (find_match_start(match_item), start) {
+                    (
+                        FindSelectionStart::TimelineSourceRow(candidate),
+                        FindSelectionStart::TimelineSourceRow(start),
+                    ) => candidate >= start,
+                    (
+                        FindSelectionStart::StatusUtf16(candidate),
+                        FindSelectionStart::StatusUtf16(start),
+                    ) => candidate >= start,
+                    _ => false,
+                })
+                .or(Some(0))
+        }
+        FindSelectionMode::Recompute { previous_state } => previous_state
+            .selected_match_index
+            .and_then(|previous_index| previous_state.matches.get(previous_index))
+            .and_then(|previous_match| preserved_find_match_index(matches, previous_match))
+            .or(Some(0)),
+    }
+}
+
+fn find_feedback(
+    raw_query: &str,
+    matches: &[FindMatch],
+    selected_match_index: Option<usize>,
+) -> String {
+    if matches.is_empty() {
+        return format!("find: no matches for \"{raw_query}\"");
+    }
+
+    let selected_match_index =
+        selected_match_index.expect("non-empty find match lists must keep a selected match");
+    format!(
+        "find: {}/{} \"{}\"",
+        selected_match_index + 1,
+        matches.len(),
+        raw_query
+    )
+}
+
+fn find_match_selected_text(match_item: &FindMatch) -> String {
+    match match_item {
+        FindMatch::Timeline(item) => item.logical_text.clone(),
+        FindMatch::Status(item) => item.line_text.clone(),
+    }
+}
+
+fn build_view_find_state(
+    raw_query: &str,
+    folded_query: &str,
+    matches: Vec<FindMatch>,
+    selected_match_index: Option<usize>,
+) -> ViewFindState {
+    let feedback = find_feedback(raw_query, &matches, selected_match_index);
+    ViewFindState {
+        raw_query: raw_query.to_owned(),
+        folded_query: folded_query.to_owned(),
+        matches,
+        selected_match_index,
+        feedback,
+    }
+}
+
+fn active_view_find_feedback(state: &WindowState) -> Option<&str> {
+    state
+        .find_states
+        .get(&state.active_view)
+        .map(|find_state| find_state.feedback.as_str())
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn view_find_outcome(view_id: &ViewId, find_state: &ViewFindState) -> ActiveViewFindOutcome {
+    let selected_text = find_state
+        .selected_match_index
+        .and_then(|index| find_state.matches.get(index))
+        .map(find_match_selected_text);
+    ActiveViewFindOutcome {
+        active_view: view_id.clone(),
+        raw_query: find_state.raw_query.clone(),
+        matched: !find_state.matches.is_empty(),
+        match_count: find_state.matches.len(),
+        current_match_index: find_state.selected_match_index,
+        selected_text,
+    }
+}
+
+enum ViewFindContent<'a> {
+    Timeline(&'a [TimelineRow]),
+    Status(&'a [String]),
+}
+
+fn recompute_find_for_view(
+    state: &mut WindowState,
+    view_id: &ViewId,
+    content: ViewFindContent<'_>,
+) {
+    let Some(previous_state) = state.find_states.get(view_id).cloned() else {
+        return;
+    };
+
+    let matches = match content {
+        ViewFindContent::Timeline(rows) => {
+            compute_timeline_find_matches(rows, &previous_state.folded_query)
+        }
+        ViewFindContent::Status(lines) => {
+            compute_status_find_matches(lines, &previous_state.folded_query)
+        }
+    };
+    let selected_match_index = choose_find_match(
+        &matches,
+        FindSelectionMode::Recompute {
+            previous_state: &previous_state,
+        },
+    );
+    let next_state = build_view_find_state(
+        &previous_state.raw_query,
+        &previous_state.folded_query,
+        matches,
+        selected_match_index,
+    );
+    state.find_states.insert(view_id.clone(), next_state);
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+unsafe fn status_edit_selection_start(hwnd: HWND) -> usize {
+    let mut start = 0u32;
+    let mut end = 0u32;
+    SendMessageW(
+        hwnd,
+        EM_GETSEL,
+        (&mut start as *mut u32) as WPARAM,
+        (&mut end as *mut u32) as LPARAM,
+    );
+    start.min(end) as usize
+}
+
+unsafe fn clear_find_projection_for_timeline(hwnd: HWND) {
+    if timeline_state_ref(hwnd)
+        .selected_find_source_row_index
+        .is_none()
+    {
+        return;
+    }
+
+    timeline_state_mut(hwnd).selected_find_source_row_index = None;
+    InvalidateRect(hwnd, null(), 1);
+}
+
+unsafe fn apply_find_to_active_view(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
+    let active_view = state_ref(hwnd).active_view.clone();
+    let view = state_ref(hwnd)
+        .views
+        .get(view_id)
+        .ok_or_else(|| "view state was not tracked".to_owned())?;
+
+    if active_view != *view_id {
+        if matches!(view_id, ViewId::Room(_) | ViewId::Thread { .. }) {
+            clear_find_projection_for_timeline(room_content_timeline(view.content));
+        }
+        return Ok(());
+    }
+
+    let selected_match = state_ref(hwnd)
+        .find_states
+        .get(view_id)
+        .and_then(|find_state| {
+            find_state
+                .selected_match_index
+                .and_then(|index| find_state.matches.get(index))
+        })
+        .cloned();
+
+    match view_id {
+        ViewId::Status => {
+            let edit = view.content;
+            match selected_match {
+                Some(FindMatch::Status(item)) => {
+                    SendMessageW(edit, EM_SETSEL, item.utf16_start, item.utf16_end as LPARAM);
+                }
+                Some(FindMatch::Timeline(_)) => {
+                    unreachable!("status views must only store status matches")
+                }
+                None => {
+                    SendMessageW(edit, EM_SETSEL, 0, 0);
+                }
+            }
+        }
+        ViewId::Room(_) | ViewId::Thread { .. } => {
+            let timeline = room_content_timeline(view.content);
+            let selected_source_row_index = match selected_match {
+                Some(FindMatch::Timeline(item)) => Some(item.source_row_index),
+                Some(FindMatch::Status(_)) => {
+                    unreachable!("timeline views must only store timeline matches")
+                }
+                None => None,
+            };
+            if timeline_state_ref(timeline).selected_find_source_row_index
+                != selected_source_row_index
+            {
+                timeline_state_mut(timeline).selected_find_source_row_index =
+                    selected_source_row_index;
+                InvalidateRect(timeline, null(), 1);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+unsafe fn scroll_timeline_to_source_row_index(hwnd: HWND, source_row_index: usize) {
+    let top_line = {
+        let timeline_state = timeline_state_ref(hwnd);
+        timeline_top_line_for_source_row_index(hwnd, &timeline_state.source_rows, source_row_index)
+    };
+    let visible_rows = timeline_visible_rows(hwnd);
+    let max_top_line =
+        timeline_max_top_line(timeline_state_ref(hwnd).paint_lines.len(), visible_rows);
+    timeline_state_mut(hwnd).top_line = top_line.min(max_top_line);
+    update_timeline_scrollbar(hwnd);
+    InvalidateRect(hwnd, null(), 1);
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+unsafe fn execute_active_view_find(
+    hwnd: HWND,
+    query: &str,
+) -> Result<ActiveViewFindOutcome, String> {
+    if query.trim().is_empty() {
+        return Err("find query must not be empty".to_owned());
+    }
+
+    let active_view = state_ref(hwnd).active_view.clone();
+    let previous_state = state_ref(hwnd).find_states.get(&active_view).cloned();
+    let folded_query = fold_find_query(query);
+
+    let next_state = match &active_view {
+        ViewId::Status => {
+            let view = state_ref(hwnd)
+                .views
+                .get(&active_view)
+                .ok_or_else(|| "view state was not tracked".to_owned())?;
+            let lines = render_status_lines(&state_ref(hwnd).model);
+            let matches = compute_status_find_matches(&lines, &folded_query);
+            let selection_start =
+                FindSelectionStart::StatusUtf16(status_edit_selection_start(view.content));
+            let selected_match_index = choose_find_match(
+                &matches,
+                FindSelectionMode::Execute {
+                    folded_query: &folded_query,
+                    previous_state: previous_state.as_ref(),
+                    start: selection_start,
+                },
+            );
+            build_view_find_state(query, &folded_query, matches, selected_match_index)
+        }
+        ViewId::Room(_) | ViewId::Thread { .. } => {
+            let view = state_ref(hwnd)
+                .views
+                .get(&active_view)
+                .ok_or_else(|| "view state was not tracked".to_owned())?;
+            let timeline = room_content_timeline(view.content);
+            let timeline_state = timeline_state_ref(timeline);
+            let start_source_row_index = timeline_source_row_index_for_top_line(
+                timeline,
+                &timeline_state.source_rows,
+                timeline_state.top_line,
+            )
+            .unwrap_or(0);
+            let matches = compute_timeline_find_matches(&timeline_state.source_rows, &folded_query);
+            let selected_match_index = choose_find_match(
+                &matches,
+                FindSelectionMode::Execute {
+                    folded_query: &folded_query,
+                    previous_state: previous_state.as_ref(),
+                    start: FindSelectionStart::TimelineSourceRow(start_source_row_index),
+                },
+            );
+            build_view_find_state(query, &folded_query, matches, selected_match_index)
+        }
+    };
+
+    state_mut(hwnd)
+        .find_states
+        .insert(active_view.clone(), next_state);
+    apply_find_to_active_view(hwnd, &active_view)?;
+
+    if let Some(find_state) = state_ref(hwnd).find_states.get(&active_view)
+        && let Some(selected_match_index) = find_state.selected_match_index
+        && let Some(selected_match) = find_state.matches.get(selected_match_index)
+    {
+        match selected_match {
+            FindMatch::Timeline(item) => {
+                let view = state_ref(hwnd)
+                    .views
+                    .get(&active_view)
+                    .ok_or_else(|| "view state was not tracked".to_owned())?;
+                scroll_timeline_to_source_row_index(
+                    room_content_timeline(view.content),
+                    item.source_row_index,
+                );
+            }
+            FindMatch::Status(_) => {
+                let view = state_ref(hwnd)
+                    .views
+                    .get(&active_view)
+                    .ok_or_else(|| "view state was not tracked".to_owned())?;
+                SendMessageW(view.content, EM_SCROLLCARET, 0, 0);
+            }
+        }
+    }
+
+    refresh_status_bar(hwnd)?;
+    Ok(view_find_outcome(
+        &active_view,
+        state_ref(hwnd)
+            .find_states
+            .get(&active_view)
+            .expect("active view find state must be stored"),
+    ))
 }
 
 fn resolve_active_view(
@@ -5853,6 +6497,10 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
         .filter(|view_id| !view_id_is_valid(&state.model, view_id))
         .cloned()
         .collect::<Vec<_>>();
+
+    for view_id in &stale_view_ids {
+        state.find_states.remove(view_id);
+    }
 
     let removed = stale_view_ids
         .into_iter()
@@ -6160,6 +6808,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         .views
         .remove(&view_id)
         .expect("HWND-to-view registry must match tracked views");
+    state.find_states.remove(&view_id);
     assert_eq!(
         removed.child, child,
         "tracked child HWND must match registry"
@@ -6401,11 +7050,18 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
     match view_id {
         ViewId::Status => {
-            let text = {
+            let lines = {
                 let state = state_ref(hwnd);
-                render_view_text(&render_status_lines(&state.model))
+                render_status_lines(&state.model)
             };
+            let text = render_view_text(&lines);
             set_edit_text(content, &text);
+            recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Status(&lines));
+            if state_ref(hwnd).find_states.contains_key(view_id)
+                && state_ref(hwnd).active_view == *view_id
+            {
+                apply_find_to_active_view(hwnd, view_id)?;
+            }
         }
         ViewId::Room(room_id) => {
             let (rows, member_rows, image_requests) = {
@@ -6438,10 +7094,17 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 (rows, member_rows, image_requests)
             };
             dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
-            set_timeline_rows(room_content_timeline(content), &rows);
+            let timeline = room_content_timeline(content);
+            set_timeline_rows(timeline, &rows);
+            recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Timeline(&rows));
+            if state_ref(hwnd).active_view == *view_id {
+                apply_find_to_active_view(hwnd, view_id)?;
+            } else {
+                clear_find_projection_for_timeline(timeline);
+            }
             set_room_member_list(room_content_member_list(content), &member_rows);
             InvalidateRect(content, null(), 1);
-            InvalidateRect(room_content_timeline(content), null(), 1);
+            InvalidateRect(timeline, null(), 1);
             InvalidateRect(room_content_member_list(content), null(), 1);
         }
         ViewId::Thread {
@@ -6466,10 +7129,17 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 (rows, member_rows, image_requests)
             };
             dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
-            set_timeline_rows(room_content_timeline(content), &rows);
+            let timeline = room_content_timeline(content);
+            set_timeline_rows(timeline, &rows);
+            recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Timeline(&rows));
+            if state_ref(hwnd).active_view == *view_id {
+                apply_find_to_active_view(hwnd, view_id)?;
+            } else {
+                clear_find_projection_for_timeline(timeline);
+            }
             set_room_member_list(room_content_member_list(content), &member_rows);
             InvalidateRect(content, null(), 1);
-            InvalidateRect(room_content_timeline(content), null(), 1);
+            InvalidateRect(timeline, null(), 1);
             InvalidateRect(room_content_member_list(content), null(), 1);
         }
     }
@@ -8452,6 +9122,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.switchbar_views.clear();
         state.room_activity.clear();
         state.room_activity_read_targets.clear();
+        state.find_states.clear();
         state.model = initial_model();
         state.decoded_images.clear();
     }
@@ -11505,6 +12176,7 @@ mod tests {
             views: BTreeMap::new(),
             hwnd_views: BTreeMap::new(),
             active_view: ViewId::Status,
+            find_states: BTreeMap::new(),
             switchbar_views: Vec::new(),
             room_activity: BTreeSet::new(),
             room_activity_read_targets: BTreeMap::new(),
@@ -15393,6 +16065,178 @@ mod tests {
     }
 
     #[test]
+    fn ascii_find_matching_folds_ascii_only() {
+        assert_eq!(fold_find_query("HeLLo Ä"), "hello Ä");
+        assert!(ascii_case_insensitive_contains(
+            "Hello world",
+            &fold_find_query("hello")
+        ));
+        assert!(ascii_case_insensitive_contains(
+            "AÄ",
+            &fold_find_query("aÄ")
+        ));
+        assert!(!ascii_case_insensitive_contains("Ä", &fold_find_query("ä")));
+    }
+
+    #[test]
+    fn ascii_find_utf16_range_counts_non_ascii_prefix_units() {
+        assert_eq!(
+            ascii_case_insensitive_utf16_range("🙂 Test λ", &fold_find_query("test")),
+            Some((3, 7))
+        );
+    }
+
+    #[test]
+    fn timeline_find_matches_are_per_logical_row() {
+        let rows = vec![
+            TimelineRow::full_width(TimelineRowKind::Plain, "alpha needle needle".to_owned())
+                .with_identity(TimelineRowIdentity::synthetic(
+                    TimelineSyntheticRowLabel::Plain,
+                    "alpha needle needle",
+                )),
+            TimelineRow::full_width(TimelineRowKind::Plain, "beta needle".to_owned())
+                .with_identity(TimelineRowIdentity::synthetic(
+                    TimelineSyntheticRowLabel::Plain,
+                    "beta needle",
+                )),
+        ];
+
+        let matches = compute_timeline_find_matches(&rows, &fold_find_query("needle"));
+        assert_eq!(matches.len(), 2);
+        assert_eq!(
+            matches,
+            vec![
+                FindMatch::Timeline(TimelineFindMatch {
+                    row_identity: TimelineRowIdentity::synthetic(
+                        TimelineSyntheticRowLabel::Plain,
+                        "alpha needle needle",
+                    ),
+                    source_row_index: 0,
+                    logical_text: "alpha needle needle".to_owned(),
+                }),
+                FindMatch::Timeline(TimelineFindMatch {
+                    row_identity: TimelineRowIdentity::synthetic(
+                        TimelineSyntheticRowLabel::Plain,
+                        "beta needle",
+                    ),
+                    source_row_index: 1,
+                    logical_text: "beta needle".to_owned(),
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_find_query_advances_and_wraps() {
+        let matches = vec![
+            FindMatch::Timeline(TimelineFindMatch {
+                row_identity: TimelineRowIdentity::activity_primary("activity-1"),
+                source_row_index: 1,
+                logical_text: "first needle".to_owned(),
+            }),
+            FindMatch::Timeline(TimelineFindMatch {
+                row_identity: TimelineRowIdentity::activity_primary("activity-2"),
+                source_row_index: 4,
+                logical_text: "second needle".to_owned(),
+            }),
+        ];
+        let previous_state = build_view_find_state(
+            "needle",
+            &fold_find_query("needle"),
+            matches.clone(),
+            Some(1),
+        );
+
+        assert_eq!(
+            choose_find_match(
+                &matches,
+                FindSelectionMode::Execute {
+                    folded_query: "needle",
+                    previous_state: Some(&previous_state),
+                    start: FindSelectionStart::TimelineSourceRow(0),
+                },
+            ),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn recompute_find_selection_preserves_timeline_identity_and_reselects_first_match_when_missing()
+    {
+        let previous_state = build_view_find_state(
+            "needle",
+            &fold_find_query("needle"),
+            vec![
+                FindMatch::Timeline(TimelineFindMatch {
+                    row_identity: TimelineRowIdentity::activity_primary("activity-1"),
+                    source_row_index: 0,
+                    logical_text: "first needle".to_owned(),
+                }),
+                FindMatch::Timeline(TimelineFindMatch {
+                    row_identity: TimelineRowIdentity::activity_primary("activity-2"),
+                    source_row_index: 1,
+                    logical_text: "second needle".to_owned(),
+                }),
+            ],
+            Some(1),
+        );
+        let reordered_matches = vec![
+            FindMatch::Timeline(TimelineFindMatch {
+                row_identity: TimelineRowIdentity::activity_primary("activity-2"),
+                source_row_index: 0,
+                logical_text: "second needle".to_owned(),
+            }),
+            FindMatch::Timeline(TimelineFindMatch {
+                row_identity: TimelineRowIdentity::activity_primary("activity-1"),
+                source_row_index: 1,
+                logical_text: "first needle".to_owned(),
+            }),
+        ];
+        let missing_selected_row_matches = vec![FindMatch::Timeline(TimelineFindMatch {
+            row_identity: TimelineRowIdentity::activity_primary("activity-1"),
+            source_row_index: 0,
+            logical_text: "first needle".to_owned(),
+        })];
+
+        assert_eq!(
+            choose_find_match(
+                &reordered_matches,
+                FindSelectionMode::Recompute {
+                    previous_state: &previous_state,
+                },
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            choose_find_match(
+                &missing_selected_row_matches,
+                FindSelectionMode::Recompute {
+                    previous_state: &previous_state,
+                },
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            choose_find_match(
+                &[],
+                FindSelectionMode::Recompute {
+                    previous_state: &previous_state,
+                },
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn no_match_find_state_is_deterministic() {
+        let state = build_view_find_state("missing", "missing", Vec::new(), None);
+
+        assert!(state.matches.is_empty());
+        assert_eq!(state.selected_match_index, None);
+        assert_eq!(state.feedback, "find: no matches for \"missing\"");
+    }
+
+    #[test]
     fn frame_status_text_returns_lifecycle_status_only_when_no_details_exist() {
         let mut state = test_state();
         state.model.status = "authenticated".to_owned();
@@ -15454,6 +16298,22 @@ mod tests {
             frame_status_text(&state),
             "error during send text | error: send text: message send failed"
         );
+    }
+
+    #[test]
+    fn frame_status_text_appends_active_view_find_feedback_without_mutating_status() {
+        let mut state = test_state();
+        state.model.status = "authenticated".to_owned();
+        state.find_states.insert(
+            ViewId::Status,
+            build_view_find_state("hello", "hello", Vec::new(), None),
+        );
+
+        assert_eq!(
+            frame_status_text(&state),
+            "authenticated | find: no matches for \"hello\""
+        );
+        assert_eq!(state.model.status, "authenticated");
     }
 
     #[test]
@@ -15903,6 +16763,10 @@ mod tests {
             operation: Operation::SendMessage,
             message: "failed".to_owned(),
         });
+        state.find_states.insert(
+            ViewId::Room("!room:example".to_owned()),
+            build_view_find_state("hello", "hello", Vec::new(), None),
+        );
         state.views.insert(ViewId::Status, tracked_view(10));
         state
             .views
@@ -15925,6 +16789,7 @@ mod tests {
         assert_eq!(state.model.last_e2ee_status, None);
         assert_eq!(state.model.last_verification, None);
         assert_eq!(state.model.last_error, None);
+        assert!(state.find_states.is_empty());
         assert_eq!(state.active_view, ViewId::Status);
         assert_eq!(removed.len(), 1);
         assert!(state.views.contains_key(&ViewId::Status));
