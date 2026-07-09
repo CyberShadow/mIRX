@@ -2955,6 +2955,36 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
 }
 
 #[test]
+fn trigger_active_timeline_history_backfill_rejects_thread_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("message-edits.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(thread_identity("!ops:example", "$thread-root"))?;
+
+    let error = app
+        .trigger_active_timeline_history_backfill()
+        .expect_err("thread view must not trigger room history backfill");
+    assert!(matches!(
+        error,
+        TestkitError::InvalidResponse(message)
+            if message.contains("active view is not a room view")
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_history_backfill_prepends_older_messages_without_disturbing_active_room()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

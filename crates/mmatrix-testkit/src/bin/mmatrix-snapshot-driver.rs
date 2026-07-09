@@ -661,7 +661,6 @@ mod cli {
                 "--expect-active-view <status|room:<room_id>|thread:<room_id>|<thread_root_event_id>>"
             ));
             assert!(usage().contains("--select-view <identity> (repeatable)"));
-            assert!(usage().contains("--trigger-history-backfill"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains("--expect-view <identity>::<substring>"));
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
@@ -676,6 +675,11 @@ mod cli {
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
             assert!(usage().contains("--expect-navigation-activity <path-or-label>"));
             assert!(usage().contains("--expect-no-navigation-activity <path-or-label>"));
+        }
+
+        #[test]
+        fn usage_documents_trigger_history_backfill_flag() {
+            assert!(usage().contains("--trigger-history-backfill"));
         }
 
         #[test]
@@ -795,6 +799,20 @@ mod cli {
             .unwrap();
 
             assert!(config.trigger_history_backfill);
+        }
+
+        #[test]
+        fn parse_args_rejects_unknown_argument() {
+            let error = parse_args(
+                ["--trigger-history-backfill", "--unknown-flag"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .err()
+            .unwrap();
+
+            assert!(error.contains("unknown argument: --unknown-flag"));
+            assert!(error.contains("--trigger-history-backfill"));
         }
 
         #[test]

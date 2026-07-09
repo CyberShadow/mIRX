@@ -1926,7 +1926,8 @@ mod imp {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId,
-        SB_PAGEDOWN, SB_PAGEUP, SendMessageW, WM_COPYDATA, WM_MDIGETACTIVE, WM_VSCROLL,
+        SB_PAGEDOWN, SB_PAGEUP, SendMessageW, WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH,
+        WM_MDIGETACTIVE, WM_VSCROLL,
     };
 
     use super::*;
@@ -2189,6 +2190,8 @@ mod imp {
         }
 
         pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
+            let active_child = self.active_mdi_child_hwnd()?;
+            self.require_active_room_view(active_child)?;
             let content = self.active_mdi_content_hwnd()?;
             let timeline_hwnd = self.child_window_with_class(content, TIMELINE_CLASS_NAME)?;
             let before_top_line = unsafe { timeline_top_line(timeline_hwnd) };
@@ -2515,6 +2518,18 @@ mod imp {
         }
 
         fn active_mdi_content_hwnd(&self) -> Result<HWND, TestkitError> {
+            let active_child = self.active_mdi_child_hwnd()?;
+            let content = unsafe { GetDlgItem(active_child, VIEW_CONTENT_ID) };
+            if content.is_null() {
+                return Err(TestkitError::InvalidResponse(
+                    "active MDI child content was not found".to_owned(),
+                ));
+            }
+
+            Ok(content)
+        }
+
+        fn active_mdi_child_hwnd(&self) -> Result<HWND, TestkitError> {
             let mdi_client = unsafe { GetDlgItem(self.hwnd, MDI_ID) };
             if mdi_client.is_null() {
                 return Err(TestkitError::InvalidResponse(
@@ -2529,14 +2544,35 @@ mod imp {
                 ));
             }
 
-            let content = unsafe { GetDlgItem(active_child, VIEW_CONTENT_ID) };
-            if content.is_null() {
-                return Err(TestkitError::InvalidResponse(
-                    "active MDI child content was not found".to_owned(),
-                ));
-            }
+            Ok(active_child)
+        }
 
-            Ok(content)
+        fn require_active_room_view(&self, active_child: HWND) -> Result<(), TestkitError> {
+            let active_child_title = unsafe { read_window_text(active_child) };
+            let ui_state = self.dump_ui_state()?;
+            let active_view = ui_state
+                .mdi
+                .views
+                .iter()
+                .find(|view| view.active)
+                .ok_or_else(|| {
+                    TestkitError::InvalidResponse(
+                        "UI state did not include an active MDI view".to_owned(),
+                    )
+                })?;
+            if active_view.title != active_child_title {
+                return Err(TestkitError::InvalidResponse(format!(
+                    "active MDI child title {:?} did not match active UI view title {:?}",
+                    active_child_title, active_view.title
+                )));
+            }
+            match &active_view.identity {
+                ViewIdentity::Room { .. } => Ok(()),
+                _ => Err(TestkitError::InvalidResponse(format!(
+                    "active view is not a room view: {:?}",
+                    active_view.identity
+                ))),
+            }
         }
 
         fn child_window_with_class(
@@ -2772,6 +2808,13 @@ mod imp {
 
     unsafe fn send_timeline_scroll(hwnd: HWND, command: usize) {
         unsafe { SendMessageW(hwnd, WM_VSCROLL, command, 0) };
+    }
+
+    unsafe fn read_window_text(hwnd: HWND) -> String {
+        let len = unsafe { SendMessageW(hwnd, WM_GETTEXTLENGTH, 0, 0) };
+        let mut buffer = vec![0u16; len as usize + 1];
+        unsafe { SendMessageW(hwnd, WM_GETTEXT, buffer.len(), buffer.as_mut_ptr() as isize) };
+        String::from_utf16_lossy(&buffer[..len as usize])
     }
 
     fn duration_millis_u64(duration: Duration) -> u64 {
