@@ -2329,6 +2329,7 @@ struct WindowState {
     command_sender: Option<CommandSender>,
     inert_command_receiver: Option<UnboundedReceiver<Command>>,
     automation: Option<AutomationState>,
+    render_state_mode: bool,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
@@ -2383,6 +2384,10 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         AppCommand::Run(options) => load_render_state(options)?,
         AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => None,
     };
+    let render_state_mode = match &command {
+        AppCommand::Run(options) => options.render_state.is_some(),
+        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => false,
+    };
     let automation_enabled = automation_enabled_for_command(&command);
 
     let instance = unsafe { GetModuleHandleW(null()) };
@@ -2408,6 +2413,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         command_sender: None,
         inert_command_receiver: None,
         automation: None,
+        render_state_mode,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         last_idle_probe_generation: None,
@@ -6538,7 +6544,7 @@ unsafe fn finish_view_activation_chrome(
     refresh_status_bar(hwnd)?;
     let state = state_ref(hwnd);
     SetFocus(state.controls.edit);
-    if state.automation.is_some() {
+    if state.render_state_mode {
         HideCaret(state.controls.edit);
     }
     Ok(())
