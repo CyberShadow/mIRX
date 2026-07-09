@@ -6051,20 +6051,25 @@ fn compute_timeline_find_matches(rows: &[TimelineRow], folded_query: &str) -> Ve
 }
 
 fn compute_status_find_matches(lines: &[String], folded_query: &str) -> Vec<FindMatch> {
-    lines
-        .iter()
-        .enumerate()
-        .filter_map(|(line_index, line_text)| {
-            let (utf16_start, utf16_end) =
-                ascii_case_insensitive_utf16_range(line_text, folded_query)?;
-            Some(FindMatch::Status(StatusFindMatch {
+    let mut matches = Vec::new();
+    let mut document_utf16_offset = 0usize;
+    for (line_index, line_text) in lines.iter().enumerate() {
+        if let Some((utf16_start, utf16_end)) =
+            ascii_case_insensitive_utf16_range(line_text, folded_query)
+        {
+            matches.push(FindMatch::Status(StatusFindMatch {
                 line_index,
-                utf16_start,
-                utf16_end,
+                utf16_start: document_utf16_offset + utf16_start,
+                utf16_end: document_utf16_offset + utf16_end,
                 line_text: line_text.clone(),
-            }))
-        })
-        .collect()
+            }));
+        }
+        document_utf16_offset += line_text.encode_utf16().count();
+        if line_index + 1 < lines.len() {
+            document_utf16_offset += "\r\n".encode_utf16().count();
+        }
+    }
+    matches
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12165,6 +12170,7 @@ mod tests {
             command_sender: None,
             inert_command_receiver: None,
             automation: None,
+            render_state_mode: false,
             exit_code: Arc::new(AtomicI32::new(0)),
             event_generation: 0,
             last_idle_probe_generation: None,
@@ -16083,6 +16089,60 @@ mod tests {
         assert_eq!(
             ascii_case_insensitive_utf16_range("🙂 Test λ", &fold_find_query("test")),
             Some((3, 7))
+        );
+    }
+
+    #[test]
+    fn status_find_matches_use_absolute_utf16_offsets_in_multiline_buffer() {
+        let lines = vec![
+            "alpha".to_owned(),
+            "🙂 Test λ".to_owned(),
+            "omega".to_owned(),
+        ];
+
+        let matches = compute_status_find_matches(&lines, &fold_find_query("test"));
+        assert_eq!(
+            matches,
+            vec![FindMatch::Status(StatusFindMatch {
+                line_index: 1,
+                utf16_start: 10,
+                utf16_end: 14,
+                line_text: "🙂 Test λ".to_owned(),
+            })]
+        );
+    }
+
+    #[test]
+    fn status_find_selection_uses_document_wide_caret_offsets() {
+        let lines = vec![
+            "alpha".to_owned(),
+            "beta".to_owned(),
+            "needle".to_owned(),
+            "needle again".to_owned(),
+        ];
+        let matches = compute_status_find_matches(&lines, &fold_find_query("needle"));
+
+        assert_eq!(
+            choose_find_match(
+                &matches,
+                FindSelectionMode::Execute {
+                    folded_query: "needle",
+                    previous_state: None,
+                    start: FindSelectionStart::StatusUtf16(13),
+                },
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            choose_find_match(
+                &matches,
+                FindSelectionMode::Execute {
+                    folded_query: "needle",
+                    previous_state: None,
+                    start: FindSelectionStart::StatusUtf16(20),
+                },
+            ),
+            Some(1)
         );
     }
 
