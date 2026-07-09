@@ -7,3 +7,8 @@
 /result
 /target
 /wineprefix*
+# Transient sub-task report/evidence artifacts (should never be committed)
+/output.md
+/gate-evidence*
+/*-report.txt
+/*_report.txt
