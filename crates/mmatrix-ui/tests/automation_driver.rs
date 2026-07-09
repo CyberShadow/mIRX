@@ -33,9 +33,9 @@ use mmatrix_testkit::{
     SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
     SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
     SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionKind, VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -3590,6 +3590,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
             has_activity: false,
             read_target_event_id: None,
             read_state: None,
+            history_backfill: UiRoomHistoryBackfillState::Idle,
         }
     );
     assert_eq!(
@@ -5663,6 +5664,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_notifications: 0,
                 num_mentions: 0,
             }),
+            history_backfill: UiRoomHistoryBackfillState::Idle,
         }
     );
     assert_eq!(
@@ -5687,6 +5689,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_notifications: 2,
                 num_mentions: 1,
             }),
+            history_backfill: UiRoomHistoryBackfillState::Idle,
         }
     );
 
@@ -5729,6 +5732,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
                 num_notifications: 2,
                 num_mentions: 1,
             }),
+            history_backfill: UiRoomHistoryBackfillState::Idle,
         }
     );
 

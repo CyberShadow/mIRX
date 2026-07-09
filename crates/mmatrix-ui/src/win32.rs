@@ -13666,6 +13666,7 @@ mod tests {
                 TimelineRowKind::Topic,
                 TimelineRowKind::Typing,
                 TimelineRowKind::Plain,
+                TimelineRowKind::StateNotice,
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
@@ -13751,6 +13752,7 @@ mod tests {
                 TimelineRowKind::Header,
                 TimelineRowKind::Topic,
                 TimelineRowKind::Typing,
+                TimelineRowKind::StateNotice,
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
