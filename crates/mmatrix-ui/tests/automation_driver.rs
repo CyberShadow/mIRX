@@ -10233,6 +10233,68 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
 }
 
 #[test]
+fn automation_driver_find_active_view_empty_query_matches_slash_find_validation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.set_compose_text("/find   ")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    let slash_ui_state = app.dump_ui_state()?;
+    let beta_view_identity = room_identity("!beta:example");
+    assert_eq!(slash_ui_state.mdi.active, beta_view_identity);
+    assert_active_switchbar_item(&slash_ui_state, &beta_view_identity);
+    assert_eq!(slash_ui_state.active_find, None);
+    assert!(
+        slash_ui_state
+            .status_bar
+            .text
+            .contains("usage: /find <text>")
+    );
+
+    let slash_model = app.dump_model()?;
+    assert_eq!(slash_model.selected_room.as_deref(), Some("!beta:example"));
+    assert_eq!(slash_model.status, "usage: /find <text>");
+    assert_eq!(slash_model.last_error, None);
+    assert_no_submitted_commands(&slash_model);
+
+    let result = app.find_active_view("")?;
+    assert_find_result(&result, &beta_view_identity, "", false, 0, None, None);
+
+    let automation_ui_state = app.dump_ui_state()?;
+    assert_eq!(automation_ui_state.mdi.active, beta_view_identity);
+    assert_active_switchbar_item(&automation_ui_state, &beta_view_identity);
+    assert_eq!(automation_ui_state.active_find, None);
+    assert!(
+        automation_ui_state
+            .status_bar
+            .text
+            .contains("usage: /find <text>")
+    );
+
+    let automation_model = app.dump_model()?;
+    assert_eq!(
+        automation_model.selected_room.as_deref(),
+        Some("!beta:example")
+    );
+    assert_eq!(automation_model.status, "usage: /find <text>");
+    assert_eq!(automation_model.last_error, None);
+    assert_no_submitted_commands(&automation_model);
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_find_active_view_preserves_per_view_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

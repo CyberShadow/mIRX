@@ -77,7 +77,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
     ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
     GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret,
-    IDC_ARROW, IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT,
+    IDC_ARROW, IsChild, IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT,
     LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW,
     MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
@@ -5522,7 +5522,9 @@ unsafe fn find_dialog_state_mut(hwnd: HWND) -> Option<&'static mut FindDialogSta
 }
 
 unsafe fn find_dialog_handles_key(dialog: HWND, message: &MSG) -> bool {
-    if frame_window_for(message.hwnd) != dialog || message.message != WM_KEYDOWN {
+    if message.message != WM_KEYDOWN
+        || (message.hwnd != dialog && IsChild(dialog, message.hwnd) == 0)
+    {
         return false;
     }
 
@@ -6587,6 +6589,30 @@ fn find_active_view_response(outcome: ActiveViewFindOutcome) -> FindActiveViewRe
     }
 }
 
+fn active_view_find_outcome_without_state(view_id: &ViewId, query: &str) -> ActiveViewFindOutcome {
+    ActiveViewFindOutcome {
+        active_view: view_id.clone(),
+        raw_query: query.to_owned(),
+        matched: false,
+        match_count: 0,
+        current_match_index: None,
+        selected_text: None,
+    }
+}
+
+unsafe fn handle_invalid_find_query(
+    hwnd: HWND,
+    query: &str,
+) -> Result<ActiveViewFindOutcome, String> {
+    set_local_command_status(hwnd, "usage: /find <text>".to_owned())?;
+    let active_view = state_ref(hwnd).active_view.clone();
+    Ok(state_ref(hwnd)
+        .find_states
+        .get(&active_view)
+        .map(|find_state| view_find_outcome(&active_view, find_state))
+        .unwrap_or_else(|| active_view_find_outcome_without_state(&active_view, query)))
+}
+
 enum ViewFindContent<'a> {
     Timeline(&'a [TimelineRow]),
     Status(&'a [String]),
@@ -6730,7 +6756,7 @@ unsafe fn execute_active_view_find(
     query: &str,
 ) -> Result<ActiveViewFindOutcome, String> {
     if query.trim().is_empty() {
-        return Err("find query must not be empty".to_owned());
+        return handle_invalid_find_query(hwnd, query);
     }
 
     let active_view = state_ref(hwnd).active_view.clone();
@@ -8291,13 +8317,6 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, SelectViewResponse { active })
         }
         ParsedCommand::FindActiveView { id, args } => {
-            if args.query.trim().is_empty() {
-                return Err(failure_response(
-                    Some(id),
-                    "invalid_find_query",
-                    "find query must not be empty",
-                ));
-            }
             let response = execute_active_view_find(hwnd, &args.query)
                 .map(find_active_view_response)
                 .map_err(|message| failure_response(Some(id.clone()), "find_failed", message))?;
