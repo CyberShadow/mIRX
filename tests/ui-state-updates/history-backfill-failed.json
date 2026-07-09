@@ -1,0 +1,8 @@
+[
+  {
+    "Error": {
+      "operation": "BackfillRoomHistory",
+      "message": "homeserver unavailable"
+    }
+  }
+]

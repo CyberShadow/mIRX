@@ -1,0 +1,10 @@
+[
+  {
+    "RoomHistoryBackfill": {
+      "room_id": "!history:example",
+      "start": "s-current",
+      "end": null,
+      "events": []
+    }
+  }
+]

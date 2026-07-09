@@ -1148,6 +1148,111 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!history:example'
       ;;
+    history-backfill-loading)
+      expect_selected='!history:example'
+      expect_active_view='room:!history:example'
+      trigger_history_backfill=1
+      room_expect_args=(
+        --expect-room '!history:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!history:example::current room line one'
+        --expect-room-activity '!history:example::current room line two'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* Loading older history...'
+        --expect-room-view '!history:example::current room line one'
+        --expect-room-view '!history:example::current room line two'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!history:example::History'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!history:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'History'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'History'
+        --expect-no-navigation-activity 'status'
+      )
+      expect_switchbar_active='room:!history:example'
+      ;;
+    history-backfill-failed)
+      expect_selected='!history:example'
+      expect_active_view='room:!history:example'
+      trigger_history_backfill=1
+      append_events_path="$root_dir/tests/ui-state-updates/history-backfill-failed.json"
+      expect_error='homeserver unavailable'
+      room_expect_args=(
+        --expect-room '!history:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!history:example::current room line one'
+        --expect-room-activity '!history:example::current room line two'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* Unable to load older history: homeserver unavailable. Scroll to top to retry.'
+        --expect-room-view '!history:example::current room line one'
+        --expect-room-view '!history:example::current room line two'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!history:example::History'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!history:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'History'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'History'
+        --expect-no-navigation-activity 'status'
+      )
+      expect_switchbar_active='room:!history:example'
+      ;;
+    history-backfill-exhausted)
+      expect_selected='!history:example'
+      expect_active_view='room:!history:example'
+      trigger_history_backfill=1
+      append_events_path="$root_dir/tests/ui-state-updates/history-backfill-exhausted.json"
+      room_expect_args=(
+        --expect-room '!history:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!history:example::current room line one'
+        --expect-room-activity '!history:example::current room line two'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* No older history available.'
+        --expect-room-view '!history:example::current room line one'
+        --expect-room-view '!history:example::current room line two'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!history:example::History'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!history:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'History'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'History'
+        --expect-no-navigation-activity 'status'
+      )
+      expect_switchbar_active='room:!history:example'
+      ;;
     member-list)
       expect_selected='!members:example'
       expect_active_view='room:!members:example'
