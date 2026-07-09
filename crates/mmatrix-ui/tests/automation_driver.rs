@@ -274,10 +274,7 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut request = Vec::new();
             let mut buffer = [0u8; 4096];
-            loop {
-                let Ok(read) = stream.read(&mut buffer) else {
-                    break;
-                };
+            while let Ok(read) = stream.read(&mut buffer) {
                 if read == 0 {
                     break;
                 }
@@ -3246,6 +3243,41 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
     )?;
 
     app.trigger_active_timeline_history_backfill()?;
+    let model = app.dump_model()?;
+    assert_eq!(model.submitted_history_commands.len(), 1);
+    assert_eq!(
+        model.submitted_history_commands.last(),
+        Some(&SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: None,
+            limit: 50,
+        })
+    );
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!beta:example",
+        "s-current",
+        Some("token-next"),
+        vec![history_backfill_event_from_event(text_event_with_event_id(
+            "!beta:example",
+            "$older-seed",
+            "@bob:example",
+            1_699_999_880_000,
+            "older seed row",
+        ))],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.trigger_active_timeline_history_backfill()?;
+    let model = app.dump_model()?;
+    assert_eq!(model.submitted_history_commands.len(), 2);
+    assert_eq!(
+        model.submitted_history_commands.last(),
+        Some(&SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: Some("token-next".to_owned()),
+            limit: 50,
+        })
+    );
     app.append_synthetic_events(&serde_json::to_string(&vec![Event::Error(
         mmatrix_core::CoreErrorEvent {
             operation: mmatrix_core::Operation::BackfillRoomHistory,
@@ -3260,7 +3292,7 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
     assert_eq!(
         room.history_backfill,
         UiRoomHistoryBackfillState::Failed {
-            from: None,
+            from: Some("token-next".to_owned()),
             message: "homeserver unavailable".to_owned(),
         }
     );
@@ -3278,12 +3310,12 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
 
     app.trigger_active_timeline_history_backfill()?;
     let model = app.dump_model()?;
-    assert_eq!(model.submitted_history_commands.len(), 2);
+    assert_eq!(model.submitted_history_commands.len(), 3);
     assert_eq!(
         model.submitted_history_commands.last(),
         Some(&SubmittedHistoryCommand {
             room_id: "!beta:example".to_owned(),
-            from: None,
+            from: Some("token-next".to_owned()),
             limit: 50,
         })
     );
@@ -3291,7 +3323,9 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
     let (room, _) = find_room_state_and_view(&ui_state, "!beta:example");
     assert_eq!(
         room.history_backfill,
-        UiRoomHistoryBackfillState::Loading { from: None }
+        UiRoomHistoryBackfillState::Loading {
+            from: Some("token-next".to_owned())
+        }
     );
 
     drop(app);
