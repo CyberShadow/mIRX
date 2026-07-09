@@ -4201,7 +4201,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
         }
     }
 
-    DeleteObject(find_highlight_brush as *mut c_void);
+    DeleteObject(find_highlight_brush);
     if !font.is_null() && !previous.is_null() {
         SelectObject(hdc, previous);
     }
