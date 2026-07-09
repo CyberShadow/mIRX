@@ -71,6 +71,8 @@ const COMMAND_ID_CONFIRM_VERIFICATION_SAS: u32 = 26;
 #[cfg(windows)]
 const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
 #[cfg(windows)]
+const COMMAND_ID_FIND_ACTIVE_VIEW: u32 = 28;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -214,6 +216,23 @@ pub struct VerificationActionArgs {
     pub flow_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindActiveViewArgs {
+    pub query: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindActiveViewResult {
+    pub active: ViewIdentity,
+    pub query: String,
+    pub matched: bool,
+    pub match_count: usize,
+    pub current_match_index: Option<usize>,
+    pub selected_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -826,7 +845,19 @@ pub struct UiState {
     pub mdi: MdiState,
     pub status_bar: StatusBarState,
     pub switchbar: SwitchbarState,
+    pub active_find: Option<UiFindState>,
     pub rooms: Vec<UiRoomState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiFindState {
+    pub active: ViewIdentity,
+    pub query: String,
+    pub matched: bool,
+    pub match_count: usize,
+    pub current_match_index: Option<usize>,
+    pub selected_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1259,6 +1290,10 @@ impl MmatrixApp {
         self.inner.select_status_view()
     }
 
+    pub fn find_active_view(&self, query: &str) -> Result<FindActiveViewResult, TestkitError> {
+        self.inner.find_active_view(query)
+    }
+
     pub fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
         self.inner.trigger_active_timeline_history_backfill()
     }
@@ -1533,6 +1568,13 @@ struct SelectViewArgs {
 #[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
+struct FindActiveViewRequestArgs<'a> {
+    query: &'a str,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct SelectNavigationPathArgs<'a> {
     path: &'a [NavigationPathSegment],
 }
@@ -1754,6 +1796,15 @@ mod imp {
         }
 
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn find_active_view(
+            &self,
+            _query: &str,
+        ) -> Result<FindActiveViewResult, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -2187,6 +2238,16 @@ mod imp {
 
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
             self.select_view(ViewIdentity::Status)
+        }
+
+        pub(crate) fn find_active_view(
+            &self,
+            query: &str,
+        ) -> Result<FindActiveViewResult, TestkitError> {
+            self.send_command(
+                COMMAND_ID_FIND_ACTIVE_VIEW,
+                FindActiveViewRequestArgs { query },
+            )
         }
 
         pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {

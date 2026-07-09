@@ -17,20 +17,21 @@ use mmatrix_core::{
     RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
 use mmatrix_testkit::{
-    BackfillRoomHistoryRequest, ComposeKey, FetchRoomImageMediaRequest, FrameSize, LaunchOptions,
-    LoginArgs, MdiState, MdiView, MembershipCommandAction, Model, NavigationNode,
-    NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource,
-    RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    BackfillRoomHistoryRequest, ComposeKey, FetchRoomImageMediaRequest, FindActiveViewArgs,
+    FindActiveViewResult, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
+    MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
+    RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
+    RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiFindState,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
     VerificationEmoji, VerificationState, ViewIdentity,
 };
@@ -416,7 +417,7 @@ fn data_models_round_trip_through_json() {
         selected_room: Some("!room:example".to_owned()),
     };
     let version = ProtocolVersion {
-        protocol_version: 15,
+        protocol_version: 18,
         app_version: "0.1.0".to_owned(),
     };
     let session = stored_session();
@@ -518,6 +519,16 @@ fn data_models_round_trip_through_json() {
                 },
             ],
         },
+        active_find: Some(UiFindState {
+            active: ViewIdentity::Room {
+                room_id: "!room:example".to_owned(),
+            },
+            query: "hello".to_owned(),
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some("hello".to_owned()),
+        }),
         rooms: vec![UiRoomState {
             room_id: "!room:example".to_owned(),
             display_name: "Room".to_owned(),
@@ -758,6 +769,17 @@ fn data_models_round_trip_through_json() {
                     }
                 ],
             },
+            "active_find": {
+                "active": {
+                    "kind": "room",
+                    "room_id": "!room:example",
+                },
+                "query": "hello",
+                "matched": true,
+                "match_count": 1,
+                "current_match_index": 0,
+                "selected_text": "hello",
+            },
             "rooms": [
                 {
                     "room_id": "!room:example",
@@ -847,6 +869,47 @@ fn room_summary_metadata_serializes_to_expected_json_shape() {
             ],
             "space_children": [],
         })
+    );
+}
+
+#[test]
+fn find_active_view_dtos_round_trip_through_json() {
+    let args = FindActiveViewArgs {
+        query: "needle".to_owned(),
+    };
+    let result = FindActiveViewResult {
+        active: ViewIdentity::Thread {
+            room_id: "!room:example".to_owned(),
+            thread_root_event_id: "$thread-root:example".to_owned(),
+        },
+        query: "needle".to_owned(),
+        matched: true,
+        match_count: 2,
+        current_match_index: Some(1),
+        selected_text: Some("needle reply".to_owned()),
+    };
+    let ui_find_state = UiFindState {
+        active: ViewIdentity::Status,
+        query: "synced".to_owned(),
+        matched: false,
+        match_count: 0,
+        current_match_index: None,
+        selected_text: None,
+    };
+
+    assert_eq!(
+        serde_json::from_value::<FindActiveViewArgs>(serde_json::to_value(&args).unwrap()).unwrap(),
+        args
+    );
+    assert_eq!(
+        serde_json::from_value::<FindActiveViewResult>(serde_json::to_value(&result).unwrap())
+            .unwrap(),
+        result
+    );
+    assert_eq!(
+        serde_json::from_value::<UiFindState>(serde_json::to_value(&ui_find_state).unwrap())
+            .unwrap(),
+        ui_find_state
     );
 }
 
@@ -4545,7 +4608,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<ProtocolVersion>(
             r#"{
-            "protocol_version":15,
+            "protocol_version":18,
             "app_version":"0.1.0",
             "unexpected":true
         }"#
@@ -4884,6 +4947,7 @@ fn data_models_reject_unknown_fields() {
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
+            "active_find":null,
             "rooms":[],
             "unexpected":true
         }"#
@@ -4896,7 +4960,8 @@ fn data_models_reject_unknown_fields() {
             "navigation":{"text":"mmatrix","children":[]},
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
-            "switchbar":{"items":[]}
+            "switchbar":{"items":[]},
+            "active_find":null
         }"#
         )
         .is_err()
@@ -5377,6 +5442,7 @@ fn switchbar_helpers_find_items_and_active_item() {
                 },
             ],
         },
+        active_find: None,
         rooms: vec![],
     };
 
@@ -5765,6 +5831,14 @@ fn non_windows_new_methods_report_unsupported_driver() {
     let error = app
         .select_status_view()
         .expect_err("select_status_view must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mmatrix-testkit requires the Windows target"
+    );
+
+    let error = app
+        .find_active_view("needle")
+        .expect_err("find_active_view must fail off Windows");
     assert_eq!(
         error.to_string(),
         "mmatrix-testkit requires the Windows target"

@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 17;
+pub(crate) const PROTOCOL_VERSION: u32 = 18;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -42,6 +42,7 @@ pub(crate) const COMMAND_ID_ACCEPT_VERIFICATION: u32 = 24;
 pub(crate) const COMMAND_ID_CANCEL_VERIFICATION: u32 = 25;
 pub(crate) const COMMAND_ID_CONFIRM_VERIFICATION_SAS: u32 = 26;
 pub(crate) const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
+pub(crate) const COMMAND_ID_FIND_ACTIVE_VIEW: u32 = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -72,6 +73,7 @@ pub(crate) enum CommandKind {
     CancelVerification,
     ConfirmVerificationSas,
     RejectVerificationSas,
+    FindActiveView,
 }
 
 impl CommandKind {
@@ -104,6 +106,7 @@ impl CommandKind {
             COMMAND_ID_CANCEL_VERIFICATION => Some(Self::CancelVerification),
             COMMAND_ID_CONFIRM_VERIFICATION_SAS => Some(Self::ConfirmVerificationSas),
             COMMAND_ID_REJECT_VERIFICATION_SAS => Some(Self::RejectVerificationSas),
+            COMMAND_ID_FIND_ACTIVE_VIEW => Some(Self::FindActiveView),
             _ => None,
         }
     }
@@ -209,6 +212,10 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: VerificationActionArgs,
     },
+    FindActiveView {
+        id: String,
+        args: FindActiveViewArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -241,6 +248,7 @@ impl ParsedCommand {
             Self::CancelVerification { .. } => CommandKind::CancelVerification,
             Self::ConfirmVerificationSas { .. } => CommandKind::ConfirmVerificationSas,
             Self::RejectVerificationSas { .. } => CommandKind::RejectVerificationSas,
+            Self::FindActiveView { .. } => CommandKind::FindActiveView,
         }
     }
 }
@@ -310,6 +318,12 @@ pub(crate) struct LoadEventsArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectViewArgs {
     pub(crate) view: ViewIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FindActiveViewArgs {
+    pub(crate) query: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -499,7 +513,19 @@ pub(crate) struct UiState {
     pub(crate) mdi: MdiState,
     pub(crate) status_bar: StatusBarState,
     pub(crate) switchbar: SwitchbarState,
+    pub(crate) active_find: Option<UiFindState>,
     pub(crate) rooms: Vec<UiRoomState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiFindState {
+    pub(crate) active: ViewIdentity,
+    pub(crate) query: String,
+    pub(crate) matched: bool,
+    pub(crate) match_count: usize,
+    pub(crate) current_match_index: Option<usize>,
+    pub(crate) selected_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -732,6 +758,17 @@ pub(crate) struct SwitchbarItem {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectViewResponse {
     pub(crate) active: ViewIdentity,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FindActiveViewResponse {
+    pub(crate) active: ViewIdentity,
+    pub(crate) query: String,
+    pub(crate) matched: bool,
+    pub(crate) match_count: usize,
+    pub(crate) current_match_index: Option<usize>,
+    pub(crate) selected_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1531,6 +1568,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SelectViewArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::FindActiveView => Ok(ParsedCommand::FindActiveView {
+            id: envelope.id.clone(),
+            args: parse_args_required::<FindActiveViewArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -1725,32 +1766,33 @@ mod tests {
         AcceptedResponse, COMMAND_ID_ACCEPT_VERIFICATION, COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
         COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CONFIRM_VERIFICATION_SAS,
         COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
-        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_GET_VERSION,
-        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
-        COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
-        COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_RESTORE_SAVED_SESSION,
-        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
-        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
-        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
-        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
+        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING,
+        COMMAND_ID_RECOVER_E2EE, COMMAND_ID_REJECT_VERIFICATION_SAS,
+        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
+        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
+        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
+        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
+        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
+        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
+        DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState, MdiView,
-        NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
-        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectViewArgs,
-        SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
+        SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
+        UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
+        failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -1824,8 +1866,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_17() {
-        assert_eq!(PROTOCOL_VERSION, 17);
+    fn protocol_version_is_18() {
+        assert_eq!(PROTOCOL_VERSION, 18);
     }
 
     #[test]
@@ -1939,13 +1981,14 @@ mod tests {
             Some(CommandKind::RejectVerificationSas)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_FIND_ACTIVE_VIEW),
+            Some(CommandKind::FindActiveView)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
-        assert_eq!(
-            CommandKind::from_id(COMMAND_ID_REJECT_VERIFICATION_SAS + 1),
-            None
-        );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_FIND_ACTIVE_VIEW + 1), None);
     }
 
     #[test]
@@ -2112,6 +2155,19 @@ mod tests {
                         room_id: "!room:example".to_owned(),
                         thread_root_event_id: "$thread-root:example".to_owned(),
                     },
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_FIND_ACTIVE_VIEW,
+                br#"{"id":"find","args":{"query":"needle"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::FindActiveView {
+                id: "find".to_owned(),
+                args: FindActiveViewArgs {
+                    query: "needle".to_owned(),
                 },
             }
         );
@@ -2376,6 +2432,105 @@ mod tests {
         assert_eq!(
             serde_json::to_value(failure).unwrap(),
             json!({"id":"ping","ok":false,"err":{"code":"invalid_args","message":"bad args"}})
+        );
+    }
+
+    #[test]
+    fn find_active_view_response_and_ui_find_state_round_trip() {
+        let response = FindActiveViewResponse {
+            active: ViewIdentity::Room {
+                room_id: "!room:example".to_owned(),
+            },
+            query: "needle".to_owned(),
+            matched: true,
+            match_count: 3,
+            current_match_index: Some(1),
+            selected_text: Some("needle in haystack".to_owned()),
+        };
+        let ui_find_state = UiFindState {
+            active: ViewIdentity::Status,
+            query: "synced".to_owned(),
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+        };
+
+        assert_eq!(
+            serde_json::from_value::<FindActiveViewResponse>(
+                serde_json::to_value(&response).unwrap()
+            )
+            .unwrap(),
+            response
+        );
+        assert_eq!(
+            serde_json::from_value::<UiFindState>(serde_json::to_value(&ui_find_state).unwrap())
+                .unwrap(),
+            ui_find_state
+        );
+    }
+
+    #[test]
+    fn ui_state_handles_active_find_null_and_populated() {
+        let without_find = serde_json::from_value::<UiState>(json!({
+            "navigation":{"text":"mmatrix","children":[]},
+            "mdi":{"active":{"kind":"status"},"views":[]},
+            "status_bar":{"text":"ready"},
+            "switchbar":{"items":[]},
+            "active_find":null,
+            "rooms":[]
+        }))
+        .unwrap();
+        assert_eq!(without_find.active_find, None);
+
+        let with_find = serde_json::from_value::<UiState>(json!({
+            "navigation":{"text":"mmatrix","children":[]},
+            "mdi":{"active":{"kind":"room","room_id":"!room:example"},"views":[]},
+            "status_bar":{"text":"ready"},
+            "switchbar":{"items":[]},
+            "active_find":{
+                "active":{"kind":"room","room_id":"!room:example"},
+                "query":"needle",
+                "matched":true,
+                "match_count":2,
+                "current_match_index":1,
+                "selected_text":"needle two"
+            },
+            "rooms":[]
+        }))
+        .unwrap();
+        assert_eq!(
+            with_find.active_find,
+            Some(UiFindState {
+                active: ViewIdentity::Room {
+                    room_id: "!room:example".to_owned(),
+                },
+                query: "needle".to_owned(),
+                matched: true,
+                match_count: 2,
+                current_match_index: Some(1),
+                selected_text: Some("needle two".to_owned()),
+            })
+        );
+    }
+
+    #[test]
+    fn find_active_view_args_reject_unknown_fields() {
+        let error = parse_command_request(
+            COMMAND_ID_FIND_ACTIVE_VIEW,
+            br#"{"id":"find","args":{"query":"needle","unexpected":true}}"#,
+        )
+        .unwrap_err();
+        assert_eq!(
+            serde_json::to_value(error).unwrap(),
+            json!({
+                "id":"find",
+                "ok":false,
+                "err":{
+                    "code":"invalid_args",
+                    "message":"invalid command args: unknown field `unexpected`, expected `query`"
+                }
+            })
         );
     }
 
@@ -3048,7 +3203,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":17,
+                    "protocol_version":18,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -3506,6 +3661,16 @@ mod tests {
                             },
                         ],
                     },
+                    active_find: Some(UiFindState {
+                        active: ViewIdentity::Room {
+                            room_id: "!room:example".to_owned(),
+                        },
+                        query: "hello".to_owned(),
+                        matched: true,
+                        match_count: 1,
+                        current_match_index: Some(0),
+                        selected_text: Some("hello".to_owned()),
+                    }),
                     rooms: vec![UiRoomState {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
@@ -3602,6 +3767,14 @@ mod tests {
                                 "has_activity":true
                             }
                         ]
+                    },
+                    "active_find":{
+                        "active":{"kind":"room","room_id":"!room:example"},
+                        "query":"hello",
+                        "matched":true,
+                        "match_count":1,
+                        "current_match_index":0,
+                        "selected_text":"hello"
                     },
                     "rooms":[
                         {
@@ -4347,6 +4520,7 @@ mod tests {
                 "mdi":{"active":{"kind":"status"},"views":[]},
                 "status_bar":{"text":"ready"},
                 "switchbar":{"items":[]},
+                "active_find":null,
                 "unexpected":true
             }))
             .is_err()

@@ -101,15 +101,16 @@ use crate::{
         DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
         DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse,
-        ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs,
-        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
+        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomState,
+        UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+        dump_verification_from_state_event, failure_response, parse_command_request,
+        success_response,
     },
 };
 
@@ -6223,6 +6224,29 @@ fn view_find_outcome(view_id: &ViewId, find_state: &ViewFindState) -> ActiveView
     }
 }
 
+fn dump_find_state(view_id: &ViewId, find_state: &ViewFindState) -> UiFindState {
+    let outcome = view_find_outcome(view_id, find_state);
+    UiFindState {
+        active: view_identity_from_view_id(&outcome.active_view),
+        query: outcome.raw_query,
+        matched: outcome.matched,
+        match_count: outcome.match_count,
+        current_match_index: outcome.current_match_index,
+        selected_text: outcome.selected_text,
+    }
+}
+
+fn find_active_view_response(outcome: ActiveViewFindOutcome) -> FindActiveViewResponse {
+    FindActiveViewResponse {
+        active: view_identity_from_view_id(&outcome.active_view),
+        query: outcome.raw_query,
+        matched: outcome.matched,
+        match_count: outcome.match_count,
+        current_match_index: outcome.current_match_index,
+        selected_text: outcome.selected_text,
+    }
+}
+
 enum ViewFindContent<'a> {
     Timeline(&'a [TimelineRow]),
     Status(&'a [String]),
@@ -7926,6 +7950,19 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 .map_err(|message| failure_response(Some(id.clone()), "unknown_view", message))?;
             serialize_success_json(&id, SelectViewResponse { active })
         }
+        ParsedCommand::FindActiveView { id, args } => {
+            if args.query.trim().is_empty() {
+                return Err(failure_response(
+                    Some(id),
+                    "invalid_find_query",
+                    "find query must not be empty",
+                ));
+            }
+            let response = execute_active_view_find(hwnd, &args.query)
+                .map(find_active_view_response)
+                .map_err(|message| failure_response(Some(id.clone()), "find_failed", message))?;
+            serialize_success_json(&id, response)
+        }
         ParsedCommand::SelectNavigationPath { id, args } => {
             select_navigation_path(hwnd, &args.path).map_err(|message| {
                 failure_response(Some(id.clone()), "unknown_navigation", message)
@@ -8113,6 +8150,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SetComposeText { id, .. }
         | ParsedCommand::SendComposeKey { id, .. }
         | ParsedCommand::SelectNavigationPath { id, .. }
+        | ParsedCommand::FindActiveView { id, .. }
         | ParsedCommand::AppendSyntheticEvents { id, .. }
         | ParsedCommand::RecoverE2ee { id, .. }
         | ParsedCommand::AcceptVerification { id, .. }
@@ -8747,6 +8785,13 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
     Ok(SwitchbarState { items })
 }
 
+fn dump_active_find_state(state: &WindowState) -> Option<UiFindState> {
+    state
+        .find_states
+        .get(&state.active_view)
+        .map(|find_state| dump_find_state(&state.active_view, find_state))
+}
+
 unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let navigation = dump_navigation_tree(hwnd)?;
     let mdi = dump_mdi_state(hwnd)?;
@@ -8759,6 +8804,7 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         mdi,
         status_bar,
         switchbar,
+        active_find: dump_active_find_state(state),
         rooms: state
             .model
             .rooms
