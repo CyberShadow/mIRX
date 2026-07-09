@@ -25,8 +25,8 @@ use mmatrix_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
-    ComposeKey, FrameSize, LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp,
-    NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    ComposeKey, FindActiveViewResult, FrameSize, LaunchOptions, MdiView, MembershipCommandAction,
+    MmatrixApp, Model, NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
     RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
@@ -35,9 +35,10 @@ use mmatrix_testkit::{
     SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
     SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
     SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionKind, VerificationState, ViewIdentity,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindState,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -1613,6 +1614,23 @@ fn view_contains(view: &MdiView, substring: &str) -> bool {
     view.lines.iter().any(|line| line.contains(substring))
 }
 
+fn view_lines_containing<'a>(view: &'a MdiView, substring: &str) -> Vec<&'a str> {
+    view.lines
+        .iter()
+        .filter_map(|line| line.contains(substring).then_some(line.as_str()))
+        .collect()
+}
+
+fn only_view_line_containing<'a>(view: &'a MdiView, substring: &str) -> &'a str {
+    let matches = view_lines_containing(view, substring);
+    assert_eq!(
+        matches.len(),
+        1,
+        "expected exactly one view line containing {substring:?}, got {matches:?}"
+    );
+    matches[0]
+}
+
 fn view_member_labels(view: &MdiView) -> Vec<&str> {
     view.members
         .iter()
@@ -1709,6 +1727,57 @@ fn assert_navigation_activity(ui_state: &UiState, path_substrings: &[&str], expe
     assert_eq!(
         node.has_activity, expected,
         "unexpected navigation activity for {path_substrings:?}"
+    );
+}
+
+fn assert_no_submitted_commands(model: &Model) {
+    assert!(model.submitted_membership_commands.is_empty());
+    assert!(model.submitted_direct_room_commands.is_empty());
+    assert!(model.submitted_room_topic_commands.is_empty());
+    assert!(model.submitted_reaction_commands.is_empty());
+    assert!(model.submitted_edit_commands.is_empty());
+    assert!(model.submitted_reply_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+    assert!(model.submitted_history_commands.is_empty());
+    assert!(model.submitted_verification_actions.is_empty());
+}
+
+fn assert_find_result(
+    result: &FindActiveViewResult,
+    active: &ViewIdentity,
+    query: &str,
+    matched: bool,
+    match_count: usize,
+    current_match_index: Option<usize>,
+    selected_text: Option<&str>,
+) {
+    assert_eq!(result.active, active.clone());
+    assert_eq!(result.query, query);
+    assert_eq!(result.matched, matched);
+    assert_eq!(result.match_count, match_count);
+    assert_eq!(result.current_match_index, current_match_index);
+    assert_eq!(result.selected_text.as_deref(), selected_text);
+}
+
+fn assert_ui_active_find(
+    ui_state: &UiState,
+    active: &ViewIdentity,
+    query: &str,
+    matched: bool,
+    match_count: usize,
+    current_match_index: Option<usize>,
+    selected_text: Option<&str>,
+) {
+    assert_eq!(
+        ui_state.active_find,
+        Some(UiFindState {
+            active: active.clone(),
+            query: query.to_owned(),
+            matched,
+            match_count,
+            current_match_index,
+            selected_text: selected_text.map(str::to_owned),
+        })
     );
 }
 
@@ -9756,6 +9825,628 @@ fn automation_driver_slash_clear_in_status_view_is_a_no_op()
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_find_updates_active_room_without_sending_text()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    let beta_view_identity = room_identity("!beta:example");
+    let before_activity = app.room_activity(Some("!beta:example"))?;
+    let before_model = app.dump_model()?;
+    assert_no_submitted_commands(&before_model);
+
+    app.set_compose_text("/find beta second")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+
+    let ui_state = app.dump_ui_state()?;
+    let selected_text =
+        only_view_line_containing(find_view(&ui_state, &beta_view_identity), "beta second");
+    assert_eq!(ui_state.mdi.active, beta_view_identity);
+    assert_active_switchbar_item(&ui_state, &beta_view_identity);
+    assert_ui_active_find(
+        &ui_state,
+        &room_identity("!beta:example"),
+        "beta second",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+    );
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("find: 1/1 \"beta second\"")
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
+    assert_eq!(model.last_error, None);
+    assert_no_submitted_commands(&model);
+    assert_eq!(app.room_activity(Some("!beta:example"))?, before_activity);
+
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "/find beta second");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!search:example", "Search", false)]),
+        text_event_with_event_id(
+            "!search:example",
+            "$needle-1",
+            "@alice:example",
+            1_700_000_000_000,
+            "first needle",
+        ),
+        text_event_with_event_id(
+            "!search:example",
+            "$other",
+            "@bob:example",
+            1_700_000_060_000,
+            "other text",
+        ),
+        text_event_with_event_id(
+            "!search:example",
+            "$needle-2",
+            "@carol:example",
+            1_700_000_120_000,
+            "second needle",
+        ),
+    ])?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let search_view_identity = room_identity("!search:example");
+    let initial_state = app.dump_ui_state()?;
+    let matching_lines =
+        view_lines_containing(find_view(&initial_state, &search_view_identity), "needle");
+    assert_eq!(matching_lines.len(), 2);
+
+    let first = app.find_active_view("needle")?;
+    assert_find_result(
+        &first,
+        &search_view_identity,
+        "needle",
+        true,
+        2,
+        Some(0),
+        Some(matching_lines[0]),
+    );
+    let first_state = app.dump_ui_state()?;
+    assert_eq!(first_state.mdi.active, search_view_identity);
+    assert_ui_active_find(
+        &first_state,
+        &room_identity("!search:example"),
+        "needle",
+        true,
+        2,
+        Some(0),
+        Some(matching_lines[0]),
+    );
+    assert!(first_state.status_bar.text.contains("find: 1/2 \"needle\""));
+
+    let second = app.find_active_view("needle")?;
+    assert_find_result(
+        &second,
+        &search_view_identity,
+        "needle",
+        true,
+        2,
+        Some(1),
+        Some(matching_lines[1]),
+    );
+    let second_state = app.dump_ui_state()?;
+    assert_eq!(second_state.mdi.active, search_view_identity);
+    assert_ui_active_find(
+        &second_state,
+        &room_identity("!search:example"),
+        "needle",
+        true,
+        2,
+        Some(1),
+        Some(matching_lines[1]),
+    );
+    assert!(
+        second_state
+            .status_bar
+            .text
+            .contains("find: 2/2 \"needle\"")
+    );
+
+    let wrapped = app.find_active_view("needle")?;
+    assert_find_result(
+        &wrapped,
+        &search_view_identity,
+        "needle",
+        true,
+        2,
+        Some(0),
+        Some(matching_lines[0]),
+    );
+    let wrapped_state = app.dump_ui_state()?;
+    assert_eq!(wrapped_state.mdi.active, search_view_identity);
+    assert_ui_active_find(
+        &wrapped_state,
+        &room_identity("!search:example"),
+        "needle",
+        true,
+        2,
+        Some(0),
+        Some(matching_lines[0]),
+    );
+    assert!(
+        wrapped_state
+            .status_bar
+            .text
+            .contains("find: 1/2 \"needle\"")
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!search:example"));
+    assert_eq!(model.last_error, None);
+    assert_no_submitted_commands(&model);
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_find_active_thread_timeline_scopes_to_thread()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_state = app.dump_ui_state()?;
+    let room_view_identity = room_identity("!ops:example");
+    assert!(view_contains(
+        find_view(&initial_state, &room_view_identity),
+        "lobby"
+    ));
+    let thread_path = navigation_path_by_substrings(
+        &initial_state.navigation,
+        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg"],
+    );
+    let thread_view_identity = thread_identity("!ops:example", "$thread-root");
+    app.select_navigation_path(&thread_path)?;
+
+    let thread_state = app.dump_ui_state()?;
+    let thread_view = find_view(&thread_state, &thread_view_identity);
+    let selected_text = only_view_line_containing(thread_view, "thread rep");
+
+    let positive = app.find_active_view("thread rep")?;
+    assert_find_result(
+        &positive,
+        &thread_view_identity,
+        "thread rep",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+    );
+    let positive_state = app.dump_ui_state()?;
+    assert_eq!(positive_state.mdi.active, thread_view_identity);
+    assert_ui_active_find(
+        &positive_state,
+        &thread_identity("!ops:example", "$thread-root"),
+        "thread rep",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+    );
+    assert!(
+        positive_state
+            .status_bar
+            .text
+            .contains("find: 1/1 \"thread rep\"")
+    );
+
+    let scoped_miss = app.find_active_view("lobby")?;
+    assert_find_result(
+        &scoped_miss,
+        &thread_view_identity,
+        "lobby",
+        false,
+        0,
+        None,
+        None,
+    );
+    let miss_state = app.dump_ui_state()?;
+    assert_eq!(miss_state.mdi.active, thread_view_identity);
+    assert_ui_active_find(
+        &miss_state,
+        &thread_identity("!ops:example", "$thread-root"),
+        "lobby",
+        false,
+        0,
+        None,
+        None,
+    );
+    assert!(
+        miss_state
+            .status_bar
+            .text
+            .contains("find: no matches for \"lobby\"")
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!ops:example"));
+    assert_eq!(model.last_error, None);
+    assert_no_submitted_commands(&model);
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_find_active_status_view_matches_status_lines()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[Event::Started, Event::E2eeStatus(sample_e2ee_status())])?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_status_view()?;
+    let before_status = app.dump_model()?.status;
+
+    let initial_state = app.dump_ui_state()?;
+    let selected_text = only_view_line_containing(
+        find_view(&initial_state, &ViewIdentity::Status),
+        "cross_signing",
+    );
+
+    let result = app.find_active_view("cross_signing")?;
+    assert_find_result(
+        &result,
+        &ViewIdentity::Status,
+        "cross_signing",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert_active_switchbar_item(&ui_state, &ViewIdentity::Status);
+    assert_ui_active_find(
+        &ui_state,
+        &ViewIdentity::Status,
+        "cross_signing",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+    );
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("find: 1/1 \"cross_signing\"")
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room, None);
+    assert_eq!(model.last_error, None);
+    assert_eq!(model.status, before_status);
+    assert_no_submitted_commands(&model);
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_find_active_view_reports_no_match_without_changing_view()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&base_events())?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    let beta_view_identity = room_identity("!beta:example");
+    let before_state = app.dump_ui_state()?;
+    let before_view = find_view(&before_state, &beta_view_identity).clone();
+
+    let result = app.find_active_view("missing search term")?;
+    assert_find_result(
+        &result,
+        &beta_view_identity,
+        "missing search term",
+        false,
+        0,
+        None,
+        None,
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, beta_view_identity);
+    assert_active_switchbar_item(&ui_state, &beta_view_identity);
+    assert_eq!(find_view(&ui_state, &beta_view_identity), &before_view);
+    assert_ui_active_find(
+        &ui_state,
+        &room_identity("!beta:example"),
+        "missing search term",
+        false,
+        0,
+        None,
+        None,
+    );
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("find: no matches for \"missing search term\"")
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
+    assert_eq!(model.last_error, None);
+    assert_no_submitted_commands(&model);
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_find_active_view_preserves_per_view_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![
+            room_summary("!alpha:example", "Alpha", false),
+            room_summary("!beta:example", "Beta", false),
+        ]),
+        text_event_with_event_id(
+            "!alpha:example",
+            "$alpha-needle",
+            "@alice:example",
+            1_700_000_000_000,
+            "alpha needle",
+        ),
+        text_event_with_event_id(
+            "!beta:example",
+            "$beta-needle-1",
+            "@bob:example",
+            1_700_000_060_000,
+            "beta needle one",
+        ),
+        text_event_with_event_id(
+            "!beta:example",
+            "$beta-needle-2",
+            "@carol:example",
+            1_700_000_120_000,
+            "beta needle two",
+        ),
+    ])?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let alpha_view_identity = room_identity("!alpha:example");
+    let beta_view_identity = room_identity("!beta:example");
+
+    app.select_room("!alpha:example")?;
+    let alpha_state = app.dump_ui_state()?;
+    let alpha_line = only_view_line_containing(
+        find_view(&alpha_state, &alpha_view_identity),
+        "alpha needle",
+    );
+    let alpha_result = app.find_active_view("alpha needle")?;
+    assert_find_result(
+        &alpha_result,
+        &alpha_view_identity,
+        "alpha needle",
+        true,
+        1,
+        Some(0),
+        Some(alpha_line),
+    );
+
+    app.select_room("!beta:example")?;
+    let beta_initial_state = app.dump_ui_state()?;
+    assert_eq!(beta_initial_state.active_find, None);
+    let beta_lines = view_lines_containing(
+        find_view(&beta_initial_state, &beta_view_identity),
+        "beta needle",
+    );
+    assert_eq!(beta_lines.len(), 2);
+    let _ = app.find_active_view("beta needle")?;
+    let beta_result = app.find_active_view("beta needle")?;
+    assert_find_result(
+        &beta_result,
+        &beta_view_identity,
+        "beta needle",
+        true,
+        2,
+        Some(1),
+        Some(beta_lines[1]),
+    );
+
+    app.select_room("!alpha:example")?;
+    let restored_alpha_state = app.dump_ui_state()?;
+    assert_eq!(restored_alpha_state.mdi.active, alpha_view_identity);
+    assert_ui_active_find(
+        &restored_alpha_state,
+        &room_identity("!alpha:example"),
+        "alpha needle",
+        true,
+        1,
+        Some(0),
+        Some(alpha_line),
+    );
+    assert!(
+        restored_alpha_state
+            .status_bar
+            .text
+            .contains("find: 1/1 \"alpha needle\"")
+    );
+
+    app.select_room("!beta:example")?;
+    let restored_beta_state = app.dump_ui_state()?;
+    assert_eq!(restored_beta_state.mdi.active, beta_view_identity);
+    assert_ui_active_find(
+        &restored_beta_state,
+        &room_identity("!beta:example"),
+        "beta needle",
+        true,
+        2,
+        Some(1),
+        Some(beta_lines[1]),
+    );
+    assert!(
+        restored_beta_state
+            .status_bar
+            .text
+            .contains("find: 2/2 \"beta needle\"")
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
+    assert_eq!(model.last_error, None);
+    assert_no_submitted_commands(&model);
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!rebuild:example", "Rebuild", false)]),
+        text_event_with_event_id(
+            "!rebuild:example",
+            "$needle-1",
+            "@alice:example",
+            1_700_000_060_000,
+            "first needle",
+        ),
+        text_event_with_event_id(
+            "!rebuild:example",
+            "$needle-2",
+            "@bob:example",
+            1_700_000_120_000,
+            "second needle",
+        ),
+    ])?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let rebuild_view_identity = room_identity("!rebuild:example");
+    let initial_state = app.dump_ui_state()?;
+    let selected_text = only_view_line_containing(
+        find_view(&initial_state, &rebuild_view_identity),
+        "second needle",
+    );
+    let _ = app.find_active_view("needle")?;
+    let before_rebuild = app.find_active_view("needle")?;
+    assert_find_result(
+        &before_rebuild,
+        &rebuild_view_identity,
+        "needle",
+        true,
+        2,
+        Some(1),
+        Some(selected_text),
+    );
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!rebuild:example",
+        "backfill-start",
+        Some("backfill-end"),
+        vec![history_backfill_event_from_event(text_event_with_event_id(
+            "!rebuild:example",
+            "$needle-0",
+            "@carol:example",
+            1_700_000_000_000,
+            "older needle",
+        ))],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, rebuild_view_identity);
+    assert_ui_active_find(
+        &ui_state,
+        &room_identity("!rebuild:example"),
+        "needle",
+        true,
+        3,
+        Some(2),
+        Some(selected_text),
+    );
+    assert!(ui_state.status_bar.text.contains("find: 3/3 \"needle\""));
+    assert_eq!(
+        app.room_activity(Some("!rebuild:example"))?
+            .iter()
+            .filter(|entry| entry.contains("needle"))
+            .count(),
+        3
+    );
+
+    let model = app.dump_model()?;
+    assert_eq!(model.selected_room.as_deref(), Some("!rebuild:example"));
+    assert_eq!(model.last_error, None);
+    assert_no_submitted_commands(&model);
+
+    let _ = fs::remove_file(&state_path);
     Ok(())
 }
 

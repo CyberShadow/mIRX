@@ -2356,6 +2356,9 @@ enum ComposeSubmission<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalSlashCommand<'a> {
     Status,
+    Find {
+        query: String,
+    },
     Window {
         target: &'a str,
     },
@@ -9386,6 +9389,12 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         "status" => LocalSlashCommand::Invalid {
             feedback: "usage: /status".to_owned(),
         },
+        "find" if !argument.is_empty() => LocalSlashCommand::Find {
+            query: argument.to_owned(),
+        },
+        "find" => LocalSlashCommand::Invalid {
+            feedback: "usage: /find <text>".to_owned(),
+        },
         "window" if !argument.is_empty() => LocalSlashCommand::Window { target: argument },
         "window" => LocalSlashCommand::Invalid {
             feedback: "usage: /window <room-id-or-display-name>".to_owned(),
@@ -9698,6 +9707,10 @@ unsafe fn execute_local_slash_command(
             activate_view(hwnd, &ViewId::Status, None)?;
             set_local_command_status(hwnd, "status window active".to_owned())
         }
+        LocalSlashCommand::Find { query } => match execute_active_view_find(hwnd, &query) {
+            Ok(_) => Ok(()),
+            Err(message) => set_local_command_status(hwnd, message),
+        },
         LocalSlashCommand::Window { target } => {
             let room_id = match resolve_room_command_target(&state_ref(hwnd).model.rooms, target) {
                 Ok(room_id) => room_id,
@@ -19000,6 +19013,13 @@ mod tests {
             }
         );
         assert_eq!(
+            parse_compose_submission("//find needle"),
+            ComposeSubmission::Message {
+                presentation: RoomMessagePresentationKind::Text,
+                body: Cow::Owned("/find needle".to_owned()),
+            }
+        );
+        assert_eq!(
             parse_compose_submission("//react $react-normal +1"),
             ComposeSubmission::Message {
                 presentation: RoomMessagePresentationKind::Text,
@@ -19092,6 +19112,12 @@ mod tests {
     fn parse_slash_command_accepts_verify_forms_and_rejects_bad_forms() {
         assert_eq!(parse_slash_command("/StAtUs"), LocalSlashCommand::Status);
         assert_eq!(
+            parse_slash_command("/FIND Mixed Case"),
+            LocalSlashCommand::Find {
+                query: "Mixed Case".to_owned(),
+            }
+        );
+        assert_eq!(
             parse_slash_command("/e2ee"),
             LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus)
         );
@@ -19141,6 +19167,12 @@ mod tests {
             parse_slash_command("/status now"),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /status".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/find"),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /find <text>".to_owned(),
             }
         );
         assert_eq!(
@@ -19206,6 +19238,18 @@ mod tests {
             parse_slash_command("/query   @alice:example.org   "),
             LocalSlashCommand::Query {
                 user_id: "@alice:example.org".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/find needle"),
+            LocalSlashCommand::Find {
+                query: "needle".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/find   two   words   here   "),
+            LocalSlashCommand::Find {
+                query: "two   words   here".to_owned(),
             }
         );
         assert_eq!(
@@ -19361,6 +19405,12 @@ mod tests {
             parse_slash_command("/query   "),
             LocalSlashCommand::Invalid {
                 feedback: "usage: /query <mxid>".to_owned(),
+            }
+        );
+        assert_eq!(
+            parse_slash_command("/find   "),
+            LocalSlashCommand::Invalid {
+                feedback: "usage: /find <text>".to_owned(),
             }
         );
         assert_eq!(
