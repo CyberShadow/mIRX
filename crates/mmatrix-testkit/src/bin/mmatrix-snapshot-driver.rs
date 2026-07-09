@@ -21,6 +21,7 @@ mod cli {
         pub(crate) select_views: Vec<ViewIdentity>,
         pub(crate) trigger_history_backfill: bool,
         pub(crate) append_events: Option<String>,
+        pub(crate) find_active_view: Option<String>,
         pub(crate) expect_selected: Option<String>,
         pub(crate) expect_rooms: Vec<String>,
         pub(crate) expect_room_memberships: Vec<RoomMembershipExpectation>,
@@ -146,6 +147,12 @@ mod cli {
                     config.append_events = Some(
                         args.next()
                             .ok_or_else(|| "missing value for --append-events".to_owned())?,
+                    );
+                }
+                "--find-active-view" => {
+                    config.find_active_view = Some(
+                        args.next()
+                            .ok_or_else(|| "missing value for --find-active-view".to_owned())?,
                     );
                 }
                 "--expect-selected" => {
@@ -437,6 +444,7 @@ mod cli {
             "  --select-view <identity> (repeatable)",
             "  --trigger-history-backfill",
             "  --append-events <path>",
+            "  --find-active-view <query>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
             "  --expect-room-membership <room_id>::<join|invite>",
@@ -683,6 +691,11 @@ mod cli {
         }
 
         #[test]
+        fn usage_documents_find_active_view_flag() {
+            assert!(usage().contains("--find-active-view <query>"));
+        }
+
+        #[test]
         fn parse_view_identity_arg_accepts_thread_identity() {
             assert_eq!(
                 parse_view_identity_arg(
@@ -787,6 +800,18 @@ mod cli {
             );
             assert_eq!(config.find_timeout, Duration::from_secs(10));
             assert_eq!(config.wait_idle, Duration::from_secs(5));
+        }
+
+        #[test]
+        fn parse_args_accepts_find_active_view_query() {
+            let config = parse_args(
+                ["--find-active-view", "alpha needle"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(config.find_active_view, Some("alpha needle".to_owned()));
         }
 
         #[test]
@@ -968,6 +993,16 @@ mod cli {
                     .err()
                     .unwrap(),
                 "missing value for --append-events"
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_missing_find_active_view_value() {
+            assert_eq!(
+                parse_args(["--find-active-view"].into_iter().map(str::to_owned))
+                    .err()
+                    .unwrap(),
+                "missing value for --find-active-view"
             );
         }
 
@@ -1678,6 +1713,13 @@ mod windows_main {
             app.wait_idle(config.wait_idle).map_err(|error| {
                 format!("WAIT_IDLE after APPEND_SYNTHETIC_EVENTS failed: {error}")
             })?;
+        }
+
+        if let Some(query) = config.find_active_view.as_deref() {
+            app.find_active_view(query)
+                .map_err(|error| format!("FIND_ACTIVE_VIEW failed: {error}"))?;
+            app.wait_idle(config.wait_idle)
+                .map_err(|error| format!("WAIT_IDLE after FIND_ACTIVE_VIEW failed: {error}"))?;
         }
 
         let model = app

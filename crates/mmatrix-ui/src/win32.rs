@@ -68,7 +68,9 @@ use windows_sys::Win32::UI::Controls::{
     TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVN_SELCHANGEDW,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetKeyState, SetFocus, VK_CONTROL,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
@@ -120,6 +122,7 @@ const ROOM_CONTENT_CLASS_NAME: &str = "mmatrixWin32RoomContent";
 const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
+const FIND_DIALOG_CLASS_NAME: &str = "mmatrixWin32FindDialog";
 const FRAME_TITLE: &str = "mmatrix";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
     width: 1024,
@@ -141,6 +144,7 @@ const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
 const MENU_ID_START_SYNC: usize = 40003;
 const MENU_ID_LOGOUT: usize = 40004;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
+const MENU_ID_FIND: usize = 40006;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -152,6 +156,9 @@ const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const RECOVER_E2EE_DIALOG_SECRET_ID: u16 = 5007;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
 const RECOVER_E2EE_DIALOG_CANCEL_ID: usize = 5009;
+const FIND_DIALOG_QUERY_ID: u16 = 5010;
+const FIND_DIALOG_OK_ID: usize = 5011;
+const FIND_DIALOG_CANCEL_ID: usize = 5012;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
@@ -190,6 +197,8 @@ const VK_RETURN_KEY: WPARAM = 13;
 const VK_UP_KEY: WPARAM = 38;
 const VK_DOWN_KEY: WPARAM = 40;
 const VK_DELETE_KEY: WPARAM = 46;
+const VK_ESCAPE_KEY: WPARAM = 27;
+const VK_F_KEY: WPARAM = b'F' as WPARAM;
 
 #[derive(Default)]
 struct Controls {
@@ -2270,6 +2279,19 @@ struct RecoverE2eeDialogState {
     cancel_button: HWND,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FindForm {
+    query: String,
+}
+
+struct FindDialogState {
+    result: Arc<Mutex<Option<FindForm>>>,
+    query_label: HWND,
+    query_edit: HWND,
+    ok_button: HWND,
+    cancel_button: HWND,
+}
+
 struct AutomationState {
     response_name: String,
     response_mapping: HANDLE,
@@ -2516,6 +2538,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     register_timeline_class(instance)?;
     register_login_dialog_class(instance)?;
     register_recover_e2ee_dialog_class(instance)?;
+    register_find_dialog_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -3112,6 +3135,34 @@ fn register_recover_e2ee_dialog_class(instance: *mut c_void) -> Result<(), Strin
         let error = unsafe { GetLastError() };
         if error != 1410 {
             return Err(last_os_error("RegisterClassExW recover e2ee dialog"));
+        }
+    }
+
+    Ok(())
+}
+
+fn register_find_dialog_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(FIND_DIALOG_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(find_dialog_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error("RegisterClassExW find dialog"));
         }
     }
 
@@ -4486,11 +4537,73 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
     }
 }
 
+unsafe extern "system" fn find_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            let create = &*(lparam as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            1
+        }
+        WM_CREATE => match create_find_dialog_controls(hwnd) {
+            Ok(()) => 0,
+            Err(message) => {
+                eprintln!("{message}");
+                -1
+            }
+        },
+        WM_COMMAND => {
+            let command_id = wparam & 0xffff;
+            match command_id {
+                FIND_DIALOG_OK_ID => {
+                    let Some(state) = find_dialog_state(hwnd) else {
+                        return 0;
+                    };
+                    *state
+                        .result
+                        .lock()
+                        .expect("find dialog result mutex poisoned") = Some(FindForm {
+                        query: read_window_text(state.query_edit),
+                    });
+                    DestroyWindow(hwnd);
+                    0
+                }
+                FIND_DIALOG_CANCEL_ID => {
+                    DestroyWindow(hwnd);
+                    0
+                }
+                _ => DefWindowProcW(hwnd, message, wparam, lparam),
+            }
+        }
+        WM_CLOSE => {
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_SIZE => {
+            layout_find_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindDialogState;
+            if !state_ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(state_ptr));
+            }
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
     let state = state_mut(hwnd);
 
-    create_account_menu(hwnd)?;
+    create_frame_menu(hwnd)?;
 
     state.controls.switchbar = CreateWindowExW(
         0,
@@ -4598,7 +4711,13 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
-unsafe fn create_account_menu(hwnd: HWND) -> Result<(), String> {
+unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
+    let edit_menu = CreatePopupMenu();
+    if edit_menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    append_menu_text(edit_menu, MF_STRING, MENU_ID_FIND, "Find...\tCtrl+F")?;
+
     let account_menu = CreatePopupMenu();
     if account_menu.is_null() {
         return Err(last_os_error("CreatePopupMenu"));
@@ -4623,6 +4742,7 @@ unsafe fn create_account_menu(hwnd: HWND) -> Result<(), String> {
     if frame_menu.is_null() {
         return Err(last_os_error("CreateMenu"));
     }
+    append_menu_text(frame_menu, MF_POPUP, edit_menu as usize, "Edit")?;
     append_menu_text(frame_menu, MF_POPUP, account_menu as usize, "Account")?;
 
     if SetMenu(hwnd, frame_menu) == 0 {
@@ -4649,21 +4769,32 @@ unsafe fn append_menu_text(
 
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
     let command_id = wparam & 0xffff;
-    let result = match command_id {
-        MENU_ID_LOGIN => show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
-        MENU_ID_RESTORE_SAVED_SESSION => submit_restore_saved_session(state_mut(hwnd))
-            .and_then(|_| refresh_status_bar(hwnd))
-            .map(|_| Some(())),
-        MENU_ID_START_SYNC => submit_start_sync(state_mut(hwnd)).map(|_| Some(())),
-        MENU_ID_RECOVER_E2EE => {
-            show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(()))
-        }
-        MENU_ID_LOGOUT => submit_logout(state_mut(hwnd)).map(|_| Some(())),
+    let (title, result) = match command_id {
+        MENU_ID_FIND => ("Find", begin_find_dialog(hwnd).map(|_| Some(()))),
+        MENU_ID_LOGIN => (
+            "Account",
+            show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
+        MENU_ID_RESTORE_SAVED_SESSION => (
+            "Account",
+            submit_restore_saved_session(state_mut(hwnd))
+                .and_then(|_| refresh_status_bar(hwnd))
+                .map(|_| Some(())),
+        ),
+        MENU_ID_START_SYNC => (
+            "Account",
+            submit_start_sync(state_mut(hwnd)).map(|_| Some(())),
+        ),
+        MENU_ID_RECOVER_E2EE => (
+            "Account",
+            show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
+        MENU_ID_LOGOUT => ("Account", submit_logout(state_mut(hwnd)).map(|_| Some(()))),
         _ => return false,
     };
 
     if let Err(message) = result {
-        show_error_message(hwnd, "Account", &message);
+        show_error_message(hwnd, title, &message);
     }
 
     true
@@ -4709,6 +4840,20 @@ unsafe fn show_recover_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     submit_recover_e2ee(state_mut(hwnd), form.recovery_secret)?;
     refresh_status_bar(hwnd)?;
     Ok(true)
+}
+
+unsafe fn begin_find_dialog(hwnd: HWND) -> Result<(), String> {
+    let active_view = state_ref(hwnd).active_view.clone();
+    let initial_query = state_ref(hwnd)
+        .find_states
+        .get(&active_view)
+        .map(|find_state| find_state.raw_query.clone())
+        .unwrap_or_default();
+    let Some(form) = show_find_dialog(hwnd, &initial_query)? else {
+        return Ok(());
+    };
+    execute_active_view_find(hwnd, &form.query)?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4895,6 +5040,51 @@ unsafe fn create_recover_e2ee_dialog_controls(hwnd: HWND) -> Result<(), String> 
     )?;
 
     layout_recover_e2ee_dialog(hwnd);
+    Ok(())
+}
+
+unsafe fn create_find_dialog_controls(hwnd: HWND) -> Result<(), String> {
+    let instance = GetModuleHandleW(null());
+    let state = find_dialog_state_mut(hwnd).expect("find dialog state must exist");
+
+    state.query_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Find",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.query_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+        FIND_DIALOG_QUERY_ID,
+        instance,
+    )?;
+    state.ok_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "OK",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        0,
+        FIND_DIALOG_OK_ID as u16,
+        instance,
+    )?;
+    state.cancel_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "Cancel",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
+        0,
+        FIND_DIALOG_CANCEL_ID as u16,
+        instance,
+    )?;
+
+    layout_find_dialog(hwnd);
     Ok(())
 }
 
@@ -5123,6 +5313,56 @@ unsafe fn layout_recover_e2ee_dialog(hwnd: HWND) {
     );
 }
 
+unsafe fn layout_find_dialog(hwnd: HWND) {
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let label_x = 16;
+    let input_x = 16;
+    let input_width = (width - 32).max(0);
+    let label_width = input_width;
+    let label_height = 18;
+    let input_height = 24;
+    let spacing = 8;
+    let block_height = label_height + spacing + input_height + 12;
+    let button_width = 96;
+    let button_height = 28;
+
+    let Some(state) = find_dialog_state(hwnd) else {
+        return;
+    };
+
+    MoveWindow(state.query_label, label_x, 16, label_width, label_height, 1);
+    MoveWindow(
+        state.query_edit,
+        input_x,
+        16 + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+
+    let button_y = 16 + block_height;
+    let cancel_x = width - 16 - button_width;
+    let ok_x = cancel_x - 12 - button_width;
+    MoveWindow(
+        state.ok_button,
+        ok_x,
+        button_y,
+        button_width,
+        button_height,
+        1,
+    );
+    MoveWindow(
+        state.cancel_button,
+        cancel_x,
+        button_y,
+        button_width,
+        button_height,
+        1,
+    );
+}
+
 unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
@@ -5182,6 +5422,75 @@ unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm
         .clone())
 }
 
+unsafe fn show_find_dialog(owner: HWND, initial_query: &str) -> Result<Option<FindForm>, String> {
+    let instance = GetModuleHandleW(null());
+    let result = Arc::new(Mutex::new(None));
+    let dialog_state = Box::new(FindDialogState {
+        result: Arc::clone(&result),
+        query_label: null_mut(),
+        query_edit: null_mut(),
+        ok_button: null_mut(),
+        cancel_button: null_mut(),
+    });
+    let dialog_state_ptr = Box::into_raw(dialog_state);
+    let class_name = wide_null(FIND_DIALOG_CLASS_NAME);
+    let title = wide_null("Find");
+    let dialog = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        420,
+        170,
+        owner,
+        null_mut(),
+        instance,
+        dialog_state_ptr.cast(),
+    );
+    if dialog.is_null() {
+        drop(Box::from_raw(dialog_state_ptr));
+        return Err(last_os_error("CreateWindowExW find dialog"));
+    }
+
+    if let Some(state) = find_dialog_state(dialog) {
+        set_window_text(state.query_edit, initial_query);
+        let len = initial_query.encode_utf16().count();
+        SendMessageW(state.query_edit, EM_SETSEL, len, len as LPARAM);
+        SetFocus(state.query_edit);
+    }
+
+    EnableWindow(owner, 0);
+    ShowWindow(dialog, SW_SHOW);
+
+    let mut message = MSG::default();
+    while IsWindow(dialog) != 0 {
+        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
+        if get_result <= 0 {
+            break;
+        }
+        if find_dialog_handles_key(dialog, &message) {
+            continue;
+        }
+        let frame = frame_window_for(message.hwnd);
+        if !frame.is_null() {
+            let mdi_client = state_ref(frame).controls.mdi_client;
+            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
+                continue;
+            }
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    EnableWindow(owner, 1);
+    Ok(result
+        .lock()
+        .expect("find dialog result mutex poisoned")
+        .clone())
+}
+
 unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
     let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const LoginDialogState;
     (!state.is_null()).then_some(&*state)
@@ -5200,6 +5509,34 @@ unsafe fn recover_e2ee_dialog_state(hwnd: HWND) -> Option<&'static RecoverE2eeDi
 unsafe fn recover_e2ee_dialog_state_mut(hwnd: HWND) -> Option<&'static mut RecoverE2eeDialogState> {
     let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoverE2eeDialogState;
     (!state.is_null()).then_some(&mut *state)
+}
+
+unsafe fn find_dialog_state(hwnd: HWND) -> Option<&'static FindDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindDialogState;
+    (!state.is_null()).then_some(&*state)
+}
+
+unsafe fn find_dialog_state_mut(hwnd: HWND) -> Option<&'static mut FindDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindDialogState;
+    (!state.is_null()).then_some(&mut *state)
+}
+
+unsafe fn find_dialog_handles_key(dialog: HWND, message: &MSG) -> bool {
+    if frame_window_for(message.hwnd) != dialog || message.message != WM_KEYDOWN {
+        return false;
+    }
+
+    match message.wParam {
+        VK_RETURN_KEY => {
+            SendMessageW(dialog, WM_COMMAND, FIND_DIALOG_OK_ID, 0);
+            true
+        }
+        VK_ESCAPE_KEY => {
+            DestroyWindow(dialog);
+            true
+        }
+        _ => false,
+    }
 }
 
 unsafe fn clear_recover_e2ee_dialog_secret(hwnd: HWND) {
@@ -10462,6 +10799,9 @@ fn message_loop() {
         unsafe {
             let frame = frame_window_for(message.hwnd);
             if !frame.is_null() {
+                if handle_find_shortcut_message(frame, &message) {
+                    continue;
+                }
                 let mdi_client = state_ref(frame).controls.mdi_client;
                 if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
                     continue;
@@ -10471,6 +10811,20 @@ fn message_loop() {
             DispatchMessageW(&message);
         }
     }
+}
+
+unsafe fn handle_find_shortcut_message(frame: HWND, message: &MSG) -> bool {
+    if message.message != WM_KEYDOWN || message.wParam != VK_F_KEY {
+        return false;
+    }
+    if (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) == 0 {
+        return false;
+    }
+
+    if let Err(error) = begin_find_dialog(frame) {
+        show_error_message(frame, "Find", &error);
+    }
+    true
 }
 
 unsafe fn frame_window_for(mut hwnd: HWND) -> HWND {

@@ -1,0 +1,94 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!find-room:example",
+        "display_name": "Find Room",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!find-room:example",
+      "activity_id": "event:$find-room-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$find-room-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "opening line before the search hit",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!find-room:example",
+      "activity_id": "event:$find-room-2",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$find-room-2",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "needle in the first matching row",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!find-room:example",
+      "activity_id": "event:$find-room-3",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "message",
+        "event_id": "$find-room-3",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "presentation": "text",
+        "body": "neutral middle line",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!find-room:example",
+      "activity_id": "event:$find-room-4",
+      "timestamp_ms": 1700000180000,
+      "kind": {
+        "type": "message",
+        "event_id": "$find-room-4",
+        "transaction_id": null,
+        "sender": "@dave:example",
+        "presentation": "text",
+        "body": "needle appears again in the second matching row",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  }
+]

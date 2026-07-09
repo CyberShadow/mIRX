@@ -198,6 +198,7 @@ configure_case_expectations() {
   select_views=()
   trigger_history_backfill=
   append_events_path=
+  find_active_view_query=
   case_frame_size=
   expect_switchbar_active=
   verification_text_expect_args=()
@@ -512,6 +513,130 @@ configure_case_expectations() {
       )
       navigation_forbid_args=(
         --expect-no-navigation-text 'plain'
+      )
+      ;;
+    find-room)
+      expect_selected='!find-room:example'
+      expect_active_view='room:!find-room:example'
+      find_active_view_query='needle'
+      room_expect_args=(
+        --expect-room '!find-room:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!find-room:example::needle in the first matching row'
+        --expect-room-view '!find-room:example::needle appears again in the second matching row'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: 1/2 "needle"'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!find-room:example::Find Room'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!find-room:example'
+      )
+      expect_switchbar_active='room:!find-room:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'needle in the first matching row'
+      )
+      ;;
+    find-thread)
+      expect_selected='!find-thread:example'
+      expect_active_view='thread:!find-thread:example|$find-thread-root'
+      select_views=('thread:!find-thread:example|$find-thread-root')
+      find_active_view_query='thread needle'
+      room_expect_args=(
+        --expect-room '!find-thread:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!find-thread:example::root msg'
+        --expect-room-view '!find-thread:example::thread needle alpha'
+        --expect-room-view '!find-thread:example::thread needle beta'
+      )
+      view_expect_args=(
+        --expect-view 'thread:!find-thread:example|$find-thread-root::thread needle alpha'
+        --expect-view 'thread:!find-thread:example|$find-thread-root::thread needle beta'
+      )
+      view_forbid_args=(
+        --expect-no-view 'thread:!find-thread:example|$find-thread-root::room-only lobby note'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: 1/2 "thread needle"'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!find-thread:example::Find Thread'
+        --expect-switchbar-item 'thread:!find-thread:example|$find-thread-root::root msg'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!find-thread:example'
+        --expect-no-switchbar-activity 'thread:!find-thread:example|$find-thread-root'
+      )
+      expect_switchbar_active='thread:!find-thread:example|$find-thread-root'
+      navigation_expect_args=(
+        --expect-navigation-text 'Find Thread'
+        --expect-navigation-text 'root msg'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'room-only lobby note'
+      )
+      ;;
+    find-status)
+      expect_active_view='status'
+      find_active_view_query='flow-verify-request'
+      expect_verification='flow-verify-request'
+      expect_verification_state='requested'
+      verification_text_expect_args=(
+        --expect-verification-text 'flow_id=flow-verify-request'
+        --expect-verification-text 'user_id=@alice:example'
+        --expect-verification-text 'state=requested'
+      )
+      status_view_expect_args=(
+        --expect-status-view 'status: verification requested by @alice:example'
+        --expect-status-view 'flow_id: flow-verify-request'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: 1/1 "flow-verify-request"'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'flow-verify-request'
+      )
+      ;;
+    find-no-match)
+      expect_selected='!find-miss:example'
+      expect_active_view='room:!find-miss:example'
+      find_active_view_query='missing needle'
+      room_expect_args=(
+        --expect-room '!find-miss:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!find-miss:example::alpha status update'
+        --expect-room-view '!find-miss:example::beta follow-up'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: no matches for "missing needle"'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!find-miss:example::Find Miss'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!find-miss:example'
+      )
+      expect_switchbar_active='room:!find-miss:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'missing needle'
       )
       ;;
     thread-activity-indicators)
@@ -1872,6 +1997,9 @@ run_case() {
   if [[ -n "${append_events_path:-}" ]]; then
     append_events_path_win=$(unix_to_wine_path "$append_events_path")
     driver_args+=(--append-events "$append_events_path_win")
+  fi
+  if [[ -n "${find_active_view_query:-}" ]]; then
+    driver_args+=(--find-active-view "$find_active_view_query")
   fi
   if [[ -n "${expect_error:-}" ]]; then
     driver_args+=(--expect-error "$expect_error")

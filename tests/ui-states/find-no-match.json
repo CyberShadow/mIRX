@@ -1,0 +1,56 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!find-miss:example",
+        "display_name": "Find Miss",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!find-miss:example",
+      "activity_id": "event:$find-miss-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$find-miss-1",
+        "transaction_id": null,
+        "sender": "@alice:example",
+        "presentation": "text",
+        "body": "alpha status update",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!find-miss:example",
+      "activity_id": "event:$find-miss-2",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "message",
+        "event_id": "$find-miss-2",
+        "transaction_id": null,
+        "sender": "@bob:example",
+        "presentation": "text",
+        "body": "beta follow-up",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  }
+]
