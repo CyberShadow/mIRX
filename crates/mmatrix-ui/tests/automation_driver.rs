@@ -49,12 +49,10 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetMenu, GetMenuItemCount,
-    GetMenuState, GetMenuStringW, GetScrollInfo, GetSubMenu, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, HMENU, MF_BYCOMMAND, MF_BYPOSITION, MF_DISABLED, MF_GRAYED,
-    SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL,
-    WS_VSCROLL,
+    FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO,
+    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
+    WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -75,7 +73,6 @@ const MENU_ID_VERIFY_ACCEPT: usize = 40007;
 const MENU_ID_VERIFY_CANCEL: usize = 40008;
 const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
 const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
-const ACCOUNT_MENU_LABEL: &str = "Account";
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1812,56 +1809,6 @@ fn activate_switchbar_item_by_command(
     Ok(())
 }
 
-unsafe fn account_menu(app: &MmatrixApp) -> HMENU {
-    let frame = app.automation_frame_hwnd() as HWND;
-    let menu = unsafe { GetMenu(frame) };
-    assert!(!menu.is_null(), "frame menu must exist");
-    let item_count = unsafe { GetMenuItemCount(menu) };
-    assert_ne!(item_count, -1, "GetMenuItemCount must succeed");
-
-    let mut buffer = [0u16; 64];
-    for index in 0..item_count {
-        let length = unsafe {
-            GetMenuStringW(
-                menu,
-                index as u32,
-                buffer.as_mut_ptr(),
-                buffer.len() as i32,
-                MF_BYPOSITION,
-            )
-        };
-        let text = String::from_utf16_lossy(&buffer[..length as usize]);
-        if text == ACCOUNT_MENU_LABEL {
-            let account_menu = unsafe { GetSubMenu(menu, index) };
-            assert!(!account_menu.is_null(), "Account popup menu must exist");
-            return account_menu;
-        }
-    }
-
-    panic!("Account popup menu must exist");
-}
-
-fn refresh_account_menu(app: &MmatrixApp) -> Result<(), Box<dyn std::error::Error>> {
-    let frame = app.automation_frame_hwnd() as HWND;
-    let account_menu = unsafe { account_menu(app) };
-    unsafe {
-        SendMessageW(frame, WM_INITMENUPOPUP, account_menu as WPARAM, 0);
-    }
-    app.wait_idle(Duration::from_secs(5))?;
-    Ok(())
-}
-
-fn account_menu_item_enabled(app: &MmatrixApp, command_id: usize) -> bool {
-    let account_menu = unsafe { account_menu(app) };
-    let state = unsafe { GetMenuState(account_menu, command_id as u32, MF_BYCOMMAND) };
-    assert_ne!(
-        state,
-        u32::MAX,
-        "GetMenuState must succeed for command {command_id}"
-    );
-    state & ((MF_DISABLED | MF_GRAYED) as u32) == 0
-}
-
 fn assert_account_verification_menu_state(
     app: &MmatrixApp,
     accept: bool,
@@ -1869,24 +1816,23 @@ fn assert_account_verification_menu_state(
     confirm: bool,
     reject: bool,
 ) {
+    let state = app
+        .dump_verification_menu_state()
+        .expect("verification menu state must be available");
     assert_eq!(
-        account_menu_item_enabled(app, MENU_ID_VERIFY_ACCEPT),
-        accept,
+        state.accept_enabled, accept,
         "unexpected enabled state for Accept Verification"
     );
     assert_eq!(
-        account_menu_item_enabled(app, MENU_ID_VERIFY_CANCEL),
-        cancel,
+        state.cancel_enabled, cancel,
         "unexpected enabled state for Cancel Verification"
     );
     assert_eq!(
-        account_menu_item_enabled(app, MENU_ID_VERIFY_CONFIRM_SAS),
-        confirm,
+        state.confirm_sas_enabled, confirm,
         "unexpected enabled state for Confirm SAS"
     );
     assert_eq!(
-        account_menu_item_enabled(app, MENU_ID_VERIFY_REJECT_SAS),
-        reject,
+        state.reject_sas_enabled, reject,
         "unexpected enabled state for Reject SAS"
     );
 }
@@ -2902,7 +2848,6 @@ fn automation_driver_requested_verification_menu_state_and_commands()
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_model = app.dump_model()?;
-    refresh_account_menu(&app)?;
     assert_account_verification_menu_state(&app, true, true, false, false);
 
     invoke_account_menu_command(&app, MENU_ID_VERIFY_ACCEPT)?;
@@ -2959,7 +2904,6 @@ fn automation_driver_sas_ready_verification_menu_state_and_commands()
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_model = app.dump_model()?;
-    refresh_account_menu(&app)?;
     assert_account_verification_menu_state(&app, false, true, true, true);
 
     invoke_account_menu_command(&app, MENU_ID_VERIFY_CONFIRM_SAS)?;
@@ -3006,8 +2950,8 @@ fn automation_driver_done_and_cancelled_verification_menu_items_are_disabled()
     ];
     let done_app = launch_app(&exe_path, &done_args)?;
     done_app.wait_idle(Duration::from_secs(5))?;
-    refresh_account_menu(&done_app)?;
     assert_account_verification_menu_state(&done_app, false, false, false, false);
+    drop(done_app);
 
     let cancelled_args = [
         OsString::from("--render-state"),
@@ -3017,7 +2961,6 @@ fn automation_driver_done_and_cancelled_verification_menu_items_are_disabled()
     ];
     let cancelled_app = launch_app(&exe_path, &cancelled_args)?;
     cancelled_app.wait_idle(Duration::from_secs(5))?;
-    refresh_account_menu(&cancelled_app)?;
     assert_account_verification_menu_state(&cancelled_app, false, false, false, false);
 
     Ok(())
@@ -3036,7 +2979,6 @@ fn automation_driver_verification_error_keeps_requested_menu_actions_enabled()
     let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    refresh_account_menu(&app)?;
     assert_account_verification_menu_state(&app, true, true, false, false);
 
     Ok(())

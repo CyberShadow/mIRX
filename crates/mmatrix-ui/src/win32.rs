@@ -76,21 +76,20 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
     ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, EnableMenuItem, GWL_STYLE,
-    GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMenu, GetMenuItemCount, GetMenuStringW,
-    GetMessageW, GetParent, GetScrollInfo, GetSubMenu, GetWindowLongPtrW, HMENU, HideCaret,
-    IDC_ARROW, IsChild, IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT,
-    LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_BYCOMMAND, MF_BYPOSITION, MF_ENABLED,
-    MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
-    SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
-    SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
-    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY,
-    WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
-    WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
-    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent, GetScrollInfo,
+    GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild, IsWindow, KillTimer, LB_ADDSTRING,
+    LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW,
+    MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
+    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
+    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
+    WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN,
+    WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL,
+    WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
+    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -104,14 +103,14 @@ use crate::{
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
         DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedVerificationAction, DumpVerificationActionKind, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
-        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomState,
-        UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
+        FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
+        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
+        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
+        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState,
+        UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
         dump_verification_from_state_event, failure_response, parse_command_request,
         success_response,
@@ -126,7 +125,6 @@ const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
 const FIND_DIALOG_CLASS_NAME: &str = "mmatrixWin32FindDialog";
 const FRAME_TITLE: &str = "mmatrix";
-const ACCOUNT_MENU_LABEL: &str = "Account";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
     width: 1024,
     height: 768,
@@ -214,6 +212,7 @@ struct Controls {
     edit: HWND,
     status_bar: HWND,
     switchbar: HWND,
+    account_menu: HMENU,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -3253,20 +3252,11 @@ unsafe extern "system" fn window_proc(
         }
         WM_INITMENUPOPUP => {
             let popup_menu = wparam as HMENU;
-            let result = (|| -> Result<(), String> {
-                let frame_menu = GetMenu(hwnd);
-                if frame_menu.is_null() {
-                    Ok(())
-                } else {
-                    let account_menu =
-                        find_frame_popup_menu_by_label(frame_menu, ACCOUNT_MENU_LABEL)?;
-                    if account_menu == popup_menu {
-                        refresh_account_verification_menu_state(hwnd, popup_menu)
-                    } else {
-                        Ok(())
-                    }
-                }
-            })();
+            let result = if popup_menu == state_ref(hwnd).controls.account_menu {
+                refresh_account_verification_menu_state(hwnd, popup_menu)
+            } else {
+                Ok(())
+            };
             if let Err(message) = result {
                 show_error_message(hwnd, "Account", &message);
             }
@@ -4800,6 +4790,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     if SetMenu(hwnd, frame_menu) == 0 {
         return Err(last_os_error("SetMenu"));
     }
+    state_mut(hwnd).controls.account_menu = account_menu;
     if DrawMenuBar(hwnd) == 0 {
         return Err(last_os_error("DrawMenuBar"));
     }
@@ -4817,34 +4808,6 @@ unsafe fn append_menu_text(
         return Err(last_os_error("AppendMenuW"));
     }
     Ok(())
-}
-
-unsafe fn find_frame_popup_menu_by_label(frame_menu: HMENU, label: &str) -> Result<HMENU, String> {
-    let item_count = GetMenuItemCount(frame_menu);
-    if item_count == -1 {
-        return Err(last_os_error("GetMenuItemCount"));
-    }
-
-    let mut buffer = [0u16; 64];
-    for index in 0..item_count {
-        let length = GetMenuStringW(
-            frame_menu,
-            index as u32,
-            buffer.as_mut_ptr(),
-            buffer.len() as i32,
-            MF_BYPOSITION,
-        );
-        let text = String::from_utf16_lossy(&buffer[..length as usize]);
-        if text == label {
-            let popup_menu = GetSubMenu(frame_menu, index);
-            if popup_menu.is_null() {
-                return Err(format!("{label} popup menu is not available"));
-            }
-            return Ok(popup_menu);
-        }
-    }
-
-    Err(format!("{label} popup menu was not found"))
 }
 
 unsafe fn refresh_account_verification_menu_state(
@@ -4894,6 +4857,36 @@ unsafe fn refresh_account_verification_menu_state(
     }
 
     Ok(())
+}
+
+unsafe fn dump_account_verification_menu_state(
+    hwnd: HWND,
+) -> Result<DumpVerificationMenuState, String> {
+    let account_menu = state_ref(hwnd).controls.account_menu;
+    if account_menu.is_null() {
+        return Err("Account menu is not available".to_owned());
+    }
+    refresh_account_verification_menu_state(hwnd, account_menu)?;
+
+    let last_verification = state_ref(hwnd).model.last_verification.as_ref();
+    Ok(DumpVerificationMenuState {
+        accept_enabled: verification_menu_action_enabled(
+            last_verification,
+            VerificationAction::Accept,
+        ),
+        cancel_enabled: verification_menu_action_enabled(
+            last_verification,
+            VerificationAction::Cancel,
+        ),
+        confirm_sas_enabled: verification_menu_action_enabled(
+            last_verification,
+            VerificationAction::Confirm,
+        ),
+        reject_sas_enabled: verification_menu_action_enabled(
+            last_verification,
+            VerificationAction::Reject,
+        ),
+    })
 }
 
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
@@ -8409,6 +8402,12 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, dump)
         }
+        ParsedCommand::DumpVerificationMenuState { id } => {
+            let state = dump_account_verification_menu_state(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "verification_menu_unavailable", message)
+            })?;
+            serialize_success_json(&id, state)
+        }
         ParsedCommand::DumpSelectedNavigationPath { id } => {
             let path = dump_selected_navigation_path(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "ui_state_unavailable", message)
@@ -8638,6 +8637,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::WaitIdle { id, .. }
         | ParsedCommand::DumpModel { id }
         | ParsedCommand::DumpUiState { id }
+        | ParsedCommand::DumpVerificationMenuState { id }
         | ParsedCommand::DumpSelectedNavigationPath { id }
         | ParsedCommand::DumpRoomActivity { id, .. }
         | ParsedCommand::ListRooms { id }

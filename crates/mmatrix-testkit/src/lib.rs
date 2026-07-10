@@ -73,6 +73,8 @@ const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
 #[cfg(windows)]
 const COMMAND_ID_FIND_ACTIVE_VIEW: u32 = 28;
 #[cfg(windows)]
+const COMMAND_ID_DUMP_VERIFICATION_MENU_STATE: u32 = 29;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -851,6 +853,15 @@ pub struct UiState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct VerificationMenuState {
+    pub accept_enabled: bool,
+    pub cancel_enabled: bool,
+    pub confirm_sas_enabled: bool,
+    pub reject_sas_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UiFindState {
     pub active: ViewIdentity,
     pub query: String,
@@ -1253,6 +1264,10 @@ impl MmatrixApp {
 
     pub fn dump_ui_state(&self) -> Result<UiState, TestkitError> {
         self.inner.dump_ui_state()
+    }
+
+    pub fn dump_verification_menu_state(&self) -> Result<VerificationMenuState, TestkitError> {
+        self.inner.dump_verification_menu_state()
     }
 
     pub fn room_activity(&self, room_id: Option<&str>) -> Result<Vec<RoomActivity>, TestkitError> {
@@ -1745,6 +1760,14 @@ mod imp {
             ))
         }
 
+        pub(crate) fn dump_verification_menu_state(
+            &self,
+        ) -> Result<VerificationMenuState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn room_activity(
             &self,
             _room_id: Option<&str>,
@@ -2156,6 +2179,12 @@ mod imp {
 
         pub(crate) fn dump_ui_state(&self) -> Result<UiState, TestkitError> {
             self.send_command(COMMAND_ID_DUMP_UI_STATE, EmptyArgs {})
+        }
+
+        pub(crate) fn dump_verification_menu_state(
+            &self,
+        ) -> Result<VerificationMenuState, TestkitError> {
+            self.send_command(COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, EmptyArgs {})
         }
 
         pub(crate) fn room_activity(

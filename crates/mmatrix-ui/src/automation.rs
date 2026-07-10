@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 18;
+pub(crate) const PROTOCOL_VERSION: u32 = 19;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -43,6 +43,7 @@ pub(crate) const COMMAND_ID_CANCEL_VERIFICATION: u32 = 25;
 pub(crate) const COMMAND_ID_CONFIRM_VERIFICATION_SAS: u32 = 26;
 pub(crate) const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
 pub(crate) const COMMAND_ID_FIND_ACTIVE_VIEW: u32 = 28;
+pub(crate) const COMMAND_ID_DUMP_VERIFICATION_MENU_STATE: u32 = 29;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -74,6 +75,7 @@ pub(crate) enum CommandKind {
     ConfirmVerificationSas,
     RejectVerificationSas,
     FindActiveView,
+    DumpVerificationMenuState,
 }
 
 impl CommandKind {
@@ -107,6 +109,7 @@ impl CommandKind {
             COMMAND_ID_CONFIRM_VERIFICATION_SAS => Some(Self::ConfirmVerificationSas),
             COMMAND_ID_REJECT_VERIFICATION_SAS => Some(Self::RejectVerificationSas),
             COMMAND_ID_FIND_ACTIVE_VIEW => Some(Self::FindActiveView),
+            COMMAND_ID_DUMP_VERIFICATION_MENU_STATE => Some(Self::DumpVerificationMenuState),
             _ => None,
         }
     }
@@ -216,6 +219,9 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: FindActiveViewArgs,
     },
+    DumpVerificationMenuState {
+        id: String,
+    },
 }
 
 impl ParsedCommand {
@@ -249,6 +255,7 @@ impl ParsedCommand {
             Self::ConfirmVerificationSas { .. } => CommandKind::ConfirmVerificationSas,
             Self::RejectVerificationSas { .. } => CommandKind::RejectVerificationSas,
             Self::FindActiveView { .. } => CommandKind::FindActiveView,
+            Self::DumpVerificationMenuState { .. } => CommandKind::DumpVerificationMenuState,
         }
     }
 }
@@ -483,6 +490,15 @@ pub(crate) struct ComposeTextResponse {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AcceptedResponse {
     pub(crate) accepted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpVerificationMenuState {
+    pub(crate) accept_enabled: bool,
+    pub(crate) cancel_enabled: bool,
+    pub(crate) confirm_sas_enabled: bool,
+    pub(crate) reject_sas_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1572,6 +1588,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<FindActiveViewArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::DumpVerificationMenuState => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpVerificationMenuState { id: envelope.id })
+        }
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -1767,18 +1787,18 @@ mod tests {
         COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CONFIRM_VERIFICATION_SAS,
         COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
-        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING,
-        COMMAND_ID_RECOVER_E2EE, COMMAND_ID_REJECT_VERIFICATION_SAS,
-        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
-        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
-        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
-        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
-        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
-        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
-        DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, COMMAND_ID_FIND_ACTIVE_VIEW,
+        COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
+        COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
+        COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_RESTORE_SAVED_SESSION,
+        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
@@ -1866,8 +1886,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_18() {
-        assert_eq!(PROTOCOL_VERSION, 18);
+    fn protocol_version_is_19() {
+        assert_eq!(PROTOCOL_VERSION, 19);
     }
 
     #[test]
@@ -1985,10 +2005,17 @@ mod tests {
             Some(CommandKind::FindActiveView)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_DUMP_VERIFICATION_MENU_STATE),
+            Some(CommandKind::DumpVerificationMenuState)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
-        assert_eq!(CommandKind::from_id(COMMAND_ID_FIND_ACTIVE_VIEW + 1), None);
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_DUMP_VERIFICATION_MENU_STATE + 1),
+            None
+        );
     }
 
     #[test]
@@ -2169,6 +2196,16 @@ mod tests {
                 args: FindActiveViewArgs {
                     query: "needle".to_owned(),
                 },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_DUMP_VERIFICATION_MENU_STATE,
+                br#"{"id":"verification-menu","args":{}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::DumpVerificationMenuState {
+                id: "verification-menu".to_owned(),
             }
         );
         assert_eq!(
@@ -3203,7 +3240,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":18,
+                    "protocol_version":19,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
