@@ -11,11 +11,12 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig, CoreErrorEvent,
-    CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySucceeded, EditMessageRequest,
-    Event, JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
-    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
-    SetRoomTopicRequest, VerificationFlowId,
+    CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
+    E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RestoreSessionRequest, RoomMembers, RoomMembership, RoomReadState,
+    RoomSummary, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -214,6 +215,9 @@ async fn handle_command(
         }
         Command::FetchRoomMedia(request) => handle_fetch_room_media(event_tx, state, request).await,
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
+        Command::SetupE2eeRecovery(request) => {
+            handle_setup_e2ee_recovery(event_tx, state, &request).await
+        }
         Command::RecoverE2ee(request) => handle_recover_e2ee(event_tx, state, &request).await,
         Command::AcceptVerification(flow) => {
             handle_accept_verification(event_tx, state, flow).await
@@ -800,6 +804,34 @@ async fn handle_recover_e2ee(
             emit_event(event_tx, Event::E2eeStatus(status));
         }
         Err(err) => emit_matrix_error(event_tx, Operation::RecoverE2ee, err),
+    }
+
+    false
+}
+
+async fn handle_setup_e2ee_recovery(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: &SetupE2eeRecoveryRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SetupE2eeRecovery,
+            "E2EE recovery setup requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::setup_e2ee_recovery(client, request).await {
+        Ok((recovery_key, status)) => {
+            emit_event(
+                event_tx,
+                Event::E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded { recovery_key }),
+            );
+            emit_event(event_tx, Event::E2eeStatus(status));
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::SetupE2eeRecovery, err),
     }
 
     false

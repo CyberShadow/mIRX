@@ -73,9 +73,9 @@ use crate::api::{
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -257,6 +257,31 @@ pub(crate) async fn summarize_e2ee_status(
             .await
             .map(map_cross_signing_status),
     })
+}
+
+pub(crate) async fn setup_e2ee_recovery(
+    client: &Client,
+    request: &SetupE2eeRecoveryRequest,
+) -> Result<(String, E2eeStatus), MatrixCoreError> {
+    let encryption = client.encryption();
+    let recovery = encryption.recovery();
+    let enable = recovery.enable();
+    let enable = if let Some(passphrase) = request.passphrase.as_deref() {
+        enable.with_passphrase(passphrase)
+    } else {
+        enable
+    };
+    let enable = if request.wait_for_backups_to_upload {
+        enable.wait_for_backups_to_upload()
+    } else {
+        enable
+    };
+    let recovery_key = enable
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to set up E2EE recovery: {err}")))?;
+
+    let status = summarize_e2ee_status(client, BackupServerStatusMode::Fetch).await?;
+    Ok((recovery_key, status))
 }
 
 pub(crate) async fn recover_e2ee(

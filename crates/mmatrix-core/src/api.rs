@@ -30,6 +30,7 @@ pub enum Command {
     BackfillRoomHistory(BackfillRoomHistoryRequest),
     FetchRoomMedia(FetchRoomMediaRequest),
     RefreshE2eeStatus,
+    SetupE2eeRecovery(SetupE2eeRecoveryRequest),
     RecoverE2ee(RecoverE2eeRequest),
     AcceptVerification(VerificationFlowId),
     CancelVerification(VerificationFlowId),
@@ -215,6 +216,28 @@ impl fmt::Debug for RecoverE2eeRequest {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("RecoverE2eeRequest")
             .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupE2eeRecoveryRequest {
+    pub passphrase: Option<String>,
+    pub wait_for_backups_to_upload: bool,
+}
+
+impl fmt::Debug for SetupE2eeRecoveryRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SetupE2eeRecoveryRequest")
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "wait_for_backups_to_upload",
+                &self.wait_for_backups_to_upload,
+            )
             .finish()
     }
 }
@@ -568,6 +591,20 @@ pub struct E2eeRecoverySucceeded {
     pub operation: E2eeRecoveryOperation,
 }
 
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct E2eeRecoverySetupSucceeded {
+    pub recovery_key: String,
+}
+
+impl fmt::Debug for E2eeRecoverySetupSucceeded {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("E2eeRecoverySetupSucceeded")
+            .field("recovery_key", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum E2eeRecoveryOperation {
@@ -753,6 +790,7 @@ pub enum Operation {
     RoomList,
     RoomReadState,
     E2eeStatus,
+    SetupE2eeRecovery,
     RecoverE2ee,
     Verification,
     Logout,
@@ -775,6 +813,7 @@ pub enum Event {
     RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),
     E2eeStatus(E2eeStatus),
+    E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),
     VerificationRequest(VerificationRequest),
     VerificationState(VerificationStateEvent),

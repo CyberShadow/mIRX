@@ -4,21 +4,21 @@ use std::time::Duration;
 use mmatrix_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig,
     CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomMediaRequest, JoinRoomRequest, LeaveRoomRequest,
-    LoginRequest, MarkRoomReadRequest, Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomMediaRequest, JoinRoomRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RoomActivity, RoomActivityKind,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomSummary, RoomTagSummary, RoomTyping, SendFileRequest, SendMessageRequest,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -586,6 +586,56 @@ fn recover_e2ee_before_login_emits_recovery_error() {
 }
 
 #[test]
+fn setup_e2ee_recovery_before_login_emits_setup_error() {
+    let (_temp_dir, config) = test_config();
+    let handle = start(config).expect("start core");
+
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("started event"),
+        Event::Started
+    );
+
+    handle
+        .command_sender()
+        .send(Command::SetupE2eeRecovery(SetupE2eeRecoveryRequest {
+            passphrase: Some("test passphrase".to_owned()),
+            wait_for_backups_to_upload: true,
+        }))
+        .expect("send setup e2ee recovery");
+
+    match handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("e2ee recovery setup error")
+    {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::SetupE2eeRecovery);
+            assert_eq!(
+                err.message,
+                "E2EE recovery setup requires an authenticated session"
+            );
+        }
+        other => panic!("expected e2ee recovery setup error, got {other:?}"),
+    }
+
+    handle
+        .command_sender()
+        .send(Command::Shutdown)
+        .expect("send shutdown");
+    assert_eq!(
+        handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stopped event"),
+        Event::Stopped
+    );
+    handle.join().expect("join worker");
+}
+
+#[test]
 fn login_store_initialization_failure_emits_typed_error_event() {
     let temp_dir = TempDir::new().expect("temporary profile directory");
     let profile_file = temp_dir.path().join("profile-file");
@@ -932,6 +982,36 @@ fn recover_e2ee_request_round_trips_through_serde() {
     let restored: RecoverE2eeRequest =
         serde_json::from_str(&json).expect("deserialize recover e2ee request");
     assert_eq!(restored, request);
+}
+
+#[test]
+fn setup_e2ee_recovery_request_round_trips_through_serde() {
+    let request = SetupE2eeRecoveryRequest {
+        passphrase: Some("test passphrase".to_owned()),
+        wait_for_backups_to_upload: true,
+    };
+
+    let json = serde_json::to_string(&request).expect("serialize setup e2ee recovery request");
+    assert_eq!(
+        json,
+        r#"{"passphrase":"test passphrase","wait_for_backups_to_upload":true}"#
+    );
+
+    let restored: SetupE2eeRecoveryRequest =
+        serde_json::from_str(&json).expect("deserialize setup e2ee recovery request");
+    assert_eq!(restored, request);
+}
+
+#[test]
+fn setup_e2ee_recovery_request_debug_redacts_passphrase() {
+    let request = SetupE2eeRecoveryRequest {
+        passphrase: Some("test passphrase".to_owned()),
+        wait_for_backups_to_upload: true,
+    };
+
+    let debug = format!("{request:?}");
+    assert!(!debug.contains("test passphrase"));
+    assert!(debug.contains("Some(\"<redacted>\")"));
 }
 
 #[test]
@@ -2054,6 +2134,34 @@ fn e2ee_recovery_succeeded_event_round_trips_through_serde() {
 }
 
 #[test]
+fn e2ee_recovery_setup_succeeded_event_round_trips_through_serde() {
+    let event = Event::E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded {
+        recovery_key: "EsTl...recovery-key".to_owned(),
+    });
+
+    let json = serde_json::to_string(&event).expect("serialize e2ee recovery setup succeeded");
+    assert_eq!(
+        json,
+        r#"{"E2eeRecoverySetupSucceeded":{"recovery_key":"EsTl...recovery-key"}}"#
+    );
+
+    let restored: Event =
+        serde_json::from_str(&json).expect("deserialize e2ee recovery setup succeeded");
+    assert_eq!(restored, event);
+}
+
+#[test]
+fn e2ee_recovery_setup_succeeded_debug_redacts_recovery_key() {
+    let succeeded = E2eeRecoverySetupSucceeded {
+        recovery_key: "EsTl...recovery-key".to_owned(),
+    };
+
+    let debug = format!("{succeeded:?}");
+    assert!(!debug.contains("EsTl...recovery-key"));
+    assert!(debug.contains("<redacted>"));
+}
+
+#[test]
 fn verification_request_event_preserves_existing_passive_wire_shape() {
     let event = Event::VerificationRequest(VerificationRequest {
         flow_id: "txn-123".to_owned(),
@@ -2155,6 +2263,22 @@ fn e2ee_dtos_reject_unknown_fields() {
         )
         .is_err(),
         "recover e2ee request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<SetupE2eeRecoveryRequest>(
+            r#"{"passphrase":"test passphrase","wait_for_backups_to_upload":false,"unexpected":"value"}"#
+        )
+        .is_err(),
+        "setup e2ee recovery request must reject unknown fields"
+    );
+
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"E2eeRecoverySetupSucceeded":{"recovery_key":"EsTl...recovery-key","unexpected":"value"}}"#
+        )
+        .is_err(),
+        "e2ee recovery setup succeeded event must reject unknown fields"
     );
 
     assert!(
