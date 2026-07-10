@@ -23226,4 +23226,22 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn selected_file_and_audio_enable_attachment_saving() {
+        for activity in [file_activity("!room:example", "file", "$file:example"), audio_activity("!room:example", "audio", "$audio:example")] {
+            let event_id = match &activity.kind {
+                RoomActivityKind::File(file) => file.event_id.clone(),
+                RoomActivityKind::Audio(audio) => audio.event_id.clone(),
+                _ => unreachable!(),
+            };
+            let mut state = test_state();
+            state.active_view = room_view_id("!room:example");
+            state.model.room_views.entry("!room:example".to_owned()).or_default().activities.push(activity);
+            state.selected_timeline_event = Some(SelectedTimelineEvent { view_id: state.active_view.clone(), event_id });
+            let menu_state = active_message_action_state(&state);
+            assert!(menu_state.selected_event_id.is_some());
+            assert!(menu_state.save_attachment_enabled);
+        }
+    }
 }
