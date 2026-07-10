@@ -1443,30 +1443,30 @@ fn room_activity_member_state_notice_round_trips_through_json() {
 fn room_activity_unsupported_message_round_trips_through_json() {
     let activity = RoomActivity {
         room_id: "!room:example".to_owned(),
-        activity_id: "event:$video1:example.org".to_owned(),
+        activity_id: "event:$custom1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-            event_id: "$video1:example.org".to_owned(),
+            event_id: "$custom1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.video".to_owned(),
-            body: "clip.mp4".to_owned(),
+            msgtype: "com.example.custom".to_owned(),
+            body: "custom payload".to_owned(),
         }),
     };
 
     let json = serde_json::json!({
         "room_id": "!room:example",
-        "activity_id": "event:$video1:example.org",
+        "activity_id": "event:$custom1:example.org",
         "timestamp_ms": 1710000000000u64,
         "relation": null,
         "reactions": [],
         "kind": {
             "type": "unsupported_message",
-            "event_id": "$video1:example.org",
+            "event_id": "$custom1:example.org",
             "sender": "@alice:example.org",
-            "msgtype": "m.video",
-            "body": "clip.mp4"
+            "msgtype": "com.example.custom",
+            "body": "custom payload"
         }
     });
 
@@ -1629,6 +1629,57 @@ fn room_activity_audio_round_trips_through_json() {
         serde_json::from_value::<RoomActivity>(json).expect("deserialize audio activity"),
         activity
     );
+}
+
+#[test]
+fn room_activity_video_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "event:$custom1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_030_000,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::Video(Box::new(sample_room_video_activity())),
+    };
+
+    let json = serde_json::to_value(&activity).expect("serialize video activity");
+    assert_eq!(json["kind"]["type"], "video");
+    assert_eq!(json["kind"]["info"]["mimetype"], "video/mp4");
+    assert_eq!(json["kind"]["info"]["duration_ms"], 12345u64);
+    assert_eq!(json["kind"]["info"]["width"], 1920u64);
+    assert_eq!(json["kind"]["info"]["height"], 1080u64);
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize video activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_video_types_reject_unknown_fields() {
+    assert!(serde_json::from_str::<RoomVideoActivity>(
+        r#"{
+            "event_id":"$video1:example.org",
+            "sender":"@alice:example.org",
+            "body":"clip.mp4",
+            "filename":"clip.mp4",
+            "source":{"type":"plain","url":"mxc://example.org/clip"},
+            "info":null,
+            "unexpected":true
+        }"#
+    )
+    .is_err());
+    assert!(serde_json::from_str::<RoomVideoInfo>(
+        r#"{
+            "mimetype":"video/mp4",
+            "size":54321,
+            "duration_ms":12345,
+            "width":1920,
+            "height":1080,
+            "thumbnail_source":null,
+            "unexpected":true
+        }"#
+    )
+    .is_err());
 }
 
 #[test]
@@ -3530,21 +3581,21 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
 fn room_activity_contains_matches_unsupported_message_fields() {
     let activity = RoomActivity {
         room_id: "!room:example".to_owned(),
-        activity_id: "event:$video1:example.org".to_owned(),
+        activity_id: "event:$custom1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-            event_id: "$video1:example.org".to_owned(),
+            event_id: "$custom1:example.org".to_owned(),
             sender: "@alice:example.org".to_owned(),
-            msgtype: "m.video".to_owned(),
-            body: "clip.mp4".to_owned(),
+            msgtype: "com.example.custom".to_owned(),
+            body: "custom payload".to_owned(),
         }),
     };
 
     assert!(activity.contains("\"type\":\"unsupported_message\""));
-    assert!(activity.contains("\"msgtype\":\"m.video\""));
-    assert!(activity.contains("clip.mp4"));
+    assert!(activity.contains("\"msgtype\":\"com.example.custom\""));
+    assert!(activity.contains("custom payload"));
 }
 
 #[test]

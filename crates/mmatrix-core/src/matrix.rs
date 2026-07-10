@@ -40,7 +40,7 @@ use matrix_sdk::{
                 EncryptedFile, ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{
-                    AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
+                    AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent, VideoInfo,
                     Relation as MessageContentRelation, Relation as MessageRelation,
                     RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
                 },
@@ -72,10 +72,11 @@ use crate::api::{
     RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomVideoActivity, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -1181,6 +1182,23 @@ fn room_activity_from_sync_message(
         });
     }
 
+    if let MessageType::Video(video) = &event.content.msgtype {
+        return Some(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{}", event.event_id),
+            timestamp_ms: event.origin_server_ts.get().into(),
+            relation: relation.clone(),
+            kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
+                event_id: event.event_id.to_string(),
+                sender: event.sender.to_string(),
+                body: video.body.clone(),
+                filename: video.filename.clone(),
+                source: room_media_source_from_matrix(&video.source),
+                info: video.info.as_deref().map(room_video_info_from_matrix),
+            })),
+        });
+    }
+
     let (msgtype, body) = unsupported_room_message_body(&event.content.msgtype)?;
 
     Some(RoomActivity {
@@ -1348,6 +1366,23 @@ fn room_audio_info_from_matrix(info: &AudioInfo) -> RoomAudioInfo {
     }
 }
 
+fn room_video_info_from_matrix(info: &VideoInfo) -> RoomVideoInfo {
+    RoomVideoInfo {
+        mimetype: info.mimetype.as_deref().map(str::to_owned),
+        size: info.size.map(u64::from),
+        duration_ms: info.duration.map(|duration| {
+            u64::try_from(duration.as_millis())
+                .expect("Matrix video duration exceeds u64 milliseconds")
+        }),
+        width: info.width.map(u64::from),
+        height: info.height.map(u64::from),
+        thumbnail_source: info
+            .thumbnail_source
+            .as_ref()
+            .map(room_media_source_from_matrix),
+    }
+}
+
 fn room_message_presentation_and_body_from_message_type(
     message_type: &MessageType,
 ) -> Option<(RoomMessagePresentationKind, String)> {
@@ -1371,7 +1406,6 @@ fn room_message_presentation_and_body_from_message_type(
 
 fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, String)> {
     match message_type {
-        MessageType::Video(_) => Some(("m.video".to_owned(), message_type.body().to_owned())),
         MessageType::_Custom(_) => Some((
             message_type.msgtype().to_owned(),
             message_type.body().to_owned(),
@@ -1382,6 +1416,7 @@ fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, 
         | MessageType::Image(_)
         | MessageType::Audio(_)
         | MessageType::File(_)
+        | MessageType::Video(_)
         | MessageType::Location(_)
         | MessageType::VerificationRequest(_) => None,
         // ruma marks MessageType as non_exhaustive, so a final fallback is required.
@@ -2865,6 +2900,7 @@ mod tests {
         RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
         SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomVideoActivity, RoomVideoInfo,
     };
     use matrix_sdk::{
         Client, SessionMeta,
@@ -4778,13 +4814,22 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_sync_video_mapping_produces_placeholder() {
+    fn sync_video_mapping_produces_typed_activity() {
         let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
             "type": "m.room.message",
             "content": {
                 "msgtype": "m.video",
                 "body": "demo.mp4",
-                "url": "mxc://example.org/video"
+                "filename": "clip.mp4",
+                "url": "mxc://example.org/video",
+                "info": {
+                    "mimetype": "video/mp4",
+                    "size": 12345u64,
+                    "duration": 12000u64,
+                    "w": 640u64,
+                    "h": 480u64,
+                    "thumbnail_url": "mxc://example.org/video-thumbnail"
+                }
             },
             "event_id": "$video:example.org",
             "sender": "@alice:example.org",
@@ -4799,12 +4844,25 @@ mod tests {
                 activity_id: "event:$video:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_300,
                 relation: None,
-                kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
+                kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                     event_id: "$video:example.org".to_owned(),
                     sender: "@alice:example.org".to_owned(),
-                    msgtype: "m.video".to_owned(),
                     body: "demo.mp4".to_owned(),
-                }),
+                    filename: Some("clip.mp4".to_owned()),
+                    source: RoomMediaSource::Plain {
+                        url: "mxc://example.org/video".to_owned()
+                    },
+                    info: Some(RoomVideoInfo {
+                        mimetype: Some("video/mp4".to_owned()),
+                        size: Some(12345),
+                        duration_ms: Some(12000),
+                        width: Some(640),
+                        height: Some(480),
+                        thumbnail_source: Some(RoomMediaSource::Plain {
+                            url: "mxc://example.org/video-thumbnail".to_owned()
+                        }),
+                    }),
+                })),
             })
         );
     }

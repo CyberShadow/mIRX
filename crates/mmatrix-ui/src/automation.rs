@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 21;
+pub(crate) const PROTOCOL_VERSION: u32 = 22;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -2209,8 +2209,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_21() {
-        assert_eq!(PROTOCOL_VERSION, 21);
+    fn protocol_version_is_22() {
+        assert_eq!(PROTOCOL_VERSION, 22);
     }
 
     #[test]
@@ -3728,7 +3728,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":21,
+                    "protocol_version":22,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5354,13 +5354,13 @@ mod tests {
         );
         let unsupported_activity = RoomActivity {
             room_id: "!room:example".to_owned(),
-            activity_id: "event:$video1:example.org".to_owned(),
+            activity_id: "event:$custom1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
-                event_id: "$video1:example.org".to_owned(),
+                event_id: "$custom1:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),
-                msgtype: "m.video".to_owned(),
+                msgtype: "com.example.custom".to_owned(),
                 body: "clip.mp4".to_owned(),
             }),
         };
@@ -5368,15 +5368,15 @@ mod tests {
             super::dump_room_activity_from_activity(&unsupported_activity),
             DumpRoomActivity {
                 room_id: "!room:example".to_owned(),
-                activity_id: "event:$video1:example.org".to_owned(),
+                activity_id: "event:$custom1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::UnsupportedMessage(
                     DumpUnsupportedRoomMessageActivity {
-                        event_id: "$video1:example.org".to_owned(),
+                        event_id: "$custom1:example.org".to_owned(),
                         sender: "@alice:example.org".to_owned(),
-                        msgtype: "m.video".to_owned(),
+                        msgtype: "com.example.custom".to_owned(),
                         body: "clip.mp4".to_owned(),
                     }
                 ),
@@ -5389,15 +5389,15 @@ mod tests {
             .expect("serialize unsupported dump room activity"),
             json!({
                 "room_id":"!room:example",
-                "activity_id":"event:$video1:example.org",
+                "activity_id":"event:$custom1:example.org",
                 "timestamp_ms":1710000000000u64,
                 "relation":null,
                 "reactions":[],
                 "kind":{
                     "type":"unsupported_message",
-                    "event_id":"$video1:example.org",
+                    "event_id":"$custom1:example.org",
                     "sender":"@alice:example.org",
-                    "msgtype":"m.video",
+                    "msgtype":"com.example.custom",
                     "body":"clip.mp4"
                 }
             })

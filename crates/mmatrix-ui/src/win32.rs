@@ -15942,7 +15942,7 @@ mod tests {
                 "$image1:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.video",
+                "com.example.custom",
                 "clip.mp4",
             ),
         )
@@ -16312,7 +16312,7 @@ mod tests {
                 "$video1:example.org",
                 "@alice:example.org",
                 1_710_000_180_000,
-                "m.video",
+                "com.example.custom",
                 "clip.mp4",
             ),
         )
@@ -16386,7 +16386,7 @@ mod tests {
                     .to_owned(),
                 "* [16:02] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)"
                     .to_owned(),
-                "* [16:03] @alice:example.org sent unsupported m.video: clip.mp4"
+                "* [16:03] @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
                 "* [22:15] carol joined".to_owned(),
                 "* [22:15] @dave:example left".to_owned(),
@@ -16451,7 +16451,7 @@ mod tests {
             TimelineRowVisual::Log {
                 timestamp: "[16:03]".to_owned(),
                 sender_prefix: "* @alice:example.org".to_owned(),
-                body: "sent unsupported m.video: clip.mp4".to_owned(),
+                body: "sent unsupported com.example.custom: clip.mp4".to_owned(),
             }
         );
         assert_eq!(
@@ -16895,7 +16895,7 @@ mod tests {
                 "$image1:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.video",
+                "com.example.custom",
                 "clip.mp4",
             ),
         )
@@ -16905,7 +16905,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent unsupported m.video: clip.mp4".to_owned(),
+                "* [16:00] @alice:example.org sent unsupported com.example.custom: clip.mp4".to_owned(),
             ]
         );
     }
@@ -16921,7 +16921,7 @@ mod tests {
                 "$unsupported:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.video",
+                "com.example.custom",
                 "clip.mp4",
             ),
         )
@@ -16938,7 +16938,7 @@ mod tests {
 
         let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
-        assert!(!rendered.contains("m.video"));
+        assert!(!rendered.contains("com.example.custom"));
         assert!(!rendered.contains("clip.mp4"));
     }
 
@@ -17859,10 +17859,10 @@ mod tests {
             image_row,
             TimelineRow::log(
                 TimelineRowKind::Unsupported,
-                "* [16:01] @alice:example.org sent unsupported m.video: clip.mp4".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4".to_owned(),
                 "[16:01]".to_owned(),
                 "* @alice:example.org".to_owned(),
-                "sent unsupported m.video: clip.mp4".to_owned(),
+                "sent unsupported com.example.custom: clip.mp4".to_owned(),
             ),
         ];
 
@@ -17873,7 +17873,7 @@ mod tests {
             logical_lines,
             vec![
                 "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
-                "* [16:01] @alice:example.org sent unsupported m.video: clip.mp4".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4".to_owned(),
             ]
         );
         assert_eq!(
@@ -17897,7 +17897,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "[16:00]|* @alice:example.org|sent image: diagram.png".to_owned(),
-                "[16:01]|* @alice:example.org|sent unsupported m.video: clip.mp4".to_owned(),
+                "[16:01]|* @alice:example.org|sent unsupported com.example.custom: clip.mp4".to_owned(),
             ]
         );
         assert_eq!(
@@ -19997,7 +19997,7 @@ mod tests {
                 "$image1:example.org",
                 "@alice:example.org",
                 1_710_000_000_000,
-                "m.video",
+                "com.example.custom",
                 "clip.mp4",
             ),
         )
@@ -20386,7 +20386,7 @@ mod tests {
             "$image1:example.org",
             "@alice:example.org",
             1_710_000_000_000,
-            "m.video",
+            "com.example.custom",
             "clip.mp4",
         );
 
@@ -20399,7 +20399,7 @@ mod tests {
                 sender: "@alice:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
                 presentation: RoomMessagePresentationKind::Text,
-                body: "[unsupported m.video] clip.mp4".to_owned(),
+                body: "[unsupported com.example.custom] clip.mp4".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             })
         );

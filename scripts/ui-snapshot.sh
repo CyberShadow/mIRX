@@ -1715,6 +1715,46 @@ configure_case_expectations() {
         --expect-no-navigation-text 'voice-note.ogg'
       )
       ;;
+    video-message)
+      expect_selected='!media:example.org'
+      expect_active_view='room:!media:example.org'
+      room_expect_args=(
+        --expect-room '!media:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!media:example.org::"type":"video"'
+        --expect-room-activity '!media:example.org::$video1:example.org'
+        --expect-room-activity '!media:example.org::clip.mp4'
+        --expect-room-activity '!media:example.org::mxc://example.org/video'
+        --expect-room-activity '!media:example.org::video/mp4'
+        --expect-room-activity '!media:example.org::34567'
+        --expect-room-activity '!media:example.org::12000'
+        --expect-room-activity '!media:example.org::1920'
+        --expect-room-activity '!media:example.org::1080'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* [16:02] @alice:example.org sent video: clip.mp4 (video/mp4, 1920x1080, 34567 bytes, 12000 ms)'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !media:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!media:example.org::Media'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!media:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!media:example.org'
+      view_forbid_args=(
+        --expect-no-view 'room:!media:example.org::unsupported'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'clip.mp4'
+      )
+      ;;
     image-message)
       expect_selected='!images:example.org'
       expect_active_view='room:!images:example.org'

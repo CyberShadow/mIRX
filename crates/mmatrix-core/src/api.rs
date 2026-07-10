@@ -308,6 +308,7 @@ pub enum RoomActivityKind {
     Image(Box<RoomImageActivity>),
     File(Box<RoomFileActivity>),
     Audio(Box<RoomAudioActivity>),
+    Video(Box<RoomVideoActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
     StateNotice(RoomStateNoticeActivity),
     Redacted(RoomRedactedActivity),
@@ -367,6 +368,17 @@ pub struct RoomAudioActivity {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomVideoActivity {
+    pub event_id: String,
+    pub sender: String,
+    pub body: String,
+    pub filename: Option<String>,
+    pub source: RoomMediaSource,
+    pub info: Option<RoomVideoInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomEncryptedFileKey {
     pub kty: String,
     pub key_ops: Vec<String>,
@@ -420,6 +432,17 @@ pub struct RoomAudioInfo {
     pub mimetype: Option<String>,
     pub size: Option<u64>,
     pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomVideoInfo {
+    pub mimetype: Option<String>,
+    pub size: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub width: Option<u64>,
+    pub height: Option<u64>,
+    pub thumbnail_source: Option<RoomMediaSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
