@@ -44,6 +44,14 @@ pub(crate) const COMMAND_ID_CONFIRM_VERIFICATION_SAS: u32 = 26;
 pub(crate) const COMMAND_ID_REJECT_VERIFICATION_SAS: u32 = 27;
 pub(crate) const COMMAND_ID_FIND_ACTIVE_VIEW: u32 = 28;
 pub(crate) const COMMAND_ID_DUMP_VERIFICATION_MENU_STATE: u32 = 29;
+pub(crate) const COMMAND_ID_DUMP_ROOM_MENU_STATE: u32 = 30;
+pub(crate) const COMMAND_ID_DUMP_MESSAGE_MENU_STATE: u32 = 31;
+pub(crate) const COMMAND_ID_SELECT_TIMELINE_EVENT: u32 = 32;
+pub(crate) const COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU: u32 = 33;
+pub(crate) const COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU: u32 = 34;
+pub(crate) const COMMAND_ID_PART_ROOM_VIA_ROOM_MENU: u32 = 35;
+pub(crate) const COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 36;
+pub(crate) const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -76,6 +84,14 @@ pub(crate) enum CommandKind {
     RejectVerificationSas,
     FindActiveView,
     DumpVerificationMenuState,
+    DumpRoomMenuState,
+    DumpMessageMenuState,
+    SelectTimelineEvent,
+    AcceptInviteViaRoomMenu,
+    RejectInviteViaRoomMenu,
+    PartRoomViaRoomMenu,
+    ReplyToSelectedMessageViaMenu,
+    RedactSelectedMessageViaMenu,
 }
 
 impl CommandKind {
@@ -110,6 +126,14 @@ impl CommandKind {
             COMMAND_ID_REJECT_VERIFICATION_SAS => Some(Self::RejectVerificationSas),
             COMMAND_ID_FIND_ACTIVE_VIEW => Some(Self::FindActiveView),
             COMMAND_ID_DUMP_VERIFICATION_MENU_STATE => Some(Self::DumpVerificationMenuState),
+            COMMAND_ID_DUMP_ROOM_MENU_STATE => Some(Self::DumpRoomMenuState),
+            COMMAND_ID_DUMP_MESSAGE_MENU_STATE => Some(Self::DumpMessageMenuState),
+            COMMAND_ID_SELECT_TIMELINE_EVENT => Some(Self::SelectTimelineEvent),
+            COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU => Some(Self::AcceptInviteViaRoomMenu),
+            COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU => Some(Self::RejectInviteViaRoomMenu),
+            COMMAND_ID_PART_ROOM_VIA_ROOM_MENU => Some(Self::PartRoomViaRoomMenu),
+            COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU => Some(Self::ReplyToSelectedMessageViaMenu),
+            COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
             _ => None,
         }
     }
@@ -222,6 +246,14 @@ pub(crate) enum ParsedCommand {
     DumpVerificationMenuState {
         id: String,
     },
+    DumpRoomMenuState { id: String },
+    DumpMessageMenuState { id: String },
+    SelectTimelineEvent { id: String, args: SelectTimelineEventArgs },
+    AcceptInviteViaRoomMenu { id: String },
+    RejectInviteViaRoomMenu { id: String },
+    PartRoomViaRoomMenu { id: String },
+    ReplyToSelectedMessageViaMenu { id: String },
+    RedactSelectedMessageViaMenu { id: String },
 }
 
 impl ParsedCommand {
@@ -256,6 +288,14 @@ impl ParsedCommand {
             Self::RejectVerificationSas { .. } => CommandKind::RejectVerificationSas,
             Self::FindActiveView { .. } => CommandKind::FindActiveView,
             Self::DumpVerificationMenuState { .. } => CommandKind::DumpVerificationMenuState,
+            Self::DumpRoomMenuState { .. } => CommandKind::DumpRoomMenuState,
+            Self::DumpMessageMenuState { .. } => CommandKind::DumpMessageMenuState,
+            Self::SelectTimelineEvent { .. } => CommandKind::SelectTimelineEvent,
+            Self::AcceptInviteViaRoomMenu { .. } => CommandKind::AcceptInviteViaRoomMenu,
+            Self::RejectInviteViaRoomMenu { .. } => CommandKind::RejectInviteViaRoomMenu,
+            Self::PartRoomViaRoomMenu { .. } => CommandKind::PartRoomViaRoomMenu,
+            Self::ReplyToSelectedMessageViaMenu { .. } => CommandKind::ReplyToSelectedMessageViaMenu,
+            Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
         }
     }
 }
@@ -288,6 +328,12 @@ pub(crate) struct DumpRoomActivityArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectRoomArgs {
     pub(crate) room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectTimelineEventArgs {
+    pub(crate) event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -499,6 +545,22 @@ pub(crate) struct DumpVerificationMenuState {
     pub(crate) cancel_enabled: bool,
     pub(crate) confirm_sas_enabled: bool,
     pub(crate) reject_sas_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomMenuState {
+    pub(crate) accept_invite_enabled: bool,
+    pub(crate) reject_invite_enabled: bool,
+    pub(crate) part_room_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpMessageMenuState {
+    pub(crate) reply_enabled: bool,
+    pub(crate) redact_enabled: bool,
+    pub(crate) selected_event_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1600,6 +1662,38 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::DumpVerificationMenuState { id: envelope.id })
         }
+        CommandKind::DumpRoomMenuState => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpRoomMenuState { id: envelope.id })
+        }
+        CommandKind::DumpMessageMenuState => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpMessageMenuState { id: envelope.id })
+        }
+        CommandKind::SelectTimelineEvent => Ok(ParsedCommand::SelectTimelineEvent {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SelectTimelineEventArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::AcceptInviteViaRoomMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::AcceptInviteViaRoomMenu { id: envelope.id })
+        }
+        CommandKind::RejectInviteViaRoomMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::RejectInviteViaRoomMenu { id: envelope.id })
+        }
+        CommandKind::PartRoomViaRoomMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::PartRoomViaRoomMenu { id: envelope.id })
+        }
+        CommandKind::ReplyToSelectedMessageViaMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::ReplyToSelectedMessageViaMenu { id: envelope.id })
+        }
+        CommandKind::RedactSelectedMessageViaMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::RedactSelectedMessageViaMenu { id: envelope.id })
+        }
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -1791,16 +1885,20 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AcceptedResponse, COMMAND_ID_ACCEPT_VERIFICATION, COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
+        AcceptedResponse, COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, COMMAND_ID_ACCEPT_VERIFICATION,
+        COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
         COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CONFIRM_VERIFICATION_SAS,
-        COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
+        COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MESSAGE_MENU_STATE, COMMAND_ID_DUMP_MODEL,
+        COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
         COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
         COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, COMMAND_ID_FIND_ACTIVE_VIEW,
         COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
         COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
-        COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_RESTORE_SAVED_SESSION,
+        COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
+        COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_RESTORE_SAVED_SESSION,
         COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
-        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_SELECT_VIEW, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT,
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
         ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
@@ -1816,6 +1914,7 @@ mod tests {
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
         RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectTimelineEventArgs,
         SelectRoomResponse, SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse,
         SendComposeKeyArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState,
         SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
@@ -2016,12 +2115,20 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_DUMP_VERIFICATION_MENU_STATE),
             Some(CommandKind::DumpVerificationMenuState)
         );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_DUMP_ROOM_MENU_STATE), Some(CommandKind::DumpRoomMenuState));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_DUMP_MESSAGE_MENU_STATE), Some(CommandKind::DumpMessageMenuState));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_SELECT_TIMELINE_EVENT), Some(CommandKind::SelectTimelineEvent));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU), Some(CommandKind::AcceptInviteViaRoomMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU), Some(CommandKind::RejectInviteViaRoomMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_PART_ROOM_VIA_ROOM_MENU), Some(CommandKind::PartRoomViaRoomMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU), Some(CommandKind::ReplyToSelectedMessageViaMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU), Some(CommandKind::RedactSelectedMessageViaMenu));
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_DUMP_VERIFICATION_MENU_STATE + 1),
+            CommandKind::from_id(COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU + 1),
             None
         );
     }
@@ -2216,6 +2323,27 @@ mod tests {
                 id: "verification-menu".to_owned(),
             }
         );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_DUMP_ROOM_MENU_STATE, br#"{"id":"room-menu"}"#).unwrap(),
+            ParsedCommand::DumpRoomMenuState { id: "room-menu".to_owned() }
+        );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_DUMP_MESSAGE_MENU_STATE, br#"{"id":"message-menu","args":{}}"#).unwrap(),
+            ParsedCommand::DumpMessageMenuState { id: "message-menu".to_owned() }
+        );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_SELECT_TIMELINE_EVENT, br#"{"id":"select-event","args":{"event_id":"$event:example"}}"#).unwrap(),
+            ParsedCommand::SelectTimelineEvent { id: "select-event".to_owned(), args: SelectTimelineEventArgs { event_id: "$event:example".to_owned() } }
+        );
+        for (command_id, id) in [
+            (COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, "accept"),
+            (COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU, "reject"),
+            (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
+            (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
+            (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
+        ] {
+            assert!(parse_command_request(command_id, format!(r#"{{"id":"{id}","args":{{}}}}"#).as_bytes()).is_ok());
+        }
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOGIN,
@@ -2939,6 +3067,13 @@ mod tests {
             (COMMAND_ID_START_SYNC, "start-sync"),
             (COMMAND_ID_LOGOUT, "logout"),
             (COMMAND_ID_DUMP_COMPOSE_TEXT, "compose-text"),
+            (COMMAND_ID_DUMP_ROOM_MENU_STATE, "room-menu"),
+            (COMMAND_ID_DUMP_MESSAGE_MENU_STATE, "message-menu"),
+            (COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, "accept"),
+            (COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU, "reject"),
+            (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
+            (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
+            (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
         ] {
             let request = format!(r#"{{"id":"{request_id}","args":{{"unexpected":true}}}}"#);
             let error = parse_command_request(command_id, request.as_bytes())
@@ -2947,6 +3082,16 @@ mod tests {
                 serde_json::to_value(error).unwrap()["err"]["code"],
                 json!("invalid_args")
             );
+        }
+
+        for request in [
+            br#"{"id":"select-event"}"#.as_slice(),
+            br#"{"id":"select-event","args":{"event_id":"$event:example","unexpected":true}}"#
+                .as_slice(),
+        ] {
+            let error = parse_command_request(COMMAND_ID_SELECT_TIMELINE_EVENT, request)
+                .expect_err("invalid timeline event selection args must fail");
+            assert_eq!(serde_json::to_value(error).unwrap()["err"]["code"], json!("invalid_args"));
         }
     }
 

@@ -98,7 +98,8 @@ use crate::{
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, DumpMembershipCommandAction, DumpModel, DumpRoomActivity,
+        ComposeTextResponse, DumpMembershipCommandAction, DumpMessageMenuState, DumpModel,
+        DumpRoomActivity, DumpRoomMenuState,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
@@ -5084,6 +5085,64 @@ unsafe fn dump_account_verification_menu_state(
     })
 }
 
+unsafe fn dump_room_menu_state(hwnd: HWND) -> Result<DumpRoomMenuState, String> {
+    let room_menu = state_ref(hwnd).controls.room_menu;
+    if room_menu.is_null() {
+        return Err("Room menu is not available".to_owned());
+    }
+    refresh_room_menu_state(hwnd, room_menu)?;
+    let action_state = active_room_action_state(state_ref(hwnd));
+    Ok(DumpRoomMenuState {
+        accept_invite_enabled: action_state.accept_invite_enabled,
+        reject_invite_enabled: action_state.reject_invite_enabled,
+        part_room_enabled: action_state.part_room_enabled,
+    })
+}
+
+unsafe fn dump_message_menu_state(hwnd: HWND) -> Result<DumpMessageMenuState, String> {
+    let message_menu = state_ref(hwnd).controls.message_menu;
+    if message_menu.is_null() {
+        return Err("Message menu is not available".to_owned());
+    }
+    refresh_message_menu_state(hwnd, message_menu)?;
+    let action_state = active_message_action_state(state_ref(hwnd));
+    let enabled = action_state.selected_event_id.is_some();
+    Ok(DumpMessageMenuState {
+        reply_enabled: enabled,
+        redact_enabled: enabled,
+        selected_event_id: action_state.selected_event_id,
+    })
+}
+
+unsafe fn select_timeline_event_for_automation(
+    hwnd: HWND,
+    event_id: &str,
+) -> Result<(), String> {
+    let active_view = state_ref(hwnd).active_view.clone();
+    if !matches!(active_view, ViewId::Room(_) | ViewId::Thread { .. }) {
+        return Err("selected_message_unavailable: active view is not a room or thread".to_owned());
+    }
+    let content = state_ref(hwnd)
+        .views
+        .get(&active_view)
+        .ok_or_else(|| "selected_message_unavailable: active view is unavailable".to_owned())?
+        .content;
+    let timeline = room_content_timeline(content);
+    if !timeline_state_ref(timeline)
+        .source_rows
+        .iter()
+        .any(|row| row.event_id.as_deref() == Some(event_id))
+    {
+        return Err(format!("unknown_event: {event_id}"));
+    }
+    state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+        view_id: active_view,
+        event_id: event_id.to_owned(),
+    });
+    InvalidateRect(timeline, null(), 1);
+    Ok(())
+}
+
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
     let command_id = wparam & 0xffff;
     let (title, result) = match command_id {
@@ -8672,6 +8731,55 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, state)
         }
+        ParsedCommand::DumpRoomMenuState { id } => {
+            let state = dump_room_menu_state(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "room_menu_unavailable", message)
+            })?;
+            serialize_success_json(&id, state)
+        }
+        ParsedCommand::DumpMessageMenuState { id } => {
+            let state = dump_message_menu_state(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "message_menu_unavailable", message)
+            })?;
+            serialize_success_json(&id, state)
+        }
+        ParsedCommand::SelectTimelineEvent { id, args } => {
+            select_timeline_event_for_automation(hwnd, &args.event_id).map_err(|message| {
+                let code = if message.starts_with("unknown_event:") {
+                    "unknown_event"
+                } else {
+                    "selected_message_unavailable"
+                };
+                failure_response(Some(id.clone()), code, message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::AcceptInviteViaRoomMenu { id } => {
+            handle_menu_command(hwnd, MENU_ID_ROOM_ACCEPT_INVITE);
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::RejectInviteViaRoomMenu { id } => {
+            handle_menu_command(hwnd, MENU_ID_ROOM_REJECT_INVITE);
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::PartRoomViaRoomMenu { id } => {
+            handle_menu_command(hwnd, MENU_ID_ROOM_PART);
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::ReplyToSelectedMessageViaMenu { id } => {
+            if selected_timeline_event_id(state_ref(hwnd)).is_none() {
+                return Err(failure_response(Some(id), "selected_message_unavailable", "no message selected"));
+            }
+            handle_menu_command(hwnd, MENU_ID_MESSAGE_REPLY);
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::RedactSelectedMessageViaMenu { id } => {
+            if selected_timeline_event_id(state_ref(hwnd)).is_none() {
+                return Err(failure_response(Some(id), "selected_message_unavailable", "no message selected"));
+            }
+            handle_menu_command(hwnd, MENU_ID_MESSAGE_REDACT);
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::DumpSelectedNavigationPath { id } => {
             let path = dump_selected_navigation_path(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "ui_state_unavailable", message)
@@ -8902,6 +9010,14 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::DumpModel { id }
         | ParsedCommand::DumpUiState { id }
         | ParsedCommand::DumpVerificationMenuState { id }
+        | ParsedCommand::DumpRoomMenuState { id }
+        | ParsedCommand::DumpMessageMenuState { id }
+        | ParsedCommand::SelectTimelineEvent { id, .. }
+        | ParsedCommand::AcceptInviteViaRoomMenu { id }
+        | ParsedCommand::RejectInviteViaRoomMenu { id }
+        | ParsedCommand::PartRoomViaRoomMenu { id }
+        | ParsedCommand::ReplyToSelectedMessageViaMenu { id }
+        | ParsedCommand::RedactSelectedMessageViaMenu { id }
         | ParsedCommand::DumpSelectedNavigationPath { id }
         | ParsedCommand::DumpRoomActivity { id, .. }
         | ParsedCommand::ListRooms { id }

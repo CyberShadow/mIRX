@@ -75,6 +75,22 @@ const COMMAND_ID_FIND_ACTIVE_VIEW: u32 = 28;
 #[cfg(windows)]
 const COMMAND_ID_DUMP_VERIFICATION_MENU_STATE: u32 = 29;
 #[cfg(windows)]
+const COMMAND_ID_DUMP_ROOM_MENU_STATE: u32 = 30;
+#[cfg(windows)]
+const COMMAND_ID_DUMP_MESSAGE_MENU_STATE: u32 = 31;
+#[cfg(windows)]
+const COMMAND_ID_SELECT_TIMELINE_EVENT: u32 = 32;
+#[cfg(windows)]
+const COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU: u32 = 33;
+#[cfg(windows)]
+const COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU: u32 = 34;
+#[cfg(windows)]
+const COMMAND_ID_PART_ROOM_VIA_ROOM_MENU: u32 = 35;
+#[cfg(windows)]
+const COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 36;
+#[cfg(windows)]
+const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -870,6 +886,22 @@ pub struct VerificationMenuState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomMenuState {
+    pub accept_invite_enabled: bool,
+    pub reject_invite_enabled: bool,
+    pub part_room_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageMenuState {
+    pub reply_enabled: bool,
+    pub redact_enabled: bool,
+    pub selected_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UiFindState {
     pub active: ViewIdentity,
     pub query: String,
@@ -1278,6 +1310,38 @@ impl MmatrixApp {
         self.inner.dump_verification_menu_state()
     }
 
+    pub fn dump_room_menu_state(&self) -> Result<RoomMenuState, TestkitError> {
+        self.inner.dump_room_menu_state()
+    }
+
+    pub fn dump_message_menu_state(&self) -> Result<MessageMenuState, TestkitError> {
+        self.inner.dump_message_menu_state()
+    }
+
+    pub fn select_timeline_event(&self, event_id: &str) -> Result<(), TestkitError> {
+        self.inner.select_timeline_event(event_id)
+    }
+
+    pub fn accept_invite_via_room_menu(&self) -> Result<(), TestkitError> {
+        self.inner.accept_invite_via_room_menu()
+    }
+
+    pub fn reject_invite_via_room_menu(&self) -> Result<(), TestkitError> {
+        self.inner.reject_invite_via_room_menu()
+    }
+
+    pub fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
+        self.inner.part_room_via_room_menu()
+    }
+
+    pub fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+        self.inner.reply_to_selected_message_via_menu()
+    }
+
+    pub fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+        self.inner.redact_selected_message_via_menu()
+    }
+
     pub fn room_activity(&self, room_id: Option<&str>) -> Result<Vec<RoomActivity>, TestkitError> {
         self.inner.room_activity(room_id)
     }
@@ -1532,6 +1596,13 @@ impl MmatrixApp {
 struct EmptyArgs {}
 
 #[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectTimelineEventArgs<'a> {
+    event_id: &'a str,
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct RequestEnvelope<'a, T> {
     id: &'a str,
@@ -1771,6 +1842,54 @@ mod imp {
         pub(crate) fn dump_verification_menu_state(
             &self,
         ) -> Result<VerificationMenuState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn dump_room_menu_state(&self) -> Result<RoomMenuState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn dump_message_menu_state(&self) -> Result<MessageMenuState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn select_timeline_event(&self, _event_id: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn accept_invite_via_room_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn reject_invite_via_room_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -2193,6 +2312,58 @@ mod imp {
             &self,
         ) -> Result<VerificationMenuState, TestkitError> {
             self.send_command(COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, EmptyArgs {})
+        }
+
+        pub(crate) fn dump_room_menu_state(&self) -> Result<RoomMenuState, TestkitError> {
+            self.send_command(COMMAND_ID_DUMP_ROOM_MENU_STATE, EmptyArgs {})
+        }
+
+        pub(crate) fn dump_message_menu_state(&self) -> Result<MessageMenuState, TestkitError> {
+            self.send_command(COMMAND_ID_DUMP_MESSAGE_MENU_STATE, EmptyArgs {})
+        }
+
+        pub(crate) fn select_timeline_event(&self, event_id: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_SELECT_TIMELINE_EVENT,
+                SelectTimelineEventArgs { event_id },
+                "SELECT_TIMELINE_EVENT",
+            )
+        }
+
+        pub(crate) fn accept_invite_via_room_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, EmptyArgs {}, "ACCEPT_INVITE_VIA_ROOM_MENU")
+        }
+
+        pub(crate) fn reject_invite_via_room_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU, EmptyArgs {}, "REJECT_INVITE_VIA_ROOM_MENU")
+        }
+
+        pub(crate) fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, EmptyArgs {}, "PART_ROOM_VIA_ROOM_MENU")
+        }
+
+        pub(crate) fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, EmptyArgs {}, "REPLY_TO_SELECTED_MESSAGE_VIA_MENU")
+        }
+
+        pub(crate) fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, EmptyArgs {}, "REDACT_SELECTED_MESSAGE_VIA_MENU")
+        }
+
+        fn send_accepted_command<Args: Serialize>(
+            &self,
+            command_id: u32,
+            args: Args,
+            command_name: &str,
+        ) -> Result<(), TestkitError> {
+            let response: AcceptedResponse = self.send_command(command_id, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(format!(
+                    "{command_name} was not accepted"
+                )))
+            }
         }
 
         pub(crate) fn room_activity(

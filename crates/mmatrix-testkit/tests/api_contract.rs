@@ -298,6 +298,49 @@ fn error_display_formats_each_public_variant() {
 }
 
 #[test]
+fn menu_state_models_round_trip_and_reject_unknown_fields() {
+    let room = mmatrix_testkit::RoomMenuState {
+        accept_invite_enabled: true,
+        reject_invite_enabled: false,
+        part_room_enabled: false,
+    };
+    assert_eq!(
+        serde_json::from_value::<mmatrix_testkit::RoomMenuState>(
+            serde_json::to_value(&room).expect("serialize room menu state"),
+        )
+        .expect("deserialize room menu state"),
+        room
+    );
+    let message = mmatrix_testkit::MessageMenuState {
+        reply_enabled: true,
+        redact_enabled: true,
+        selected_event_id: Some("$event:example".to_owned()),
+    };
+    assert_eq!(
+        serde_json::from_value::<mmatrix_testkit::MessageMenuState>(
+            serde_json::to_value(&message).expect("serialize message menu state"),
+        )
+        .expect("deserialize message menu state"),
+        message
+    );
+
+    assert!(serde_json::from_value::<mmatrix_testkit::RoomMenuState>(serde_json::json!({
+        "accept_invite_enabled": true,
+        "reject_invite_enabled": false,
+        "part_room_enabled": false,
+        "unexpected": true
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<mmatrix_testkit::MessageMenuState>(serde_json::json!({
+        "reply_enabled": true,
+        "redact_enabled": true,
+        "selected_event_id": "$event:example",
+        "unexpected": true
+    }))
+    .is_err());
+}
+
+#[test]
 fn data_models_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
@@ -5809,6 +5852,12 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
     assert_eq!(app.pid(), 0);
     unsupported(app.set_compose_text("draft"));
     unsupported(app.send_compose_key(ComposeKey::Return));
+    unsupported(app.select_timeline_event("$event:example"));
+    unsupported(app.accept_invite_via_room_menu());
+    unsupported(app.reject_invite_via_room_menu());
+    unsupported(app.part_room_via_room_menu());
+    unsupported(app.reply_to_selected_message_via_menu());
+    unsupported(app.redact_selected_message_via_menu());
 }
 
 #[cfg(not(windows))]
@@ -5823,6 +5872,14 @@ fn non_windows_new_methods_report_unsupported_driver() {
         error.to_string(),
         "mmatrix-testkit requires the Windows target"
     );
+
+    for result in [
+        app.dump_room_menu_state().map(|_| ()),
+        app.dump_message_menu_state().map(|_| ()),
+    ] {
+        let error = result.expect_err("menu state dump must fail off Windows");
+        assert_eq!(error.to_string(), "mmatrix-testkit requires the Windows target");
+    }
 
     let error = app
         .select_view(ViewIdentity::Status)
