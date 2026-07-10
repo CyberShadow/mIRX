@@ -101,8 +101,9 @@ use crate::{
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
-        DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
-        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
         FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
         ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
@@ -11235,6 +11236,25 @@ fn submitted_verification_actions_from_state(
         .collect()
 }
 
+fn dump_submitted_recovery_command(command: &Command) -> Option<DumpSubmittedRecoveryCommand> {
+    match command {
+        Command::RecoverE2ee(_) => Some(DumpSubmittedRecoveryCommand {
+            secret_redacted: true,
+        }),
+        _ => None,
+    }
+}
+
+fn submitted_recovery_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedRecoveryCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_recovery_command)
+        .collect()
+}
+
 fn dump_model_from_state(state: &WindowState) -> DumpModel {
     let model = &state.model;
     DumpModel {
@@ -11259,6 +11279,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
         submitted_history_commands: submitted_history_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
+        submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }

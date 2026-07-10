@@ -830,6 +830,8 @@ pub(crate) struct DumpModel {
     pub(crate) submitted_history_commands: Vec<DumpSubmittedHistoryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_recovery_commands: Vec<DumpSubmittedRecoveryCommand>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
 }
@@ -917,6 +919,12 @@ pub(crate) struct DumpSubmittedVerificationAction {
     pub(crate) action: DumpVerificationActionKind,
     pub(crate) flow_id: String,
     pub(crate) user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedRecoveryCommand {
+    pub(crate) secret_redacted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3299,6 +3307,7 @@ mod tests {
                     submitted_redaction_commands: Vec::new(),
                     submitted_history_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
+                    submitted_recovery_commands: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -3882,6 +3891,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -3958,6 +3968,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4012,6 +4023,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4089,6 +4101,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4171,6 +4184,7 @@ mod tests {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4259,6 +4273,7 @@ mod tests {
             }],
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4378,6 +4393,7 @@ mod tests {
                 },
             ],
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!room:example".to_owned()),
         };
@@ -4442,6 +4458,7 @@ mod tests {
                 submitted_redaction_commands: Vec::new(),
                 submitted_history_commands: Vec::new(),
                 submitted_verification_actions: Vec::new(),
+                submitted_recovery_commands: Vec::new(),
                 last_error: None,
                 selected_room: None,
             }

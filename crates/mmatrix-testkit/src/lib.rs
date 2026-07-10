@@ -264,6 +264,8 @@ pub struct Model {
     pub submitted_history_commands: Vec<SubmittedHistoryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_recovery_commands: Vec<SubmittedRecoveryCommand>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
 }
@@ -351,6 +353,12 @@ pub struct SubmittedVerificationAction {
     pub action: VerificationActionKind,
     pub flow_id: String,
     pub user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedRecoveryCommand {
+    pub secret_redacted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

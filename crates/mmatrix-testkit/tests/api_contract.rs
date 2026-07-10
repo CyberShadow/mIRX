@@ -410,6 +410,7 @@ fn data_models_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
             message: "failed".to_owned(),
@@ -3540,6 +3541,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
     };
@@ -3603,6 +3605,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3679,6 +3682,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3760,6 +3764,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3849,6 +3854,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3919,6 +3925,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3992,6 +3999,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4068,6 +4076,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         }],
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4190,6 +4199,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             }],
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: None,
         }
@@ -4262,6 +4272,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
             },
         ],
         submitted_verification_actions: Vec::new(),
+        submitted_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4351,6 +4362,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: None,
         }

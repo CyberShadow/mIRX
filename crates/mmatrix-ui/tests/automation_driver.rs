@@ -34,7 +34,8 @@ use mmatrix_testkit::{
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
     SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
     SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedRecoveryCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand,
     SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindState,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
@@ -49,10 +50,11 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem, GetScrollInfo,
-    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, SB_PAGEDOWN, SB_VERT, SCROLLINFO,
-    SIF_ALL, SendMessageW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
-    WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem,
+    GetScrollInfo, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, PostMessageW,
+    SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR,
+    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
+    WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -73,6 +75,9 @@ const MENU_ID_VERIFY_ACCEPT: usize = 40007;
 const MENU_ID_VERIFY_CANCEL: usize = 40008;
 const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
 const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
+const MENU_ID_RECOVER_E2EE: usize = 40005;
+const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
+const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1849,6 +1854,64 @@ fn invoke_account_menu_command(
     Ok(())
 }
 
+fn wide_null(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn submit_recover_e2ee_menu_dialog(
+    app: &MmatrixApp,
+    secret: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let frame = app.automation_frame_hwnd() as HWND;
+    assert_ne!(
+        unsafe { PostMessageW(frame, WM_COMMAND, MENU_ID_RECOVER_E2EE as WPARAM, 0) },
+        0,
+        "posting Recover E2EE menu command must succeed"
+    );
+
+    let class_name = wide_null("mmatrixWin32RecoverE2eeDialog");
+    let title = wide_null("Recover E2EE");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let dialog = loop {
+        let dialog = unsafe { FindWindowW(class_name.as_ptr(), title.as_ptr()) };
+        if !dialog.is_null() {
+            break dialog;
+        }
+        if Instant::now() >= deadline {
+            panic!("Recover E2EE dialog did not appear within five seconds");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let secret_edit = unsafe { GetDlgItem(dialog, RECOVER_E2EE_DIALOG_SECRET_ID) };
+    assert!(
+        !secret_edit.is_null(),
+        "Recover E2EE dialog secret edit control must exist"
+    );
+    let secret = wide_null(secret);
+    assert_ne!(
+        unsafe { SetWindowTextW(secret_edit, secret.as_ptr()) },
+        0,
+        "setting Recover E2EE dialog secret must succeed"
+    );
+    unsafe {
+        SendMessageW(dialog, WM_COMMAND, RECOVER_E2EE_DIALOG_OK_ID as WPARAM, 0);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if unsafe { FindWindowW(class_name.as_ptr(), title.as_ptr()) }.is_null() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("Recover E2EE dialog did not close within five seconds");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
 unsafe fn mdi_client_hwnd(app: &MmatrixApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };
@@ -3013,6 +3076,48 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
     let status_view = find_view(&ui_state, &ViewIdentity::Status);
     assert!(!view_contains(status_view, "sample recovery secret"));
     assert!(!ui_state.status_bar.text.contains("sample recovery secret"));
+    assert_eq!(app.compose_text()?, "");
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secret()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let initial_model = app.dump_model()?;
+    let secret = "sample recovery secret";
+    submit_recover_e2ee_menu_dialog(&app, secret)?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "e2ee recovery submitted");
+    assert_eq!(
+        model.submitted_recovery_commands,
+        vec![SubmittedRecoveryCommand {
+            secret_redacted: true,
+        }]
+    );
+    assert_eq!(model.last_error, initial_model.last_error);
+    assert!(!serde_json::to_string(&model)?.contains(secret));
+
+    app.select_status_view()?;
+    app.wait_idle(Duration::from_secs(2))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(!serde_json::to_string(&ui_state)?.contains(secret));
+    assert!(!ui_state.status_bar.text.contains(secret));
+    assert!(!view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        secret
+    ));
     assert_eq!(app.compose_text()?, "");
 
     Ok(())
