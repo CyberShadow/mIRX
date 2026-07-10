@@ -22,6 +22,9 @@ mod cli {
         pub(crate) trigger_history_backfill: bool,
         pub(crate) append_events: Option<String>,
         pub(crate) find_active_view: Option<String>,
+        pub(crate) actions: Vec<Action>,
+        pub(crate) expect_active_find_history: Option<String>,
+        pub(crate) expect_active_find_selected_text: Option<String>,
         pub(crate) expect_selected: Option<String>,
         pub(crate) expect_rooms: Vec<String>,
         pub(crate) expect_room_memberships: Vec<RoomMembershipExpectation>,
@@ -53,6 +56,12 @@ mod cli {
         pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
         pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
         pub(crate) expect_room_unreads: Vec<RoomUnreadExpectation>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) enum Action {
+        Find(String),
+        Append(String),
     }
 
     pub(crate) struct RoomActivityExpectation {
@@ -154,6 +163,34 @@ mod cli {
                         args.next()
                             .ok_or_else(|| "missing value for --find-active-view".to_owned())?,
                     );
+                }
+                "--action" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --action".to_owned())?;
+                    config.actions.push(parse_action(&value)?);
+                }
+                "--expect-active-find-history" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-active-find-history".to_owned()
+                    })?;
+                    match value.as_str() {
+                        "local_only" | "loading" | "exhausted" | "failed" => {
+                            config.expect_active_find_history = Some(value);
+                        }
+                        _ => {
+                            return Err(format!(
+                                "invalid --expect-active-find-history value {value:?}; expected local_only|loading|exhausted|failed\n{}",
+                                usage()
+                            ));
+                        }
+                    }
+                }
+                "--expect-active-find-selected-text" => {
+                    config.expect_active_find_selected_text =
+                        Some(args.next().ok_or_else(|| {
+                            "missing value for --expect-active-find-selected-text".to_owned()
+                        })?);
                 }
                 "--expect-selected" => {
                     config.expect_selected = Some(
@@ -445,6 +482,9 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
+            "  --action <find:<query>|append:<path>> (repeatable)",
+            "  --expect-active-find-history <local_only|loading|exhausted|failed>",
+            "  --expect-active-find-selected-text <substring>",
             "  --expect-selected <room_id>",
             "  --expect-room <room_id>",
             "  --expect-room-membership <room_id>::<join|invite>",
@@ -479,6 +519,19 @@ mod cli {
             "  --expect-no-navigation-activity <path-or-label>",
         ]
         .join("\n")
+    }
+
+    fn parse_action(value: &str) -> Result<Action, String> {
+        if let Some(query) = value.strip_prefix("find:") {
+            return Ok(Action::Find(query.to_owned()));
+        }
+        if let Some(path) = value.strip_prefix("append:") {
+            return Ok(Action::Append(path.to_owned()));
+        }
+        Err(format!(
+            "invalid --action value {value:?}; expected find:<query> or append:<path>\n{}",
+            usage()
+        ))
     }
 
     pub(crate) fn parse_view_identity_arg(
@@ -655,7 +708,7 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
+            Action, RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
             RoomUnreadExpectation, ViewExpectation, format_view_identity, parse_args,
             parse_view_expectation, parse_view_identity_arg, usage,
         };
@@ -670,6 +723,12 @@ mod cli {
             ));
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
+            assert!(usage().contains("--action <find:<query>|append:<path>> (repeatable)"));
+            assert!(
+                usage()
+                    .contains("--expect-active-find-history <local_only|loading|exhausted|failed>")
+            );
+            assert!(usage().contains("--expect-active-find-selected-text <substring>"));
             assert!(usage().contains("--expect-view <identity>::<substring>"));
             assert!(usage().contains("--expect-no-view <identity>::<substring>"));
             assert!(usage().contains("--expect-room-membership <room_id>::<join|invite>"));
@@ -812,6 +871,53 @@ mod cli {
             .unwrap();
 
             assert_eq!(config.find_active_view, Some("alpha needle".to_owned()));
+        }
+
+        #[test]
+        fn parse_args_preserves_ordered_actions() {
+            let config = parse_args(
+                [
+                    "--action",
+                    "find:older needle",
+                    "--action",
+                    "append:C:\\snapshots\\backfill.json",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.actions,
+                vec![
+                    Action::Find("older needle".to_owned()),
+                    Action::Append("C:\\snapshots\\backfill.json".to_owned()),
+                ]
+            );
+        }
+
+        #[test]
+        fn parse_args_accepts_active_find_expectations() {
+            let config = parse_args(
+                [
+                    "--expect-active-find-history",
+                    "loading",
+                    "--expect-active-find-selected-text",
+                    "older needle",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.expect_active_find_history.as_deref(),
+                Some("loading")
+            );
+            assert_eq!(
+                config.expect_active_find_selected_text.as_deref(),
+                Some("older needle")
+            );
         }
 
         #[test]
@@ -1625,11 +1731,11 @@ mod windows_main {
     use std::process::ExitCode;
 
     use mmatrix_testkit::{
-        MdiView, MmatrixApp, NavigationNode, RoomActivity, UiState, Verification,
-        VerificationState, ViewIdentity,
+        MdiView, MmatrixApp, NavigationNode, RoomActivity, UiFindHistorySearchState, UiState,
+        Verification, VerificationState, ViewIdentity,
     };
 
-    use crate::cli::{Config, ViewExpectation, format_view_identity, parse_args};
+    use crate::cli::{Action, Config, ViewExpectation, format_view_identity, parse_args};
 
     impl Config {
         fn requires_ui_state(&self) -> bool {
@@ -1655,6 +1761,8 @@ mod windows_main {
                 || !self.expect_room_tags.is_empty()
                 || !self.expect_room_read_targets.is_empty()
                 || !self.expect_room_unreads.is_empty()
+                || self.expect_active_find_history.is_some()
+                || self.expect_active_find_selected_text.is_some()
         }
     }
 
@@ -1721,6 +1829,28 @@ mod windows_main {
                 .map_err(|error| format!("FIND_ACTIVE_VIEW failed: {error}"))?;
             app.wait_idle(config.wait_idle)
                 .map_err(|error| format!("WAIT_IDLE after FIND_ACTIVE_VIEW failed: {error}"))?;
+        }
+
+        for action in &config.actions {
+            match action {
+                Action::Find(query) => {
+                    app.find_active_view(query)
+                        .map_err(|error| format!("FIND_ACTIVE_VIEW failed: {error}"))?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after FIND_ACTIVE_VIEW failed: {error}")
+                    })?;
+                }
+                Action::Append(path) => {
+                    let json_text = fs::read_to_string(path).map_err(|error| {
+                        format!("failed to read action append file {path:?}: {error}")
+                    })?;
+                    app.append_synthetic_events(&json_text)
+                        .map_err(|error| format!("APPEND_SYNTHETIC_EVENTS failed: {error}"))?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after APPEND_SYNTHETIC_EVENTS failed: {error}")
+                    })?;
+                }
+            }
         }
 
         let model = app
@@ -1871,6 +2001,34 @@ mod windows_main {
             let ui_state = app
                 .dump_ui_state()
                 .map_err(|error| format!("DUMP_UI_STATE failed: {error}"))?;
+
+            if let Some(expected_history) = config.expect_active_find_history.as_deref() {
+                let active_find = ui_state.active_find.as_ref().ok_or_else(|| {
+                    "active Find history assertion failed: no active Find state".to_owned()
+                })?;
+                let actual_history = active_find_history_name(&active_find.history_search);
+                if actual_history != expected_history {
+                    return Err(format!(
+                        "active Find history assertion failed: expected {expected_history}, found {actual_history}"
+                    ));
+                }
+                println!("PASS active Find history {expected_history}");
+            }
+
+            if let Some(expected_text) = config.expect_active_find_selected_text.as_deref() {
+                let active_find = ui_state.active_find.as_ref().ok_or_else(|| {
+                    "active Find selected text assertion failed: no active Find state".to_owned()
+                })?;
+                let selected_text = active_find.selected_text.as_deref().ok_or_else(|| {
+                    "active Find selected text assertion failed: no selected text".to_owned()
+                })?;
+                if !selected_text.contains(expected_text) {
+                    return Err(format!(
+                        "active Find selected text assertion failed: expected substring {expected_text:?} in {selected_text:?}"
+                    ));
+                }
+                println!("PASS active Find selected text contains {expected_text:?}");
+            }
 
             if let Some(expected_view) = config.expect_active_view.as_ref() {
                 if &ui_state.mdi.active != expected_view {
@@ -2328,6 +2486,15 @@ mod windows_main {
             VerificationState::Confirmed => "confirmed",
             VerificationState::Done => "done",
             VerificationState::Cancelled { .. } => "cancelled",
+        }
+    }
+
+    fn active_find_history_name(state: &UiFindHistorySearchState) -> &'static str {
+        match state {
+            UiFindHistorySearchState::LocalOnly => "local_only",
+            UiFindHistorySearchState::Loading => "loading",
+            UiFindHistorySearchState::Exhausted => "exhausted",
+            UiFindHistorySearchState::Failed { .. } => "failed",
         }
     }
 

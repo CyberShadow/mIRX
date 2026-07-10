@@ -199,6 +199,9 @@ configure_case_expectations() {
   trigger_history_backfill=
   append_events_path=
   find_active_view_query=
+  ordered_actions=()
+  expect_active_find_history=
+  expect_active_find_selected_text=
   case_frame_size=
   expect_switchbar_active=
   verification_text_expect_args=()
@@ -531,6 +534,7 @@ configure_case_expectations() {
       expect_selected='!find-room:example'
       expect_active_view='room:!find-room:example'
       find_active_view_query='needle'
+      expect_active_find_history='local_only'
       room_expect_args=(
         --expect-room '!find-room:example'
       )
@@ -553,6 +557,62 @@ configure_case_expectations() {
       navigation_forbid_args=(
         --expect-no-navigation-text 'needle in the first matching row'
       )
+      ;;
+    find-room-history-loading)
+      expect_selected='!find-history:example'
+      expect_active_view='room:!find-history:example'
+      find_active_view_query='history needle'
+      expect_active_find_history='loading'
+      room_view_expect_args=(
+        --expect-room-view '!find-history:example::* Loading older history...'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: loading older history for "history needle"'
+      )
+      expect_switchbar_active='room:!find-history:example'
+      ;;
+    find-room-history-match)
+      expect_selected='!find-history:example'
+      expect_active_view='room:!find-history:example'
+      ordered_actions=(
+        'find:history needle'
+        "append:$root_dir/tests/ui-state-updates/find-room-history-match.json"
+      )
+      expect_active_find_history='local_only'
+      expect_active_find_selected_text='older history needle match'
+      room_view_expect_args=(
+        --expect-room-view '!find-history:example::older history needle match'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: 1/1 "history needle"'
+      )
+      expect_switchbar_active='room:!find-history:example'
+      ;;
+    find-room-history-exhausted)
+      expect_selected='!find-history:example'
+      expect_active_view='room:!find-history:example'
+      ordered_actions=(
+        'find:history needle'
+        "append:$root_dir/tests/ui-state-updates/find-room-history-exhausted.json"
+      )
+      expect_active_find_history='exhausted'
+      status_bar_expect_args=(
+        --expect-status-bar 'find: no matches for "history needle" in loaded or older history'
+      )
+      expect_switchbar_active='room:!find-history:example'
+      ;;
+    find-room-history-failed)
+      expect_selected='!find-history:example'
+      expect_active_view='room:!find-history:example'
+      ordered_actions=(
+        'find:history needle'
+        "append:$root_dir/tests/ui-state-updates/find-room-history-failed.json"
+      )
+      expect_active_find_history='failed'
+      status_bar_expect_args=(
+        --expect-status-bar 'find: unable to load older history for "history needle": homeserver unavailable'
+      )
+      expect_switchbar_active='room:!find-history:example'
       ;;
     find-thread)
       expect_selected='!find-thread:example'
@@ -2184,6 +2244,8 @@ run_case() {
   local driver_args=()
   local ui_args=()
   local append_events_path_win=
+  local action=
+  local action_path_win=
 
   configure_case_expectations "$case_name"
   cleanup_app
@@ -2236,6 +2298,20 @@ run_case() {
   fi
   if [[ -n "${find_active_view_query:-}" ]]; then
     driver_args+=(--find-active-view "$find_active_view_query")
+  fi
+  for action in "${ordered_actions[@]}"; do
+    if [[ "$action" == append:* ]]; then
+      action_path_win=$(unix_to_wine_path "${action#append:}")
+      driver_args+=(--action "append:$action_path_win")
+    else
+      driver_args+=(--action "$action")
+    fi
+  done
+  if [[ -n "${expect_active_find_history:-}" ]]; then
+    driver_args+=(--expect-active-find-history "$expect_active_find_history")
+  fi
+  if [[ -n "${expect_active_find_selected_text:-}" ]]; then
+    driver_args+=(--expect-active-find-selected-text "$expect_active_find_selected_text")
   fi
   if [[ -n "${expect_error:-}" ]]; then
     driver_args+=(--expect-error "$expect_error")
