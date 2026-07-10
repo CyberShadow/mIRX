@@ -112,12 +112,12 @@ use crate::{
         LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
         ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
         SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomState,
-        UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
+        UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -536,6 +536,7 @@ struct ActiveViewFindOutcome {
     match_count: usize,
     current_match_index: Option<usize>,
     selected_text: Option<String>,
+    history_search: UiFindHistorySearchState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -8056,6 +8057,7 @@ fn view_find_outcome(view_id: &ViewId, find_state: &ViewFindState) -> ActiveView
         match_count: find_state.matches.len(),
         current_match_index: find_state.selected_match_index,
         selected_text,
+        history_search: dump_ui_find_history_search_state(&find_state.history_search),
     }
 }
 
@@ -8068,6 +8070,7 @@ fn dump_find_state(view_id: &ViewId, find_state: &ViewFindState) -> UiFindState 
         match_count: outcome.match_count,
         current_match_index: outcome.current_match_index,
         selected_text: outcome.selected_text,
+        history_search: outcome.history_search,
     }
 }
 
@@ -8079,6 +8082,7 @@ fn find_active_view_response(outcome: ActiveViewFindOutcome) -> FindActiveViewRe
         match_count: outcome.match_count,
         current_match_index: outcome.current_match_index,
         selected_text: outcome.selected_text,
+        history_search: outcome.history_search,
     }
 }
 
@@ -8090,6 +8094,7 @@ fn active_view_find_outcome_without_state(view_id: &ViewId, query: &str) -> Acti
         match_count: 0,
         current_match_index: None,
         selected_text: None,
+        history_search: UiFindHistorySearchState::LocalOnly,
     }
 }
 
@@ -10990,6 +10995,19 @@ fn dump_ui_room_history_backfill_state(
             message: message.clone(),
         },
         RoomHistoryBackfillStatus::Exhausted => UiRoomHistoryBackfillState::Exhausted,
+    }
+}
+
+fn dump_ui_find_history_search_state(
+    history_search: &RoomFindHistorySearch,
+) -> UiFindHistorySearchState {
+    match history_search {
+        RoomFindHistorySearch::LocalOnly => UiFindHistorySearchState::LocalOnly,
+        RoomFindHistorySearch::Loading => UiFindHistorySearchState::Loading,
+        RoomFindHistorySearch::Exhausted => UiFindHistorySearchState::Exhausted,
+        RoomFindHistorySearch::Failed { message } => UiFindHistorySearchState::Failed {
+            message: message.clone(),
+        },
     }
 }
 

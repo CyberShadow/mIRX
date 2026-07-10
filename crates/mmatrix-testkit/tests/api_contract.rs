@@ -32,9 +32,10 @@ use mmatrix_testkit::{
     SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
-    UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
+    TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -628,6 +629,7 @@ fn data_models_round_trip_through_json() {
             match_count: 1,
             current_match_index: Some(0),
             selected_text: Some("hello".to_owned()),
+            history_search: UiFindHistorySearchState::LocalOnly,
         }),
         rooms: vec![UiRoomState {
             room_id: "!room:example".to_owned(),
@@ -879,6 +881,7 @@ fn data_models_round_trip_through_json() {
                 "match_count": 1,
                 "current_match_index": 0,
                 "selected_text": "hello",
+                "history_search": {"state": "local_only"},
             },
             "rooms": [
                 {
@@ -989,6 +992,7 @@ fn find_active_view_dtos_round_trip_through_json() {
         match_count: 2,
         current_match_index: Some(1),
         selected_text: Some("needle reply".to_owned()),
+        history_search: UiFindHistorySearchState::Loading,
     };
     let ui_find_state = UiFindState {
         active: ViewIdentity::Status,
@@ -997,6 +1001,9 @@ fn find_active_view_dtos_round_trip_through_json() {
         match_count: 0,
         current_match_index: None,
         selected_text: None,
+        history_search: UiFindHistorySearchState::Failed {
+            message: "homeserver unavailable".to_owned(),
+        },
     };
 
     assert_eq!(

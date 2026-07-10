@@ -681,6 +681,16 @@ pub(crate) struct UiFindState {
     pub(crate) match_count: usize,
     pub(crate) current_match_index: Option<usize>,
     pub(crate) selected_text: Option<String>,
+    pub(crate) history_search: UiFindHistorySearchState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum UiFindHistorySearchState {
+    LocalOnly,
+    Loading,
+    Exhausted,
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -924,6 +934,7 @@ pub(crate) struct FindActiveViewResponse {
     pub(crate) match_count: usize,
     pub(crate) current_match_index: Option<usize>,
     pub(crate) selected_text: Option<String>,
+    pub(crate) history_search: UiFindHistorySearchState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -2139,9 +2150,10 @@ mod tests {
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
         SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
         SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs,
-        StatusBarState, SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
-        WaitIdleResponse, failure_response, parse_command_request, success_response,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
+        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2922,6 +2934,7 @@ mod tests {
             match_count: 3,
             current_match_index: Some(1),
             selected_text: Some("needle in haystack".to_owned()),
+            history_search: UiFindHistorySearchState::LocalOnly,
         };
         let ui_find_state = UiFindState {
             active: ViewIdentity::Status,
@@ -2930,6 +2943,9 @@ mod tests {
             match_count: 0,
             current_match_index: None,
             selected_text: None,
+            history_search: UiFindHistorySearchState::Failed {
+                message: "homeserver unavailable".to_owned(),
+            },
         };
 
         assert_eq!(
@@ -2970,7 +2986,8 @@ mod tests {
                 "matched":true,
                 "match_count":2,
                 "current_match_index":1,
-                "selected_text":"needle two"
+                "selected_text":"needle two",
+                "history_search":{"state":"loading"}
             },
             "rooms":[]
         }))
@@ -2986,6 +3003,7 @@ mod tests {
                 match_count: 2,
                 current_match_index: Some(1),
                 selected_text: Some("needle two".to_owned()),
+                history_search: UiFindHistorySearchState::Loading,
             })
         );
     }
@@ -4208,6 +4226,7 @@ mod tests {
                         match_count: 1,
                         current_match_index: Some(0),
                         selected_text: Some("hello".to_owned()),
+                        history_search: UiFindHistorySearchState::LocalOnly,
                     }),
                     rooms: vec![UiRoomState {
                         room_id: "!room:example".to_owned(),
@@ -4312,7 +4331,8 @@ mod tests {
                         "matched":true,
                         "match_count":1,
                         "current_match_index":0,
-                        "selected_text":"hello"
+                        "selected_text":"hello",
+                        "history_search":{"state":"local_only"}
                     },
                     "rooms":[
                         {

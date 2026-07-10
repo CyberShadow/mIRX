@@ -279,6 +279,7 @@ pub struct FindActiveViewResult {
     pub match_count: usize,
     pub current_match_index: Option<usize>,
     pub selected_text: Option<String>,
+    pub history_search: UiFindHistorySearchState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -980,6 +981,16 @@ pub struct UiFindState {
     pub match_count: usize,
     pub current_match_index: Option<usize>,
     pub selected_text: Option<String>,
+    pub history_search: UiFindHistorySearchState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UiFindHistorySearchState {
+    LocalOnly,
+    Loading,
+    Exhausted,
+    Failed { message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

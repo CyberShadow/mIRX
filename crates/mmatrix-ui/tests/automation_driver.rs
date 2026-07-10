@@ -38,8 +38,8 @@ use mmatrix_testkit::{
     SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindState,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
+    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
     ViewIdentity,
 };
@@ -1775,6 +1775,7 @@ fn assert_find_result(
     assert_eq!(result.match_count, match_count);
     assert_eq!(result.current_match_index, current_match_index);
     assert_eq!(result.selected_text.as_deref(), selected_text);
+    assert_eq!(result.history_search, UiFindHistorySearchState::LocalOnly);
 }
 
 fn assert_ui_active_find(
@@ -1795,6 +1796,7 @@ fn assert_ui_active_find(
             match_count,
             current_match_index,
             selected_text: selected_text.map(str::to_owned),
+            history_search: UiFindHistorySearchState::LocalOnly,
         })
     );
 }
@@ -3873,7 +3875,8 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
         Duration::from_secs(5),
     )?;
 
-    app.trigger_active_timeline_history_backfill()?;
+    let result = app.find_active_view("absent needle")?;
+    assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
     let model = app.dump_model()?;
     assert_eq!(model.submitted_history_commands.len(), 1);
     assert_eq!(
@@ -3901,7 +3904,7 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
 }
 
 #[test]
-fn render_state_history_backfill_trigger_records_command_and_shows_loading()
+fn render_state_room_find_backfill_records_loading_and_matches_older_history()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
@@ -3920,7 +3923,9 @@ fn render_state_history_backfill_trigger_records_command_and_shows_loading()
         Duration::from_secs(5),
     )?;
 
-    app.trigger_active_timeline_history_backfill()?;
+    let result = app.find_active_view("older needle")?;
+    assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
+    assert!(!result.matched);
     let model = app.dump_model()?;
     assert_eq!(model.submitted_history_commands.len(), 1);
     assert_eq!(
@@ -3939,7 +3944,54 @@ fn render_state_history_backfill_trigger_records_command_and_shows_loading()
         UiRoomHistoryBackfillState::Loading { from: None }
     );
     assert!(view_contains(view, "* Loading older history..."));
+    assert_eq!(
+        ui_state
+            .active_find
+            .as_ref()
+            .map(|find| &find.history_search),
+        Some(&UiFindHistorySearchState::Loading)
+    );
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("find: loading older history for \"older needle\"")
+    );
 
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!history:example",
+        "start",
+        Some("next"),
+        vec![history_backfill_event_from_event(text_event_with_event_id(
+            "!history:example",
+            "$older-needle",
+            "@alice:example",
+            1_699_999_000_000,
+            "older needle",
+        ))],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let selected_text = only_view_line_containing(
+        find_view(&ui_state, &room_identity("!history:example")),
+        "older needle",
+    );
+    assert_ui_active_find(
+        &ui_state,
+        &room_identity("!history:example"),
+        "older needle",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+    );
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("find: 1/1 \"older needle\"")
+    );
     Ok(())
 }
 
@@ -3976,7 +4028,8 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         Duration::from_secs(5),
     )?;
 
-    app.trigger_active_timeline_history_backfill()?;
+    let result = app.find_active_view("absent needle")?;
+    assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
     let model = app.dump_model()?;
     assert_eq!(model.submitted_history_commands.len(), 1);
     assert_eq!(
@@ -4035,6 +4088,18 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         "* Unable to load older history: homeserver unavailable. Scroll to top to retry."
     ));
     assert_eq!(
+        ui_state
+            .active_find
+            .as_ref()
+            .map(|find| &find.history_search),
+        Some(&UiFindHistorySearchState::Failed {
+            message: "homeserver unavailable".to_owned(),
+        })
+    );
+    assert!(ui_state.status_bar.text.contains(
+        "find: unable to load older history for \"absent needle\": homeserver unavailable"
+    ));
+    assert_eq!(
         app.dump_model()?.last_error,
         Some(UiError {
             operation: "backfill_room_history".to_owned(),
@@ -4042,7 +4107,8 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         })
     );
 
-    app.trigger_active_timeline_history_backfill()?;
+    let result = app.find_active_view("absent needle")?;
+    assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
     let model = app.dump_model()?;
     assert_eq!(model.submitted_history_commands.len(), 3);
     assert_eq!(
@@ -4100,7 +4166,8 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
         Duration::from_secs(5),
     )?;
 
-    app.trigger_active_timeline_history_backfill()?;
+    let result = app.find_active_view("absent needle")?;
+    assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
     let model = app.dump_model()?;
     assert_eq!(model.submitted_history_commands.len(), 1);
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
@@ -4115,6 +4182,19 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
     let (room, view) = find_room_state_and_view(&ui_state, "!beta:example");
     assert_eq!(room.history_backfill, UiRoomHistoryBackfillState::Exhausted);
     assert!(view_contains(view, "* No older history available."));
+    assert_eq!(
+        ui_state
+            .active_find
+            .as_ref()
+            .map(|find| &find.history_search),
+        Some(&UiFindHistorySearchState::Exhausted)
+    );
+    assert!(
+        ui_state
+            .status_bar
+            .text
+            .contains("find: no matches for \"absent needle\" in loaded or older history")
+    );
 
     app.trigger_active_timeline_history_backfill()?;
     assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
