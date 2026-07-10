@@ -20,8 +20,9 @@ nix develop -c cargo fmt --check
 nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 nix develop -c cargo test --workspace
 nix develop -c ./scripts/cross-build.sh
-nix develop -c ./scripts/ui-snapshot.sh
 nix develop -c ./scripts/wine-smoke.sh
+nix develop -c ./scripts/windows-ui-tests.sh
+nix develop -c ./scripts/ui-snapshot.sh
 nix develop -c ./scripts/dll-gate.sh
 nix develop -c ./scripts/measure.sh
 ```
