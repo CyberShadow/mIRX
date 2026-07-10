@@ -17979,6 +17979,44 @@ mod tests {
     }
 
     #[test]
+    fn thread_video_rows_use_room_backed_preview_media_state() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let mut event = video_message("!ops:example", "$thread-video:example.org");
+        let Event::RoomActivity(activity) = &mut event else {
+            unreachable!("video message must create a room activity");
+        };
+        activity.relation = Some(thread_relation("$thread-root:example.org"));
+        apply_core_event(&mut state, event).unwrap();
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$thread-video:example.org",
+                "$thread-video:example.org",
+                RoomMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "unavailable".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+
+        let rows =
+            build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
+        let video_row = rows
+            .iter()
+            .find(|row| matches!(row.kind, TimelineRowKind::Video))
+            .expect("thread video row must be present");
+        assert_eq!(
+            video_row.image_state,
+            Some(TimelineImageState::Failed {
+                message: "unavailable".to_owned(),
+            })
+        );
+    }
+
+    #[test]
     fn room_preview_media_dispatch_records_one_thumbnail_fetch_and_dedupes_pending() {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
@@ -18105,6 +18143,69 @@ mod tests {
         };
         dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(state.recorded_commands.len(), 1);
+
+        let room_requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
+        };
+        assert!(room_requests.is_empty());
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn thread_video_preview_media_dispatch_uses_room_backed_pending_state() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let mut event = video_message("!ops:example", "$thread-video:example.org");
+        let Event::RoomActivity(activity) = &mut event else {
+            unreachable!("video message must create a room activity");
+        };
+        activity.relation = Some(thread_relation("$thread-root:example.org"));
+        apply_core_event(&mut state, event).unwrap();
+
+        let requests = {
+            let room_view = state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist");
+            collect_lazy_room_preview_media_requests(
+                room_view,
+                room_view.activities.iter().filter(|activity| {
+                    room_activity_belongs_to_thread(activity, "$thread-root:example.org")
+                }),
+            )
+        };
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "event:$thread-video:example.org".to_owned(),
+                event_id: "$thread-video:example.org".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/video-thumbnail".to_owned(),
+                },
+                format: timeline_thumbnail_format(),
+            })]
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .and_then(|room_view| room_view.preview_media.get("event:$thread-video:example.org"))
+                .cloned(),
+            Some(RoomPreviewMediaState::Pending {
+                event_id: "$thread-video:example.org".to_owned(),
+                format: timeline_thumbnail_format(),
+            })
+        );
 
         let room_requests = {
             let room_view = state
