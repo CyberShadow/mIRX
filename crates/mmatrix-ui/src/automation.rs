@@ -2093,7 +2093,8 @@ mod tests {
         RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
         RoomMediaSource, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
         RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
-        SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationRequest,
+        RoomVideoActivity, RoomVideoInfo, SpaceChildSummary, StoredSession,
+        UnsupportedRoomMessageActivity, VerificationRequest,
         VerificationState, VerificationStateEvent,
     };
     use serde_json::{Value, json};
@@ -2123,6 +2124,7 @@ mod tests {
         DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpRoomVideoActivity, DumpRoomVideoInfo,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
         DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
@@ -5674,6 +5676,87 @@ mod tests {
                 }
             })
         );
+        let video_activity = RoomActivity {
+            room_id: "!room:example".to_owned(),
+            activity_id: "event:$video1:example.org".to_owned(),
+            timestamp_ms: 1_710_000_018_000,
+            relation: None,
+            kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
+                event_id: "$video1:example.org".to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                body: "clip.mp4".to_owned(),
+                filename: Some("clip.mp4".to_owned()),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/video".to_owned(),
+                },
+                info: Some(RoomVideoInfo {
+                    mimetype: Some("video/mp4".to_owned()),
+                    size: Some(34_567),
+                    duration_ms: Some(12_000),
+                    width: Some(1920),
+                    height: Some(1080),
+                    thumbnail_source: Some(RoomMediaSource::Plain {
+                        url: "mxc://example.org/video-thumbnail".to_owned(),
+                    }),
+                }),
+            })),
+        };
+        assert_eq!(
+            super::dump_room_activity_from_activity(&video_activity),
+            DumpRoomActivity {
+                room_id: "!room:example".to_owned(),
+                activity_id: "event:$video1:example.org".to_owned(),
+                timestamp_ms: 1_710_000_018_000,
+                relation: None,
+                reactions: Vec::new(),
+                kind: DumpRoomActivityKind::Video(Box::new(DumpRoomVideoActivity {
+                    event_id: "$video1:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    body: "clip.mp4".to_owned(),
+                    filename: Some("clip.mp4".to_owned()),
+                    source: DumpRoomMediaSource::Plain {
+                        url: "mxc://example.org/video".to_owned(),
+                    },
+                    info: Some(DumpRoomVideoInfo {
+                        mimetype: Some("video/mp4".to_owned()),
+                        size: Some(34_567),
+                        duration_ms: Some(12_000),
+                        width: Some(1920),
+                        height: Some(1080),
+                        thumbnail_source: Some(DumpRoomMediaSource::Plain {
+                            url: "mxc://example.org/video-thumbnail".to_owned(),
+                        }),
+                    }),
+                })),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(super::dump_room_activity_from_activity(&video_activity))
+                .expect("serialize video dump room activity"),
+            json!({
+                "room_id":"!room:example",
+                "activity_id":"event:$video1:example.org",
+                "timestamp_ms":1710000018000u64,
+                "relation":null,
+                "reactions":[],
+                "kind":{
+                    "type":"video",
+                    "event_id":"$video1:example.org",
+                    "sender":"@alice:example.org",
+                    "body":"clip.mp4",
+                    "filename":"clip.mp4",
+                    "source":{"type":"plain","url":"mxc://example.org/video"},
+                    "info":{
+                        "mimetype":"video/mp4",
+                        "size":34567u64,
+                        "duration_ms":12000u64,
+                        "width":1920u64,
+                        "height":1080u64,
+                        "thumbnail_source":{"type":"plain","url":"mxc://example.org/video-thumbnail"}
+                    }
+                }
+            })
+        );
         let redacted_activity = RoomActivity {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$redacted:example.org".to_owned(),
@@ -5787,6 +5870,18 @@ mod tests {
             .is_err()
         );
         assert!(
+            serde_json::from_value::<DumpRoomVideoActivity>(json!({
+                "event_id":"$video1:example.org",
+                "sender":"@alice:example.org",
+                "body":"clip.mp4",
+                "filename":"clip.mp4",
+                "source":{"type":"plain","url":"mxc://example.org/video"},
+                "info":null,
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
             serde_json::from_value::<DumpRoomImageMediaState>(json!({
                 "type":"failed",
                 "message":"unavailable",
@@ -5809,6 +5904,18 @@ mod tests {
                 "width":640u64,
                 "height":480u64,
                 "is_animated":false,
+                "unexpected":true
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<DumpRoomVideoInfo>(json!({
+                "mimetype":"video/mp4",
+                "size":34567u64,
+                "duration_ms":12000u64,
+                "width":1920u64,
+                "height":1080u64,
+                "thumbnail_source":null,
                 "unexpected":true
             }))
             .is_err()
