@@ -80,7 +80,7 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted,
         is_space: false,

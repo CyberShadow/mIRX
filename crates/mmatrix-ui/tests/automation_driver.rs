@@ -512,7 +512,7 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted,
         is_space: false,
@@ -538,7 +538,7 @@ fn joined_space_summary(
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted: false,
         is_space: true,
@@ -2714,7 +2714,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
             RoomSummary {
                 room_id: "!space:example".to_owned(),
                 display_name: "Space".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: true,
@@ -9029,7 +9029,7 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
             RoomSummary {
                 room_id: "!direct:example".to_owned(),
                 display_name: "Direct".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -9095,7 +9095,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
             RoomSummary {
                 room_id: "!direct-one:example".to_owned(),
                 display_name: "Direct One".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -9107,7 +9107,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
             RoomSummary {
                 room_id: "!direct-two:example".to_owned(),
                 display_name: "Direct Two".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -9620,7 +9620,8 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
 }
 
 #[test]
-fn automation_driver_renders_synced_topic_without_topic_notice() -> Result<(), Box<dyn std::error::Error>> {
+fn automation_driver_renders_synced_topic_without_topic_notice()
+-> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
@@ -9631,7 +9632,9 @@ fn automation_driver_renders_synced_topic_without_topic_notice() -> Result<(), B
 
     let mut summary = room_summary("!beta:example", "Beta", false);
     summary.topic = Some("incident review".to_owned());
-    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(vec![summary])])?)?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(vec![
+        summary,
+    ])])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let state = app.dump_ui_state()?;

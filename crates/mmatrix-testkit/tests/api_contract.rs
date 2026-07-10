@@ -399,6 +399,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!space:example".to_owned(),
                 display_name: "Space".to_owned(),
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: true,
@@ -421,6 +422,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!alpha:example".to_owned(),
                 display_name: "Alpha".to_owned(),
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: false,
@@ -441,6 +443,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!beta:example".to_owned(),
                 display_name: "Beta".to_owned(),
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -452,6 +455,7 @@ fn data_models_round_trip_through_json() {
             mmatrix_testkit::Room {
                 room_id: "!lobby:example".to_owned(),
                 display_name: "Lobby".to_owned(),
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -925,6 +929,7 @@ fn room_summary_metadata_serializes_to_expected_json_shape() {
     let room = mmatrix_testkit::Room {
         room_id: "!alpha:example".to_owned(),
         display_name: "Alpha".to_owned(),
+        topic: None,
         membership: RoomMembership::Join,
         encrypted: true,
         is_space: false,
@@ -948,6 +953,7 @@ fn room_summary_metadata_serializes_to_expected_json_shape() {
         serde_json::json!({
             "room_id": "!alpha:example",
             "display_name": "Alpha",
+            "topic": null,
             "membership": "join",
             "encrypted": true,
             "is_space": false,

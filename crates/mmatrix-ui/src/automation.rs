@@ -3040,7 +3040,7 @@ mod tests {
             Event::SyncedRooms(vec![RoomSummary {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -3772,6 +3772,7 @@ mod tests {
                     rooms: vec![super::DumpRoom {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
+                        topic: None,
                         membership: RoomMembership::Join,
                         encrypted: true,
                         is_space: false,
@@ -4015,6 +4016,7 @@ mod tests {
                     rooms: vec![super::DumpRoom {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
+                        topic: None,
                         membership: RoomMembership::Join,
                         encrypted: true,
                         is_space: false,

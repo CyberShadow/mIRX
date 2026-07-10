@@ -1158,9 +1158,19 @@ fn room_summary_and_space_child_reject_unknown_fields() {
 }
 
 #[test]
+fn room_summary_requires_explicit_topic_field() {
+    let error = serde_json::from_str::<Event>(
+        r#"{"SyncedRooms":[{"room_id":"!ops:example.org","display_name":"Ops","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#,
+    )
+    .expect_err("room summary without topic must be rejected");
+
+    assert!(error.to_string().contains("missing field `topic`"));
+}
+
+#[test]
 fn room_summary_requires_membership() {
     let error = serde_json::from_str::<Event>(
-        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#,
+        r#"{"SyncedRooms":[{"room_id":"!space:example.org","display_name":"Space","topic":null,"encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]}"#,
     )
     .expect_err("room summary must require membership");
     assert!(
@@ -1174,7 +1184,7 @@ fn flat_room_summary_payload_round_trips_with_explicit_space_defaults() {
     let event = Event::SyncedRooms(vec![RoomSummary {
         room_id: "!ops:example.org".to_owned(),
         display_name: "Ops".to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted: true,
         is_space: false,
@@ -1199,7 +1209,7 @@ fn synced_rooms_event_round_trips_account_data_metadata_payload() {
     let event = Event::SyncedRooms(vec![RoomSummary {
         room_id: "!dm:example.org".to_owned(),
         display_name: "Alice".to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted: true,
         is_space: false,

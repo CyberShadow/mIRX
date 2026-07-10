@@ -50,7 +50,7 @@ fn space(room_id: &str, display_name: &str, children: Vec<&str>) -> RoomSummary 
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted: false,
         is_space: true,
@@ -72,7 +72,7 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
     RoomSummary {
         room_id: room_id.to_owned(),
         display_name: display_name.to_owned(),
-            topic: None,
+        topic: None,
         membership: RoomMembership::Join,
         encrypted: false,
         is_space: false,

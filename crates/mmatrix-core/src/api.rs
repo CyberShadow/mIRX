@@ -264,7 +264,7 @@ pub enum RoomMembership {
     Invite,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomSummary {
     pub room_id: String,
@@ -277,6 +277,52 @@ pub struct RoomSummary {
     pub direct_user_ids: Vec<String>,
     pub tags: Vec<RoomTagSummary>,
     pub space_children: Vec<SpaceChildSummary>,
+}
+
+impl<'de> serde::Deserialize<'de> for RoomSummary {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireRoomSummary {
+            room_id: String,
+            display_name: String,
+            topic: serde_json::Value,
+            membership: RoomMembership,
+            encrypted: bool,
+            is_space: bool,
+            is_direct: bool,
+            direct_user_ids: Vec<String>,
+            tags: Vec<RoomTagSummary>,
+            space_children: Vec<SpaceChildSummary>,
+        }
+
+        let room = WireRoomSummary::deserialize(deserializer)?;
+        let topic = match room.topic {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(topic) => Some(topic),
+            topic => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid topic value: expected string or null, got {topic}"
+                )));
+            }
+        };
+
+        Ok(Self {
+            room_id: room.room_id,
+            display_name: room.display_name,
+            topic,
+            membership: room.membership,
+            encrypted: room.encrypted,
+            is_space: room.is_space,
+            is_direct: room.is_direct,
+            direct_user_ids: room.direct_user_ids,
+            tags: room.tags,
+            space_children: room.space_children,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

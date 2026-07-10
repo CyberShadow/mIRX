@@ -10956,7 +10956,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             RoomSummary {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -10968,7 +10968,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             RoomSummary {
                 room_id: "!two:example".to_owned(),
                 display_name: "Two".to_owned(),
-            topic: None,
+                topic: None,
                 membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: false,
@@ -14264,22 +14264,31 @@ mod tests {
         summary.topic = Some("incident review".to_owned());
 
         apply_core_event(&mut state, Event::SyncedRooms(vec![summary.clone()])).unwrap();
-        let initial = project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
+        let initial =
+            project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
         assert!(initial.contains(&"Room: Ops (!ops:example)".to_owned()));
         assert!(initial.contains(&"Topic: incident review".to_owned()));
-        assert!(!initial.iter().any(|line| line.contains("set topic: incident review")));
+        assert!(
+            !initial
+                .iter()
+                .any(|line| line.contains("set topic: incident review"))
+        );
 
         apply_core_event(&mut state, topic_state("!ops:example", "deployment window")).unwrap();
-        let updated = project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
+        let updated =
+            project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
         assert!(updated.contains(&"Topic: deployment window".to_owned()));
-        assert!(updated
-            .iter()
-            .any(|line| line.contains("set topic: deployment window")));
+        assert!(
+            updated
+                .iter()
+                .any(|line| line.contains("set topic: deployment window"))
+        );
         assert!(!updated.contains(&"Topic: incident review".to_owned()));
 
         summary.topic = None;
         apply_core_event(&mut state, Event::SyncedRooms(vec![summary])).unwrap();
-        let cleared = project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
+        let cleared =
+            project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
         assert!(!cleared.iter().any(|line| line.starts_with("Topic: ")));
     }
 
