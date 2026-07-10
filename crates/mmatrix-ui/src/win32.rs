@@ -17635,6 +17635,101 @@ mod tests {
     }
 
     #[test]
+    fn loaded_video_preview_projects_and_dedupes_dispatch() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            video_message("!ops:example", "$video1:example.org"),
+        )
+        .unwrap();
+        let requests = {
+            let view = state.model.room_views.get("!ops:example").unwrap();
+            collect_lazy_room_preview_media_requests(view, view.activities.iter())
+        };
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$video1:example.org",
+                "$video1:example.org",
+                RoomMediaKind::Loaded {
+                    format: timeline_thumbnail_format(),
+                    bytes: tiny_png_bytes(),
+                },
+            ),
+        )
+        .unwrap();
+        assert!(
+            build_room_timeline_rows(&state.model, "!ops:example")
+                .iter()
+                .any(|row| matches!(
+                    row.image_state,
+                    Some(TimelineImageState::Loaded {
+                        width: 1,
+                        height: 1,
+                        ..
+                    })
+                ))
+        );
+        let view = state.model.room_views.get("!ops:example").unwrap();
+        assert!(collect_lazy_room_preview_media_requests(view, view.activities.iter()).is_empty());
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn redacted_video_preview_drops_state_and_ignores_late_media() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            video_message("!ops:example", "$video1:example.org"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$video1:example.org",
+                "$video1:example.org",
+                RoomMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "current".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            incoming_redacted(
+                "!ops:example",
+                "$video1:example.org",
+                "$redaction:example.org",
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$video1:example.org",
+                "$video1:example.org",
+                RoomMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "late".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        assert!(
+            state.model.room_views["!ops:example"]
+                .preview_media
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn redaction_image_row_clears_media_state_and_ignores_late_media_updates() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];

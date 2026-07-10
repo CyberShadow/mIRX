@@ -7334,6 +7334,56 @@ fn automation_driver_renders_failed_image_message_fixture_and_exposes_failed_med
     Ok(())
 }
 
+fn assert_video_fixture_media_state(
+    fixture_name: &str,
+    expected_media_state: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path(fixture_name);
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            fixture_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let activities = app.room_activity(Some("!media:example.org"))?;
+    assert_eq!(activities.len(), 1);
+    let activity_json = serde_json::to_string(&activities[0])?;
+    assert!(activity_json.contains("\"type\":\"video\""));
+    assert!(activity_json.contains(expected_media_state));
+    Ok(())
+}
+
+#[test]
+fn automation_driver_video_message_exposes_pending_media_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_video_fixture_media_state(
+        "video-message.json",
+        "\"media_state\":{\"type\":\"pending\"}",
+    )
+}
+
+#[test]
+fn automation_driver_video_message_loaded_exposes_loaded_media_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_video_fixture_media_state(
+        "video-message-loaded.json",
+        "\"media_state\":{\"type\":\"loaded\",\"width\":64,\"height\":48}",
+    )
+}
+
+#[test]
+fn automation_driver_video_message_failed_exposes_failed_media_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_video_fixture_media_state(
+        "video-message-failed.json",
+        "\"media_state\":{\"type\":\"failed\",\"message\":\"failed to fetch room image media: unavailable\"}",
+    )
+}
+
 #[test]
 fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_metadata()
 -> Result<(), Box<dyn std::error::Error>> {
