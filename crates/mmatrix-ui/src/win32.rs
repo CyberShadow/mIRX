@@ -510,11 +510,20 @@ enum FindMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum RoomFindHistorySearch {
+    LocalOnly,
+    Loading,
+    Exhausted,
+    Failed { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ViewFindState {
     raw_query: String,
     folded_query: String,
     matches: Vec<FindMatch>,
     selected_match_index: Option<usize>,
+    history_search: RoomFindHistorySearch,
     feedback: String,
 }
 
@@ -7951,9 +7960,21 @@ fn find_feedback(
     raw_query: &str,
     matches: &[FindMatch],
     selected_match_index: Option<usize>,
+    history_search: &RoomFindHistorySearch,
 ) -> String {
     if matches.is_empty() {
-        return format!("find: no matches for \"{raw_query}\"");
+        return match history_search {
+            RoomFindHistorySearch::LocalOnly => format!("find: no matches for \"{raw_query}\""),
+            RoomFindHistorySearch::Loading => {
+                format!("find: loading older history for \"{raw_query}\"")
+            }
+            RoomFindHistorySearch::Exhausted => {
+                format!("find: no matches for \"{raw_query}\" in loaded or older history")
+            }
+            RoomFindHistorySearch::Failed { message } => {
+                format!("find: unable to load older history for \"{raw_query}\": {message}")
+            }
+        };
     }
 
     let selected_match_index =
@@ -7979,14 +8000,40 @@ fn build_view_find_state(
     matches: Vec<FindMatch>,
     selected_match_index: Option<usize>,
 ) -> ViewFindState {
-    let feedback = find_feedback(raw_query, &matches, selected_match_index);
+    build_view_find_state_with_history(
+        raw_query,
+        folded_query,
+        matches,
+        selected_match_index,
+        RoomFindHistorySearch::LocalOnly,
+    )
+}
+
+fn build_view_find_state_with_history(
+    raw_query: &str,
+    folded_query: &str,
+    matches: Vec<FindMatch>,
+    selected_match_index: Option<usize>,
+    history_search: RoomFindHistorySearch,
+) -> ViewFindState {
+    let feedback = find_feedback(raw_query, &matches, selected_match_index, &history_search);
     ViewFindState {
         raw_query: raw_query.to_owned(),
         folded_query: folded_query.to_owned(),
         matches,
         selected_match_index,
+        history_search,
         feedback,
     }
+}
+
+fn rebuild_view_find_feedback(find_state: &mut ViewFindState) {
+    find_state.feedback = find_feedback(
+        &find_state.raw_query,
+        &find_state.matches,
+        find_state.selected_match_index,
+        &find_state.history_search,
+    );
 }
 
 fn active_view_find_feedback(state: &WindowState) -> Option<&str> {
@@ -8087,11 +8134,17 @@ fn recompute_find_for_view(
             previous_state: &previous_state,
         },
     );
-    let next_state = build_view_find_state(
+    let history_search = if matches.is_empty() && matches!(view_id, ViewId::Room(_)) {
+        previous_state.history_search
+    } else {
+        RoomFindHistorySearch::LocalOnly
+    };
+    let next_state = build_view_find_state_with_history(
         &previous_state.raw_query,
         &previous_state.folded_query,
         matches,
         selected_match_index,
+        history_search,
     );
     state.find_states.insert(view_id.clone(), next_state);
 }
@@ -8196,6 +8249,51 @@ unsafe fn scroll_timeline_to_source_row_index(hwnd: HWND, source_row_index: usiz
     InvalidateRect(hwnd, null(), 1);
 }
 
+fn build_room_find_state_and_maybe_submit_history_backfill(
+    state: &mut WindowState,
+    room_id: &str,
+    raw_query: &str,
+    folded_query: &str,
+    matches: Vec<FindMatch>,
+    selected_match_index: Option<usize>,
+) -> Result<ViewFindState, String> {
+    let history_search = if !matches.is_empty() {
+        RoomFindHistorySearch::LocalOnly
+    } else {
+        let history_status = state
+            .model
+            .room_views
+            .get(room_id)
+            .map(|room_view| room_view.history.status.clone())
+            .unwrap_or(RoomHistoryBackfillStatus::Idle);
+        match history_status {
+            RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
+            RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
+            RoomHistoryBackfillStatus::Failed { message, .. } => {
+                if submit_backfill_room_history_for_room(state, room_id)? {
+                    RoomFindHistorySearch::Loading
+                } else {
+                    RoomFindHistorySearch::Failed { message }
+                }
+            }
+            RoomHistoryBackfillStatus::Idle => {
+                if submit_backfill_room_history_for_room(state, room_id)? {
+                    RoomFindHistorySearch::Loading
+                } else {
+                    RoomFindHistorySearch::LocalOnly
+                }
+            }
+        }
+    };
+    Ok(build_view_find_state_with_history(
+        raw_query,
+        folded_query,
+        matches,
+        selected_match_index,
+        history_search,
+    ))
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 unsafe fn execute_active_view_find(
     hwnd: HWND,
@@ -8229,7 +8327,7 @@ unsafe fn execute_active_view_find(
             );
             build_view_find_state(query, &folded_query, matches, selected_match_index)
         }
-        ViewId::Room(_) | ViewId::Thread { .. } => {
+        ViewId::Thread { .. } => {
             let view = state_ref(hwnd)
                 .views
                 .get(&active_view)
@@ -8252,6 +8350,41 @@ unsafe fn execute_active_view_find(
                 },
             );
             build_view_find_state(query, &folded_query, matches, selected_match_index)
+        }
+        ViewId::Room(room_id) => {
+            let (matches, selected_match_index) = {
+                let view = state_ref(hwnd)
+                    .views
+                    .get(&active_view)
+                    .ok_or_else(|| "view state was not tracked".to_owned())?;
+                let timeline = room_content_timeline(view.content);
+                let timeline_state = timeline_state_ref(timeline);
+                let start_source_row_index = timeline_source_row_index_for_top_line(
+                    timeline,
+                    &timeline_state.source_rows,
+                    timeline_state.top_line,
+                )
+                .unwrap_or(0);
+                let matches =
+                    compute_timeline_find_matches(&timeline_state.source_rows, &folded_query);
+                let selected_match_index = choose_find_match(
+                    &matches,
+                    FindSelectionMode::Execute {
+                        folded_query: &folded_query,
+                        previous_state: previous_state.as_ref(),
+                        start: FindSelectionStart::TimelineSourceRow(start_source_row_index),
+                    },
+                );
+                (matches, selected_match_index)
+            };
+            build_room_find_state_and_maybe_submit_history_backfill(
+                state_mut(hwnd),
+                room_id,
+                query,
+                &folded_query,
+                matches,
+                selected_match_index,
+            )?
         }
     };
 
@@ -11115,12 +11248,98 @@ unsafe fn drain_core_events(hwnd: HWND) -> Vec<Event> {
     queue.drain(..).collect()
 }
 
+unsafe fn continue_room_find_history_search_after_refresh(
+    hwnd: HWND,
+    room_id: &str,
+) -> Result<(), String> {
+    let view_id = ViewId::Room(room_id.to_owned());
+    let Some(find_state) = state_ref(hwnd).find_states.get(&view_id) else {
+        return Ok(());
+    };
+    if find_state.history_search != RoomFindHistorySearch::Loading && find_state.matches.is_empty()
+    {
+        return Ok(());
+    }
+
+    let (has_matches, history_status) = {
+        let state = state_ref(hwnd);
+        let find_state = state
+            .find_states
+            .get(&view_id)
+            .expect("loading room find state must remain tracked after refresh");
+        (
+            !find_state.matches.is_empty(),
+            state
+                .model
+                .room_views
+                .get(room_id)
+                .map(|room_view| room_view.history.status.clone())
+                .unwrap_or(RoomHistoryBackfillStatus::Idle),
+        )
+    };
+
+    if has_matches {
+        let state = state_mut(hwnd);
+        let find_state = state
+            .find_states
+            .get_mut(&view_id)
+            .expect("loading room find state must remain tracked after refresh");
+        find_state.history_search = RoomFindHistorySearch::LocalOnly;
+        rebuild_view_find_feedback(find_state);
+    } else {
+        let history_search = match history_status {
+            RoomHistoryBackfillStatus::Idle => {
+                let _ = submit_backfill_room_history_for_room(state_mut(hwnd), room_id)?;
+                RoomFindHistorySearch::Loading
+            }
+            RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
+            RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
+            RoomHistoryBackfillStatus::Failed { message, .. } => {
+                RoomFindHistorySearch::Failed { message }
+            }
+        };
+        let find_state = state_mut(hwnd)
+            .find_states
+            .get_mut(&view_id)
+            .expect("loading room find state must remain tracked after refresh");
+        find_state.history_search = history_search;
+        rebuild_view_find_feedback(find_state);
+    }
+
+    apply_find_to_active_view(hwnd, &view_id)?;
+    if has_matches && state_ref(hwnd).active_view == view_id {
+        let selected_match = state_ref(hwnd)
+            .find_states
+            .get(&view_id)
+            .and_then(|find_state| {
+                find_state
+                    .selected_match_index
+                    .and_then(|index| find_state.matches.get(index))
+            })
+            .cloned()
+            .expect("matched room find state must retain a selected match");
+        let FindMatch::Timeline(item) = selected_match else {
+            unreachable!("room views must only store timeline matches");
+        };
+        let view = state_ref(hwnd)
+            .views
+            .get(&view_id)
+            .expect("room view must remain tracked after refresh");
+        scroll_timeline_to_source_row_index(
+            room_content_timeline(view.content),
+            item.source_row_index,
+        );
+    }
+    refresh_status_bar(hwnd)
+}
+
 unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(), String> {
     if events.is_empty() {
         return Ok(());
     }
 
     let mut history_backfill_anchor = None;
+    let mut history_backfill_room_ids = Vec::new();
     for event in events {
         if let Event::E2eeRecoverySetupSucceeded(result) = &event {
             show_e2ee_recovery_key(hwnd, &result.recovery_key)?;
@@ -11132,6 +11351,28 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
             history_backfill_anchor =
                 capture_room_history_backfill_anchor(state, &backfill.room_id);
         }
+        if let Event::RoomHistoryBackfill(backfill) = &event
+            && state
+                .find_states
+                .get(&ViewId::Room(backfill.room_id.clone()))
+                .is_some_and(|find_state| {
+                    find_state.history_search == RoomFindHistorySearch::Loading
+                })
+        {
+            history_backfill_room_ids.push(backfill.room_id.clone());
+        }
+        if let Event::Error(error) = &event
+            && error.operation == Operation::BackfillRoomHistory
+            && let Some(room_id) = loading_room_history_room_id(&state.model.room_views)
+            && state
+                .find_states
+                .get(&ViewId::Room(room_id.clone()))
+                .is_some_and(|find_state| {
+                    find_state.history_search == RoomFindHistorySearch::Loading
+                })
+        {
+            history_backfill_room_ids.push(room_id);
+        }
         apply_core_event(state, event)?;
         state.event_generation += 1;
     }
@@ -11139,6 +11380,11 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
     sync_views_and_tree(hwnd)?;
     if let Some(anchor) = history_backfill_anchor {
         restore_room_history_backfill_anchor(hwnd, anchor);
+    }
+    history_backfill_room_ids.sort();
+    history_backfill_room_ids.dedup();
+    for room_id in history_backfill_room_ids {
+        continue_room_find_history_search_after_refresh(hwnd, &room_id)?;
     }
     Ok(())
 }
@@ -19239,7 +19485,165 @@ mod tests {
 
         assert!(state.matches.is_empty());
         assert_eq!(state.selected_match_index, None);
+        assert_eq!(state.history_search, RoomFindHistorySearch::LocalOnly);
         assert_eq!(state.feedback, "find: no matches for \"missing\"");
+    }
+
+    #[test]
+    fn room_find_local_match_stays_local_without_history_backfill() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        let matches = vec![FindMatch::Timeline(TimelineFindMatch {
+            row_identity: TimelineRowIdentity::activity_primary("activity-1"),
+            source_row_index: 0,
+            logical_text: "needle".to_owned(),
+        })];
+
+        let find_state = build_room_find_state_and_maybe_submit_history_backfill(
+            &mut state,
+            "!room:example",
+            "needle",
+            "needle",
+            matches,
+            Some(0),
+        )
+        .unwrap();
+
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::LocalOnly);
+        assert_eq!(find_state.feedback, "find: 1/1 \"needle\"");
+        assert!(state.recorded_commands.is_empty());
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_find_miss_from_idle_submits_history_backfill_and_shows_loading_feedback() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+
+        let find_state = build_room_find_state_and_maybe_submit_history_backfill(
+            &mut state,
+            "!room:example",
+            "needle",
+            "needle",
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::Loading);
+        assert_eq!(
+            find_state.feedback,
+            "find: loading older history for \"needle\""
+        );
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+                room_id: "!room:example".to_owned(),
+                from: None,
+                limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+            })]
+        );
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_find_miss_while_history_is_loading_does_not_submit_a_duplicate() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state
+            .model
+            .room_views
+            .entry("!room:example".to_owned())
+            .or_default()
+            .history
+            .status = RoomHistoryBackfillStatus::Loading { from: None };
+
+        let find_state = build_room_find_state_and_maybe_submit_history_backfill(
+            &mut state,
+            "!room:example",
+            "needle",
+            "needle",
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::Loading);
+        assert_eq!(
+            find_state.feedback,
+            "find: loading older history for \"needle\""
+        );
+        assert!(state.recorded_commands.is_empty());
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_find_recompute_with_new_match_clears_loading_history_search() {
+        let mut state = test_state();
+        let view_id = room_view_id("!room:example");
+        state.find_states.insert(
+            view_id.clone(),
+            build_view_find_state_with_history(
+                "needle",
+                "needle",
+                Vec::new(),
+                None,
+                RoomFindHistorySearch::Loading,
+            ),
+        );
+        let rows = vec![
+            TimelineRow::full_width(TimelineRowKind::Plain, "older needle".to_owned())
+                .with_identity(TimelineRowIdentity::synthetic(
+                    TimelineSyntheticRowLabel::Plain,
+                    "older needle",
+                )),
+        ];
+
+        recompute_find_for_view(&mut state, &view_id, ViewFindContent::Timeline(&rows));
+
+        let find_state = state.find_states.get(&view_id).unwrap();
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::LocalOnly);
+        assert_eq!(find_state.feedback, "find: 1/1 \"needle\"");
+    }
+
+    #[test]
+    fn room_find_history_feedback_reports_exhaustion_and_failure() {
+        let exhausted = build_view_find_state_with_history(
+            "needle",
+            "needle",
+            Vec::new(),
+            None,
+            RoomFindHistorySearch::Exhausted,
+        );
+        let failed = build_view_find_state_with_history(
+            "needle",
+            "needle",
+            Vec::new(),
+            None,
+            RoomFindHistorySearch::Failed {
+                message: "homeserver unavailable".to_owned(),
+            },
+        );
+
+        assert_eq!(
+            exhausted.feedback,
+            "find: no matches for \"needle\" in loaded or older history"
+        );
+        assert_eq!(
+            failed.feedback,
+            "find: unable to load older history for \"needle\": homeserver unavailable"
+        );
+    }
+
+    #[test]
+    fn thread_find_miss_remains_local_only_without_history_backfill() {
+        let (state, handle) = test_state_with_command_sender();
+        let find_state = build_view_find_state("needle", "needle", Vec::new(), None);
+
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::LocalOnly);
+        assert_eq!(find_state.feedback, "find: no matches for \"needle\"");
+        assert!(state.recorded_commands.is_empty());
+        stop_test_core(handle);
     }
 
     #[test]
