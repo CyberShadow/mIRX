@@ -13123,6 +13123,55 @@ mod tests {
         }
     }
 
+    unsafe fn with_test_compose_window<T>(state: WindowState, test: impl FnOnce(HWND) -> T) -> T {
+        init_common_controls().unwrap();
+        let compose = CreateWindowExW(
+            0,
+            wide_null(EDIT_CLASS_NAME).as_ptr(),
+            wide_null("").as_ptr(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            null_mut(),
+            null_mut(),
+            GetModuleHandleW(null()),
+            null_mut(),
+        );
+        assert!(!compose.is_null(), "test compose control must be created");
+
+        let status_bar = CreateWindowExW(
+            0,
+            STATUSCLASSNAMEW,
+            null(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            null_mut(),
+            null_mut(),
+            GetModuleHandleW(null()),
+            null_mut(),
+        );
+        assert!(
+            !status_bar.is_null(),
+            "test status bar control must be created"
+        );
+
+        let state_ptr = Box::into_raw(Box::new(state));
+        SetWindowLongPtrW(compose, GWLP_USERDATA, state_ptr as isize);
+        (*state_ptr).controls.edit = compose;
+        (*state_ptr).controls.status_bar = status_bar;
+
+        let result = test(compose);
+        DestroyWindow(compose);
+        DestroyWindow(status_bar);
+        drop(Box::from_raw(state_ptr));
+        result
+    }
+
     fn measure_ascii_width(text: &str) -> i32 {
         text.chars().count() as i32
     }
@@ -21022,9 +21071,20 @@ mod tests {
 
     #[test]
     fn reply_menu_prefill_does_not_submit_a_command() {
-        let state = test_state();
-        assert_eq!(reply_compose_text("$event-id"), "/reply $event-id ");
-        assert!(state.recorded_commands.is_empty());
+        let mut state = test_state();
+        state.active_view = room_view_id("!room:example");
+        state.selected_timeline_event = Some(SelectedTimelineEvent {
+            view_id: state.active_view.clone(),
+            event_id: "$event-id".to_owned(),
+        });
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                prefill_reply_to_selected_message(hwnd).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/reply $event-id ");
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+            });
+        }
     }
 
     #[test]
@@ -21037,17 +21097,22 @@ mod tests {
             event_id: "$event-id".to_owned(),
         });
 
-        let event_id = selected_timeline_event_id(&state).unwrap().to_owned();
-        let status = submit_redact_slash_command(&mut state, event_id).unwrap();
-
-        assert_eq!(status, "Redaction queued for $event-id");
-        assert_eq!(
-            state.recorded_commands,
-            vec![Command::RedactEvent(RedactEventRequest {
-                room_id: "!room:example".to_owned(),
-                event_id: "$event-id".to_owned(),
-            })]
-        );
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                submit_redact_selected_message(hwnd).unwrap();
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "Redaction queued for $event-id"
+                );
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::RedactEvent(RedactEventRequest {
+                        room_id: "!room:example".to_owned(),
+                        event_id: "$event-id".to_owned(),
+                    })]
+                );
+            });
+        }
         stop_test_core(handle);
     }
 
