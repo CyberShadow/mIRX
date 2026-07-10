@@ -86,10 +86,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
     WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN,
-    WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL,
-    WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER,
+    WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::{
@@ -150,6 +151,11 @@ const MENU_ID_VERIFY_ACCEPT: usize = 40007;
 const MENU_ID_VERIFY_CANCEL: usize = 40008;
 const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
 const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
+const MENU_ID_ROOM_ACCEPT_INVITE: usize = 40011;
+const MENU_ID_ROOM_REJECT_INVITE: usize = 40012;
+const MENU_ID_ROOM_PART: usize = 40013;
+const MENU_ID_MESSAGE_REPLY: usize = 40014;
+const MENU_ID_MESSAGE_REDACT: usize = 40015;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -189,6 +195,7 @@ const TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT: i32 = 120;
 const TIMELINE_IMAGE_MEDIA_SLOT_LINES: usize = 7;
 const TIMELINE_IMAGE_LEFT_INDENT: i32 = 24;
 const TIMELINE_FIND_HIGHLIGHT_COLOR: u32 = 0x00f0f8d8;
+const TIMELINE_SELECTION_COLOR: u32 = 0x00f5e6cc;
 const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
@@ -212,6 +219,8 @@ struct Controls {
     edit: HWND,
     status_bar: HWND,
     switchbar: HWND,
+    room_menu: HMENU,
+    message_menu: HMENU,
     account_menu: HMENU,
 }
 
@@ -318,6 +327,7 @@ impl TimelineRowIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TimelineRow {
     identity: TimelineRowIdentity,
+    event_id: Option<String>,
     kind: TimelineRowKind,
     logical_text: String,
     visual: TimelineRowVisual,
@@ -340,6 +350,7 @@ impl TimelineRow {
     fn full_width(kind: TimelineRowKind, text: String) -> Self {
         Self {
             identity: TimelineRowIdentity::default_for_row(&kind, &text),
+            event_id: None,
             kind,
             logical_text: text.clone(),
             visual: TimelineRowVisual::FullWidth { text },
@@ -356,6 +367,7 @@ impl TimelineRow {
     ) -> Self {
         Self {
             identity: TimelineRowIdentity::default_for_row(&kind, &logical_text),
+            event_id: None,
             kind,
             logical_text,
             visual: TimelineRowVisual::Log {
@@ -369,6 +381,11 @@ impl TimelineRow {
 
     fn with_identity(mut self, identity: TimelineRowIdentity) -> Self {
         self.identity = identity;
+        self
+    }
+
+    fn with_event_id(mut self, event_id: Option<&str>) -> Self {
+        self.event_id = event_id.map(str::to_owned);
         self
     }
 }
@@ -2482,6 +2499,7 @@ struct WindowState {
     views: BTreeMap<ViewId, MdiViewState>,
     hwnd_views: BTreeMap<isize, ViewId>,
     active_view: ViewId,
+    selected_timeline_event: Option<SelectedTimelineEvent>,
     find_states: BTreeMap<ViewId, ViewFindState>,
     switchbar_views: Vec<ViewId>,
     room_activity: BTreeSet<ViewId>,
@@ -2493,6 +2511,12 @@ struct WindowState {
     gdiplus_session: Option<GdiplusSession>,
     gdiplus_startup_error: Option<String>,
     recorded_commands: Vec<Command>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedTimelineEvent {
+    view_id: ViewId,
+    event_id: String,
 }
 
 impl Drop for WindowState {
@@ -2568,6 +2592,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         views: BTreeMap::new(),
         hwnd_views: BTreeMap::new(),
         active_view: ViewId::Status,
+        selected_timeline_event: None,
         find_states: BTreeMap::new(),
         switchbar_views: Vec::new(),
         room_activity: BTreeSet::new(),
@@ -3252,7 +3277,11 @@ unsafe extern "system" fn window_proc(
         }
         WM_INITMENUPOPUP => {
             let popup_menu = wparam as HMENU;
-            let result = if popup_menu == state_ref(hwnd).controls.account_menu {
+            let result = if popup_menu == state_ref(hwnd).controls.room_menu {
+                refresh_room_menu_state(hwnd, popup_menu)
+            } else if popup_menu == state_ref(hwnd).controls.message_menu {
+                refresh_message_menu_state(hwnd, popup_menu)
+            } else if popup_menu == state_ref(hwnd).controls.account_menu {
                 refresh_account_verification_menu_state(hwnd, popup_menu)
             } else {
                 Ok(())
@@ -3383,6 +3412,10 @@ unsafe extern "system" fn timeline_window_proc(
             0
         }
         WM_VSCROLL => scroll_timeline(hwnd, wparam),
+        WM_LBUTTONDOWN => {
+            select_timeline_row(hwnd, lparam);
+            0
+        }
         WM_PAINT => {
             paint_timeline(hwnd);
             0
@@ -3836,6 +3869,44 @@ unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
     apply_timeline_content(hwnd, rows.to_vec(), rendered_text, lines, paint_lines);
 }
 
+unsafe fn select_timeline_row(hwnd: HWND, lparam: LPARAM) {
+    let y = ((lparam >> 16) as i16) as i32;
+    let state = timeline_state_ref(hwnd);
+    let line_index = y
+        .checked_sub(state.vertical_padding)
+        .filter(|offset| *offset >= 0)
+        .map(|offset| state.top_line + (offset / state.line_height) as usize);
+    let event_id = line_index
+        .and_then(|index| state.paint_lines.get(index))
+        .and_then(|line| line.source_row_index)
+        .and_then(|index| state.source_rows.get(index))
+        .and_then(|row| row.event_id.clone());
+    let frame = frame_window_for(hwnd);
+    let window_state = state_mut(frame);
+    window_state.selected_timeline_event = event_id.map(|event_id| SelectedTimelineEvent {
+        view_id: window_state.active_view.clone(),
+        event_id,
+    });
+    InvalidateRect(hwnd, null(), 1);
+}
+
+fn validate_selected_timeline_event(
+    state: &mut WindowState,
+    view_id: &ViewId,
+    rows: &[TimelineRow],
+) {
+    let Some(selected) = state.selected_timeline_event.as_ref() else {
+        return;
+    };
+    if selected.view_id == *view_id
+        && !rows
+            .iter()
+            .any(|row| row.event_id.as_deref() == Some(&selected.event_id))
+    {
+        state.selected_timeline_event = None;
+    }
+}
+
 unsafe fn timeline_source_row_paint_line_count(hwnd: HWND, row: &TimelineRow) -> usize {
     timeline_row_paint_lines(hwnd, std::slice::from_ref(row), timeline_client_width(hwnd)).len()
 }
@@ -4115,6 +4186,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
         SelectObject(hdc, font)
     };
     let find_highlight_brush = CreateSolidBrush(TIMELINE_FIND_HIGHLIGHT_COLOR);
+    let selection_brush = CreateSolidBrush(TIMELINE_SELECTION_COLOR);
 
     let state = timeline_state_ref(hwnd);
     let visible_rows = timeline_visible_rows(hwnd);
@@ -4126,6 +4198,18 @@ unsafe fn paint_timeline(hwnd: HWND) {
         .enumerate()
     {
         let line_y = state.vertical_padding + row as i32 * state.line_height;
+        if line.source_row_index.is_some_and(|index| {
+            state.source_rows[index].event_id.as_deref()
+                == selected_timeline_event_id(state_ref(frame_window_for(hwnd)))
+        }) {
+            let rect = RECT {
+                left: 0,
+                top: line_y,
+                right: client_rect.right,
+                bottom: line_y + state.line_height,
+            };
+            FillRect(hdc, &rect, selection_brush);
+        }
         if state.selected_find_source_row_index.is_some()
             && line.source_row_index == state.selected_find_source_row_index
         {
@@ -4220,6 +4304,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
     }
 
     DeleteObject(find_highlight_brush);
+    DeleteObject(selection_brush);
     if !font.is_null() && !previous.is_null() {
         SelectObject(hdc, previous);
     }
@@ -4736,6 +4821,41 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     }
     append_menu_text(edit_menu, MF_STRING, MENU_ID_FIND, "Find...\tCtrl+F")?;
 
+    let room_menu = CreatePopupMenu();
+    if room_menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    append_menu_text(
+        room_menu,
+        MF_STRING,
+        MENU_ID_ROOM_ACCEPT_INVITE,
+        "Accept Invite",
+    )?;
+    append_menu_text(
+        room_menu,
+        MF_STRING,
+        MENU_ID_ROOM_REJECT_INVITE,
+        "Reject Invite",
+    )?;
+    append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_PART, "Part Room")?;
+
+    let message_menu = CreatePopupMenu();
+    if message_menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    append_menu_text(
+        message_menu,
+        MF_STRING,
+        MENU_ID_MESSAGE_REPLY,
+        "Reply to Message",
+    )?;
+    append_menu_text(
+        message_menu,
+        MF_STRING,
+        MENU_ID_MESSAGE_REDACT,
+        "Redact Message",
+    )?;
+
     let account_menu = CreatePopupMenu();
     if account_menu.is_null() {
         return Err(last_os_error("CreatePopupMenu"));
@@ -4785,14 +4905,89 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         return Err(last_os_error("CreateMenu"));
     }
     append_menu_text(frame_menu, MF_POPUP, edit_menu as usize, "Edit")?;
+    append_menu_text(frame_menu, MF_POPUP, room_menu as usize, "Room")?;
+    append_menu_text(frame_menu, MF_POPUP, message_menu as usize, "Message")?;
     append_menu_text(frame_menu, MF_POPUP, account_menu as usize, "Account")?;
 
     if SetMenu(hwnd, frame_menu) == 0 {
         return Err(last_os_error("SetMenu"));
     }
-    state_mut(hwnd).controls.account_menu = account_menu;
+    let controls = &mut state_mut(hwnd).controls;
+    controls.room_menu = room_menu;
+    controls.message_menu = message_menu;
+    controls.account_menu = account_menu;
     if DrawMenuBar(hwnd) == 0 {
         return Err(last_os_error("DrawMenuBar"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RoomActionState {
+    accept_invite_enabled: bool,
+    reject_invite_enabled: bool,
+    part_room_enabled: bool,
+}
+
+fn active_room_action_state(state: &WindowState) -> RoomActionState {
+    RoomActionState {
+        accept_invite_enabled: resolve_invite_command_room_id(state, "accept", None).is_ok(),
+        reject_invite_enabled: resolve_invite_command_room_id(state, "reject", None).is_ok(),
+        part_room_enabled: resolve_part_slash_command_room_id(state, None).is_ok(),
+    }
+}
+
+unsafe fn refresh_room_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    let action_state = active_room_action_state(state_ref(hwnd));
+    for (item_id, enabled) in [
+        (
+            MENU_ID_ROOM_ACCEPT_INVITE,
+            action_state.accept_invite_enabled,
+        ),
+        (
+            MENU_ID_ROOM_REJECT_INVITE,
+            action_state.reject_invite_enabled,
+        ),
+        (MENU_ID_ROOM_PART, action_state.part_room_enabled),
+    ] {
+        let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
+        if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
+            return Err(last_os_error("EnableMenuItem"));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageActionState {
+    selected_event_id: Option<String>,
+}
+
+fn selected_timeline_event_id(state: &WindowState) -> Option<&str> {
+    state.selected_timeline_event.as_ref().and_then(|selected| {
+        (selected.view_id == state.active_view).then_some(selected.event_id.as_str())
+    })
+}
+
+fn active_message_action_state(state: &WindowState) -> MessageActionState {
+    let selected_event_id = match state.active_view {
+        ViewId::Room(_) | ViewId::Thread { .. } => {
+            selected_timeline_event_id(state).map(str::to_owned)
+        }
+        ViewId::Status => None,
+    };
+    MessageActionState { selected_event_id }
+}
+
+unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    let enabled = active_message_action_state(state_ref(hwnd))
+        .selected_event_id
+        .is_some();
+    let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
+    for item_id in [MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_REDACT] {
+        if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
+            return Err(last_os_error("EnableMenuItem"));
+        }
     }
     Ok(())
 }
@@ -4893,6 +5088,26 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
     let command_id = wparam & 0xffff;
     let (title, result) = match command_id {
         MENU_ID_FIND => ("Find", begin_find_dialog(hwnd).map(|_| Some(()))),
+        MENU_ID_ROOM_ACCEPT_INVITE => (
+            "Room",
+            submit_room_menu_action(hwnd, submit_accept_slash_command).map(|_| Some(())),
+        ),
+        MENU_ID_ROOM_REJECT_INVITE => (
+            "Room",
+            submit_room_menu_action(hwnd, submit_reject_slash_command).map(|_| Some(())),
+        ),
+        MENU_ID_ROOM_PART => (
+            "Room",
+            submit_room_menu_action(hwnd, submit_part_slash_command).map(|_| Some(())),
+        ),
+        MENU_ID_MESSAGE_REPLY => (
+            "Message",
+            prefill_reply_to_selected_message(hwnd).map(|_| Some(())),
+        ),
+        MENU_ID_MESSAGE_REDACT => (
+            "Message",
+            submit_redact_selected_message(hwnd).map(|_| Some(())),
+        ),
         MENU_ID_LOGIN => (
             "Account",
             show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -4936,6 +5151,39 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
     }
 
     true
+}
+
+unsafe fn submit_room_menu_action(
+    hwnd: HWND,
+    submit: fn(&mut WindowState, Option<&str>) -> Result<String, String>,
+) -> Result<(), String> {
+    let result = submit(state_mut(hwnd), None);
+    match result {
+        Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+    }
+}
+
+unsafe fn prefill_reply_to_selected_message(hwnd: HWND) -> Result<(), String> {
+    let Some(event_id) = selected_timeline_event_id(state_ref(hwnd)) else {
+        return set_local_command_status(hwnd, "no message selected".to_owned());
+    };
+    set_compose_text(hwnd, &reply_compose_text(event_id))?;
+    SetFocus(compose_edit(hwnd)?);
+    Ok(())
+}
+
+fn reply_compose_text(event_id: &str) -> String {
+    format!("/reply {event_id} ")
+}
+
+unsafe fn submit_redact_selected_message(hwnd: HWND) -> Result<(), String> {
+    let Some(event_id) = selected_timeline_event_id(state_ref(hwnd)).map(str::to_owned) else {
+        return set_local_command_status(hwnd, "no message selected".to_owned());
+    };
+    let result = submit_redact_slash_command(state_mut(hwnd), event_id);
+    match result {
+        Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+    }
 }
 
 unsafe fn handle_switchbar_command(hwnd: HWND, wparam: WPARAM) -> bool {
@@ -6056,7 +6304,8 @@ fn push_room_activity_row(
                     sender_prefix,
                     body,
                 )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
             );
         }
         RoomActivityKind::Image(message) => {
@@ -6075,7 +6324,8 @@ fn push_room_activity_row(
                 format!("* {}", message.sender),
                 body,
             )
-            .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id));
+            .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+            .with_event_id(room_activity_event_id(activity));
             row.image_state = image_state;
             rows.push(row);
         }
@@ -6092,7 +6342,8 @@ fn push_room_activity_row(
                     format!("* {}", message.sender),
                     body,
                 )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
             );
         }
         RoomActivityKind::Audio(message) => {
@@ -6108,7 +6359,8 @@ fn push_room_activity_row(
                     format!("* {}", message.sender),
                     body,
                 )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
             );
         }
         RoomActivityKind::UnsupportedMessage(message) => {
@@ -6122,7 +6374,8 @@ fn push_room_activity_row(
                     format!("* {}", message.sender),
                     body,
                 )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
             );
         }
         RoomActivityKind::StateNotice(notice) => match &notice.content {
@@ -6137,7 +6390,8 @@ fn push_room_activity_row(
                         "*".to_owned(),
                         body,
                     )
-                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                    .with_event_id(room_activity_event_id(activity)),
                 );
             }
             RoomStateNoticeContent::Member {
@@ -6164,7 +6418,8 @@ fn push_room_activity_row(
                         "*".to_owned(),
                         body,
                     )
-                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                    .with_event_id(room_activity_event_id(activity)),
                 );
             }
         },
@@ -6179,7 +6434,8 @@ fn push_room_activity_row(
                     "*".to_owned(),
                     body,
                 )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id)),
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
             );
         }
     }
@@ -7049,11 +7305,10 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
         state.model.selected_room.as_deref(),
         &state.model,
     );
-    if matches!(resolved_active_view, ViewId::Status) {
-        state.active_view = ViewId::Status;
-    } else {
-        state.active_view = resolved_active_view;
+    if state.active_view != resolved_active_view {
+        state.selected_timeline_event = None;
     }
+    state.active_view = resolved_active_view;
 
     removed
 }
@@ -7347,6 +7602,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         "tracked child HWND must match registry"
     );
     if state.active_view == view_id {
+        state.selected_timeline_event = None;
         state.active_view = resolve_active_view(
             &state.active_view,
             state.model.selected_room.as_deref(),
@@ -7627,6 +7883,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 (rows, member_rows, image_requests)
             };
             dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
+            validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
             recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Timeline(&rows));
@@ -7662,6 +7919,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 (rows, member_rows, image_requests)
             };
             dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
+            validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
             recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Timeline(&rows));
@@ -7721,6 +7979,9 @@ unsafe fn apply_view_activation_state(
 
     {
         let state = state_mut(hwnd);
+        if state.active_view != *view_id {
+            state.selected_timeline_event = None;
+        }
         state.active_view = view_id.clone();
     }
 
@@ -7808,6 +8069,9 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
             state.model.selected_room.as_deref(),
             &state.model,
         );
+        if state.active_view != active {
+            state.selected_timeline_event = None;
+        }
         state.active_view = active.clone();
         active
     };
@@ -9678,6 +9942,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.room_activity.clear();
         state.room_activity_read_targets.clear();
         state.find_states.clear();
+        state.selected_timeline_event = None;
         state.model = initial_model();
         state.decoded_images.clear();
     }
@@ -12842,6 +13107,7 @@ mod tests {
             views: BTreeMap::new(),
             hwnd_views: BTreeMap::new(),
             active_view: ViewId::Status,
+            selected_timeline_event: None,
             find_states: BTreeMap::new(),
             switchbar_views: Vec::new(),
             room_activity: BTreeSet::new(),
@@ -20669,6 +20935,119 @@ mod tests {
             })]
         );
 
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn active_room_action_state_matches_active_invite_and_joined_views() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            invited_room("!invite:example", "Invite"),
+            room("!joined:example", "Joined", false),
+        ];
+
+        state.active_view = room_view_id("!invite:example");
+        assert_eq!(
+            active_room_action_state(&state),
+            RoomActionState {
+                accept_invite_enabled: true,
+                reject_invite_enabled: true,
+                part_room_enabled: false,
+            }
+        );
+
+        state.active_view = thread_view_id("!joined:example", "$thread:example");
+        assert_eq!(
+            active_room_action_state(&state),
+            RoomActionState {
+                accept_invite_enabled: false,
+                reject_invite_enabled: false,
+                part_room_enabled: true,
+            }
+        );
+    }
+
+    #[test]
+    fn active_message_action_state_requires_a_selected_rendered_event() {
+        let mut state = test_state();
+        state.active_view = room_view_id("!room:example");
+        assert_eq!(
+            active_message_action_state(&state),
+            MessageActionState {
+                selected_event_id: None
+            }
+        );
+
+        state.selected_timeline_event = Some(SelectedTimelineEvent {
+            view_id: state.active_view.clone(),
+            event_id: "$missing:example".to_owned(),
+        });
+        let rows = vec![TimelineRow::full_width(
+            TimelineRowKind::Plain,
+            "context".to_owned(),
+        )];
+        validate_selected_timeline_event(&mut state, &room_view_id("!room:example"), &rows);
+        assert_eq!(
+            active_message_action_state(&state),
+            MessageActionState {
+                selected_event_id: None
+            }
+        );
+
+        let rows = vec![
+            TimelineRow::log(
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                "message".to_owned(),
+                "[00:00]".to_owned(),
+                "@alice:".to_owned(),
+                "message".to_owned(),
+            )
+            .with_event_id(Some("$event:example")),
+        ];
+        state.selected_timeline_event = Some(SelectedTimelineEvent {
+            view_id: state.active_view.clone(),
+            event_id: "$event:example".to_owned(),
+        });
+        validate_selected_timeline_event(&mut state, &room_view_id("!room:example"), &rows);
+        assert_eq!(
+            active_message_action_state(&state),
+            MessageActionState {
+                selected_event_id: Some("$event:example".to_owned())
+            }
+        );
+    }
+
+    #[test]
+    fn reply_menu_prefill_does_not_submit_a_command() {
+        let state = test_state();
+        assert_eq!(reply_compose_text("$event-id"), "/reply $event-id ");
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn redact_menu_submission_matches_slash_command_submission() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.active_view = room_view_id("!room:example");
+        state.selected_timeline_event = Some(SelectedTimelineEvent {
+            view_id: state.active_view.clone(),
+            event_id: "$event-id".to_owned(),
+        });
+
+        let event_id = selected_timeline_event_id(&state).unwrap().to_owned();
+        let status = submit_redact_slash_command(&mut state, event_id).unwrap();
+
+        assert_eq!(status, "Redaction queued for $event-id");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::RedactEvent(RedactEventRequest {
+                room_id: "!room:example".to_owned(),
+                event_id: "$event-id".to_owned(),
+            })]
+        );
         stop_test_core(handle);
     }
 
