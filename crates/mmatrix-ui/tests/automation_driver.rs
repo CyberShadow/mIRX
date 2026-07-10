@@ -11179,14 +11179,14 @@ fn automation_driver_find_active_status_view_matches_status_lines()
     let initial_state = app.dump_ui_state()?;
     let selected_text = only_view_line_containing(
         find_view(&initial_state, &ViewIdentity::Status),
-        "cross_signing",
+        "cross-signing",
     );
 
-    let result = app.find_active_view("cross_signing")?;
+    let result = app.find_active_view("cross-signing")?;
     assert_find_result(
         &result,
         &ViewIdentity::Status,
-        "cross_signing",
+        "cross-signing",
         true,
         1,
         Some(0),
@@ -11199,7 +11199,7 @@ fn automation_driver_find_active_status_view_matches_status_lines()
     assert_ui_active_find(
         &ui_state,
         &ViewIdentity::Status,
-        "cross_signing",
+        "cross-signing",
         true,
         1,
         Some(0),
@@ -11209,7 +11209,7 @@ fn automation_driver_find_active_status_view_matches_status_lines()
         ui_state
             .status_bar
             .text
-            .contains("find: 1/1 \"cross_signing\"")
+            .contains("find: 1/1 \"cross-signing\"")
     );
 
     let model = app.dump_model()?;
