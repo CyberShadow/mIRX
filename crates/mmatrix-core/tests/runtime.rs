@@ -4,14 +4,14 @@ use mmatrix_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig,
     CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomImageMediaRequest, JoinRoomRequest, LeaveRoomRequest,
+    EditMessageRequest, Event, FetchRoomMediaRequest, JoinRoomRequest, LeaveRoomRequest,
     LoginRequest, MarkRoomReadRequest, Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
     RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
@@ -406,22 +406,22 @@ fn set_room_topic_before_login_emits_set_room_topic_error() {
 }
 
 #[test]
-fn fetch_room_image_media_before_login_emits_fetch_room_image_media_error() {
+fn fetch_room_media_before_login_emits_fetch_room_media_error() {
     assert_invalid_authenticated_command(
-        Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+        Command::FetchRoomMedia(FetchRoomMediaRequest {
             room_id: "!ops:example.org".to_owned(),
             activity_id: "event:$image:example.org".to_owned(),
             event_id: "$image:example.org".to_owned(),
             source: RoomMediaSource::Plain {
                 url: "mxc://example.org/image".to_owned(),
             },
-            format: RoomImageMediaFormat::Thumbnail {
+            format: RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
         }),
-        Operation::FetchRoomImageMedia,
-        "fetch room image media requires an authenticated session",
+        Operation::FetchRoomMedia,
+        "fetch room media requires an authenticated session",
     );
 }
 
@@ -815,17 +815,17 @@ fn redact_event_request_round_trips_through_serde() {
 }
 
 #[test]
-fn fetch_room_image_media_request_round_trips_through_serde() {
+fn fetch_room_media_request_round_trips_through_serde() {
     for (request, json) in [
         (
-            FetchRoomImageMediaRequest {
+            FetchRoomMediaRequest {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image:example.org".to_owned(),
                 event_id: "$image:example.org".to_owned(),
                 source: RoomMediaSource::Plain {
                     url: "mxc://example.org/image".to_owned(),
                 },
-                format: RoomImageMediaFormat::Thumbnail {
+                format: RoomMediaFormat::Thumbnail {
                     width: 160,
                     height: 120,
                 },
@@ -833,22 +833,22 @@ fn fetch_room_image_media_request_round_trips_through_serde() {
             r#"{"room_id":"!room:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"plain","url":"mxc://example.org/image"},"format":{"type":"thumbnail","width":160,"height":120}}"#,
         ),
         (
-            FetchRoomImageMediaRequest {
+            FetchRoomMediaRequest {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image:example.org".to_owned(),
                 event_id: "$image:example.org".to_owned(),
                 source: encrypted_media_source("mxc://example.org/encrypted-image"),
-                format: RoomImageMediaFormat::File,
+                format: RoomMediaFormat::File,
             },
             r#"{"room_id":"!room:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"encrypted","url":"mxc://example.org/encrypted-image","key":{"kty":"oct","key_ops":["decrypt","encrypt"],"alg":"A256CTR","k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ext":true},"iv":"AgICAgICAgICAgICAgICAg","hashes":{"sha256":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"},"v":"v2"},"format":{"type":"file"}}"#,
         ),
     ] {
         let serialized =
-            serde_json::to_string(&request).expect("serialize fetch room image media request");
+            serde_json::to_string(&request).expect("serialize fetch room media request");
         assert_eq!(serialized, json);
 
-        let restored: FetchRoomImageMediaRequest =
-            serde_json::from_str(json).expect("deserialize fetch room image media request");
+        let restored: FetchRoomMediaRequest =
+            serde_json::from_str(json).expect("deserialize fetch room media request");
         assert_eq!(restored, request);
     }
 }
@@ -1856,42 +1856,42 @@ fn room_history_backfill_event_rejects_invalid_tag() {
 }
 
 #[test]
-fn room_image_media_events_round_trip_through_serde() {
-    let loaded_event = Event::RoomImageMedia(RoomImageMedia {
+fn room_media_events_round_trip_through_serde() {
+    let loaded_event = Event::RoomMedia(RoomMedia {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image:example.org".to_owned(),
         event_id: "$image:example.org".to_owned(),
-        kind: RoomImageMediaKind::Loaded {
-            format: RoomImageMediaFormat::Thumbnail {
+        kind: RoomMediaKind::Loaded {
+            format: RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
             bytes: vec![1, 2, 3],
         },
     });
-    let failed_event = Event::RoomImageMedia(RoomImageMedia {
+    let failed_event = Event::RoomMedia(RoomMedia {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$image:example.org".to_owned(),
         event_id: "$image:example.org".to_owned(),
-        kind: RoomImageMediaKind::Failed {
-            format: RoomImageMediaFormat::File,
-            message: "failed to fetch room image media: unavailable".to_owned(),
+        kind: RoomMediaKind::Failed {
+            format: RoomMediaFormat::File,
+            message: "failed to fetch room media: unavailable".to_owned(),
         },
     });
 
     assert_eq!(
-        serde_json::to_string(&loaded_event).expect("serialize loaded room image media"),
-        r#"{"RoomImageMedia":{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"loaded","format":{"type":"thumbnail","width":160,"height":120},"bytes":[1,2,3]}}}"#
+        serde_json::to_string(&loaded_event).expect("serialize loaded room media"),
+        r#"{"RoomMedia":{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"loaded","format":{"type":"thumbnail","width":160,"height":120},"bytes":[1,2,3]}}}"#
     );
     assert_eq!(
-        serde_json::to_string(&failed_event).expect("serialize failed room image media"),
-        r#"{"RoomImageMedia":{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"failed","format":{"type":"file"},"message":"failed to fetch room image media: unavailable"}}}"#
+        serde_json::to_string(&failed_event).expect("serialize failed room media"),
+        r#"{"RoomMedia":{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"failed","format":{"type":"file"},"message":"failed to fetch room media: unavailable"}}}"#
     );
 
     for event in [loaded_event, failed_event] {
-        let json = serde_json::to_string(&event).expect("serialize room image media event");
+        let json = serde_json::to_string(&event).expect("serialize room media event");
         let restored: Event =
-            serde_json::from_str(&json).expect("deserialize room image media event");
+            serde_json::from_str(&json).expect("deserialize room media event");
         assert_eq!(restored, event);
     }
 }
@@ -2172,37 +2172,37 @@ fn invite_request_dtos_reject_unknown_fields() {
 }
 
 #[test]
-fn fetch_room_image_media_dtos_reject_unknown_fields() {
+fn fetch_room_media_dtos_reject_unknown_fields() {
     assert!(
-        serde_json::from_str::<FetchRoomImageMediaRequest>(
+        serde_json::from_str::<FetchRoomMediaRequest>(
             r#"{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","source":{"type":"plain","url":"mxc://example.org/image"},"format":{"type":"thumbnail","width":160,"height":120},"unexpected":"value"}"#
         )
         .is_err(),
-        "fetch room image media request must reject unknown fields"
+        "fetch room media request must reject unknown fields"
     );
 
     assert!(
-        serde_json::from_str::<RoomImageMedia>(
+        serde_json::from_str::<RoomMedia>(
             r#"{"room_id":"!ops:example.org","activity_id":"event:$image:example.org","event_id":"$image:example.org","kind":{"type":"loaded","format":{"type":"file"},"bytes":[1,2,3]},"unexpected":"value"}"#
         )
         .is_err(),
-        "room image media must reject unknown fields"
+        "room media must reject unknown fields"
     );
 
     assert!(
-        serde_json::from_str::<RoomImageMediaFormat>(
+        serde_json::from_str::<RoomMediaFormat>(
             r#"{"type":"thumbnail","width":160,"height":120,"unexpected":"value"}"#
         )
         .is_err(),
-        "room image media format must reject unknown fields"
+        "room media format must reject unknown fields"
     );
 
     assert!(
-        serde_json::from_str::<RoomImageMediaKind>(
+        serde_json::from_str::<RoomMediaKind>(
             r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":"value"}"#
         )
         .is_err(),
-        "room image media kind must reject unknown fields"
+        "room media kind must reject unknown fields"
     );
 
     assert!(

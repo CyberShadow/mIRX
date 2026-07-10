@@ -60,13 +60,13 @@ use tokio::task::JoinHandle;
 use crate::api::{
     BackfillRoomHistoryRequest, CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomImageMediaRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    FetchRoomMediaRequest, LoginRequest, MarkRoomReadRequest, Operation,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
     RoomTyping, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
@@ -711,11 +711,11 @@ pub(crate) fn summarize_joined_room_read_states(client: &Client) -> Vec<RoomRead
         .collect()
 }
 
-pub(crate) async fn fetch_room_image_media(
+pub(crate) async fn fetch_room_media(
     client: &Client,
-    request: FetchRoomImageMediaRequest,
-) -> RoomImageMedia {
-    let FetchRoomImageMediaRequest {
+    request: FetchRoomMediaRequest,
+) -> RoomMedia {
+    let FetchRoomMediaRequest {
         room_id,
         activity_id,
         event_id,
@@ -723,14 +723,14 @@ pub(crate) async fn fetch_room_image_media(
         format,
     } = request;
 
-    let params = match room_image_media_request_parameters(&source, &format) {
+    let params = match room_media_request_parameters(&source, &format) {
         Ok(params) => params,
         Err(err) => {
-            return RoomImageMedia {
+            return RoomMedia {
                 room_id,
                 activity_id,
                 event_id,
-                kind: RoomImageMediaKind::Failed {
+                kind: RoomMediaKind::Failed {
                     format,
                     message: err.to_string(),
                 },
@@ -739,32 +739,32 @@ pub(crate) async fn fetch_room_image_media(
     };
 
     match client.media().get_media_content(&params, true).await {
-        Ok(bytes) => RoomImageMedia {
+        Ok(bytes) => RoomMedia {
             room_id,
             activity_id,
             event_id,
-            kind: RoomImageMediaKind::Loaded { format, bytes },
+            kind: RoomMediaKind::Loaded { format, bytes },
         },
-        Err(err) => RoomImageMedia {
+        Err(err) => RoomMedia {
             room_id,
             activity_id,
             event_id,
-            kind: RoomImageMediaKind::Failed {
+            kind: RoomMediaKind::Failed {
                 format,
-                message: format!("failed to fetch room image media: {err}"),
+                message: format!("failed to fetch room media: {err}"),
             },
         },
     }
 }
 
-fn room_image_media_request_parameters(
+fn room_media_request_parameters(
     source: &RoomMediaSource,
-    format: &RoomImageMediaFormat,
+    format: &RoomMediaFormat,
 ) -> Result<MediaRequestParameters, MatrixCoreError> {
     let source = media_source_from_room_media_source(source)?;
 
     let format = match format {
-        RoomImageMediaFormat::Thumbnail { width, height } => {
+        RoomMediaFormat::Thumbnail { width, height } => {
             if *width == 0 || *height == 0 {
                 return Err(MatrixCoreError::new(
                     "thumbnail width and height must be greater than zero",
@@ -782,7 +782,7 @@ fn room_image_media_request_parameters(
                 height,
             ))
         }
-        RoomImageMediaFormat::File => MediaFormat::File,
+        RoomMediaFormat::File => MediaFormat::File,
     };
 
     Ok(MediaRequestParameters { source, format })
@@ -2727,7 +2727,7 @@ mod tests {
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
         ReactionEventIndexEntry, attach_reply_relation, attach_thread_relation,
         attach_thread_reply_relation, backfill_room_history, cancelled_state,
-        direct_user_ids_by_room_from_content, fetch_room_image_media, insert_pending_outgoing_kind,
+        direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
         map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
@@ -2736,7 +2736,7 @@ mod tests {
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
-        room_history_backfill_events_from_timeline, room_image_media_request_parameters,
+        room_history_backfill_events_from_timeline, room_media_request_parameters,
         room_list_update_is_relevant, room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags,
@@ -2746,12 +2746,12 @@ mod tests {
     };
     use crate::api::{
         BackfillRoomHistoryRequest, CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus,
-        E2eeRecoveryState, Event, FetchRoomImageMediaRequest, Operation,
+        E2eeRecoveryState, Event, FetchRoomMediaRequest, Operation,
         ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind, RoomActivityRelation,
         RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
         RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
         RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-        RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+        RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
         RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
         RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
@@ -2948,13 +2948,13 @@ mod tests {
         (runtime, client, room_send_queue)
     }
 
-    fn room_image_media_request(source: RoomMediaSource) -> FetchRoomImageMediaRequest {
-        FetchRoomImageMediaRequest {
+    fn room_media_request(source: RoomMediaSource) -> FetchRoomMediaRequest {
+        FetchRoomMediaRequest {
             room_id: "!room:example.org".to_owned(),
             activity_id: "event:$image:example.org".to_owned(),
             event_id: "$image:example.org".to_owned(),
             source,
-            format: RoomImageMediaFormat::Thumbnail {
+            format: RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
@@ -3023,12 +3023,12 @@ mod tests {
     }
 
     #[test]
-    fn room_image_media_request_parameters_map_plain_thumbnail_requests() {
-        let params = room_image_media_request_parameters(
+    fn room_media_request_parameters_map_plain_thumbnail_requests() {
+        let params = room_media_request_parameters(
             &RoomMediaSource::Plain {
                 url: "mxc://example.org/image".to_owned(),
             },
-            &RoomImageMediaFormat::Thumbnail {
+            &RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
@@ -3059,7 +3059,24 @@ mod tests {
     }
 
     #[test]
-    fn fetch_room_image_media_returns_typed_failure_for_invalid_mxc() {
+    fn room_media_request_parameters_map_plain_file_requests() {
+        let params = room_media_request_parameters(
+            &RoomMediaSource::Plain {
+                url: "mxc://example.org/file".to_owned(),
+            },
+            &RoomMediaFormat::File,
+        )
+        .expect("build media request parameters");
+
+        match params.source {
+            MediaSource::Plain(uri) => assert_eq!(uri.as_str(), "mxc://example.org/file"),
+            other => panic!("expected plain MXC source, got {other:?}"),
+        }
+        assert!(matches!(params.format, MediaFormat::File));
+    }
+
+    #[test]
+    fn fetch_room_media_returns_typed_failure_for_invalid_mxc() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -3067,9 +3084,9 @@ mod tests {
         let client = build_test_client();
 
         let media = runtime.block_on(async {
-            fetch_room_image_media(
+            fetch_room_media(
                 &client,
-                room_image_media_request(RoomMediaSource::Plain {
+                room_media_request(RoomMediaSource::Plain {
                     url: "not-an-mxc-uri".to_owned(),
                 }),
             )
@@ -3080,10 +3097,10 @@ mod tests {
         assert_eq!(media.activity_id, "event:$image:example.org");
         assert_eq!(media.event_id, "$image:example.org");
         match media.kind {
-            RoomImageMediaKind::Failed { format, message } => {
+            RoomMediaKind::Failed { format, message } => {
                 assert_eq!(
                     format,
-                    RoomImageMediaFormat::Thumbnail {
+                    RoomMediaFormat::Thumbnail {
                         width: 160,
                         height: 120,
                     }
@@ -3093,15 +3110,15 @@ mod tests {
                     "unexpected error message: {message}"
                 );
             }
-            other => panic!("expected failed room image media, got {other:?}"),
+            other => panic!("expected failed room media, got {other:?}"),
         }
     }
 
     #[test]
-    fn room_image_media_request_parameters_map_encrypted_thumbnail_requests() {
-        let params = room_image_media_request_parameters(
+    fn room_media_request_parameters_map_encrypted_thumbnail_requests() {
+        let params = room_media_request_parameters(
             &encrypted_media_source("mxc://example.org/image"),
-            &RoomImageMediaFormat::Thumbnail {
+            &RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
@@ -3115,6 +3132,11 @@ mod tests {
                 assert_eq!(json["url"], "mxc://example.org/image");
                 assert_eq!(json["v"], "v2");
                 assert_eq!(json["key"]["kty"], "oct");
+                assert_eq!(json["key"]["alg"], "A256CTR");
+                assert_eq!(
+                    json["key"]["k"],
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                );
                 assert_eq!(
                     json["hashes"]["sha256"],
                     "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
@@ -3125,18 +3147,87 @@ mod tests {
     }
 
     #[test]
-    fn room_image_media_request_parameters_reject_zero_thumbnail_dimensions() {
+    fn room_media_request_parameters_map_encrypted_file_requests() {
+        let params = room_media_request_parameters(
+            &encrypted_media_source("mxc://example.org/audio"),
+            &RoomMediaFormat::File,
+        )
+        .expect("build encrypted media request parameters");
+
+        assert!(matches!(params.format, MediaFormat::File));
+        match params.source {
+            MediaSource::Encrypted(file) => {
+                let json = serde_json::to_value(file.as_ref())
+                    .expect("serialize encrypted media request source");
+                assert_eq!(json["url"], "mxc://example.org/audio");
+                assert_eq!(json["v"], "v2");
+                assert_eq!(json["key"]["kty"], "oct");
+                assert_eq!(json["key"]["alg"], "A256CTR");
+                assert_eq!(
+                    json["key"]["k"],
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                );
+                assert_eq!(
+                    json["hashes"]["sha256"],
+                    "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"
+                );
+            }
+            other => panic!("expected encrypted media source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_room_media_file_returns_typed_failure_for_invalid_mxc() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let client = build_test_client();
+
+        let media = runtime.block_on(async {
+            fetch_room_media(
+                &client,
+                FetchRoomMediaRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    activity_id: "event:$file:example.org".to_owned(),
+                    event_id: "$file:example.org".to_owned(),
+                    source: RoomMediaSource::Plain {
+                        url: "not-an-mxc-uri".to_owned(),
+                    },
+                    format: RoomMediaFormat::File,
+                },
+            )
+            .await
+        });
+
+        assert_eq!(media.room_id, "!room:example.org");
+        assert_eq!(media.activity_id, "event:$file:example.org");
+        assert_eq!(media.event_id, "$file:example.org");
+        match media.kind {
+            RoomMediaKind::Failed { format, message } => {
+                assert_eq!(format, RoomMediaFormat::File);
+                assert!(
+                    message.starts_with("invalid media MXC URI:"),
+                    "unexpected error message: {message}"
+                );
+            }
+            other => panic!("expected failed room media, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn room_media_request_parameters_reject_zero_thumbnail_dimensions() {
         for format in [
-            RoomImageMediaFormat::Thumbnail {
+            RoomMediaFormat::Thumbnail {
                 width: 0,
                 height: 120,
             },
-            RoomImageMediaFormat::Thumbnail {
+            RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 0,
             },
         ] {
-            let err = room_image_media_request_parameters(
+            let err = room_media_request_parameters(
                 &RoomMediaSource::Plain {
                     url: "mxc://example.org/image".to_owned(),
                 },
@@ -3153,7 +3244,7 @@ mod tests {
 
     #[test]
     fn encrypted_media_request_parameters_reject_invalid_metadata() {
-        let err = room_image_media_request_parameters(
+        let err = room_media_request_parameters(
             &RoomMediaSource::Encrypted {
                 url: "mxc://example.org/image".to_owned(),
                 key: RoomEncryptedFileKey {
@@ -3167,7 +3258,7 @@ mod tests {
                 hashes: encrypted_file_hashes(),
                 v: "v2".to_owned(),
             },
-            &RoomImageMediaFormat::Thumbnail {
+            &RoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },

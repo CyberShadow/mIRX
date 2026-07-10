@@ -211,8 +211,8 @@ async fn handle_command(
         Command::BackfillRoomHistory(request) => {
             handle_backfill_room_history(event_tx, state, request).await
         }
-        Command::FetchRoomImageMedia(request) => {
-            handle_fetch_room_image_media(event_tx, state, request).await
+        Command::FetchRoomMedia(request) => {
+            handle_fetch_room_media(event_tx, state, request).await
         }
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
         Command::RecoverE2ee(request) => handle_recover_e2ee(event_tx, state, &request).await,
@@ -717,22 +717,22 @@ async fn handle_backfill_room_history(
     false
 }
 
-async fn handle_fetch_room_image_media(
+async fn handle_fetch_room_media(
     event_tx: &EventSender,
     state: &mut WorkerState,
-    request: crate::api::FetchRoomImageMediaRequest,
+    request: crate::api::FetchRoomMediaRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
         emit_invalid_state(
             event_tx,
-            Operation::FetchRoomImageMedia,
-            "fetch room image media requires an authenticated session",
+            Operation::FetchRoomMedia,
+            "fetch room media requires an authenticated session",
         );
         return false;
     };
 
-    let media = matrix::fetch_room_image_media(client, request).await;
-    emit_event(event_tx, Event::RoomImageMedia(media));
+    let media = matrix::fetch_room_media(client, request).await;
+    emit_event(event_tx, Event::RoomMedia(media));
 
     false
 }

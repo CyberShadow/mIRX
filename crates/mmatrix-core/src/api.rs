@@ -27,7 +27,7 @@ pub enum Command {
     RedactEvent(RedactEventRequest),
     MarkRoomRead(MarkRoomReadRequest),
     BackfillRoomHistory(BackfillRoomHistoryRequest),
-    FetchRoomImageMedia(FetchRoomImageMediaRequest),
+    FetchRoomMedia(FetchRoomMediaRequest),
     RefreshE2eeStatus,
     RecoverE2ee(RecoverE2eeRequest),
     AcceptVerification(VerificationFlowId),
@@ -159,17 +159,17 @@ pub struct BackfillRoomHistoryRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FetchRoomImageMediaRequest {
+pub struct FetchRoomMediaRequest {
     pub room_id: String,
     pub activity_id: String,
     pub event_id: String,
     pub source: RoomMediaSource,
-    pub format: RoomImageMediaFormat,
+    pub format: RoomMediaFormat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RoomImageMediaFormat {
+pub enum RoomMediaFormat {
     Thumbnail { width: u32, height: u32 },
     File,
 }
@@ -445,11 +445,11 @@ pub enum RoomActivityUpdateTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RoomImageMedia {
+pub struct RoomMedia {
     pub room_id: String,
     pub activity_id: String,
     pub event_id: String,
-    pub kind: RoomImageMediaKind,
+    pub kind: RoomMediaKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -578,13 +578,13 @@ pub enum RoomActivityUpdateKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RoomImageMediaKind {
+pub enum RoomMediaKind {
     Loaded {
-        format: RoomImageMediaFormat,
+        format: RoomMediaFormat,
         bytes: Vec<u8>,
     },
     Failed {
-        format: RoomImageMediaFormat,
+        format: RoomMediaFormat,
         message: String,
     },
 }
@@ -717,7 +717,7 @@ pub enum Operation {
     RedactEvent,
     MarkRoomRead,
     BackfillRoomHistory,
-    FetchRoomImageMedia,
+    FetchRoomMedia,
     RoomList,
     RoomReadState,
     E2eeStatus,
@@ -738,7 +738,7 @@ pub enum Event {
     RoomActivity(Box<RoomActivity>),
     RoomActivityUpdate(RoomActivityUpdate),
     RoomHistoryBackfill(RoomHistoryBackfill),
-    RoomImageMedia(RoomImageMedia),
+    RoomMedia(RoomMedia),
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),
