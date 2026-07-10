@@ -167,11 +167,32 @@ pub struct FetchRoomMediaRequest {
     pub format: RoomMediaFormat,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RoomMediaFormat {
     Thumbnail { width: u32, height: u32 },
     File,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum RoomMediaFormatDto {
+    Thumbnail { width: u32, height: u32 },
+    File {},
+}
+
+impl<'de> serde::Deserialize<'de> for RoomMediaFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match RoomMediaFormatDto::deserialize(deserializer)? {
+            RoomMediaFormatDto::Thumbnail { width, height } => {
+                Ok(Self::Thumbnail { width, height })
+            }
+            RoomMediaFormatDto::File {} => Ok(Self::File),
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

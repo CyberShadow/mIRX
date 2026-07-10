@@ -2197,6 +2197,16 @@ fn fetch_room_media_dtos_reject_unknown_fields() {
         "room media format must reject unknown fields"
     );
 
+    assert_eq!(
+        serde_json::from_str::<RoomMediaFormat>(r#"{"type":"file"}"#)
+            .expect("deserialize file room media format"),
+        RoomMediaFormat::File
+    );
+    assert!(
+        serde_json::from_str::<RoomMediaFormat>(r#"{"type":"file","width":1}"#).is_err(),
+        "file room media format must reject unknown fields"
+    );
+
     assert!(
         serde_json::from_str::<RoomMediaKind>(
             r#"{"type":"failed","format":{"type":"file"},"message":"unavailable","unexpected":"value"}"#
