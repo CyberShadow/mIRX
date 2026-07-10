@@ -2510,29 +2510,9 @@ pub(crate) async fn send_file(
 ) -> Result<(), MatrixCoreError> {
     let room = joined_room_by_id(client, &request.room_id)?;
     let path = request.path.clone();
-    let (bytes, size) = tokio::task::spawn_blocking(move || {
-        let metadata = std::fs::metadata(&path).map_err(|err| {
-            MatrixCoreError::new(format!(
-                "failed to read file path {}: {err}",
-                path.display()
-            ))
-        })?;
-        if !metadata.is_file() {
-            return Err(MatrixCoreError::new(format!(
-                "file path is not a regular file: {}",
-                path.display()
-            )));
-        }
-        let bytes = std::fs::read(&path).map_err(|err| {
-            MatrixCoreError::new(format!(
-                "failed to read file path {}: {err}",
-                path.display()
-            ))
-        })?;
-        Ok((bytes, metadata.len()))
-    })
-    .await
-    .map_err(|err| MatrixCoreError::new(format!("failed to read file path: {err}")))??;
+    let (bytes, size) = tokio::task::spawn_blocking(move || read_file_bytes(&path))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to read file path: {err}")))??;
 
     let filename = match request.filename {
         Some(filename) => filename,
@@ -2563,6 +2543,28 @@ pub(crate) async fn send_file(
         .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix file: {err}")))?;
 
     Ok(())
+}
+
+fn read_file_bytes(path: &std::path::Path) -> Result<(Vec<u8>, u64), MatrixCoreError> {
+    let metadata = std::fs::metadata(path).map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to read file path {}: {err}",
+            path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(MatrixCoreError::new(format!(
+            "file path is not a regular file: {}",
+            path.display()
+        )));
+    }
+    let bytes = std::fs::read(path).map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to read file path {}: {err}",
+            path.display()
+        ))
+    })?;
+    Ok((bytes, metadata.len()))
 }
 
 pub(crate) async fn send_reaction(
@@ -2793,7 +2795,7 @@ mod tests {
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
         outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
-        room_activity_from_sync_member, room_activity_from_sync_message,
+        read_file_bytes, room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
@@ -2805,6 +2807,27 @@ mod tests {
         sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
+
+    #[test]
+    fn read_file_bytes_reads_regular_files_and_rejects_missing_and_directories() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let file = temp.path().join("report.txt");
+        std::fs::write(&file, b"report").expect("write file");
+        assert_eq!(
+            read_file_bytes(&file).expect("read file"),
+            (b"report".to_vec(), 6)
+        );
+
+        let missing = read_file_bytes(&temp.path().join("missing.txt")).expect_err("missing file");
+        assert!(missing.to_string().contains("failed to read file path"));
+
+        let directory = read_file_bytes(temp.path()).expect_err("directory is not a file");
+        assert!(
+            directory
+                .to_string()
+                .contains("file path is not a regular file")
+        );
+    }
     use crate::api::{
         BackfillRoomHistoryRequest, CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus,
         E2eeRecoveryState, Event, FetchRoomMediaRequest, Operation,

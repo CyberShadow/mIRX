@@ -4811,6 +4811,47 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
 }
 
 #[test]
+fn automation_driver_send_file_target_uses_explicit_joined_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    assert_eq!(
+        app.send_file_target(
+            Some("!ops:example"),
+            "C:\\tmp\\report.txt",
+            Some("report.txt"),
+            Some("application/octet-stream"),
+        )?,
+        "!ops:example"
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_sendfile_slash_rejects_active_thread() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("thread-hierarchy.json");
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.select_view(thread_identity("!ops:example", "$thread-root"))?;
+    app.set_compose_text("/sendfile C:\\tmp\\report.txt")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.status,
+        "file attachments cannot target threads yet"
+    );
+    Ok(())
+}
+
+#[test]
 fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivated()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
