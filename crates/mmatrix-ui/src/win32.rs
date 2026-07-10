@@ -18199,7 +18199,9 @@ mod tests {
                 .model
                 .room_views
                 .get("!ops:example")
-                .and_then(|room_view| room_view.preview_media.get("event:$thread-video:example.org"))
+                .and_then(|room_view| room_view
+                    .preview_media
+                    .get("event:$thread-video:example.org"))
                 .cloned(),
             Some(RoomPreviewMediaState::Pending {
                 event_id: "$thread-video:example.org".to_owned(),
