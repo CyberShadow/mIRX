@@ -581,6 +581,7 @@ pub(crate) struct DumpRoomMenuState {
 pub(crate) struct DumpMessageMenuState {
     pub(crate) reply_enabled: bool,
     pub(crate) redact_enabled: bool,
+    pub(crate) save_attachment_enabled: bool,
     pub(crate) selected_event_id: Option<String>,
 }
 
@@ -1294,7 +1295,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RedactEvent => "redact_event",
         Operation::MarkRoomRead => "mark_room_read",
         Operation::BackfillRoomHistory => "backfill_room_history",
-        Operation::FetchRoomImageMedia => "fetch_room_image_media",
+        Operation::FetchRoomMedia => "fetch_room_media",
         Operation::RoomList => "room_list",
         Operation::RoomReadState => "room_read_state",
         Operation::E2eeStatus => "e2ee_status",

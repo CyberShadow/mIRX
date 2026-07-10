@@ -18,13 +18,13 @@ use std::time::Duration;
 use mmatrix_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CommandSender, CoreConfig,
     CoreErrorEvent, CoreHandle, CreateDirectRoomRequest, E2eeBackupState, E2eeCrossSigningStatus,
-    E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomImageMediaRequest,
+    E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomMediaRequest,
     JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
     ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioInfo, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
     RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary,
     RoomTyping, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
@@ -156,6 +156,7 @@ const MENU_ID_ROOM_REJECT_INVITE: usize = 40012;
 const MENU_ID_ROOM_PART: usize = 40013;
 const MENU_ID_MESSAGE_REPLY: usize = 40014;
 const MENU_ID_MESSAGE_REDACT: usize = 40015;
+const MENU_ID_MESSAGE_SAVE_ATTACHMENT: usize = 40016;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -586,18 +587,18 @@ struct ThreadViewModel {
 enum RoomImageMediaState {
     Pending {
         event_id: String,
-        format: RoomImageMediaFormat,
+        format: RoomMediaFormat,
     },
     Loaded {
         event_id: String,
-        format: RoomImageMediaFormat,
+        format: RoomMediaFormat,
         image_key: String,
         width: u32,
         height: u32,
     },
     Failed {
         event_id: String,
-        format: RoomImageMediaFormat,
+        format: RoomMediaFormat,
         message: String,
     },
 }
@@ -833,7 +834,7 @@ impl RoomViewModel {
         &self,
         activity_id: &str,
         event_id: &str,
-        format: &RoomImageMediaFormat,
+        format: &RoomMediaFormat,
     ) -> TimelineImageState {
         match self.image_media.get(activity_id) {
             Some(RoomImageMediaState::Pending {
@@ -872,7 +873,7 @@ impl RoomViewModel {
         &self,
         activity_id: &str,
         event_id: &str,
-        format: &RoomImageMediaFormat,
+        format: &RoomMediaFormat,
     ) -> bool {
         match self.image_media.get(activity_id) {
             Some(RoomImageMediaState::Pending {
@@ -897,7 +898,7 @@ impl RoomViewModel {
         &mut self,
         activity_id: String,
         event_id: String,
-        format: RoomImageMediaFormat,
+        format: RoomMediaFormat,
     ) -> Option<RoomImageMediaState> {
         self.image_media.insert(
             activity_id,
@@ -1464,8 +1465,8 @@ fn initialize_gdiplus_state() -> (Option<GdiplusSession>, Option<String>) {
     }
 }
 
-fn timeline_thumbnail_format() -> RoomImageMediaFormat {
-    RoomImageMediaFormat::Thumbnail {
+fn timeline_thumbnail_format() -> RoomMediaFormat {
+    RoomMediaFormat::Thumbnail {
         width: TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH as u32,
         height: TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT as u32,
     }
@@ -1475,13 +1476,13 @@ fn room_image_media_storage_key(
     room_id: &str,
     activity_id: &str,
     event_id: &str,
-    format: &RoomImageMediaFormat,
+    format: &RoomMediaFormat,
 ) -> String {
     match format {
-        RoomImageMediaFormat::Thumbnail { width, height } => {
+        RoomMediaFormat::Thumbnail { width, height } => {
             format!("{room_id}|{activity_id}|{event_id}|thumbnail:{width}x{height}")
         }
-        RoomImageMediaFormat::File => {
+        RoomMediaFormat::File => {
             format!("{room_id}|{activity_id}|{event_id}|file")
         }
     }
@@ -1815,7 +1816,7 @@ fn decoded_image_from_loaded_media(
     room_id: &str,
     activity_id: &str,
     event_id: &str,
-    format: &RoomImageMediaFormat,
+    format: &RoomMediaFormat,
     bytes: &[u8],
 ) -> Result<RoomImageMediaState, String> {
     let Some(_session) = state.gdiplus_session.as_ref() else {
@@ -1838,18 +1839,22 @@ fn decoded_image_from_loaded_media(
     })
 }
 
-fn apply_room_image_media_event(state: &mut WindowState, media: RoomImageMedia) {
-    let RoomImageMedia {
+fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
+    let RoomMedia {
         room_id,
         activity_id,
         event_id,
         kind,
     } = media;
     let format = match &kind {
-        RoomImageMediaKind::Loaded { format, .. } | RoomImageMediaKind::Failed { format, .. } => {
+        RoomMediaKind::Loaded { format, .. } | RoomMediaKind::Failed { format, .. } => {
             format
         }
     };
+    if format == &RoomMediaFormat::File {
+        apply_attachment_save_media_event(state, room_id, activity_id, event_id, kind);
+        return;
+    }
     if format != &timeline_thumbnail_format() {
         return;
     }
@@ -1877,12 +1882,12 @@ fn apply_room_image_media_event(state: &mut WindowState, media: RoomImageMedia) 
     }
 
     let next_state = match kind {
-        RoomImageMediaKind::Failed { format, message } => RoomImageMediaState::Failed {
+        RoomMediaKind::Failed { format, message } => RoomImageMediaState::Failed {
             event_id,
             format,
             message,
         },
-        RoomImageMediaKind::Loaded { format, bytes } => {
+        RoomMediaKind::Loaded { format, bytes } => {
             match decoded_image_from_loaded_media(
                 state,
                 &room_id,
@@ -2511,12 +2516,37 @@ struct WindowState {
     gdiplus_session: Option<GdiplusSession>,
     gdiplus_startup_error: Option<String>,
     recorded_commands: Vec<Command>,
+    pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
+    last_attachment_save: Option<AttachmentSaveResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SelectedTimelineEvent {
     view_id: ViewId,
     event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectedMediaAttachment {
+    room_id: String,
+    activity_id: String,
+    event_id: String,
+    filename: Option<String>,
+    source: RoomMediaSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingAttachmentSave {
+    room_id: String,
+    activity_id: String,
+    event_id: String,
+    filename: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AttachmentSaveResult {
+    Saved { room_id: String, activity_id: String, event_id: String, filename: String, path: PathBuf },
+    Failed { room_id: String, activity_id: String, event_id: String, filename: Option<String>, message: String },
 }
 
 impl Drop for WindowState {
@@ -2604,6 +2634,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         gdiplus_session,
         gdiplus_startup_error,
         recorded_commands: Vec::new(),
+        pending_attachment_saves: BTreeMap::new(),
+        last_attachment_save: None,
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;
@@ -2793,6 +2825,40 @@ fn profile_dir() -> Result<PathBuf, String> {
 
 fn session_path() -> Result<PathBuf, String> {
     Ok(profile_dir()?.join(SESSION_FILE_NAME))
+}
+
+fn attachments_dir() -> Result<PathBuf, String> { Ok(profile_dir()?.join("attachments")) }
+
+fn sanitize_attachment_path_component(value: &str) -> Result<String, String> {
+    if value.is_empty() || matches!(value, "." | "..") || value.ends_with([' ', '.'])
+        || value.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0') || c.is_ascii_control()) {
+        return Err(format!("invalid attachment path component: {value:?}"));
+    }
+    let upper = value.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (upper.len() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && matches!(upper.as_bytes()[3], b'1'..=b'9')) {
+        return Err(format!("invalid attachment path component: {value:?}"));
+    }
+    Ok(value.to_owned())
+}
+
+fn attachment_directory_component(value: &str) -> String {
+    value.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect()
+}
+
+fn attachment_save_path(room_id: &str, event_id: &str, filename: &str) -> Result<PathBuf, String> {
+    let filename = sanitize_attachment_path_component(filename)?;
+    Ok(attachments_dir()?.join(attachment_directory_component(room_id)).join(attachment_directory_component(event_id)).join(filename))
+}
+
+fn write_attachment_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| format!("attachment path {} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent).map_err(|err| format!("failed to create attachment directory {}: {err}", parent.display()))?;
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, bytes).map_err(|err| format!("failed to write attachment {}: {err}", temp_path.display()))?;
+    match fs::remove_file(path) { Ok(()) => {}, Err(err) if err.kind() == ErrorKind::NotFound => {}, Err(err) => return Err(format!("failed to replace attachment {}: {err}", path.display())) };
+    fs::rename(&temp_path, path).map_err(|err| format!("failed to save attachment {}: {err}", path.display()))
 }
 
 fn load_saved_session() -> Result<SavedSession, String> {
@@ -4856,6 +4922,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         MENU_ID_MESSAGE_REDACT,
         "Redact Message",
     )?;
+    append_menu_text(message_menu, MF_STRING, MENU_ID_MESSAGE_SAVE_ATTACHMENT, "Save Attachment...")?;
 
     let account_menu = CreatePopupMenu();
     if account_menu.is_null() {
@@ -4962,6 +5029,24 @@ unsafe fn refresh_room_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), S
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MessageActionState {
     selected_event_id: Option<String>,
+    save_attachment_enabled: bool,
+}
+
+fn selected_timeline_media_attachment(state: &WindowState) -> Option<SelectedMediaAttachment> {
+    let selected = state.selected_timeline_event.as_ref()?;
+    if selected.view_id != state.active_view { return None; }
+    let room_id = match &state.active_view { ViewId::Room(room_id) => room_id, ViewId::Thread { room_id, .. } => room_id, ViewId::Status => return None };
+    let activity = state.model.room_views.get(room_id)?.activities.iter().find(|activity| match &activity.kind {
+        RoomActivityKind::File(file) => file.event_id == selected.event_id,
+        RoomActivityKind::Audio(audio) => audio.event_id == selected.event_id,
+        _ => false,
+    })?;
+    let (event_id, filename, source) = match &activity.kind {
+        RoomActivityKind::File(file) => (&file.event_id, file.filename.clone(), file.source.clone()),
+        RoomActivityKind::Audio(audio) => (&audio.event_id, audio.filename.clone(), audio.source.clone()),
+        _ => return None,
+    };
+    Some(SelectedMediaAttachment { room_id: room_id.clone(), activity_id: activity.activity_id.clone(), event_id: event_id.clone(), filename, source })
 }
 
 fn selected_timeline_event_id(state: &WindowState) -> Option<&str> {
@@ -4992,7 +5077,8 @@ fn active_message_action_state(state: &WindowState) -> MessageActionState {
         }
         ViewId::Status => None,
     };
-    MessageActionState { selected_event_id }
+    let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
+    MessageActionState { selected_event_id, save_attachment_enabled }
 }
 
 unsafe fn active_message_action_state_for_automation(hwnd: HWND) -> MessageActionState {
@@ -5000,19 +5086,21 @@ unsafe fn active_message_action_state_for_automation(hwnd: HWND) -> MessageActio
         ViewId::Room(_) | ViewId::Thread { .. } => selected_timeline_event_id_for_automation(hwnd),
         ViewId::Status => None,
     };
-    MessageActionState { selected_event_id }
+    let state = state_ref(hwnd);
+    let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
+    MessageActionState { selected_event_id, save_attachment_enabled }
 }
 
 unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
-    let enabled = active_message_action_state_for_automation(hwnd)
-        .selected_event_id
-        .is_some();
-    let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
+    let action_state = active_message_action_state_for_automation(hwnd);
+    let flags = MF_BYCOMMAND | if action_state.selected_event_id.is_some() { MF_ENABLED } else { MF_GRAYED };
     for item_id in [MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_REDACT] {
         if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
         }
     }
+    let flags = MF_BYCOMMAND | if action_state.save_attachment_enabled { MF_ENABLED } else { MF_GRAYED };
+    if EnableMenuItem(popup_menu, MENU_ID_MESSAGE_SAVE_ATTACHMENT as u32, flags) == -1 { return Err(last_os_error("EnableMenuItem")); }
     Ok(())
 }
 
@@ -5133,6 +5221,7 @@ unsafe fn dump_message_menu_state(hwnd: HWND) -> Result<DumpMessageMenuState, St
     Ok(DumpMessageMenuState {
         reply_enabled: enabled,
         redact_enabled: enabled,
+        save_attachment_enabled: action_state.save_attachment_enabled,
         selected_event_id: action_state.selected_event_id,
     })
 }
@@ -5190,6 +5279,7 @@ unsafe fn menu_command_result(
             "Message",
             submit_redact_selected_message(hwnd).map(|_| Some(())),
         ),
+        MENU_ID_MESSAGE_SAVE_ATTACHMENT => ("Message", save_selected_message_attachment(hwnd).map(|_| Some(()))),
         MENU_ID_LOGIN => (
             "Account",
             show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -5229,6 +5319,37 @@ unsafe fn menu_command_result(
     };
 
     Some((title, result))
+}
+
+fn attachment_save_key(room_id: &str, activity_id: &str, event_id: &str) -> String {
+    format!("{room_id}\u{1f}{activity_id}\u{1f}{event_id}")
+}
+
+fn apply_attachment_save_media_event(state: &mut WindowState, room_id: String, activity_id: String, event_id: String, kind: RoomMediaKind) {
+    let key = attachment_save_key(&room_id, &activity_id, &event_id);
+    let Some(pending) = state.pending_attachment_saves.remove(&key) else { return; };
+    match kind {
+        RoomMediaKind::Loaded { bytes, .. } => match pending.filename.as_deref().ok_or_else(|| "attachment has no filename".to_owned()).and_then(|filename| attachment_save_path(&room_id, &event_id, filename).and_then(|path| { write_attachment_file(&path, &bytes)?; Ok((filename.to_owned(), path)) })) {
+            Ok((filename, path)) => { state.last_attachment_save = Some(AttachmentSaveResult::Saved { room_id, activity_id, event_id, filename, path: path.clone() }); state.model.status = format!("attachment saved: {}", path.display()); }
+            Err(message) => { state.last_attachment_save = Some(AttachmentSaveResult::Failed { room_id, activity_id, event_id, filename: pending.filename, message: message.clone() }); state.model.status = format!("attachment save failed: {message}"); }
+        },
+        RoomMediaKind::Failed { message, .. } => { state.last_attachment_save = Some(AttachmentSaveResult::Failed { room_id, activity_id, event_id, filename: pending.filename, message: message.clone() }); state.model.status = format!("attachment save failed: {message}"); }
+    }
+}
+
+unsafe fn save_selected_message_attachment(hwnd: HWND) -> Result<(), String> {
+    let attachment = selected_timeline_media_attachment(state_ref(hwnd)).ok_or_else(|| "no media attachment selected".to_owned())?;
+    let filename = attachment.filename.clone().ok_or_else(|| "attachment has no filename".to_owned())?;
+    sanitize_attachment_path_component(&filename)?;
+    let command = Command::FetchRoomMedia(FetchRoomMediaRequest { room_id: attachment.room_id.clone(), activity_id: attachment.activity_id.clone(), event_id: attachment.event_id.clone(), source: attachment.source.clone(), format: RoomMediaFormat::File });
+    let key = attachment_save_key(&attachment.room_id, &attachment.activity_id, &attachment.event_id);
+    let state = state_mut(hwnd);
+    state.pending_attachment_saves.insert(key.clone(), PendingAttachmentSave { room_id: attachment.room_id, activity_id: attachment.activity_id, event_id: attachment.event_id, filename: Some(filename.clone()) });
+    let sender = state.command_sender.as_ref().cloned().ok_or_else(|| "command sender is unavailable".to_owned())?;
+    if let Err(err) = sender.send(command.clone()) { state.pending_attachment_saves.remove(&key); return Err(format!("failed to enqueue fetch room media command: {err}")); }
+    #[cfg(test)] state.recorded_commands.push(command);
+    state.model.status = format!("saving attachment: {filename}");
+    Ok(())
 }
 
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> Option<Result<(), String>> {
@@ -6184,7 +6305,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
         Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
-        Event::RoomImageMedia(media) => apply_room_image_media_event(state, media),
+        Event::RoomMedia(media) => apply_room_media_event(state, media),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
@@ -7831,7 +7952,7 @@ struct RoomImageMediaDispatch {
     activity_id: String,
     event_id: String,
     source: RoomMediaSource,
-    format: RoomImageMediaFormat,
+    format: RoomMediaFormat,
 }
 
 fn timeline_image_thumbnail_source(
@@ -7918,7 +8039,7 @@ fn dispatch_lazy_room_image_media_requests(
             state.decoded_images.remove(&image_key);
         }
 
-        let command = Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+        let command = Command::FetchRoomMedia(FetchRoomMediaRequest {
             room_id: room_id.to_owned(),
             activity_id: request.activity_id.clone(),
             event_id: request.event_id.clone(),
@@ -12202,7 +12323,7 @@ fn dump_room_image_media_state(
     room_view: &RoomViewModel,
     activity_id: &str,
     event_id: &str,
-    format: &RoomImageMediaFormat,
+    format: &RoomMediaFormat,
 ) -> Option<DumpRoomImageMediaState> {
     match room_view.image_media.get(activity_id) {
         Some(RoomImageMediaState::Pending {
@@ -12300,7 +12421,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::RedactEvent => "redact event",
         Operation::MarkRoomRead => "mark room read",
         Operation::BackfillRoomHistory => "backfill room history",
-        Operation::FetchRoomImageMedia => "fetch room image media",
+        Operation::FetchRoomMedia => "fetch room image media",
         Operation::RoomList => "room list",
         Operation::RoomReadState => "room read state",
         Operation::E2eeStatus => "e2ee status",
@@ -13162,9 +13283,9 @@ mod tests {
         room_id: &str,
         activity_id: &str,
         event_id: &str,
-        kind: RoomImageMediaKind,
+        kind: RoomMediaKind,
     ) -> Event {
-        Event::RoomImageMedia(RoomImageMedia {
+        Event::RoomMedia(RoomMedia {
             room_id: room_id.to_owned(),
             activity_id: activity_id.to_owned(),
             event_id: event_id.to_owned(),
@@ -13306,6 +13427,8 @@ mod tests {
             gdiplus_startup_error,
             #[cfg(test)]
             recorded_commands: Vec::new(),
+            pending_attachment_saves: BTreeMap::new(),
+            last_attachment_save: None,
         }
     }
 
@@ -15052,7 +15175,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "unavailable".to_owned(),
                 },
@@ -16063,7 +16186,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "unavailable".to_owned(),
                 },
@@ -16126,7 +16249,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "current".to_owned(),
                 },
@@ -16140,7 +16263,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$different:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "stale".to_owned(),
                 },
@@ -16153,8 +16276,8 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
-                    format: RoomImageMediaFormat::File,
+                RoomMediaKind::Failed {
+                    format: RoomMediaFormat::File,
                     message: "wrong format".to_owned(),
                 },
             ),
@@ -16206,7 +16329,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "current".to_owned(),
                 },
@@ -16252,7 +16375,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "late".to_owned(),
                 },
@@ -16294,7 +16417,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Loaded {
+                RoomMediaKind::Loaded {
                     format: timeline_thumbnail_format(),
                     bytes: vec![0, 1, 2, 3],
                 },
@@ -16336,7 +16459,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Loaded {
+                RoomMediaKind::Loaded {
                     format: timeline_thumbnail_format(),
                     bytes: tiny_png_bytes(),
                 },
@@ -16403,7 +16526,7 @@ mod tests {
                 "!ops:example",
                 "event:$thread-image:example.org",
                 "$thread-image:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "unavailable".to_owned(),
                 },
@@ -16454,7 +16577,7 @@ mod tests {
         dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(
             state.recorded_commands,
-            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+            vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
                 event_id: "$image1:example.org".to_owned(),
@@ -16653,7 +16776,7 @@ mod tests {
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
-                RoomImageMediaKind::Failed {
+                RoomMediaKind::Failed {
                     format: timeline_thumbnail_format(),
                     message: "unavailable".to_owned(),
                 },
@@ -16703,7 +16826,7 @@ mod tests {
 
         assert_eq!(
             state.recorded_commands,
-            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+            vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
                 event_id: "$image1:example.org".to_owned(),
@@ -16780,7 +16903,7 @@ mod tests {
 
         assert_eq!(
             state.recorded_commands,
-            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+            vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
                 event_id: "$image1:example.org".to_owned(),
@@ -16833,7 +16956,7 @@ mod tests {
 
         assert_eq!(
             state.recorded_commands,
-            vec![Command::FetchRoomImageMedia(FetchRoomImageMediaRequest {
+            vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
                 room_id: "!ops:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
                 event_id: "$image1:example.org".to_owned(),
@@ -21252,7 +21375,8 @@ mod tests {
         assert_eq!(
             active_message_action_state(&state),
             MessageActionState {
-                selected_event_id: None
+                selected_event_id: None,
+                save_attachment_enabled: false,
             }
         );
 
@@ -21268,7 +21392,8 @@ mod tests {
         assert_eq!(
             active_message_action_state(&state),
             MessageActionState {
-                selected_event_id: None
+                selected_event_id: None,
+                save_attachment_enabled: false,
             }
         );
 
@@ -21293,7 +21418,8 @@ mod tests {
         assert_eq!(
             active_message_action_state(&state),
             MessageActionState {
-                selected_event_id: Some("$event:example".to_owned())
+                selected_event_id: Some("$event:example".to_owned()),
+                save_attachment_enabled: false,
             }
         );
     }
@@ -23080,6 +23206,24 @@ mod tests {
                 .send(Command::Shutdown)
                 .expect("shutdown command must enqueue");
             handle.join().expect("test core must stop cleanly");
+        });
+    }
+
+    #[test]
+    fn save_attachment_sanitizer_rejects_invalid_windows_names() {
+        for value in ["", ".", "..", "../file", "dir\\file", "C:file", "NUL", "com1", "name.", "name "] {
+            assert!(sanitize_attachment_path_component(value).is_err(), "{value:?} must be rejected");
+        }
+        assert_eq!(sanitize_attachment_path_component("report.pdf").unwrap(), "report.pdf");
+    }
+
+    #[test]
+    fn attachment_save_path_uses_profile_attachment_root() {
+        with_local_app_data(|root| {
+            assert_eq!(
+                attachment_save_path("!room:example", "$event:example", "report.pdf").unwrap(),
+                root.join(PROFILE_SUBDIR).join("attachments").join("_room_example").join("_event_example").join("report.pdf")
+            );
         });
     }
 }
