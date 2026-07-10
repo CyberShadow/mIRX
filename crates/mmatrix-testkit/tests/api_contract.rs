@@ -17,23 +17,25 @@ use mmatrix_core::{
     RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
 use mmatrix_testkit::{
-    BackfillRoomHistoryRequest, ComposeKey, FetchRoomImageMediaRequest, FindActiveViewArgs,
-    FindActiveViewResult, FrameSize, LaunchOptions, LoginArgs, MdiState, MdiView,
-    MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
-    RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
-    UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
+    BackfillRoomHistoryRequest, ComposeKey, E2eeRecoverySetupResult, FetchRoomImageMediaRequest,
+    FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions, LoginArgs, MdiState,
+    MdiView, MembershipCommandAction, Model, NavigationNode, NavigationPathSegment,
+    ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomImageMedia,
+    RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource, RoomMemberView,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind, RoomVideoActivity,
+    RoomVideoInfo,
+    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild,
+    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
+    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -162,6 +164,26 @@ fn sample_room_audio_activity() -> RoomAudioActivity {
             mimetype: Some("audio/ogg".to_owned()),
             size: Some(9_876),
             duration_ms: Some(12_345),
+        }),
+    }
+}
+
+fn sample_room_video_activity() -> RoomVideoActivity {
+    RoomVideoActivity {
+        event_id: "$video1:example.org".to_owned(),
+        sender: "@alice:example.org".to_owned(),
+        body: "clip.mp4".to_owned(),
+        filename: Some("clip.mp4".to_owned()),
+        source: sample_encrypted_room_media_source("mxc://example.org/clip"),
+        info: Some(RoomVideoInfo {
+            mimetype: Some("video/mp4".to_owned()),
+            size: Some(54_321),
+            duration_ms: Some(12_345),
+            width: Some(1920),
+            height: Some(1080),
+            thumbnail_source: Some(RoomMediaSource::Plain {
+                url: "mxc://example.org/clip-thumbnail".to_owned(),
+            }),
         }),
     }
 }
@@ -5795,6 +5817,45 @@ fn setup_e2ee_recovery_args_round_trip_and_redact_debug() {
         serde_json::from_value::<SetupE2eeRecoveryArgs>(serde_json::json!({
             "passphrase":"sample setup passphrase",
             "wait_for_backups_to_upload":false,
+            "unexpected":true,
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn setup_e2ee_recovery_dump_dtos_round_trip_and_reject_unknown_fields() {
+    let submission = SubmittedSetupRecoveryCommand {
+        passphrase_redacted: true,
+        wait_for_backups_to_upload: true,
+    };
+    assert_eq!(
+        serde_json::from_value::<SubmittedSetupRecoveryCommand>(
+            serde_json::to_value(submission).unwrap()
+        )
+        .unwrap(),
+        submission
+    );
+    assert!(
+        serde_json::from_value::<SubmittedSetupRecoveryCommand>(serde_json::json!({
+            "passphrase_redacted":true,
+            "wait_for_backups_to_upload":true,
+            "unexpected":true,
+        }))
+        .is_err()
+    );
+
+    let result = E2eeRecoverySetupResult {
+        recovery_key_present: true,
+    };
+    assert_eq!(
+        serde_json::from_value::<E2eeRecoverySetupResult>(serde_json::to_value(result).unwrap())
+            .unwrap(),
+        result
+    );
+    assert!(
+        serde_json::from_value::<E2eeRecoverySetupResult>(serde_json::json!({
+            "recovery_key_present":true,
             "unexpected":true,
         }))
         .is_err()

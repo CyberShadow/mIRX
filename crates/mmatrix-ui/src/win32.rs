@@ -27,6 +27,7 @@ use mmatrix_core::{
     RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    RoomVideoInfo,
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
     SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
@@ -98,10 +99,10 @@ use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_SETUP_E2EE_RECOVERY,
-        COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, DumpE2eeRecoverySetupResult,
-        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState, DumpRoomMenuState,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
+        ComposeTextResponse, DumpE2eeRecoverySetupResult, DumpMembershipCommandAction,
+        DumpMessageMenuState, DumpModel, DumpRoomActivity, DumpRoomActivityKind,
+        DumpRoomActivityResponse, DumpRoomImageMediaState, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
@@ -413,6 +414,7 @@ enum TimelineRowKind {
     Image,
     File,
     Audio,
+    Video,
     Unsupported,
     StateNotice,
     Plain,
@@ -730,6 +732,7 @@ impl RoomViewModel {
             RoomActivityKind::Image(_)
             | RoomActivityKind::File(_)
             | RoomActivityKind::Audio(_)
+            | RoomActivityKind::Video(_)
             | RoomActivityKind::UnsupportedMessage(_) => self.activities.push(activity),
             RoomActivityKind::StateNotice(notice) => {
                 if let RoomStateNoticeContent::Topic { topic } = &notice.content {
@@ -1639,6 +1642,19 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             ),
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::Video(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[video] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::StateNotice(_) => None,
         RoomActivityKind::Redacted(_) => None,
     }
@@ -1652,6 +1668,7 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
         RoomActivityKind::Image(_) => true,
         RoomActivityKind::File(_) => true,
         RoomActivityKind::Audio(_) => true,
+        RoomActivityKind::Video(_) => true,
         RoomActivityKind::UnsupportedMessage(_) => true,
         RoomActivityKind::StateNotice(_) => true,
         RoomActivityKind::Redacted(_) => true,
@@ -1667,6 +1684,7 @@ fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
         RoomActivityKind::File(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Audio(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::Video(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
         RoomActivityKind::Redacted(activity) => Some(activity.event_id.as_str()),
@@ -1702,6 +1720,13 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
                 .to_owned(),
         ),
         RoomActivityKind::Audio(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::Video(message) => Some(
             message
                 .filename
                 .as_deref()
@@ -1779,6 +1804,7 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::Image(_)
         | RoomActivityKind::File(_)
         | RoomActivityKind::Audio(_)
+        | RoomActivityKind::Video(_)
         | RoomActivityKind::UnsupportedMessage(_)
         | RoomActivityKind::StateNotice(_)
         | RoomActivityKind::Redacted(_) => room_activity_event_id(activity),
@@ -4524,7 +4550,10 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
             send_state: TimelineMessageSendState::Sent,
         } => rgb(0x24, 0x5E, 0x7A),
         TimelineRowKind::Message { .. } => rgb(0x00, 0x00, 0x00),
-        TimelineRowKind::Image | TimelineRowKind::File | TimelineRowKind::Audio => {
+        TimelineRowKind::Image
+        | TimelineRowKind::File
+        | TimelineRowKind::Audio
+        | TimelineRowKind::Video => {
             rgb(0x1F, 0x64, 0x5A)
         }
         TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
@@ -5248,6 +5277,7 @@ fn selected_timeline_media_attachment(state: &WindowState) -> Option<SelectedMed
         .find(|activity| match &activity.kind {
             RoomActivityKind::File(file) => file.event_id == selected.event_id,
             RoomActivityKind::Audio(audio) => audio.event_id == selected.event_id,
+            RoomActivityKind::Video(video) => video.event_id == selected.event_id,
             _ => false,
         })?;
     let (event_id, filename, source) = match &activity.kind {
@@ -5258,6 +5288,11 @@ fn selected_timeline_media_attachment(state: &WindowState) -> Option<SelectedMed
             &audio.event_id,
             audio.filename.clone(),
             audio.source.clone(),
+        ),
+        RoomActivityKind::Video(video) => (
+            &video.event_id,
+            video.filename.clone(),
+            video.source.clone(),
         ),
         _ => return None,
     };
@@ -7132,6 +7167,23 @@ fn push_room_activity_row(
                 .with_event_id(room_activity_event_id(activity)),
             );
         }
+        RoomActivityKind::Video(message) => {
+            let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
+            let metadata_suffix = format_room_video_metadata_suffix(message.info.as_ref());
+            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+            let body = format!("sent video: {display_name}{metadata_suffix}");
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::Video,
+                    format!("* {timestamp} {} {body}", message.sender),
+                    timestamp,
+                    format!("* {}", message.sender),
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
+            );
+        }
         RoomActivityKind::UnsupportedMessage(message) => {
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent unsupported {}: {}", message.msgtype, message.body);
@@ -7334,6 +7386,32 @@ fn format_room_audio_metadata_suffix(info: Option<&RoomAudioInfo>) -> String {
     let mut parts = Vec::new();
     if let Some(mimetype) = info.mimetype.as_deref() {
         parts.push(mimetype.to_owned());
+    }
+    if let Some(size) = info.size {
+        parts.push(format!("{size} bytes"));
+    }
+    if let Some(duration_ms) = info.duration_ms {
+        parts.push(format!("{duration_ms} ms"));
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+fn format_room_video_metadata_suffix(info: Option<&RoomVideoInfo>) -> String {
+    let Some(info) = info else {
+        return String::new();
+    };
+
+    let mut parts = Vec::new();
+    if let Some(mimetype) = info.mimetype.as_deref() {
+        parts.push(mimetype.to_owned());
+    }
+    if let (Some(width), Some(height)) = (info.width, info.height) {
+        parts.push(format!("{width}x{height}"));
     }
     if let Some(size) = info.size {
         parts.push(format!("{size} bytes"));

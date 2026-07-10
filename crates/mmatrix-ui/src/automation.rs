@@ -7,8 +7,9 @@ use mmatrix_core::{
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomVideoActivity, RoomVideoInfo, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1174,6 +1175,7 @@ pub(crate) enum DumpRoomActivityKind {
     Image(Box<DumpRoomImageActivity>),
     File(Box<DumpRoomFileActivity>),
     Audio(Box<DumpRoomAudioActivity>),
+    Video(Box<DumpRoomVideoActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
     StateNotice(DumpRoomStateNoticeActivity),
     Redacted(DumpRoomRedactedActivity),
@@ -1222,6 +1224,17 @@ pub(crate) struct DumpRoomAudioActivity {
     pub(crate) filename: Option<String>,
     pub(crate) source: DumpRoomMediaSource,
     pub(crate) info: Option<DumpRoomAudioInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomVideoActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) body: String,
+    pub(crate) filename: Option<String>,
+    pub(crate) source: DumpRoomMediaSource,
+    pub(crate) info: Option<DumpRoomVideoInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1287,6 +1300,17 @@ pub(crate) struct DumpRoomAudioInfo {
     pub(crate) mimetype: Option<String>,
     pub(crate) size: Option<u64>,
     pub(crate) duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomVideoInfo {
+    pub(crate) mimetype: Option<String>,
+    pub(crate) size: Option<u64>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) width: Option<u64>,
+    pub(crate) height: Option<u64>,
+    pub(crate) thumbnail_source: Option<DumpRoomMediaSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1494,6 +1518,9 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::Audio(audio) => {
             DumpRoomActivityKind::Audio(Box::new(dump_room_audio_activity_from_core(audio)))
         }
+        RoomActivityKind::Video(video) => {
+            DumpRoomActivityKind::Video(Box::new(dump_room_video_activity_from_core(video)))
+        }
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
         ),
@@ -1573,6 +1600,19 @@ pub(crate) fn dump_room_audio_activity_from_core(
     }
 }
 
+pub(crate) fn dump_room_video_activity_from_core(
+    video: &RoomVideoActivity,
+) -> DumpRoomVideoActivity {
+    DumpRoomVideoActivity {
+        event_id: video.event_id.clone(),
+        sender: video.sender.clone(),
+        body: video.body.clone(),
+        filename: video.filename.clone(),
+        source: dump_room_media_source_from_core(&video.source),
+        info: video.info.as_ref().map(dump_room_video_info_from_core),
+    }
+}
+
 pub(crate) fn dump_room_media_source_from_core(source: &RoomMediaSource) -> DumpRoomMediaSource {
     match source {
         RoomMediaSource::Plain { url } => DumpRoomMediaSource::Plain { url: url.clone() },
@@ -1626,6 +1666,20 @@ pub(crate) fn dump_room_audio_info_from_core(info: &RoomAudioInfo) -> DumpRoomAu
         mimetype: info.mimetype.clone(),
         size: info.size,
         duration_ms: info.duration_ms,
+    }
+}
+
+pub(crate) fn dump_room_video_info_from_core(info: &RoomVideoInfo) -> DumpRoomVideoInfo {
+    DumpRoomVideoInfo {
+        mimetype: info.mimetype.clone(),
+        size: info.size,
+        duration_ms: info.duration_ms,
+        width: info.width,
+        height: info.height,
+        thumbnail_source: info
+            .thumbnail_source
+            .as_ref()
+            .map(dump_room_media_source_from_core),
     }
 }
 
@@ -2061,16 +2115,17 @@ mod tests {
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
         COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT,
         COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
-        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, DumpModel,
-        DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
-        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
-        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
-        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomImageMediaState,
-        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
-        DumpRoomMessageSendState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedEditCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
+        DumpE2eeRecoverySetupResult, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
+        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
         DumpUnsupportedRoomMessageActivity, FindActiveViewArgs, FindActiveViewResponse,
         GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
         MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
@@ -4370,6 +4425,56 @@ mod tests {
                 "last_verification":null,
                 "last_error":null,
                 "selected_room":null
+            }),
+        ] {
+            assert!(serde_json::from_value::<DumpModel>(invalid_json).is_err());
+        }
+    }
+
+    #[test]
+    fn dump_model_round_trips_setup_recovery_data_and_rejects_unknown_nested_fields() {
+        let model = DumpModel {
+            status: "ready".to_owned(),
+            lifecycle_state: LifecycleState::Ready,
+            rooms: Vec::new(),
+            last_activity: None,
+            e2ee_status: None,
+            last_e2ee_recovery_setup_result: Some(DumpE2eeRecoverySetupResult {
+                recovery_key_present: true,
+            }),
+            last_verification: None,
+            submitted_membership_commands: Vec::new(),
+            submitted_direct_room_commands: Vec::new(),
+            submitted_room_topic_commands: Vec::new(),
+            submitted_reaction_commands: Vec::new(),
+            submitted_edit_commands: Vec::new(),
+            submitted_reply_commands: Vec::new(),
+            submitted_redaction_commands: Vec::new(),
+            submitted_history_commands: Vec::new(),
+            submitted_verification_actions: Vec::new(),
+            submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: vec![DumpSubmittedSetupRecoveryCommand {
+                passphrase_redacted: true,
+                wait_for_backups_to_upload: true,
+            }],
+            last_error: None,
+            selected_room: None,
+        };
+        let json = serde_json::to_value(&model).unwrap();
+        assert_eq!(serde_json::from_value::<DumpModel>(json).unwrap(), model);
+
+        for invalid_json in [
+            json!({
+                "status":"ready", "lifecycle_state":"ready", "rooms":[], "last_activity":null,
+                "e2ee_status":null,
+                "last_e2ee_recovery_setup_result":{"recovery_key_present":true,"unexpected":true},
+                "last_verification":null, "last_error":null, "selected_room":null,
+            }),
+            json!({
+                "status":"ready", "lifecycle_state":"ready", "rooms":[], "last_activity":null,
+                "e2ee_status":null, "last_e2ee_recovery_setup_result":null, "last_verification":null,
+                "submitted_setup_recovery_commands":[{"passphrase_redacted":true,"wait_for_backups_to_upload":true,"unexpected":true}],
+                "last_error":null, "selected_room":null,
             }),
         ] {
             assert!(serde_json::from_value::<DumpModel>(invalid_json).is_err());

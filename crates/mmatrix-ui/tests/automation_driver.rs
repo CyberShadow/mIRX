@@ -37,10 +37,10 @@ use mmatrix_testkit::{
     SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
     SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError,
-    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedVerificationAction,
+    SwitchbarItem, TestkitError, UiError, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -77,8 +77,11 @@ const MENU_ID_VERIFY_CANCEL: usize = 40008;
 const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
 const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
+const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
 const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
+const SETUP_E2EE_DIALOG_PASSPHRASE_ID: i32 = 5013;
+const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1953,6 +1956,63 @@ fn submit_recover_e2ee_menu_dialog(
     Ok(())
 }
 
+fn submit_setup_e2ee_recovery_menu_dialog(
+    app: &MmatrixApp,
+    passphrase: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let frame_value = frame as isize;
+    let menu_thread = std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            MENU_ID_SETUP_E2EE_RECOVERY as WPARAM,
+            0,
+        );
+    });
+
+    let class_name = wide_null("mmatrixWin32SetupE2eeDialog");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let dialog = loop {
+        let dialog = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
+        if !dialog.is_null() {
+            break dialog;
+        }
+        if Instant::now() >= deadline {
+            panic!("Set Up E2EE Recovery dialog did not appear within five seconds");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    let passphrase_edit = unsafe { GetDlgItem(dialog, SETUP_E2EE_DIALOG_PASSPHRASE_ID) };
+    assert!(
+        !passphrase_edit.is_null(),
+        "setup passphrase edit must exist"
+    );
+    let passphrase = wide_null(passphrase);
+    assert_ne!(
+        unsafe { SetWindowTextW(passphrase_edit, passphrase.as_ptr()) },
+        0
+    );
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, SETUP_E2EE_DIALOG_OK_ID as WPARAM, 0) },
+        0
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { IsWindow(dialog) } != 0 {
+        if Instant::now() >= deadline {
+            panic!("Set Up E2EE Recovery dialog did not close within five seconds");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    menu_thread
+        .join()
+        .expect("setup E2EE menu command thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
 unsafe fn mdi_client_hwnd(app: &MmatrixApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };
@@ -3184,6 +3244,69 @@ fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secr
     ));
     assert_eq!(app.compose_text()?, "");
 
+    Ok(())
+}
+
+#[test]
+fn automation_driver_setup_e2ee_recovery_menu_dialog_submits_once_and_redacts_passphrase()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let passphrase = "sample setup passphrase";
+    submit_setup_e2ee_recovery_menu_dialog(&app, passphrase)?;
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "e2ee recovery setup submitted");
+    assert_eq!(
+        model.submitted_setup_recovery_commands,
+        vec![SubmittedSetupRecoveryCommand {
+            passphrase_redacted: true,
+            wait_for_backups_to_upload: false,
+        }]
+    );
+    assert!(!serde_json::to_string(&model)?.contains(passphrase));
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_setup_e2ee_recovery_submits_once_without_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let passphrase = "sample slash setup passphrase";
+    app.set_compose_text(&format!("/e2ee setup wait passphrase {passphrase}"))?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_setup_recovery_commands,
+        vec![SubmittedSetupRecoveryCommand {
+            passphrase_redacted: true,
+            wait_for_backups_to_upload: true,
+        }]
+    );
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_ne!(
+        app.compose_text()?,
+        format!("/e2ee setup wait passphrase {passphrase}")
+    );
+    assert!(!serde_json::to_string(&model)?.contains(passphrase));
     Ok(())
 }
 
