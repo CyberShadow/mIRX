@@ -2856,7 +2856,7 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
     assert!(view_contains(status_view, "cross_signing: incomplete"));
     assert!(view_contains(
         status_view,
-        "actions: Account > Recover E2EE..., /e2ee refresh",
+        "actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh",
     ));
     assert!(
         ui_state
