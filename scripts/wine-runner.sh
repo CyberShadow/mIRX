@@ -175,7 +175,7 @@ host_capture_helper() {
       current_result_file=$result_file
       capture_path="$request_dir/$capture_name"
 
-      if timeout 10s import -window root "$capture_path" >"$runner_tmpdir/import.log" 2>&1; then
+      if timeout --kill-after=1s 10s import -window root "$capture_path" >"$runner_tmpdir/import.log" 2>&1; then
         printf 'ok\n' >"$result_file"
       else
         local import_status=$?
