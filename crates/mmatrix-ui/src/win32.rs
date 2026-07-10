@@ -4984,7 +4984,17 @@ unsafe fn selected_timeline_event_id_for_automation(hwnd: HWND) -> Option<String
         .then(|| selected.event_id.clone())
 }
 
-unsafe fn active_message_action_state(hwnd: HWND) -> MessageActionState {
+fn active_message_action_state(state: &WindowState) -> MessageActionState {
+    let selected_event_id = match state.active_view {
+        ViewId::Room(_) | ViewId::Thread { .. } => {
+            selected_timeline_event_id(state).map(str::to_owned)
+        }
+        ViewId::Status => None,
+    };
+    MessageActionState { selected_event_id }
+}
+
+unsafe fn active_message_action_state_for_automation(hwnd: HWND) -> MessageActionState {
     let selected_event_id = match state_ref(hwnd).active_view {
         ViewId::Room(_) | ViewId::Thread { .. } => selected_timeline_event_id_for_automation(hwnd),
         ViewId::Status => None,
@@ -4993,7 +5003,7 @@ unsafe fn active_message_action_state(hwnd: HWND) -> MessageActionState {
 }
 
 unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
-    let enabled = active_message_action_state(hwnd)
+    let enabled = active_message_action_state_for_automation(hwnd)
         .selected_event_id
         .is_some();
     let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
@@ -5117,7 +5127,7 @@ unsafe fn dump_message_menu_state(hwnd: HWND) -> Result<DumpMessageMenuState, St
         return Err("Message menu is not available".to_owned());
     }
     refresh_message_menu_state(hwnd, message_menu)?;
-    let action_state = active_message_action_state(hwnd);
+    let action_state = active_message_action_state_for_automation(hwnd);
     let enabled = action_state.selected_event_id.is_some();
     Ok(DumpMessageMenuState {
         reply_enabled: enabled,
