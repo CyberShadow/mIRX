@@ -10070,7 +10070,10 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
             target: "!beta:example".to_owned(),
         }]
     );
-    assert_eq!(app.dump_ui_state()?.mdi.active, room_identity("!beta:example"));
+    assert_eq!(
+        app.dump_ui_state()?.mdi.active,
+        room_identity("!beta:example")
+    );
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -10086,16 +10089,20 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 
     let replaced_state = app.dump_ui_state()?;
     assert_eq!(replaced_state.mdi.active, room_identity("!alpha:example"));
-    assert!(replaced_state
-        .mdi
-        .views
-        .iter()
-        .all(|view| view.identity != room_identity("!beta:example")));
-    assert!(replaced_state
-        .switchbar
-        .items
-        .iter()
-        .all(|item| item.identity != room_identity("!beta:example")));
+    assert!(
+        replaced_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("!beta:example"))
+    );
+    assert!(
+        replaced_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != room_identity("!beta:example"))
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
