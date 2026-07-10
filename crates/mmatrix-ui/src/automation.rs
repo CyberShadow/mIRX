@@ -1201,7 +1201,7 @@ pub(crate) struct DumpRoomImageActivity {
     pub(crate) filename: Option<String>,
     pub(crate) source: DumpRoomMediaSource,
     pub(crate) info: Option<DumpRoomImageInfo>,
-    pub(crate) media_state: Option<DumpRoomImageMediaState>,
+    pub(crate) media_state: Option<DumpRoomPreviewMediaState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1235,11 +1235,12 @@ pub(crate) struct DumpRoomVideoActivity {
     pub(crate) filename: Option<String>,
     pub(crate) source: DumpRoomMediaSource,
     pub(crate) info: Option<DumpRoomVideoInfo>,
+    pub(crate) media_state: Option<DumpRoomPreviewMediaState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum DumpRoomImageMediaState {
+pub(crate) enum DumpRoomPreviewMediaState {
     Pending,
     Loaded { width: u32, height: u32 },
     Failed { message: String },
@@ -1610,6 +1611,7 @@ pub(crate) fn dump_room_video_activity_from_core(
         filename: video.filename.clone(),
         source: dump_room_media_source_from_core(&video.source),
         info: video.info.as_ref().map(dump_room_video_info_from_core),
+        media_state: None,
     }
 }
 
@@ -2121,7 +2123,7 @@ mod tests {
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
         DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
         DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomImageInfo, DumpRoomPreviewMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
         DumpRoomVideoActivity, DumpRoomVideoInfo, DumpSubmittedEditCommand,
@@ -5727,6 +5729,7 @@ mod tests {
                             url: "mxc://example.org/video-thumbnail".to_owned(),
                         }),
                     }),
+                    media_state: None,
                 })),
             }
         );
@@ -5882,7 +5885,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            serde_json::from_value::<DumpRoomImageMediaState>(json!({
+            serde_json::from_value::<DumpRoomPreviewMediaState>(json!({
                 "type":"failed",
                 "message":"unavailable",
                 "unexpected":true

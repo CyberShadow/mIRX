@@ -1741,7 +1741,7 @@ configure_case_expectations() {
         --expect-no-navigation-text 'voice-note.ogg'
       )
       ;;
-    video-message)
+    video-message|video-message-loaded|video-message-failed)
       expect_selected='!media:example.org'
       expect_active_view='room:!media:example.org'
       room_expect_args=(
@@ -1758,12 +1758,25 @@ configure_case_expectations() {
         --expect-room-activity '!media:example.org::1920'
         --expect-room-activity '!media:example.org::1080'
       )
+      if [[ "$case_name" == video-message ]]; then
+        room_activity_expect_args+=(
+          --expect-room-activity '!media:example.org::"media_state":{"type":"pending"}'
+        )
+      elif [[ "$case_name" == video-message-loaded ]]; then
+        room_activity_expect_args+=(
+          --expect-room-activity '!media:example.org::"media_state":{"type":"loaded","width":64,"height":48}'
+        )
+      else
+        room_activity_expect_args+=(
+          --expect-room-activity '!media:example.org::"media_state":{"type":"failed","message":"failed to fetch room image media: unavailable"}'
+        )
+      fi
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
         --expect-room-view '!media:example.org::* [16:02] @alice:example.org sent video: clip.mp4 (video/mp4, 1920x1080, 34567 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !media:example.org'
+        --expect-status-bar "$([[ "$case_name" == video-message ]] && echo 'timeline update from !media:example.org' || echo 'preview media update from !media:example.org')"
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1835,7 +1848,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'image media update from !images:example.org'
+        --expect-status-bar 'preview media update from !images:example.org'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1868,7 +1881,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'image media update from !images:example.org'
+        --expect-status-bar 'preview media update from !images:example.org'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1943,7 +1956,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'image media update from !images:example.org'
+        --expect-status-bar 'preview media update from !images:example.org'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1980,7 +1993,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'image media update from !images:example.org'
+        --expect-status-bar 'preview media update from !images:example.org'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'

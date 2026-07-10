@@ -584,6 +584,7 @@ pub struct RoomVideoActivity {
     pub filename: Option<String>,
     pub source: RoomMediaSource,
     pub info: Option<RoomVideoInfo>,
+    pub media_state: Option<RoomImageMediaState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -101,7 +101,7 @@ use crate::{
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpE2eeRecoverySetupResult, DumpMembershipCommandAction,
         DumpMessageMenuState, DumpModel, DumpRoomActivity, DumpRoomActivityKind,
-        DumpRoomActivityResponse, DumpRoomImageMediaState, DumpRoomMenuState,
+        DumpRoomActivityResponse, DumpRoomPreviewMediaState, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
@@ -578,7 +578,7 @@ struct RoomViewModel {
     activities: Vec<RoomActivity>,
     reactions_by_target: BTreeMap<String, BTreeMap<String, RoomReactionEntry>>,
     threads: BTreeMap<String, ThreadViewModel>,
-    image_media: BTreeMap<String, RoomImageMediaState>,
+    preview_media: BTreeMap<String, RoomPreviewMediaState>,
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
     history: RoomHistoryBackfillState,
@@ -598,7 +598,7 @@ struct ThreadViewModel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RoomImageMediaState {
+enum RoomPreviewMediaState {
     Pending {
         event_id: String,
         format: RoomMediaFormat,
@@ -696,7 +696,7 @@ impl RoomViewModel {
             )
         });
         self.reactions_by_target.clear();
-        self.retain_image_media_for_visible_activities();
+        self.retain_preview_media_for_visible_activities();
         self.rebuild_threads();
     }
 
@@ -833,7 +833,7 @@ impl RoomViewModel {
 
         if changed {
             self.rebuild_threads();
-            self.retain_image_media_for_visible_activities();
+            self.retain_preview_media_for_visible_activities();
         }
     }
 
@@ -845,20 +845,20 @@ impl RoomViewModel {
         self.members = members.members;
     }
 
-    fn projected_image_state(
+    fn projected_preview_state(
         &self,
         activity_id: &str,
         event_id: &str,
         format: &RoomMediaFormat,
     ) -> TimelineImageState {
-        match self.image_media.get(activity_id) {
-            Some(RoomImageMediaState::Pending {
+        match self.preview_media.get(activity_id) {
+            Some(RoomPreviewMediaState::Pending {
                 event_id: stored_event_id,
                 format: stored_format,
             }) if stored_event_id == event_id && stored_format == format => {
                 TimelineImageState::Pending
             }
-            Some(RoomImageMediaState::Loaded {
+            Some(RoomPreviewMediaState::Loaded {
                 event_id: stored_event_id,
                 format: stored_format,
                 image_key,
@@ -871,7 +871,7 @@ impl RoomViewModel {
                     height: *height,
                 }
             }
-            Some(RoomImageMediaState::Failed {
+            Some(RoomPreviewMediaState::Failed {
                 event_id: stored_event_id,
                 format: stored_format,
                 message,
@@ -884,23 +884,23 @@ impl RoomViewModel {
         }
     }
 
-    fn should_request_image_media(
+    fn should_request_preview_media(
         &self,
         activity_id: &str,
         event_id: &str,
         format: &RoomMediaFormat,
     ) -> bool {
-        match self.image_media.get(activity_id) {
-            Some(RoomImageMediaState::Pending {
+        match self.preview_media.get(activity_id) {
+            Some(RoomPreviewMediaState::Pending {
                 event_id: stored_event_id,
                 format: stored_format,
             })
-            | Some(RoomImageMediaState::Loaded {
+            | Some(RoomPreviewMediaState::Loaded {
                 event_id: stored_event_id,
                 format: stored_format,
                 ..
             })
-            | Some(RoomImageMediaState::Failed {
+            | Some(RoomPreviewMediaState::Failed {
                 event_id: stored_event_id,
                 format: stored_format,
                 ..
@@ -909,28 +909,28 @@ impl RoomViewModel {
         }
     }
 
-    fn mark_image_media_pending(
+    fn mark_preview_media_pending(
         &mut self,
         activity_id: String,
         event_id: String,
         format: RoomMediaFormat,
-    ) -> Option<RoomImageMediaState> {
-        self.image_media.insert(
+    ) -> Option<RoomPreviewMediaState> {
+        self.preview_media.insert(
             activity_id,
-            RoomImageMediaState::Pending { event_id, format },
+            RoomPreviewMediaState::Pending { event_id, format },
         )
     }
 
-    fn remove_image_media(&mut self, activity_id: &str) -> Option<RoomImageMediaState> {
-        self.image_media.remove(activity_id)
+    fn remove_preview_media(&mut self, activity_id: &str) -> Option<RoomPreviewMediaState> {
+        self.preview_media.remove(activity_id)
     }
 
-    fn insert_image_media(
+    fn insert_preview_media(
         &mut self,
         activity_id: String,
-        image_media: RoomImageMediaState,
-    ) -> Option<RoomImageMediaState> {
-        self.image_media.insert(activity_id, image_media)
+        preview_media: RoomPreviewMediaState,
+    ) -> Option<RoomPreviewMediaState> {
+        self.preview_media.insert(activity_id, preview_media)
     }
 
     fn upsert_message_activity(
@@ -1088,7 +1088,7 @@ impl RoomViewModel {
         self.activities[index].kind = RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: target_event_id.to_owned(),
         });
-        self.remove_image_media(&activity_id);
+        self.remove_preview_media(&activity_id);
         self.rebuild_threads();
         true
     }
@@ -1353,8 +1353,8 @@ impl RoomViewModel {
         }
     }
 
-    fn retain_image_media_for_visible_activities(&mut self) {
-        self.image_media.retain(|activity_id, _| {
+    fn retain_preview_media_for_visible_activities(&mut self) {
+        self.preview_media.retain(|activity_id, _| {
             self.activities
                 .iter()
                 .any(|activity| activity.activity_id == *activity_id)
@@ -1487,7 +1487,7 @@ fn timeline_thumbnail_format() -> RoomMediaFormat {
     }
 }
 
-fn room_image_media_storage_key(
+fn room_preview_media_storage_key(
     room_id: &str,
     activity_id: &str,
     event_id: &str,
@@ -1814,9 +1814,9 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
     }
 }
 
-fn room_image_media_loaded_key(image_media: &RoomImageMediaState) -> Option<&str> {
-    match image_media {
-        RoomImageMediaState::Loaded { image_key, .. } => Some(image_key.as_str()),
+fn room_preview_media_loaded_key(preview_media: &RoomPreviewMediaState) -> Option<&str> {
+    match preview_media {
+        RoomPreviewMediaState::Loaded { image_key, .. } => Some(image_key.as_str()),
         _ => None,
     }
 }
@@ -1826,8 +1826,8 @@ fn prune_decoded_images(state: &mut WindowState) {
         .model
         .room_views
         .values()
-        .flat_map(|room_view| room_view.image_media.values())
-        .filter_map(room_image_media_loaded_key)
+        .flat_map(|room_view| room_view.preview_media.values())
+        .filter_map(room_preview_media_loaded_key)
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     state
@@ -1835,7 +1835,7 @@ fn prune_decoded_images(state: &mut WindowState) {
         .retain(|image_key, _| referenced_keys.contains(image_key));
 }
 
-fn room_image_activity_matches(
+fn room_preview_activity_matches(
     room_view: &RoomViewModel,
     activity_id: &str,
     event_id: &str,
@@ -1845,6 +1845,9 @@ fn room_image_activity_matches(
             && matches!(
                 &activity.kind,
                 RoomActivityKind::Image(message) if message.event_id == event_id
+            ) || matches!(
+                &activity.kind,
+                RoomActivityKind::Video(message) if message.event_id == event_id
             )
     })
 }
@@ -1856,7 +1859,7 @@ fn decoded_image_from_loaded_media(
     event_id: &str,
     format: &RoomMediaFormat,
     bytes: &[u8],
-) -> Result<RoomImageMediaState, String> {
+) -> Result<RoomPreviewMediaState, String> {
     let Some(_session) = state.gdiplus_session.as_ref() else {
         return Err(state
             .gdiplus_startup_error
@@ -1864,11 +1867,11 @@ fn decoded_image_from_loaded_media(
             .unwrap_or_else(|| "GDI+ startup did not complete".to_owned()));
     };
     let image = decode_image_bytes(bytes)?;
-    let key = room_image_media_storage_key(room_id, activity_id, event_id, format);
+    let key = room_preview_media_storage_key(room_id, activity_id, event_id, format);
     let width = image.width;
     let height = image.height;
     state.decoded_images.insert(key.clone(), image);
-    Ok(RoomImageMediaState::Loaded {
+    Ok(RoomPreviewMediaState::Loaded {
         event_id: event_id.to_owned(),
         format: format.clone(),
         image_key: key,
@@ -1897,7 +1900,7 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
     let Some(room_view) = state.model.room_views.get(&room_id) else {
         return;
     };
-    if !room_image_activity_matches(room_view, &activity_id, &event_id) {
+    if !room_preview_activity_matches(room_view, &activity_id, &event_id) {
         return;
     }
 
@@ -1907,18 +1910,18 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
             .room_views
             .get_mut(&room_id)
             .expect("room image media updates require an existing room view")
-            .remove_image_media(&activity_id)
+            .remove_preview_media(&activity_id)
     };
     if let Some(image_key) = previous
         .as_ref()
-        .and_then(room_image_media_loaded_key)
+        .and_then(room_preview_media_loaded_key)
         .map(str::to_owned)
     {
         state.decoded_images.remove(&image_key);
     }
 
     let next_state = match kind {
-        RoomMediaKind::Failed { format, message } => RoomImageMediaState::Failed {
+        RoomMediaKind::Failed { format, message } => RoomPreviewMediaState::Failed {
             event_id,
             format,
             message,
@@ -1932,8 +1935,8 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
                 &format,
                 &bytes,
             ) {
-                Ok(image_media) => image_media,
-                Err(message) => RoomImageMediaState::Failed {
+                Ok(preview_media) => preview_media,
+                Err(message) => RoomPreviewMediaState::Failed {
                     event_id,
                     format,
                     message,
@@ -1942,13 +1945,13 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
         }
     };
 
-    state.model.status = format!("image media update from {room_id}");
+    state.model.status = format!("preview media update from {room_id}");
     state
         .model
         .room_views
         .get_mut(&room_id)
         .expect("room image media updates require an existing room view")
-        .insert_image_media(activity_id, next_state);
+        .insert_preview_media(activity_id, next_state);
 }
 
 fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
@@ -7306,7 +7309,7 @@ fn push_room_activity_row(
             let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
             let format = timeline_thumbnail_format();
             let image_state = room_view.map(|view| {
-                view.projected_image_state(&activity.activity_id, &message.event_id, &format)
+                view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
             });
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent image: {display_name}{metadata_suffix}");
@@ -7359,9 +7362,15 @@ fn push_room_activity_row(
         RoomActivityKind::Video(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_video_metadata_suffix(message.info.as_ref());
+            let format = timeline_thumbnail_format();
+            let image_state = timeline_video_preview_source(message).map(|_| {
+                room_view.map(|view| {
+                    view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
+                })
+            });
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent video: {display_name}{metadata_suffix}");
-            rows.push(
+            let mut row =
                 TimelineRow::log(
                     TimelineRowKind::Video,
                     format!("* {timestamp} {} {body}", message.sender),
@@ -7370,8 +7379,9 @@ fn push_room_activity_row(
                     body,
                 )
                 .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
+                .with_event_id(room_activity_event_id(activity));
+            row.image_state = image_state.flatten();
+            rows.push(row);
         }
         RoomActivityKind::UnsupportedMessage(message) => {
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
@@ -8736,14 +8746,14 @@ unsafe fn destroy_stale_room_views(hwnd: HWND) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct RoomImageMediaDispatch {
+struct RoomPreviewMediaDispatch {
     activity_id: String,
     event_id: String,
     source: RoomMediaSource,
     format: RoomMediaFormat,
 }
 
-fn timeline_image_thumbnail_source(
+fn timeline_image_preview_source(
     message: &mmatrix_core::RoomImageActivity,
 ) -> Option<&RoomMediaSource> {
     if let Some(thumbnail_source) = message
@@ -8760,28 +8770,43 @@ fn timeline_image_thumbnail_source(
     }
 }
 
-fn collect_lazy_room_image_media_requests<'a>(
+fn timeline_video_preview_source(
+    message: &mmatrix_core::RoomVideoActivity,
+) -> Option<&RoomMediaSource> {
+    message
+        .info
+        .as_ref()
+        .and_then(|info| info.thumbnail_source.as_ref())
+}
+
+fn collect_lazy_room_preview_media_requests<'a>(
     room_view: &RoomViewModel,
     activities: impl IntoIterator<Item = &'a RoomActivity>,
-) -> Vec<RoomImageMediaDispatch> {
+) -> Vec<RoomPreviewMediaDispatch> {
     let format = timeline_thumbnail_format();
     activities
         .into_iter()
         .filter_map(|activity| {
-            let RoomActivityKind::Image(message) = &activity.kind else {
-                return None;
+            let (event_id, source) = match &activity.kind {
+                RoomActivityKind::Image(message) => {
+                    (&message.event_id, timeline_image_preview_source(message))
+                }
+                RoomActivityKind::Video(message) => {
+                    (&message.event_id, timeline_video_preview_source(message))
+                }
+                _ => return None,
             };
-            if !room_view.should_request_image_media(
+            if !room_view.should_request_preview_media(
                 &activity.activity_id,
-                &message.event_id,
+                event_id,
                 &format,
             ) {
                 return None;
             }
-            let source = timeline_image_thumbnail_source(message)?;
-            Some(RoomImageMediaDispatch {
+            let source = source?;
+            Some(RoomPreviewMediaDispatch {
                 activity_id: activity.activity_id.clone(),
-                event_id: message.event_id.clone(),
+                event_id: event_id.clone(),
                 source: source.clone(),
                 format: format.clone(),
             })
@@ -8789,10 +8814,10 @@ fn collect_lazy_room_image_media_requests<'a>(
         .collect()
 }
 
-fn dispatch_lazy_room_image_media_requests(
+fn dispatch_lazy_room_preview_media_requests(
     state: &mut WindowState,
     room_id: &str,
-    requests: Vec<RoomImageMediaDispatch>,
+    requests: Vec<RoomPreviewMediaDispatch>,
 ) -> Result<(), String> {
     if state.synthetic_load_in_progress || requests.is_empty() {
         return Ok(());
@@ -8804,7 +8829,7 @@ fn dispatch_lazy_room_image_media_requests(
             .room_views
             .get(room_id)
             .expect("image media dispatch requires an existing room view")
-            .should_request_image_media(&request.activity_id, &request.event_id, &request.format);
+            .should_request_preview_media(&request.activity_id, &request.event_id, &request.format);
         if !should_request {
             continue;
         }
@@ -8814,14 +8839,14 @@ fn dispatch_lazy_room_image_media_requests(
             .room_views
             .get_mut(room_id)
             .expect("image media dispatch requires an existing room view")
-            .mark_image_media_pending(
+            .mark_preview_media_pending(
                 request.activity_id.clone(),
                 request.event_id.clone(),
                 request.format.clone(),
             );
         if let Some(image_key) = previous
             .as_ref()
-            .and_then(room_image_media_loaded_key)
+            .and_then(room_preview_media_loaded_key)
             .map(str::to_owned)
         {
             state.decoded_images.remove(&image_key);
@@ -8844,7 +8869,7 @@ fn dispatch_lazy_room_image_media_requests(
                 .room_views
                 .get_mut(room_id)
                 .expect("image media dispatch requires an existing room view")
-                .remove_image_media(&request.activity_id);
+                .remove_preview_media(&request.activity_id);
             return Err(format!(
                 "failed to enqueue fetch room image media command: {err}"
             ));
@@ -8894,7 +8919,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 let image_requests = if is_sendable_room(room) {
                     room_view
                         .map(|room_view| {
-                            collect_lazy_room_image_media_requests(
+                            collect_lazy_room_preview_media_requests(
                                 room_view,
                                 room_view.activities.iter(),
                             )
@@ -8914,7 +8939,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 };
                 (rows, member_rows, image_requests)
             };
-            dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
+            dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
@@ -8941,7 +8966,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                     .get(room_id)
                     .expect("thread view must target an existing room view");
                 let rows = build_thread_timeline_rows(&state.model, room_id, thread_root_event_id);
-                let image_requests = collect_lazy_room_image_media_requests(
+                let image_requests = collect_lazy_room_preview_media_requests(
                     room_view,
                     room_view.activities.iter().filter(|activity| {
                         room_activity_belongs_to_thread(activity, thread_root_event_id)
@@ -8950,7 +8975,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 let member_rows = room_member_view_rows(room_view.members.as_slice());
                 (rows, member_rows, image_requests)
             };
-            dispatch_lazy_room_image_media_requests(state_mut(hwnd), room_id, image_requests)?;
+            dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
@@ -13398,52 +13423,59 @@ fn dump_room_activity_entry_from_room_entry(
     if let Some(event_id) = room_activity_event_id(activity) {
         dump.reactions = room_view.reaction_summaries_for_event(event_id);
     }
-    let RoomActivityKind::Image(image) = &activity.kind else {
-        return dump;
-    };
-    let DumpRoomActivityKind::Image(dump_image) = &mut dump.kind else {
-        return dump;
-    };
-    dump_image.media_state = dump_room_image_media_state(
-        room_view,
-        &activity.activity_id,
-        &image.event_id,
-        &timeline_thumbnail_format(),
-    );
+    match (&activity.kind, &mut dump.kind) {
+        (RoomActivityKind::Image(image), DumpRoomActivityKind::Image(dump_image)) => {
+            dump_image.media_state = dump_room_preview_media_state(
+                room_view,
+                &activity.activity_id,
+                &image.event_id,
+                &timeline_thumbnail_format(),
+            );
+        }
+        (RoomActivityKind::Video(video), DumpRoomActivityKind::Video(dump_video)) => {
+            dump_video.media_state = dump_room_preview_media_state(
+                room_view,
+                &activity.activity_id,
+                &video.event_id,
+                &timeline_thumbnail_format(),
+            );
+        }
+        _ => {}
+    }
     dump
 }
 
-fn dump_room_image_media_state(
+fn dump_room_preview_media_state(
     room_view: &RoomViewModel,
     activity_id: &str,
     event_id: &str,
     format: &RoomMediaFormat,
-) -> Option<DumpRoomImageMediaState> {
-    match room_view.image_media.get(activity_id) {
-        Some(RoomImageMediaState::Pending {
+) -> Option<DumpRoomPreviewMediaState> {
+    match room_view.preview_media.get(activity_id) {
+        Some(RoomPreviewMediaState::Pending {
             event_id: stored_event_id,
             format: stored_format,
         }) if stored_event_id == event_id && stored_format == format => {
-            Some(DumpRoomImageMediaState::Pending)
+            Some(DumpRoomPreviewMediaState::Pending)
         }
-        Some(RoomImageMediaState::Loaded {
+        Some(RoomPreviewMediaState::Loaded {
             event_id: stored_event_id,
             format: stored_format,
             width,
             height,
             ..
         }) if stored_event_id == event_id && stored_format == format => {
-            Some(DumpRoomImageMediaState::Loaded {
+            Some(DumpRoomPreviewMediaState::Loaded {
                 width: *width,
                 height: *height,
             })
         }
-        Some(RoomImageMediaState::Failed {
+        Some(RoomPreviewMediaState::Failed {
             event_id: stored_event_id,
             format: stored_format,
             message,
         }) if stored_event_id == event_id && stored_format == format => {
-            Some(DumpRoomImageMediaState::Failed {
+            Some(DumpRoomPreviewMediaState::Failed {
                 message: message.clone(),
             })
         }
@@ -14429,7 +14461,7 @@ mod tests {
         }
     }
 
-    fn room_image_media_event(
+    fn room_preview_media_event(
         room_id: &str,
         activity_id: &str,
         event_id: &str,
@@ -16304,7 +16336,7 @@ mod tests {
     }
 
     #[test]
-    fn clear_room_timeline_removes_stale_image_media_state() {
+    fn clear_room_timeline_removes_stale_preview_media_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
 
@@ -16323,7 +16355,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -16356,7 +16388,7 @@ mod tests {
             room_view.activities,
             vec![pending_message_activity("!ops:example", "txn-1", "hello")]
         );
-        assert!(room_view.image_media.is_empty());
+        assert!(room_view.preview_media.is_empty());
     }
 
     #[test]
@@ -17317,7 +17349,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_room_image_media_event_projects_failed_image_state() {
+    fn failed_room_preview_media_event_projects_failed_image_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17335,7 +17367,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17352,9 +17384,9 @@ mod tests {
                 .model
                 .room_views
                 .get("!ops:example")
-                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .and_then(|room_view| room_view.preview_media.get("event:$image1:example.org"))
                 .cloned(),
-            Some(RoomImageMediaState::Failed {
+            Some(RoomPreviewMediaState::Failed {
                 event_id: "$image1:example.org".to_owned(),
                 format: timeline_thumbnail_format(),
                 message: "unavailable".to_owned(),
@@ -17380,7 +17412,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_or_mismatched_room_image_media_event_does_not_replace_current_state() {
+    fn stale_or_mismatched_room_preview_media_event_does_not_replace_current_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17398,7 +17430,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17412,7 +17444,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$different:example.org",
@@ -17425,7 +17457,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17442,9 +17474,9 @@ mod tests {
                 .model
                 .room_views
                 .get("!ops:example")
-                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .and_then(|room_view| room_view.preview_media.get("event:$image1:example.org"))
                 .cloned(),
-            Some(RoomImageMediaState::Failed {
+            Some(RoomPreviewMediaState::Failed {
                 event_id: "$image1:example.org".to_owned(),
                 format: timeline_thumbnail_format(),
                 message: "current".to_owned(),
@@ -17478,7 +17510,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17506,12 +17538,12 @@ mod tests {
             .expect("room view must exist");
         assert!(
             !room_view
-                .image_media
+                .preview_media
                 .contains_key("event:$image1:example.org"),
             "redaction should drop stored image media state"
         );
         assert!(
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
                 .is_empty(),
             "redacted image rows must not trigger lazy image fetches"
         );
@@ -17524,7 +17556,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17541,14 +17573,14 @@ mod tests {
             .room_views
             .get("!ops:example")
             .expect("room view must exist");
-        assert!(room_view.image_media.is_empty());
+        assert!(room_view.preview_media.is_empty());
         let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("late"));
     }
 
     #[test]
-    fn invalid_loaded_room_image_media_event_projects_failed_image_state() {
+    fn invalid_loaded_room_preview_media_event_projects_failed_image_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17566,7 +17598,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17590,7 +17622,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_room_image_media_event_projects_loaded_image_state() {
+    fn loaded_room_preview_media_event_projects_loaded_image_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17608,7 +17640,7 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17620,7 +17652,7 @@ mod tests {
         )
         .unwrap();
 
-        let image_key = room_image_media_storage_key(
+        let image_key = room_preview_media_storage_key(
             "!ops:example",
             "event:$image1:example.org",
             "$image1:example.org",
@@ -17631,9 +17663,9 @@ mod tests {
                 .model
                 .room_views
                 .get("!ops:example")
-                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .and_then(|room_view| room_view.preview_media.get("event:$image1:example.org"))
                 .cloned(),
-            Some(RoomImageMediaState::Loaded {
+            Some(RoomPreviewMediaState::Loaded {
                 event_id: "$image1:example.org".to_owned(),
                 format: timeline_thumbnail_format(),
                 image_key: image_key.clone(),
@@ -17659,7 +17691,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_image_rows_use_room_backed_image_media_state() {
+    fn thread_image_rows_use_room_backed_preview_media_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         let mut activity = image_activity(
@@ -17675,7 +17707,7 @@ mod tests {
         apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$thread-image:example.org",
                 "$thread-image:example.org",
@@ -17702,7 +17734,7 @@ mod tests {
     }
 
     #[test]
-    fn room_image_media_dispatch_records_one_thumbnail_fetch_and_dedupes_pending() {
+    fn room_preview_media_dispatch_records_one_thumbnail_fetch_and_dedupes_pending() {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17725,9 +17757,9 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
-        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(
             state.recorded_commands,
             vec![Command::FetchRoomMedia(FetchRoomMediaRequest {
@@ -17747,7 +17779,7 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
         assert!(requests.is_empty());
 
@@ -17755,7 +17787,7 @@ mod tests {
     }
 
     #[test]
-    fn room_image_media_dispatch_without_command_sender_keeps_pending_state() {
+    fn room_preview_media_dispatch_without_command_sender_keeps_pending_state() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17778,18 +17810,18 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
-        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
             state
                 .model
                 .room_views
                 .get("!ops:example")
-                .and_then(|room_view| room_view.image_media.get("event:$image1:example.org"))
+                .and_then(|room_view| room_view.preview_media.get("event:$image1:example.org"))
                 .cloned(),
-            Some(RoomImageMediaState::Pending {
+            Some(RoomPreviewMediaState::Pending {
                 event_id: "$image1:example.org".to_owned(),
                 format: timeline_thumbnail_format(),
             })
@@ -17798,7 +17830,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_image_media_dispatch_uses_room_backed_pending_state() {
+    fn thread_preview_media_dispatch_uses_room_backed_pending_state() {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         let mut activity = image_activity(
@@ -17819,14 +17851,14 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(
+            collect_lazy_room_preview_media_requests(
                 room_view,
                 room_view.activities.iter().filter(|activity| {
                     room_activity_belongs_to_thread(activity, "$thread-root:example.org")
                 }),
             )
         };
-        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
         assert_eq!(state.recorded_commands.len(), 1);
 
         let room_requests = {
@@ -17835,7 +17867,7 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
         assert!(room_requests.is_empty());
 
@@ -17860,7 +17892,7 @@ mod tests {
         )
         .unwrap();
 
-        let duplicate_request = RoomImageMediaDispatch {
+        let duplicate_request = RoomPreviewMediaDispatch {
             activity_id: "event:$image1:example.org".to_owned(),
             event_id: "$image1:example.org".to_owned(),
             source: RoomMediaSource::Plain {
@@ -17868,7 +17900,7 @@ mod tests {
             },
             format: timeline_thumbnail_format(),
         };
-        dispatch_lazy_room_image_media_requests(
+        dispatch_lazy_room_preview_media_requests(
             &mut state,
             "!ops:example",
             vec![duplicate_request.clone(), duplicate_request],
@@ -17881,7 +17913,7 @@ mod tests {
     }
 
     #[test]
-    fn loaded_or_failed_image_media_state_skips_additional_fetch_dispatch() {
+    fn loaded_or_failed_preview_media_state_skips_additional_fetch_dispatch() {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
@@ -17902,9 +17934,9 @@ mod tests {
             .room_views
             .get_mut("!ops:example")
             .expect("room view must exist")
-            .insert_image_media(
+            .insert_preview_media(
                 "event:$image1:example.org".to_owned(),
-                RoomImageMediaState::Loaded {
+                RoomPreviewMediaState::Loaded {
                     event_id: "$image1:example.org".to_owned(),
                     format: timeline_thumbnail_format(),
                     image_key: "loaded-key".to_owned(),
@@ -17919,13 +17951,13 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
         assert!(requests.is_empty());
 
         apply_core_event(
             &mut state,
-            room_image_media_event(
+            room_preview_media_event(
                 "!ops:example",
                 "event:$image1:example.org",
                 "$image1:example.org",
@@ -17942,7 +17974,7 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
         assert!(requests.is_empty());
 
@@ -17973,9 +18005,9 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
-        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
             state.recorded_commands,
@@ -18015,7 +18047,7 @@ mod tests {
             .get("!ops:example")
             .expect("room view must exist");
         let requests =
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter());
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter());
         assert!(requests.is_empty());
     }
 
@@ -18050,9 +18082,9 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
-        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
             state.recorded_commands,
@@ -18103,9 +18135,9 @@ mod tests {
                 .room_views
                 .get("!ops:example")
                 .expect("room view must exist");
-            collect_lazy_room_image_media_requests(room_view, room_view.activities.iter())
+            collect_lazy_room_preview_media_requests(room_view, room_view.activities.iter())
         };
-        dispatch_lazy_room_image_media_requests(&mut state, "!ops:example", requests).unwrap();
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
 
         assert_eq!(
             state.recorded_commands,
@@ -19447,7 +19479,7 @@ mod tests {
                 )],
                 reactions_by_target: BTreeMap::new(),
                 threads: BTreeMap::new(),
-                image_media: BTreeMap::new(),
+                preview_media: BTreeMap::new(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
                 history: RoomHistoryBackfillState::default(),

@@ -167,7 +167,7 @@ fn sample_room_audio_activity() -> RoomAudioActivity {
     }
 }
 
-fn sample_room_video_activity() -> RoomVideoActivity {
+fn sample_room_video_activity(media_state: Option<RoomImageMediaState>) -> RoomVideoActivity {
     RoomVideoActivity {
         event_id: "$video1:example.org".to_owned(),
         sender: "@alice:example.org".to_owned(),
@@ -184,6 +184,7 @@ fn sample_room_video_activity() -> RoomVideoActivity {
                 url: "mxc://example.org/clip-thumbnail".to_owned(),
             }),
         }),
+        media_state,
     }
 }
 
@@ -1638,7 +1639,7 @@ fn room_activity_video_round_trips_through_json() {
         timestamp_ms: 1_710_000_030_000,
         relation: None,
         reactions: Vec::new(),
-        kind: RoomActivityKind::Video(Box::new(sample_room_video_activity())),
+        kind: RoomActivityKind::Video(Box::new(sample_room_video_activity(None))),
     };
 
     let json = serde_json::to_value(&activity).expect("serialize video activity");
@@ -1651,6 +1652,27 @@ fn room_activity_video_round_trips_through_json() {
         serde_json::from_value::<RoomActivity>(json).expect("deserialize video activity"),
         activity
     );
+}
+
+#[test]
+fn room_activity_video_media_states_round_trip_through_json() {
+    for media_state in [
+        RoomImageMediaState::Pending,
+        RoomImageMediaState::Loaded {
+            width: 64,
+            height: 48,
+        },
+        RoomImageMediaState::Failed {
+            message: "download failed".to_owned(),
+        },
+    ] {
+        let video = sample_room_video_activity(Some(media_state));
+        let json = serde_json::to_value(&video).expect("serialize video activity");
+        assert_eq!(
+            serde_json::from_value::<RoomVideoActivity>(json).expect("deserialize video activity"),
+            video
+        );
+    }
 }
 
 #[test]
