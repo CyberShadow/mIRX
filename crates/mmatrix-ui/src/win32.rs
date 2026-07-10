@@ -27,10 +27,9 @@ use mmatrix_core::{
     RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    RoomVideoInfo,
-    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
 };
 use serde::Serialize;
@@ -4553,9 +4552,7 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         TimelineRowKind::Image
         | TimelineRowKind::File
         | TimelineRowKind::Audio
-        | TimelineRowKind::Video => {
-            rgb(0x1F, 0x64, 0x5A)
-        }
+        | TimelineRowKind::Video => rgb(0x1F, 0x64, 0x5A),
         TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
         TimelineRowKind::StateNotice => rgb(0x3D, 0x67, 0x35),
     }
@@ -16905,7 +16902,8 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent unsupported com.example.custom: clip.mp4".to_owned(),
+                "* [16:00] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                    .to_owned(),
             ]
         );
     }
@@ -17859,7 +17857,8 @@ mod tests {
             image_row,
             TimelineRow::log(
                 TimelineRowKind::Unsupported,
-                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                    .to_owned(),
                 "[16:01]".to_owned(),
                 "* @alice:example.org".to_owned(),
                 "sent unsupported com.example.custom: clip.mp4".to_owned(),
@@ -17873,7 +17872,8 @@ mod tests {
             logical_lines,
             vec![
                 "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
-                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4".to_owned(),
+                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                    .to_owned(),
             ]
         );
         assert_eq!(
@@ -17897,7 +17897,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "[16:00]|* @alice:example.org|sent image: diagram.png".to_owned(),
-                "[16:01]|* @alice:example.org|sent unsupported com.example.custom: clip.mp4".to_owned(),
+                "[16:01]|* @alice:example.org|sent unsupported com.example.custom: clip.mp4"
+                    .to_owned(),
             ]
         );
         assert_eq!(

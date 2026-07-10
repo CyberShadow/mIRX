@@ -25,17 +25,16 @@ use mmatrix_testkit::{
     RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
     RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomImageMedia,
     RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource, RoomMemberView,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind, RoomVideoActivity,
-    RoomVideoInfo,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild,
-    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
-    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
-    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    RoomStateNoticeContent, RoomTag, RoomVideoActivity, RoomVideoInfo, SendFileArgs,
+    SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiError, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
+    UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -1656,8 +1655,9 @@ fn room_activity_video_round_trips_through_json() {
 
 #[test]
 fn room_video_types_reject_unknown_fields() {
-    assert!(serde_json::from_str::<RoomVideoActivity>(
-        r#"{
+    assert!(
+        serde_json::from_str::<RoomVideoActivity>(
+            r#"{
             "event_id":"$video1:example.org",
             "sender":"@alice:example.org",
             "body":"clip.mp4",
@@ -1666,10 +1666,12 @@ fn room_video_types_reject_unknown_fields() {
             "info":null,
             "unexpected":true
         }"#
-    )
-    .is_err());
-    assert!(serde_json::from_str::<RoomVideoInfo>(
-        r#"{
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomVideoInfo>(
+            r#"{
             "mimetype":"video/mp4",
             "size":54321,
             "duration_ms":12345,
@@ -1678,8 +1680,9 @@ fn room_video_types_reject_unknown_fields() {
             "thumbnail_source":null,
             "unexpected":true
         }"#
-    )
-    .is_err());
+        )
+        .is_err()
+    );
 }
 
 #[test]

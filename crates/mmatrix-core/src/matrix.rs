@@ -40,9 +40,9 @@ use matrix_sdk::{
                 EncryptedFile, ImageInfo, MediaSource,
                 member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
                 message::{
-                    AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent, VideoInfo,
+                    AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
                     Relation as MessageContentRelation, Relation as MessageRelation,
-                    RoomMessageEventContent, RoomMessageEventContentWithoutRelation,
+                    RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
                 },
                 redaction::OriginalSyncRoomRedactionEvent,
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
@@ -2897,10 +2897,10 @@ mod tests {
         RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
         RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
-        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
-        RoomVideoActivity, RoomVideoInfo,
+        RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomVideoActivity, RoomVideoInfo,
+        SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
+        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, SessionMeta,
