@@ -1561,6 +1561,7 @@ mod room_assertion_tests {
         Room {
             room_id: room_id.to_owned(),
             display_name: room_id.to_owned(),
+            topic: None,
             membership,
             encrypted: false,
             is_space: false,
