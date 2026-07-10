@@ -2945,19 +2945,18 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
     let status_view = find_view(&ui_state, &ViewIdentity::Status);
     assert!(status_view.active);
     assert!(view_contains(status_view, "recovery: incomplete"));
-    assert!(view_contains(status_view, "backup: enabled"));
-    assert!(view_contains(status_view, "backup_enabled_local: true"));
-    assert!(view_contains(status_view, "backup_exists_on_server: true"));
-    assert!(view_contains(status_view, "cross_signing: incomplete"));
+    assert!(view_contains(status_view, "local backup: enabled"));
+    assert!(view_contains(status_view, "server backup: exists"));
+    assert!(view_contains(status_view, "cross-signing: incomplete"));
     assert!(view_contains(
         status_view,
-        "actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh",
+        "actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys",
     ));
     assert!(
         ui_state
             .status_bar
             .text
-            .contains("e2ee: recovery incomplete, backup enabled")
+            .contains("e2ee: recovery incomplete, backup healthy, cross-signing incomplete")
     );
 
     Ok(())

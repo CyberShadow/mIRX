@@ -17,10 +17,10 @@ use std::time::Duration;
 
 use mmatrix_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CommandSender, CoreConfig,
-    CoreErrorEvent, CoreHandle, CreateDirectRoomRequest, E2eeBackupState, E2eeCrossSigningStatus,
-    E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event, FetchRoomMediaRequest,
-    JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    CoreErrorEvent, CoreHandle, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
+    FetchRoomMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
+    Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioInfo, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo,
@@ -7668,27 +7668,19 @@ fn render_status_lines(model: &UiModel) -> Vec<String> {
             e2ee_recovery_state_label(status.recovery)
         ));
         lines.push(format!(
-            "backup: {}",
-            e2ee_backup_state_label(status.backup.state)
+            "local backup: {}",
+            e2ee_local_backup_label(&status.backup)
         ));
         lines.push(format!(
-            "backup_enabled_local: {}",
-            if status.backup.enabled_locally {
-                "true"
-            } else {
-                "false"
-            }
+            "server backup: {}",
+            e2ee_server_backup_label(status.backup.exists_on_server)
         ));
         lines.push(format!(
-            "backup_exists_on_server: {}",
-            e2ee_backup_exists_label(status.backup.exists_on_server)
-        ));
-        lines.push(format!(
-            "cross_signing: {}",
+            "cross-signing: {}",
             e2ee_cross_signing_label(status.cross_signing.as_ref())
         ));
         lines.push(
-            "actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh".to_owned(),
+            "actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys".to_owned(),
         );
     }
 
@@ -7724,8 +7716,10 @@ fn frame_status_text(state: &WindowState) -> String {
     if let Some(status) = &model.last_e2ee_status {
         text.push_str(" | e2ee: recovery ");
         text.push_str(e2ee_recovery_state_label(status.recovery));
-        text.push_str(", backup ");
-        text.push_str(e2ee_backup_state_label(status.backup.state));
+        text.push_str(", ");
+        text.push_str(e2ee_backup_health_summary(status));
+        text.push_str(", cross-signing ");
+        text.push_str(e2ee_cross_signing_label(status.cross_signing.as_ref()));
     }
 
     if let Some(error) = &model.last_error {
@@ -12948,18 +12942,66 @@ fn e2ee_backup_state_label(state: E2eeBackupState) -> &'static str {
     }
 }
 
+fn e2ee_local_backup_label(status: &E2eeBackupStatus) -> &'static str {
+    match status.state {
+        E2eeBackupState::Creating
+        | E2eeBackupState::Enabling
+        | E2eeBackupState::Resuming
+        | E2eeBackupState::Downloading
+        | E2eeBackupState::Disabling => e2ee_backup_state_label(status.state),
+        E2eeBackupState::Unknown => "unknown",
+        _ if status.enabled_locally => "enabled",
+        _ => "disabled",
+    }
+}
+
+fn e2ee_server_backup_label(exists_on_server: Option<bool>) -> &'static str {
+    match exists_on_server {
+        Some(true) => "exists",
+        Some(false) => "missing",
+        None => "not checked",
+    }
+}
+
+fn e2ee_backup_health_summary(status: &E2eeStatus) -> &'static str {
+    match status.backup.state {
+        E2eeBackupState::Creating
+        | E2eeBackupState::Enabling
+        | E2eeBackupState::Resuming
+        | E2eeBackupState::Downloading
+        | E2eeBackupState::Disabling => {
+            return match status.backup.state {
+                E2eeBackupState::Creating => "backup creating",
+                E2eeBackupState::Enabling => "backup enabling",
+                E2eeBackupState::Resuming => "backup resuming",
+                E2eeBackupState::Downloading => "backup downloading",
+                E2eeBackupState::Disabling => "backup disabling",
+                _ => unreachable!(),
+            };
+        }
+        _ => {}
+    }
+
+    if status.backup.state == E2eeBackupState::Enabled
+        && status.backup.enabled_locally
+        && status.backup.exists_on_server == Some(true)
+    {
+        "backup healthy"
+    } else if status.backup.exists_on_server == Some(false) {
+        "backup missing on server"
+    } else if !status.backup.enabled_locally {
+        "local backup disabled"
+    } else if status.backup.exists_on_server.is_none() {
+        "server backup not checked"
+    } else {
+        "backup unknown"
+    }
+}
+
 fn e2ee_cross_signing_label(status: Option<&E2eeCrossSigningStatus>) -> &'static str {
     match status {
         Some(status) if status.complete => "complete",
         Some(_) => "incomplete",
-        None => "unknown",
-    }
-}
-
-fn e2ee_backup_exists_label(exists_on_server: Option<bool>) -> &'static str {
-    match exists_on_server {
-        Some(true) => "true",
-        Some(false) => "false",
         None => "unknown",
     }
 }
@@ -18456,12 +18498,11 @@ mod tests {
         let status_text = render_view_text(&render_status_lines(&state.model));
         assert!(status_text.contains("e2ee"));
         assert!(status_text.contains("recovery: incomplete"));
-        assert!(status_text.contains("backup: enabled"));
-        assert!(status_text.contains("backup_enabled_local: false"));
-        assert!(status_text.contains("backup_exists_on_server: true"));
-        assert!(status_text.contains("cross_signing: incomplete"));
+        assert!(status_text.contains("local backup: disabled"));
+        assert!(status_text.contains("server backup: exists"));
+        assert!(status_text.contains("cross-signing: incomplete"));
         assert!(status_text.contains(
-            "actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh"
+            "actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
         ));
     }
 
@@ -18799,8 +18840,52 @@ mod tests {
 
         assert_eq!(
             frame_status_text(&state),
-            "e2ee status updated | e2ee: recovery incomplete, backup enabled"
+            "e2ee status updated | e2ee: recovery incomplete, backup healthy, cross-signing complete"
         );
+    }
+
+    #[test]
+    fn e2ee_backup_status_labels_distinguish_missing_unknown_and_transitional_states() {
+        let missing = e2ee_status(
+            E2eeRecoveryState::Enabled,
+            E2eeBackupState::Enabled,
+            true,
+            Some(false),
+            Some(true),
+        );
+        let mut missing_state = test_state();
+        missing_state.model.last_e2ee_status = Some(missing.clone());
+        let missing_text = render_view_text(&render_status_lines(&missing_state.model));
+        assert!(missing_text.contains("server backup: missing"));
+        assert_eq!(
+            e2ee_backup_health_summary(&missing),
+            "backup missing on server"
+        );
+
+        let unknown = e2ee_status(
+            E2eeRecoveryState::Enabled,
+            E2eeBackupState::Enabled,
+            true,
+            None,
+            Some(true),
+        );
+        let mut unknown_state = test_state();
+        unknown_state.model.last_e2ee_status = Some(unknown.clone());
+        let unknown_text = render_view_text(&render_status_lines(&unknown_state.model));
+        assert!(unknown_text.contains("server backup: not checked"));
+        assert_eq!(
+            e2ee_backup_health_summary(&unknown),
+            "server backup not checked"
+        );
+
+        let transitional = e2ee_status(
+            E2eeRecoveryState::Enabled,
+            E2eeBackupState::Enabling,
+            false,
+            None,
+            Some(true),
+        );
+        assert_eq!(e2ee_backup_health_summary(&transitional), "backup enabling");
     }
 
     #[test]

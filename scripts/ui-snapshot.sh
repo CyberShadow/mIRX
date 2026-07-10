@@ -1042,18 +1042,17 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view 'e2ee'
         --expect-status-view 'recovery: incomplete'
-        --expect-status-view 'backup: enabled'
-        --expect-status-view 'backup_enabled_local: false'
-        --expect-status-view 'backup_exists_on_server: true'
-        --expect-status-view 'cross_signing: incomplete'
-        --expect-status-view 'actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'local backup: disabled'
+        --expect-status-view 'server backup: exists'
+        --expect-status-view 'cross-signing: incomplete'
+        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
         --expect-no-status-view 'passphrase='
       )
       status_bar_expect_args=(
-        --expect-status-bar 'e2ee: recovery incomplete, backup enabled'
+        --expect-status-bar 'e2ee: recovery incomplete, local backup disabled, cross-signing incomplete'
       )
       status_bar_forbid_args=(
         --expect-no-status-bar 'recovery_secret'
@@ -1072,18 +1071,17 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view 'e2ee'
         --expect-status-view 'recovery: enabled'
-        --expect-status-view 'backup: enabled'
-        --expect-status-view 'backup_enabled_local: true'
-        --expect-status-view 'backup_exists_on_server: true'
-        --expect-status-view 'cross_signing: complete'
-        --expect-status-view 'actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'local backup: enabled'
+        --expect-status-view 'server backup: exists'
+        --expect-status-view 'cross-signing: complete'
+        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
         --expect-no-status-view 'passphrase='
       )
       status_bar_expect_args=(
-        --expect-status-bar 'e2ee: recovery enabled, backup enabled'
+        --expect-status-bar 'e2ee: recovery enabled, backup healthy, cross-signing complete'
       )
       status_bar_forbid_args=(
         --expect-no-status-bar 'recovery_secret'
@@ -1103,11 +1101,10 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view 'e2ee'
         --expect-status-view 'recovery: incomplete'
-        --expect-status-view 'backup: enabled'
-        --expect-status-view 'backup_enabled_local: false'
-        --expect-status-view 'backup_exists_on_server: true'
-        --expect-status-view 'cross_signing: incomplete'
-        --expect-status-view 'actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'local backup: disabled'
+        --expect-status-view 'server backup: exists'
+        --expect-status-view 'cross-signing: incomplete'
+        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
         --expect-status-view 'operation: e2ee recovery'
         --expect-status-view 'failed to recover E2EE secrets: invalid recovery key or passphrase'
       )
@@ -1116,8 +1113,37 @@ configure_case_expectations() {
         --expect-no-status-view 'passphrase='
       )
       status_bar_expect_args=(
-        --expect-status-bar 'e2ee: recovery incomplete, backup enabled'
+        --expect-status-bar 'e2ee: recovery incomplete, local backup disabled, cross-signing incomplete'
         --expect-status-bar 'error: e2ee recovery: failed to recover E2EE secrets'
+      )
+      status_bar_forbid_args=(
+        --expect-no-status-bar 'recovery_secret'
+        --expect-no-status-bar 'passphrase='
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
+      ;;
+    e2ee-backup-missing)
+      expect_active_view='status'
+      status_view_expect_args=(
+        --expect-status-view 'e2ee'
+        --expect-status-view 'recovery: enabled'
+        --expect-status-view 'local backup: enabled'
+        --expect-status-view 'server backup: missing'
+        --expect-status-view 'cross-signing: complete'
+        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'recovery_secret'
+        --expect-no-status-view 'passphrase='
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'e2ee: recovery enabled, backup missing on server, cross-signing complete'
       )
       status_bar_forbid_args=(
         --expect-no-status-bar 'recovery_secret'
