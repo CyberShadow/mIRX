@@ -4984,6 +4984,7 @@ unsafe fn selected_timeline_event_id_for_automation(hwnd: HWND) -> Option<String
         .then(|| selected.event_id.clone())
 }
 
+#[cfg(test)]
 fn active_message_action_state(state: &WindowState) -> MessageActionState {
     let selected_event_id = match state.active_view {
         ViewId::Room(_) | ViewId::Thread { .. } => {
@@ -5246,6 +5247,19 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> Option<Result<(), S
 }
 
 unsafe fn invoke_menu_command_for_automation(hwnd: HWND, command_id: usize) -> Result<(), String> {
+    let room_action_enabled = match command_id {
+        MENU_ID_ROOM_ACCEPT_INVITE => {
+            active_room_action_state(state_ref(hwnd)).accept_invite_enabled
+        }
+        MENU_ID_ROOM_REJECT_INVITE => {
+            active_room_action_state(state_ref(hwnd)).reject_invite_enabled
+        }
+        MENU_ID_ROOM_PART => active_room_action_state(state_ref(hwnd)).part_room_enabled,
+        _ => true,
+    };
+    if !room_action_enabled {
+        return Err("room menu action is disabled".to_owned());
+    }
     let Some(result) = handle_menu_command(hwnd, command_id) else {
         return Err(format!("unknown menu command {command_id}"));
     };
@@ -13344,6 +13358,49 @@ mod tests {
         result
     }
 
+    unsafe fn install_test_active_timeline_event(hwnd: HWND, event_id: &str) {
+        let instance = GetModuleHandleW(null());
+        register_room_content_class(instance).unwrap();
+        register_timeline_class(instance).unwrap();
+        let content = CreateWindowExW(
+            0,
+            wide_null(ROOM_CONTENT_CLASS_NAME).as_ptr(),
+            wide_null("").as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            0,
+            0,
+            hwnd,
+            null_mut(),
+            instance,
+            null_mut(),
+        );
+        assert!(!content.is_null(), "test room content must be created");
+        let active_view = state_ref(hwnd).active_view.clone();
+        state_mut(hwnd).views.insert(
+            active_view,
+            MdiViewState {
+                child: hwnd,
+                content,
+            },
+        );
+        set_timeline_rows(
+            room_content_timeline(content),
+            &[TimelineRow::log(
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                "message".to_owned(),
+                "[00:00]".to_owned(),
+                "@alice:".to_owned(),
+                "message".to_owned(),
+            )
+            .with_event_id(Some(event_id))],
+        );
+    }
+
     fn measure_ascii_width(text: &str) -> i32 {
         text.chars().count() as i32
     }
@@ -21252,6 +21309,7 @@ mod tests {
 
         unsafe {
             with_test_compose_window(state, |hwnd| {
+                install_test_active_timeline_event(hwnd, "$event-id");
                 prefill_reply_to_selected_message(hwnd).unwrap();
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "/reply $event-id ");
                 assert!(state_ref(hwnd).recorded_commands.is_empty());
@@ -21271,6 +21329,7 @@ mod tests {
 
         unsafe {
             with_test_compose_window(state, |hwnd| {
+                install_test_active_timeline_event(hwnd, "$event-id");
                 submit_redact_selected_message(hwnd).unwrap();
                 assert_eq!(
                     state_ref(hwnd).model.status,
