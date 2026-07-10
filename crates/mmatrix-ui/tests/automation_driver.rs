@@ -9988,6 +9988,230 @@ fn automation_driver_slash_redact_from_thread_targets_parent_room()
 }
 
 #[test]
+fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+
+    let menu = app.dump_room_menu_state()?;
+    assert!(menu.accept_invite_enabled);
+    assert!(menu.reject_invite_enabled);
+    assert!(!menu.part_room_enabled);
+
+    app.accept_invite_via_room_menu()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let accepted = app.dump_model()?;
+    assert_eq!(accepted.status, "accept submitted: !invite:example");
+    assert_eq!(
+        accepted.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::AcceptInvite,
+            target: "!invite:example".to_owned(),
+        }]
+    );
+    assert!(accepted.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Invite
+    }));
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(vec![
+        room_summary("!beta:example", "Beta", false),
+        room_summary("!invite:example", "Lobby", false),
+    ])])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let joined = app.dump_model()?;
+    assert!(joined.rooms.iter().any(|room| {
+        room.room_id == "!invite:example" && room.membership == RoomMembership::Join
+    }));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let menu = app.dump_room_menu_state()?;
+    assert!(!menu.accept_invite_enabled);
+    assert!(!menu.reject_invite_enabled);
+    assert!(menu.part_room_enabled);
+
+    app.part_room_via_room_menu()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "part submitted: !beta:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Leave,
+            target: "!beta:example".to_owned(),
+        }]
+    );
+    assert_eq!(app.dump_ui_state()?.mdi.active, room_identity("!beta:example"));
+
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
+        text_event(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_180_000,
+            "alpha after part",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let replaced_state = app.dump_ui_state()?;
+    assert_eq!(replaced_state.mdi.active, room_identity("!alpha:example"));
+    assert!(replaced_state
+        .mdi
+        .views
+        .iter()
+        .all(|view| view.identity != room_identity("!beta:example")));
+    assert!(replaced_state
+        .switchbar
+        .items
+        .iter()
+        .all(|item| item.identity != room_identity("!beta:example")));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_message_menu_reply_prefills_selected_event()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!reactions:example")?;
+
+    let disabled = app.dump_message_menu_state()?;
+    assert!(!disabled.reply_enabled);
+    assert!(!disabled.redact_enabled);
+    assert_eq!(disabled.selected_event_id, None);
+
+    app.select_timeline_event("$react-normal")?;
+    let enabled = app.dump_message_menu_state()?;
+    assert!(enabled.reply_enabled);
+    assert!(enabled.redact_enabled);
+    assert_eq!(enabled.selected_event_id.as_deref(), Some("$react-normal"));
+
+    app.reply_to_selected_message_via_menu()?;
+    assert_eq!(app.compose_text()?, "/reply $react-normal ");
+    let model = app.dump_model()?;
+    assert!(model.submitted_reply_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_message_menu_redact_records_selected_event()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("redactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!redactions:example")?;
+    let before = app.room_activity(Some("!redactions:example"))?;
+
+    app.select_timeline_event("$redact-text")?;
+    app.redact_selected_message_via_menu()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_redaction_commands,
+        vec![SubmittedRedactionCommand {
+            room_id: "!redactions:example".to_owned(),
+            event_id: "$redact-text".to_owned(),
+        }]
+    );
+    assert_eq!(app.room_activity(Some("!redactions:example"))?, before);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_message_menu_redact_from_thread_targets_parent_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("reactions.json");
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
+    app.select_view(thread_view_identity.clone())?;
+    app.select_timeline_event("$react-thread-reply")?;
+    app.redact_selected_message_via_menu()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    assert_eq!(
+        app.dump_model()?.submitted_redaction_commands,
+        vec![SubmittedRedactionCommand {
+            room_id: "!reactions:example".to_owned(),
+            event_id: "$react-thread-reply".to_owned(),
+        }]
+    );
+    assert_eq!(app.dump_ui_state()?.mdi.active, thread_view_identity);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_slash_clear_clears_only_active_room_timeline()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
