@@ -1,12 +1,13 @@
 use std::env;
 use std::error::Error;
+use std::fs;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use matrix_sdk::{
     Client, Room,
     config::SyncSettings,
     ruma::{
-        OwnedEventId, RoomId,
+        OwnedEventId, RoomId, UInt,
         api::client::config::get_room_account_data,
         events::{
             RoomAccountDataEventType, fully_read::FullyReadEventContent,
@@ -15,9 +16,10 @@ use matrix_sdk::{
     },
 };
 use mmatrix_core::{
-    Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, Event, LoginRequest,
-    MarkRoomReadRequest, RoomMessagePresentationKind, RoomSummary, SendMessageRequest,
-    StoredSession, start,
+    Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, EditMessageRequest, Event,
+    FetchRoomMediaRequest, LoginRequest, MarkRoomReadRequest, RedactEventRequest, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary, SendFileRequest,
+    SendMessageRequest, SendReactionRequest, StoredSession, start,
 };
 use tempfile::TempDir;
 
@@ -286,6 +288,76 @@ async fn live_direct_text_message_event_id(
         .event_id)
 }
 
+async fn live_wait_for_room_event(
+    client: &Client,
+    room: &Room,
+    nonce: u128,
+    context: &str,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    while Instant::now() < deadline {
+        client
+            .sync_once(SyncSettings::default())
+            .await
+            .expect("sync fixture client while waiting for room event");
+        let mut options = matrix_sdk::room::MessagesOptions::backward();
+        options.limit = UInt::from(50_u32);
+        options.filter.limit = Some(UInt::from(50_u32));
+        let response = room
+            .messages(options)
+            .await
+            .expect("fetch room history while waiting for room event");
+
+        for event in response.chunk {
+            let value: serde_json::Value = serde_json::from_str(event.raw().json().get())
+                .expect("deserialize fixture timeline event as JSON");
+            if predicate(&value) {
+                return value;
+            }
+        }
+    }
+
+    panic!("timed out waiting for {context} for nonce {nonce}");
+}
+
+fn wait_for_live_room_media_loaded(
+    handle: &CoreHandle,
+    activity_id: &str,
+    event_id: &str,
+    context: &str,
+) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    while Instant::now() < deadline {
+        match handle
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("room media event")
+        {
+            Event::RoomMedia(media)
+                if media.activity_id == activity_id && media.event_id == event_id =>
+            {
+                match media.kind {
+                    RoomMediaKind::Loaded {
+                        format: RoomMediaFormat::File,
+                        bytes,
+                    } => return bytes,
+                    other => panic!("{context} returned unexpected room media kind: {other:?}"),
+                }
+            }
+            Event::Error(err) => panic!(
+                "{context} failed during {:?}: {}",
+                err.operation, err.message
+            ),
+            _ => {}
+        }
+    }
+
+    panic!("timed out waiting for {context} room media event {event_id}");
+}
+
 async fn live_get_fully_read_marker(
     client: &Client,
     room: &Room,
@@ -494,6 +566,204 @@ fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
         .block_on(live_get_fully_read_marker(&fixture_client, &room))
         .expect("query m.fully_read room account data");
     assert_eq!(fully_read_event_id, event_id);
+
+    live_shutdown_and_join(handle);
+}
+
+#[test]
+fn live_matrix_message_actions_round_trip_is_env_gated() {
+    let Some(env) = live_matrix_env_with_room() else {
+        return;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build live fixture runtime");
+    let (_temp_dir, handle) = live_start_core();
+    live_send_login(
+        &handle,
+        env.homeserver_url.clone(),
+        env.username.clone(),
+        env.password.clone(),
+        "mmatrix live message actions test",
+    );
+    wait_for_live_login_and_synced_rooms(&handle);
+
+    let fixture_client = runtime
+        .block_on(live_fixture_client_from_env_values(
+            &env.homeserver_url,
+            &env.username,
+            &env.password,
+        ))
+        .expect("create fixture client");
+    let room = runtime
+        .block_on(live_room_from_env_value(&fixture_client, &env.room_id))
+        .expect("resolve MMATRIX_ROOM into a joined room");
+    let nonce = live_nonce();
+
+    let reaction_target = runtime
+        .block_on(live_direct_text_message_event_id(
+            &room,
+            format!("mmatrix live reaction target {nonce}"),
+        ))
+        .expect("send reaction target");
+    let reaction_key = "+1".to_owned();
+    handle
+        .command_sender()
+        .send(Command::SendReaction(SendReactionRequest {
+            room_id: env.room_id.clone(),
+            target_event_id: reaction_target.to_string(),
+            key: reaction_key.clone(),
+        }))
+        .expect("send reaction");
+    runtime.block_on(live_wait_for_room_event(
+        &fixture_client,
+        &room,
+        nonce,
+        "reaction targeting the baseline message",
+        |event| {
+            event["type"] == "m.reaction"
+                && event["content"]["m.relates_to"]["event_id"] == reaction_target.as_str()
+                && event["content"]["m.relates_to"]["key"] == reaction_key
+        },
+    ));
+
+    let edit_target = runtime
+        .block_on(live_direct_text_message_event_id(
+            &room,
+            format!("mmatrix live edit target {nonce}"),
+        ))
+        .expect("send edit target");
+    let edited_body = format!("mmatrix live edited body {nonce}");
+    handle
+        .command_sender()
+        .send(Command::EditMessage(EditMessageRequest {
+            room_id: env.room_id.clone(),
+            target_event_id: edit_target.to_string(),
+            presentation: RoomMessagePresentationKind::Text,
+            body: edited_body.clone(),
+        }))
+        .expect("send edit message");
+    runtime.block_on(live_wait_for_room_event(
+        &fixture_client,
+        &room,
+        nonce,
+        "replacement relation for the edit target",
+        |event| {
+            event["type"] == "m.room.message"
+                && event["content"]["m.relates_to"]["rel_type"] == "m.replace"
+                && event["content"]["m.relates_to"]["event_id"] == edit_target.as_str()
+                && event["content"]["m.new_content"]["body"] == edited_body
+        },
+    ));
+
+    let redaction_target = runtime
+        .block_on(live_direct_text_message_event_id(
+            &room,
+            format!("mmatrix live redaction target {nonce}"),
+        ))
+        .expect("send redaction target");
+    handle
+        .command_sender()
+        .send(Command::RedactEvent(RedactEventRequest {
+            room_id: env.room_id,
+            event_id: redaction_target.to_string(),
+        }))
+        .expect("send redaction");
+    runtime.block_on(live_wait_for_room_event(
+        &fixture_client,
+        &room,
+        nonce,
+        "redaction event for the redaction target",
+        |event| {
+            event["type"] == "m.room.redaction" && event["redacts"] == redaction_target.as_str()
+        },
+    ));
+
+    live_shutdown_and_join(handle);
+}
+
+#[test]
+fn live_matrix_file_send_and_fetch_media_round_trip_is_env_gated() {
+    let Some(env) = live_matrix_env_with_room() else {
+        return;
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build live fixture runtime");
+    let (temp_dir, handle) = live_start_core();
+    live_send_login(
+        &handle,
+        env.homeserver_url.clone(),
+        env.username.clone(),
+        env.password.clone(),
+        "mmatrix live file media test",
+    );
+    wait_for_live_login_and_synced_rooms(&handle);
+
+    let fixture_client = runtime
+        .block_on(live_fixture_client_from_env_values(
+            &env.homeserver_url,
+            &env.username,
+            &env.password,
+        ))
+        .expect("create fixture client");
+    let room = runtime
+        .block_on(live_room_from_env_value(&fixture_client, &env.room_id))
+        .expect("resolve MMATRIX_ROOM into a joined room");
+    let nonce = live_nonce();
+    let filename = format!("mmatrix-live-{nonce}.txt");
+    let payload = format!("mmatrix live media test {nonce}\n").into_bytes();
+    let path = temp_dir.path().join(&filename);
+    fs::write(&path, &payload).expect("write live test file");
+
+    handle
+        .command_sender()
+        .send(Command::SendFile(SendFileRequest {
+            room_id: env.room_id.clone(),
+            path,
+            filename: Some(filename.clone()),
+            content_type: Some("text/plain".to_owned()),
+        }))
+        .expect("send file");
+    let file_event = runtime.block_on(live_wait_for_room_event(
+        &fixture_client,
+        &room,
+        nonce,
+        "m.file event for the uploaded file",
+        |event| {
+            event["type"] == "m.room.message"
+                && event["content"]["msgtype"] == "m.file"
+                && event["content"]["body"] == filename
+        },
+    ));
+    let event_id = file_event["event_id"]
+        .as_str()
+        .expect("uploaded file event must include an event id")
+        .to_owned();
+    let url = file_event["content"]["url"]
+        .as_str()
+        .expect("uploaded file event must be unencrypted and include an MXC URL")
+        .to_owned();
+    let activity_id = format!("live-file-{nonce}");
+    handle
+        .command_sender()
+        .send(Command::FetchRoomMedia(FetchRoomMediaRequest {
+            room_id: env.room_id.clone(),
+            activity_id: activity_id.clone(),
+            event_id: event_id.clone(),
+            source: RoomMediaSource::Plain { url },
+            format: RoomMediaFormat::File,
+        }))
+        .expect("fetch uploaded room media");
+    let bytes = wait_for_live_room_media_loaded(
+        &handle,
+        &activity_id,
+        &event_id,
+        "fetch uploaded room media",
+    );
+    assert_eq!(bytes, payload);
 
     live_shutdown_and_join(handle);
 }
