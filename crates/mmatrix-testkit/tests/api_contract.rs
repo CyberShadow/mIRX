@@ -324,20 +324,24 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         message
     );
 
-    assert!(serde_json::from_value::<mmatrix_testkit::RoomMenuState>(serde_json::json!({
-        "accept_invite_enabled": true,
-        "reject_invite_enabled": false,
-        "part_room_enabled": false,
-        "unexpected": true
-    }))
-    .is_err());
-    assert!(serde_json::from_value::<mmatrix_testkit::MessageMenuState>(serde_json::json!({
-        "reply_enabled": true,
-        "redact_enabled": true,
-        "selected_event_id": "$event:example",
-        "unexpected": true
-    }))
-    .is_err());
+    assert!(
+        serde_json::from_value::<mmatrix_testkit::RoomMenuState>(serde_json::json!({
+            "accept_invite_enabled": true,
+            "reject_invite_enabled": false,
+            "part_room_enabled": false,
+            "unexpected": true
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<mmatrix_testkit::MessageMenuState>(serde_json::json!({
+            "reply_enabled": true,
+            "redact_enabled": true,
+            "selected_event_id": "$event:example",
+            "unexpected": true
+        }))
+        .is_err()
+    );
 }
 
 #[test]
@@ -5878,7 +5882,10 @@ fn non_windows_new_methods_report_unsupported_driver() {
         app.dump_message_menu_state().map(|_| ()),
     ] {
         let error = result.expect_err("menu state dump must fail off Windows");
-        assert_eq!(error.to_string(), "mmatrix-testkit requires the Windows target");
+        assert_eq!(
+            error.to_string(),
+            "mmatrix-testkit requires the Windows target"
+        );
     }
 
     let error = app

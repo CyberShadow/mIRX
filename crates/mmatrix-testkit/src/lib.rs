@@ -2331,23 +2331,43 @@ mod imp {
         }
 
         pub(crate) fn accept_invite_via_room_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, EmptyArgs {}, "ACCEPT_INVITE_VIA_ROOM_MENU")
+            self.send_accepted_command(
+                COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU,
+                EmptyArgs {},
+                "ACCEPT_INVITE_VIA_ROOM_MENU",
+            )
         }
 
         pub(crate) fn reject_invite_via_room_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU, EmptyArgs {}, "REJECT_INVITE_VIA_ROOM_MENU")
+            self.send_accepted_command(
+                COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
+                EmptyArgs {},
+                "REJECT_INVITE_VIA_ROOM_MENU",
+            )
         }
 
         pub(crate) fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, EmptyArgs {}, "PART_ROOM_VIA_ROOM_MENU")
+            self.send_accepted_command(
+                COMMAND_ID_PART_ROOM_VIA_ROOM_MENU,
+                EmptyArgs {},
+                "PART_ROOM_VIA_ROOM_MENU",
+            )
         }
 
         pub(crate) fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, EmptyArgs {}, "REPLY_TO_SELECTED_MESSAGE_VIA_MENU")
+            self.send_accepted_command(
+                COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
+                EmptyArgs {},
+                "REPLY_TO_SELECTED_MESSAGE_VIA_MENU",
+            )
         }
 
         pub(crate) fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, EmptyArgs {}, "REDACT_SELECTED_MESSAGE_VIA_MENU")
+            self.send_accepted_command(
+                COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU,
+                EmptyArgs {},
+                "REDACT_SELECTED_MESSAGE_VIA_MENU",
+            )
         }
 
         fn send_accepted_command<Args: Serialize>(
