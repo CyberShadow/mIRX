@@ -1046,7 +1046,7 @@ configure_case_expectations() {
         --expect-status-view 'backup_enabled_local: false'
         --expect-status-view 'backup_exists_on_server: true'
         --expect-status-view 'cross_signing: incomplete'
-        --expect-status-view 'actions: Account > Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1076,7 +1076,7 @@ configure_case_expectations() {
         --expect-status-view 'backup_enabled_local: true'
         --expect-status-view 'backup_exists_on_server: true'
         --expect-status-view 'cross_signing: complete'
-        --expect-status-view 'actions: Account > Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1107,7 +1107,7 @@ configure_case_expectations() {
         --expect-status-view 'backup_enabled_local: false'
         --expect-status-view 'backup_exists_on_server: true'
         --expect-status-view 'cross_signing: incomplete'
-        --expect-status-view 'actions: Account > Recover E2EE..., /e2ee refresh'
+        --expect-status-view 'actions: Account > Set Up E2EE Recovery..., Recover E2EE..., /e2ee refresh'
         --expect-status-view 'operation: e2ee recovery'
         --expect-status-view 'failed to recover E2EE secrets: invalid recovery key or passphrase'
       )
