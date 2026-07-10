@@ -8272,12 +8272,16 @@ fn build_room_find_state_and_maybe_submit_history_backfill(
             RoomHistoryBackfillStatus::Failed { message, .. } => {
                 if submit_backfill_room_history_for_room(state, room_id)? {
                     RoomFindHistorySearch::Loading
+                } else if loading_room_history_room_id(&state.model.room_views).is_some() {
+                    RoomFindHistorySearch::Loading
                 } else {
                     RoomFindHistorySearch::Failed { message }
                 }
             }
             RoomHistoryBackfillStatus::Idle => {
                 if submit_backfill_room_history_for_room(state, room_id)? {
+                    RoomFindHistorySearch::Loading
+                } else if loading_room_history_room_id(&state.model.room_views).is_some() {
                     RoomFindHistorySearch::Loading
                 } else {
                     RoomFindHistorySearch::LocalOnly
@@ -11248,63 +11252,77 @@ unsafe fn drain_core_events(hwnd: HWND) -> Vec<Event> {
     queue.drain(..).collect()
 }
 
+fn pending_room_find_history_room_ids(state: &WindowState) -> Vec<String> {
+    state
+        .find_states
+        .iter()
+        .filter_map(|(view_id, find_state)| match view_id {
+            ViewId::Room(room_id)
+                if find_state.history_search == RoomFindHistorySearch::Loading =>
+            {
+                Some(room_id.clone())
+            }
+            ViewId::Status | ViewId::Thread { .. } | ViewId::Room(_) => None,
+        })
+        .collect()
+}
+
+fn continue_room_find_history_search_after_refresh_state(
+    state: &mut WindowState,
+    room_id: &str,
+) -> Result<bool, String> {
+    let view_id = ViewId::Room(room_id.to_owned());
+    let Some(find_state) = state.find_states.get(&view_id) else {
+        return Ok(false);
+    };
+    if find_state.history_search != RoomFindHistorySearch::Loading && find_state.matches.is_empty()
+    {
+        return Ok(false);
+    }
+
+    if !find_state.matches.is_empty() {
+        let find_state = state
+            .find_states
+            .get_mut(&view_id)
+            .expect("matched room find state must remain tracked after refresh");
+        find_state.history_search = RoomFindHistorySearch::LocalOnly;
+        rebuild_view_find_feedback(find_state);
+        return Ok(true);
+    }
+
+    let history_status = state
+        .model
+        .room_views
+        .get(room_id)
+        .map(|room_view| room_view.history.status.clone())
+        .unwrap_or(RoomHistoryBackfillStatus::Idle);
+    let history_search = match history_status {
+        RoomHistoryBackfillStatus::Idle => {
+            let _ = submit_backfill_room_history_for_room(state, room_id)?;
+            RoomFindHistorySearch::Loading
+        }
+        RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
+        RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
+        RoomHistoryBackfillStatus::Failed { message, .. } => {
+            RoomFindHistorySearch::Failed { message }
+        }
+    };
+    let find_state = state
+        .find_states
+        .get_mut(&view_id)
+        .expect("loading room find state must remain tracked after refresh");
+    find_state.history_search = history_search;
+    rebuild_view_find_feedback(find_state);
+    Ok(false)
+}
+
 unsafe fn continue_room_find_history_search_after_refresh(
     hwnd: HWND,
     room_id: &str,
 ) -> Result<(), String> {
     let view_id = ViewId::Room(room_id.to_owned());
-    let Some(find_state) = state_ref(hwnd).find_states.get(&view_id) else {
-        return Ok(());
-    };
-    if find_state.history_search != RoomFindHistorySearch::Loading && find_state.matches.is_empty()
-    {
-        return Ok(());
-    }
-
-    let (has_matches, history_status) = {
-        let state = state_ref(hwnd);
-        let find_state = state
-            .find_states
-            .get(&view_id)
-            .expect("loading room find state must remain tracked after refresh");
-        (
-            !find_state.matches.is_empty(),
-            state
-                .model
-                .room_views
-                .get(room_id)
-                .map(|room_view| room_view.history.status.clone())
-                .unwrap_or(RoomHistoryBackfillStatus::Idle),
-        )
-    };
-
-    if has_matches {
-        let state = state_mut(hwnd);
-        let find_state = state
-            .find_states
-            .get_mut(&view_id)
-            .expect("loading room find state must remain tracked after refresh");
-        find_state.history_search = RoomFindHistorySearch::LocalOnly;
-        rebuild_view_find_feedback(find_state);
-    } else {
-        let history_search = match history_status {
-            RoomHistoryBackfillStatus::Idle => {
-                let _ = submit_backfill_room_history_for_room(state_mut(hwnd), room_id)?;
-                RoomFindHistorySearch::Loading
-            }
-            RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
-            RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
-            RoomHistoryBackfillStatus::Failed { message, .. } => {
-                RoomFindHistorySearch::Failed { message }
-            }
-        };
-        let find_state = state_mut(hwnd)
-            .find_states
-            .get_mut(&view_id)
-            .expect("loading room find state must remain tracked after refresh");
-        find_state.history_search = history_search;
-        rebuild_view_find_feedback(find_state);
-    }
+    let has_matches =
+        continue_room_find_history_search_after_refresh_state(state_mut(hwnd), room_id)?;
 
     apply_find_to_active_view(hwnd, &view_id)?;
     if has_matches && state_ref(hwnd).active_view == view_id {
@@ -11351,27 +11369,13 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
             history_backfill_anchor =
                 capture_room_history_backfill_anchor(state, &backfill.room_id);
         }
-        if let Event::RoomHistoryBackfill(backfill) = &event
-            && state
-                .find_states
-                .get(&ViewId::Room(backfill.room_id.clone()))
-                .is_some_and(|find_state| {
-                    find_state.history_search == RoomFindHistorySearch::Loading
-                })
+        if matches!(&event, Event::RoomHistoryBackfill(_))
+            || matches!(
+                &event,
+                Event::Error(error) if error.operation == Operation::BackfillRoomHistory
+            )
         {
-            history_backfill_room_ids.push(backfill.room_id.clone());
-        }
-        if let Event::Error(error) = &event
-            && error.operation == Operation::BackfillRoomHistory
-            && let Some(room_id) = loading_room_history_room_id(&state.model.room_views)
-            && state
-                .find_states
-                .get(&ViewId::Room(room_id.clone()))
-                .is_some_and(|find_state| {
-                    find_state.history_search == RoomFindHistorySearch::Loading
-                })
-        {
-            history_backfill_room_ids.push(room_id);
+            history_backfill_room_ids.extend(pending_room_find_history_room_ids(state));
         }
         apply_core_event(state, event)?;
         state.event_generation += 1;
@@ -19575,6 +19579,150 @@ mod tests {
         );
         assert!(state.recorded_commands.is_empty());
         stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_find_blocked_by_another_room_backfill_stays_pending_and_retries() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![
+            room("!room-a:example", "Room A", false),
+            room("!room-b:example", "Room B", false),
+        ];
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room-a:example"),
+            Ok(true)
+        );
+
+        let view_id = room_view_id("!room-b:example");
+        let find_state = build_room_find_state_and_maybe_submit_history_backfill(
+            &mut state,
+            "!room-b:example",
+            "needle",
+            "needle",
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::Loading);
+        assert_eq!(state.recorded_commands.len(), 1);
+        state.find_states.insert(view_id.clone(), find_state);
+        assert_eq!(
+            pending_room_find_history_room_ids(&state),
+            vec!["!room-b:example".to_owned()]
+        );
+
+        apply_core_event(
+            &mut state,
+            room_history_backfill("!room-a:example", "token-a", Some("token-b"), Vec::new()),
+        )
+        .unwrap();
+        assert!(
+            !continue_room_find_history_search_after_refresh_state(&mut state, "!room-b:example",)
+                .unwrap()
+        );
+
+        assert_eq!(state.recorded_commands.len(), 2);
+        assert_eq!(
+            state.recorded_commands.last(),
+            Some(&Command::BackfillRoomHistory(BackfillRoomHistoryRequest {
+                room_id: "!room-b:example".to_owned(),
+                from: None,
+                limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+            }))
+        );
+        assert_eq!(
+            state
+                .find_states
+                .get(&view_id)
+                .map(|find_state| &find_state.history_search),
+            Some(&RoomFindHistorySearch::Loading)
+        );
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn pending_room_find_transitions_to_exhausted_or_failed_after_refresh() {
+        let mut state = test_state();
+        let view_id = room_view_id("!room:example");
+        state.find_states.insert(
+            view_id.clone(),
+            build_view_find_state_with_history(
+                "needle",
+                "needle",
+                Vec::new(),
+                None,
+                RoomFindHistorySearch::Loading,
+            ),
+        );
+        let room_view = state
+            .model
+            .room_views
+            .entry("!room:example".to_owned())
+            .or_default();
+        room_view.history.status = RoomHistoryBackfillStatus::Exhausted;
+
+        assert!(
+            !continue_room_find_history_search_after_refresh_state(&mut state, "!room:example",)
+                .unwrap()
+        );
+        let find_state = state.find_states.get(&view_id).unwrap();
+        assert_eq!(find_state.history_search, RoomFindHistorySearch::Exhausted);
+        assert_eq!(
+            find_state.feedback,
+            "find: no matches for \"needle\" in loaded or older history"
+        );
+
+        state.find_states.insert(
+            view_id.clone(),
+            build_view_find_state_with_history(
+                "needle",
+                "needle",
+                Vec::new(),
+                None,
+                RoomFindHistorySearch::Loading,
+            ),
+        );
+        state
+            .model
+            .room_views
+            .get_mut("!room:example")
+            .unwrap()
+            .history
+            .next_token = Some("retry-token".to_owned());
+        state
+            .model
+            .room_views
+            .get_mut("!room:example")
+            .unwrap()
+            .history
+            .status = RoomHistoryBackfillStatus::Failed {
+            from: Some("retry-token".to_owned()),
+            message: "homeserver unavailable".to_owned(),
+        };
+
+        assert!(
+            !continue_room_find_history_search_after_refresh_state(&mut state, "!room:example",)
+                .unwrap()
+        );
+        let find_state = state.find_states.get(&view_id).unwrap();
+        assert_eq!(
+            find_state.history_search,
+            RoomFindHistorySearch::Failed {
+                message: "homeserver unavailable".to_owned(),
+            }
+        );
+        assert_eq!(
+            find_state.feedback,
+            "find: unable to load older history for \"needle\": homeserver unavailable"
+        );
+        assert_eq!(
+            state
+                .model
+                .room_views
+                .get("!room:example")
+                .map(|room_view| room_view.history.next_token.as_deref()),
+            Some(Some("retry-token"))
+        );
     }
 
     #[test]
