@@ -3269,7 +3269,8 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND => {
-            if handle_switchbar_command(hwnd, wparam) || handle_menu_command(hwnd, wparam) {
+            if handle_switchbar_command(hwnd, wparam) || handle_menu_command(hwnd, wparam).is_some()
+            {
                 0
             } else {
                 default_window_proc(hwnd, message, wparam, lparam)
@@ -5219,23 +5220,26 @@ unsafe fn menu_command_result(
     Some((title, result))
 }
 
-unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
+unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> Option<Result<(), String>> {
     let Some((title, result)) = menu_command_result(hwnd, wparam) else {
-        return false;
+        return None;
     };
 
-    if let Err(message) = result {
+    if let Err(message) = &result {
         show_error_message(hwnd, title, &message);
     }
 
-    true
+    Some(
+        result
+            .and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned())),
+    )
 }
 
 unsafe fn invoke_menu_command_for_automation(hwnd: HWND, command_id: usize) -> Result<(), String> {
-    let Some((_title, result)) = menu_command_result(hwnd, command_id) else {
+    let Some(result) = handle_menu_command(hwnd, command_id) else {
         return Err(format!("unknown menu command {command_id}"));
     };
-    result?.ok_or_else(|| "menu action was not performed".to_owned())
+    result
 }
 
 unsafe fn submit_room_menu_action(
