@@ -16,9 +16,9 @@ use mmatrix_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomMemberSummary,
+    RoomActivityUpdateTarget, RoomHistoryBackfill, RoomHistoryBackfillEvent,
     RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
-    RoomMediaKind as CoreRoomMediaKind, RoomMembers, RoomMembership,
+    RoomMediaKind as CoreRoomMediaKind, RoomMemberSummary, RoomMembers, RoomMembership,
     RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
@@ -10184,15 +10184,17 @@ fn assert_message_menu_attachment_save(
     assert_eq!(menu.selected_event_id.as_deref(), Some(event_id));
 
     app.save_attachment_via_message_menu()?;
-    app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomMedia(CoreRoomMedia {
-        room_id: "!media:example.org".to_owned(),
-        activity_id: format!("event:{event_id}"),
-        event_id: event_id.to_owned(),
-        kind: CoreRoomMediaKind::Loaded {
-            format: CoreRoomMediaFormat::File,
-            bytes: bytes.clone(),
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomMedia(
+        CoreRoomMedia {
+            room_id: "!media:example.org".to_owned(),
+            activity_id: format!("event:{event_id}"),
+            event_id: event_id.to_owned(),
+            kind: CoreRoomMediaKind::Loaded {
+                format: CoreRoomMediaFormat::File,
+                bytes: bytes.clone(),
+            },
         },
-    })])?)?;
+    )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let saved_path = local_app_data

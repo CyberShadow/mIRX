@@ -138,9 +138,7 @@ impl CommandKind {
                 Some(Self::ReplyToSelectedMessageViaMenu)
             }
             COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
-            COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => {
-                Some(Self::SaveAttachmentViaMessageMenu)
-            }
+            COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => Some(Self::SaveAttachmentViaMessageMenu),
             _ => None,
         }
     }
@@ -1931,31 +1929,31 @@ mod tests {
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
-        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
-        COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
-        COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC,
-        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, DumpModel,
-        DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
-        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
-        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
-        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomImageMediaState,
-        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
-        DumpRoomMessageSendState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedEditCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpUnsupportedRoomMessageActivity, FindActiveViewArgs, FindActiveViewResponse,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
-        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendTextArgs, SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
-        UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
+        COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
+        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
+        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
+        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
+        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
+        DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
+        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
+        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiFindState,
+        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2423,7 +2421,10 @@ mod tests {
             (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
             (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
             (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
-            (COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, "save-attachment"),
+            (
+                COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
+                "save-attachment",
+            ),
         ] {
             assert!(
                 parse_command_request(
@@ -3163,7 +3164,10 @@ mod tests {
             (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
             (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
             (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
-            (COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, "save-attachment"),
+            (
+                COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
+                "save-attachment",
+            ),
         ] {
             let request = format!(r#"{{"id":"{request_id}","args":{{"unexpected":true}}}}"#);
             let error = parse_command_request(command_id, request.as_bytes())
@@ -3486,7 +3490,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":19,
+                    "protocol_version":20,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
