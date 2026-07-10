@@ -11288,7 +11288,15 @@ fn parse_redact_slash_command(argument: &str) -> LocalSlashCommand<'_> {
 }
 
 fn local_command_history_entry(input: &str, command: &LocalSlashCommand<'_>) -> Option<String> {
-    if matches!(command, LocalSlashCommand::Invalid { .. }) && is_e2ee_command_input(input) {
+    if (matches!(command, LocalSlashCommand::Invalid { .. }) && is_e2ee_command_input(input))
+        || matches!(
+            command,
+            LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
+                passphrase: Some(_),
+                ..
+            })
+        )
+    {
         return None;
     }
 
@@ -21273,6 +21281,27 @@ mod tests {
                 .entries
                 .iter()
                 .any(|entry| entry.contains("secret"))
+        );
+    }
+
+    #[test]
+    fn valid_e2ee_setup_passphrase_form_is_not_recorded_in_compose_history() {
+        let mut state = test_state();
+        let input = "/e2ee setup wait passphrase secret phrase";
+        let ComposeSubmission::LocalCommand(command) = parse_compose_submission(input) else {
+            panic!("expected local command submission");
+        };
+
+        assert_eq!(local_command_history_entry(input, &command), None);
+        state
+            .compose_history
+            .record_submission("safe draft".to_owned());
+        assert!(
+            !state
+                .compose_history
+                .entries
+                .iter()
+                .any(|entry| entry.contains("secret phrase"))
         );
     }
 
