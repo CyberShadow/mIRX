@@ -33,11 +33,10 @@ use mmatrix_testkit::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
     SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
-    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedRecoveryCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindState,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError,
+    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
     ViewIdentity,
 };
@@ -50,11 +49,11 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect, GetDlgItem,
-    GetScrollInfo, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, PostMessageW,
-    SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR,
-    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
-    WM_VSCROLL, WS_VSCROLL,
+    EnumThreadWindows, FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect,
+    GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IsWindow, PostMessageW, SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL,
+    SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 #[allow(dead_code)]
@@ -1858,22 +1857,57 @@ fn wide_null(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+unsafe fn recover_e2ee_dialog_hwnd(frame: HWND, class_name_wide: *const u16) -> HWND {
+    let dialog = unsafe { FindWindowW(class_name_wide, std::ptr::null()) };
+    if !dialog.is_null() {
+        return dialog;
+    }
+
+    let dialog = unsafe { GetLastActivePopup(frame) };
+    if dialog != frame && unsafe { class_name(dialog) } == "mmatrixWin32RecoverE2eeDialog" {
+        dialog
+    } else {
+        let thread_id = unsafe { GetWindowThreadProcessId(frame, std::ptr::null_mut()) };
+        let mut dialog = 0 as HWND;
+        unsafe {
+            EnumThreadWindows(
+                thread_id,
+                Some(find_recover_e2ee_dialog_window),
+                (&raw mut dialog) as isize,
+            );
+        }
+        dialog
+    }
+}
+
+unsafe extern "system" fn find_recover_e2ee_dialog_window(hwnd: HWND, lparam: isize) -> i32 {
+    if unsafe { class_name(hwnd) } == "mmatrixWin32RecoverE2eeDialog" {
+        unsafe { *(lparam as *mut HWND) = hwnd };
+        0
+    } else {
+        1
+    }
+}
+
 fn submit_recover_e2ee_menu_dialog(
     app: &MmatrixApp,
     secret: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let frame = app.automation_frame_hwnd() as HWND;
-    assert_ne!(
-        unsafe { PostMessageW(frame, WM_COMMAND, MENU_ID_RECOVER_E2EE as WPARAM, 0) },
-        0,
-        "posting Recover E2EE menu command must succeed"
-    );
+    let frame_value = frame as isize;
+    let menu_thread = std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            MENU_ID_RECOVER_E2EE as WPARAM,
+            0,
+        );
+    });
 
     let class_name = wide_null("mmatrixWin32RecoverE2eeDialog");
-    let title = wide_null("Recover E2EE");
     let deadline = Instant::now() + Duration::from_secs(5);
     let dialog = loop {
-        let dialog = unsafe { FindWindowW(class_name.as_ptr(), title.as_ptr()) };
+        let dialog = unsafe { recover_e2ee_dialog_hwnd(frame, class_name.as_ptr()) };
         if !dialog.is_null() {
             break dialog;
         }
@@ -1894,13 +1928,15 @@ fn submit_recover_e2ee_menu_dialog(
         0,
         "setting Recover E2EE dialog secret must succeed"
     );
-    unsafe {
-        SendMessageW(dialog, WM_COMMAND, RECOVER_E2EE_DIALOG_OK_ID as WPARAM, 0);
-    }
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, RECOVER_E2EE_DIALOG_OK_ID as WPARAM, 0) },
+        0,
+        "posting Recover E2EE dialog OK command must succeed"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if unsafe { FindWindowW(class_name.as_ptr(), title.as_ptr()) }.is_null() {
+        if unsafe { IsWindow(dialog) } == 0 {
             break;
         }
         if Instant::now() >= deadline {
@@ -1908,6 +1944,9 @@ fn submit_recover_e2ee_menu_dialog(
         }
         std::thread::sleep(POLL_INTERVAL);
     }
+    menu_thread
+        .join()
+        .expect("Recover E2EE menu command thread must not panic");
     app.wait_idle(Duration::from_secs(5))?;
     Ok(())
 }

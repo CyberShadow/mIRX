@@ -101,9 +101,8 @@ use crate::{
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
         DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
-        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand,
+        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
         DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
         FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
         ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
@@ -10908,7 +10907,6 @@ fn submit_recover_e2ee(state: &mut WindowState, recovery_secret: String) -> Resu
     sender
         .send(command.clone())
         .map_err(|err| format!("failed to enqueue recover e2ee command: {err}"))?;
-    #[cfg(test)]
     state.recorded_commands.push(command);
     state.model.status = "e2ee recovery submitted".to_owned();
     Ok(())
