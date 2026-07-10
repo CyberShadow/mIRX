@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 20;
+pub(crate) const PROTOCOL_VERSION: u32 = 21;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -53,6 +53,7 @@ pub(crate) const COMMAND_ID_PART_ROOM_VIA_ROOM_MENU: u32 = 35;
 pub(crate) const COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 36;
 pub(crate) const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
 pub(crate) const COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU: u32 = 38;
+pub(crate) const COMMAND_ID_SEND_FILE: u32 = 39;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -94,6 +95,7 @@ pub(crate) enum CommandKind {
     ReplyToSelectedMessageViaMenu,
     RedactSelectedMessageViaMenu,
     SaveAttachmentViaMessageMenu,
+    SendFile,
 }
 
 impl CommandKind {
@@ -139,6 +141,7 @@ impl CommandKind {
             }
             COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
             COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => Some(Self::SaveAttachmentViaMessageMenu),
+            COMMAND_ID_SEND_FILE => Some(Self::SendFile),
             _ => None,
         }
     }
@@ -173,6 +176,10 @@ pub(crate) enum ParsedCommand {
     SendText {
         id: String,
         args: SendTextArgs,
+    },
+    SendFile {
+        id: String,
+        args: SendFileArgs,
     },
     LoadSyntheticState {
         id: String,
@@ -292,6 +299,7 @@ impl ParsedCommand {
             Self::ListRooms { .. } => CommandKind::ListRooms,
             Self::SelectRoom { .. } => CommandKind::SelectRoom,
             Self::SendText { .. } => CommandKind::SendText,
+            Self::SendFile { .. } => CommandKind::SendFile,
             Self::LoadSyntheticState { .. } => CommandKind::LoadSyntheticState,
             Self::DumpUiState { .. } => CommandKind::DumpUiState,
             Self::SelectView { .. } => CommandKind::SelectView,
@@ -369,6 +377,15 @@ pub(crate) struct SelectTimelineEventArgs {
 pub(crate) struct SendTextArgs {
     pub(crate) room_id: Option<String>,
     pub(crate) body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SendFileArgs {
+    pub(crate) room_id: Option<String>,
+    pub(crate) path: String,
+    pub(crate) filename: Option<String>,
+    pub(crate) content_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1297,6 +1314,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RejectRoomInvite => "reject_room_invite",
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
+        Operation::SendFile => "send_file",
         Operation::EditMessage => "edit_message",
         Operation::SendReaction => "send_reaction",
         Operation::RedactEvent => "redact_event",
@@ -1671,6 +1689,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SendTextArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::SendFile => Ok(ParsedCommand::SendFile {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SendFileArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::LoadSyntheticState => Ok(ParsedCommand::LoadSyntheticState {
             id: envelope.id.clone(),
             args: parse_args_required::<LoadEventsArgs>(&envelope.id, envelope.args)?,
@@ -1932,7 +1954,7 @@ mod tests {
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
         COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
         DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
         DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
@@ -1949,7 +1971,7 @@ mod tests {
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
         RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
         SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendTextArgs, SendTextResponse,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs, SendTextResponse,
         SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiFindState,
         UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
         ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
@@ -2027,8 +2049,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_20() {
-        assert_eq!(PROTOCOL_VERSION, 20);
+    fn protocol_version_is_21() {
+        assert_eq!(PROTOCOL_VERSION, 21);
     }
 
     #[test]
@@ -2190,7 +2212,11 @@ mod tests {
             Some(CommandKind::SelectView)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU + 1),
+            CommandKind::from_id(COMMAND_ID_SEND_FILE),
+            Some(CommandKind::SendFile)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SEND_FILE + 1),
             None
         );
     }
@@ -2269,6 +2295,22 @@ mod tests {
                 args: SendTextArgs {
                     room_id: Some("!room:example".to_owned()),
                     body: "hello".to_owned(),
+                },
+            }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SEND_FILE,
+                br#"{"id":"file","args":{"room_id":"!room:example","path":"C:\\tmp\\report.txt","filename":"report.txt","content_type":"application/octet-stream"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SendFile {
+                id: "file".to_owned(),
+                args: SendFileArgs {
+                    room_id: Some("!room:example".to_owned()),
+                    path: "C:\\tmp\\report.txt".to_owned(),
+                    filename: Some("report.txt".to_owned()),
+                    content_type: Some("application/octet-stream".to_owned()),
                 },
             }
         );
@@ -3490,7 +3532,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":20,
+                    "protocol_version":21,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

@@ -33,6 +33,8 @@ const COMMAND_ID_SELECT_ROOM: u32 = 7;
 #[cfg(windows)]
 const COMMAND_ID_SEND_TEXT: u32 = 8;
 #[cfg(windows)]
+const COMMAND_ID_SEND_FILE: u32 = 39;
+#[cfg(windows)]
 const COMMAND_ID_LOAD_SYNTHETIC_STATE: u32 = 9;
 #[cfg(windows)]
 const COMMAND_ID_DUMP_UI_STATE: u32 = 10;
@@ -1404,6 +1406,20 @@ impl MmatrixApp {
         self.inner.send_text_target(room_id, body)
     }
 
+    pub fn send_file(&self, path: &str) -> Result<String, TestkitError> {
+        self.send_file_target(None, path, None, None)
+    }
+
+    pub fn send_file_target(
+        &self,
+        room_id: Option<&str>,
+        path: &str,
+        filename: Option<&str>,
+        content_type: Option<&str>,
+    ) -> Result<String, TestkitError> {
+        self.inner.send_file_target(room_id, path, filename, content_type)
+    }
+
     pub fn compose_text(&self) -> Result<String, TestkitError> {
         self.inner.compose_text()
     }
@@ -1639,6 +1655,15 @@ struct SelectRoomArgs<'a> {
 struct SendTextArgs<'a> {
     room_id: Option<&'a str>,
     body: &'a str,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SendFileArgs<'a> {
+    room_id: Option<&'a str>,
+    path: &'a str,
+    filename: Option<&'a str>,
+    content_type: Option<&'a str>,
 }
 
 #[cfg(windows)]
@@ -1983,6 +2008,18 @@ mod imp {
             &self,
             _room_id: Option<&str>,
             _body: &str,
+        ) -> Result<String, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn send_file_target(
+            &self,
+            _room_id: Option<&str>,
+            _path: &str,
+            _filename: Option<&str>,
+            _content_type: Option<&str>,
         ) -> Result<String, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
@@ -2539,6 +2576,27 @@ mod imp {
             } else {
                 Err(TestkitError::InvalidResponse(format!(
                     "SEND_TEXT was not accepted for room {}",
+                    response.room_id
+                )))
+            }
+        }
+
+        pub(crate) fn send_file_target(
+            &self,
+            room_id: Option<&str>,
+            path: &str,
+            filename: Option<&str>,
+            content_type: Option<&str>,
+        ) -> Result<String, TestkitError> {
+            let response: SendTextResponse = self.send_command(
+                COMMAND_ID_SEND_FILE,
+                SendFileArgs { room_id, path, filename, content_type },
+            )?;
+            if response.accepted {
+                Ok(response.room_id)
+            } else {
+                Err(TestkitError::InvalidResponse(format!(
+                    "SEND_FILE was not accepted for room {}",
                     response.room_id
                 )))
             }

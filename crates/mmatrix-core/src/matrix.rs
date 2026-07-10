@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use matrix_sdk::{
+    attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo},
     Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
@@ -55,6 +57,7 @@ use matrix_sdk::{
 };
 use matrix_sdk_base::{RoomInfoNotableUpdateReasons, read_receipts::RoomReadReceipts};
 use matrix_sdk_crypto::CrossSigningStatus;
+use mime::Mime;
 use tokio::task::JoinHandle;
 
 use crate::api::{
@@ -69,7 +72,7 @@ use crate::api::{
     RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
     VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent,
@@ -2497,6 +2500,60 @@ pub(crate) async fn send_message(
         .send(AnyMessageLikeEventContent::RoomMessage(content))
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix message: {err}")))?;
+
+    Ok(())
+}
+
+pub(crate) async fn send_file(
+    client: &Client,
+    request: SendFileRequest,
+) -> Result<(), MatrixCoreError> {
+    let room = joined_room_by_id(client, &request.room_id)?;
+    let path = request.path.clone();
+    let (bytes, size) = tokio::task::spawn_blocking(move || {
+        let metadata = std::fs::metadata(&path).map_err(|err| {
+            MatrixCoreError::new(format!("failed to read file path {}: {err}", path.display()))
+        })?;
+        if !metadata.is_file() {
+            return Err(MatrixCoreError::new(format!(
+                "file path is not a regular file: {}",
+                path.display()
+            )));
+        }
+        let bytes = std::fs::read(&path).map_err(|err| {
+            MatrixCoreError::new(format!("failed to read file path {}: {err}", path.display()))
+        })?;
+        Ok((bytes, metadata.len()))
+    })
+    .await
+    .map_err(|err| MatrixCoreError::new(format!("failed to read file path: {err}")))??;
+
+    let filename = match request.filename {
+        Some(filename) => filename,
+        None => request
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                MatrixCoreError::new(format!(
+                    "file path does not include a file name: {}",
+                    request.path.display()
+                ))
+            })?,
+    };
+    let mime = match request.content_type {
+        Some(content_type) => Mime::from_str(&content_type)
+            .map_err(|err| MatrixCoreError::new(format!("invalid file content type: {err}")))?,
+        None => mime::APPLICATION_OCTET_STREAM,
+    };
+    let size = UInt::new(size)
+        .ok_or_else(|| MatrixCoreError::new(format!("file size cannot fit Matrix UInt: {size}")))?;
+    let config = AttachmentConfig::new().info(AttachmentInfo::File(BaseFileInfo { size: Some(size) }));
+
+    room.send_attachment(filename, &mime, bytes, config)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix file: {err}")))?;
 
     Ok(())
 }

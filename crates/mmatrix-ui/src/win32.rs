@@ -27,7 +27,7 @@ use mmatrix_core::{
     RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent, start,
 };
@@ -2432,6 +2432,9 @@ enum LocalSlashCommand<'a> {
     Reply {
         target_event_id: String,
         body: String,
+    },
+    SendFile {
+        path: String,
     },
     Edit {
         target_event_id: String,
@@ -9238,6 +9241,49 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 },
             )
         }
+        ParsedCommand::SendFile { id, args } => {
+            let room_id = match args.room_id {
+                Some(room_id) => room_id,
+                None => match &state_ref(hwnd).active_view {
+                    ViewId::Room(room_id) => room_id.clone(),
+                    ViewId::Thread { .. } => {
+                        return Err(failure_response(
+                            Some(id.clone()),
+                            "send_failed",
+                            "file attachments cannot target threads yet".to_owned(),
+                        ));
+                    }
+                    ViewId::Status => {
+                        return Err(failure_response(
+                            Some(id.clone()),
+                            "send_failed",
+                            "no room selected".to_owned(),
+                        ));
+                    }
+                },
+            };
+            let command = Command::SendFile(SendFileRequest {
+                room_id: room_id.clone(),
+                path: PathBuf::from(args.path),
+                filename: args.filename,
+                content_type: args.content_type,
+            });
+            let state = state_mut(hwnd);
+            if sendable_room_by_id(&state.model.rooms, &room_id).is_none() {
+                return Err(failure_response(
+                    Some(id.clone()),
+                    "send_failed",
+                    format!("room is not joined: {room_id}"),
+                ));
+            }
+            state.command_sender.as_ref()
+                .ok_or_else(|| failure_response(Some(id.clone()), "send_failed", "core command sender is not available".to_owned()))?
+                .send(command.clone())
+                .map_err(|err| failure_response(Some(id.clone()), "send_failed", format!("failed to enqueue send file command: {err}")))?;
+            #[cfg(test)]
+            state.recorded_commands.push(command);
+            serialize_success_json(&id, SendTextResponse { accepted: true, room_id })
+        }
         ParsedCommand::DumpComposeText { id } => {
             let text = dump_compose_text(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "compose_unavailable", message)
@@ -9397,6 +9443,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SelectRoom { id, .. }
         | ParsedCommand::SelectView { id, .. }
         | ParsedCommand::SendText { id, .. }
+        | ParsedCommand::SendFile { id, .. }
         | ParsedCommand::LoadSyntheticState { id, .. }
         | ParsedCommand::Login { id, .. }
         | ParsedCommand::RestoreSession { id, .. }
@@ -10680,6 +10727,12 @@ fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
         },
         "react" => parse_react_slash_command(argument),
         "reply" => parse_reply_slash_command(argument),
+        "sendfile" if !argument.is_empty() => LocalSlashCommand::SendFile {
+            path: argument.to_owned(),
+        },
+        "sendfile" => LocalSlashCommand::Invalid {
+            feedback: "usage: /sendfile <path>".to_owned(),
+        },
         "edit" => parse_edit_slash_command(argument),
         "redact" => parse_redact_slash_command(argument),
         "unreact" => parse_unreact_slash_command(argument),
@@ -10878,6 +10931,32 @@ struct ComposeDestination {
     thread: Option<SendMessageThreadTarget>,
 }
 
+fn submit_send_file_slash_command(state: &mut WindowState, path: String) -> Result<String, String> {
+    let room_id = match &state.active_view {
+        ViewId::Room(room_id) if sendable_room_by_id(&state.model.rooms, room_id).is_some() => {
+            room_id.clone()
+        }
+        ViewId::Room(room_id) => return Err(format!("room is not joined: {room_id}")),
+        ViewId::Thread { .. } => return Err("file attachments cannot target threads yet".to_owned()),
+        ViewId::Status => return Err("no room selected".to_owned()),
+    };
+    let command = Command::SendFile(SendFileRequest {
+        room_id: room_id.clone(),
+        path: PathBuf::from(path),
+        filename: None,
+        content_type: None,
+    });
+    state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue send file command: {err}"))?;
+    #[cfg(test)]
+    state.recorded_commands.push(command);
+    Ok(format!("File queued for {room_id}"))
+}
+
 fn resolve_compose_destination(
     state: &WindowState,
     explicit_room_id: Option<&str>,
@@ -11061,6 +11140,12 @@ unsafe fn execute_local_slash_command(
                 let state = state_mut(hwnd);
                 submit_reply_slash_command(state, target_event_id, body)
             };
+            match result {
+                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
+            }
+        }
+        LocalSlashCommand::SendFile { path } => {
+            let result = submit_send_file_slash_command(state_mut(hwnd), path);
             match result {
                 Ok(message) | Err(message) => set_local_command_status(hwnd, message),
             }

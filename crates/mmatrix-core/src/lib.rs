@@ -20,7 +20,7 @@ pub use api::{
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
     VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent,

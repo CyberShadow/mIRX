@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use mmatrix_core::{
@@ -14,7 +15,7 @@ use mmatrix_core::{
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest,
+    RoomSummary, RoomTagSummary, RoomTyping, SendFileRequest, SendMessageRequest, SendReactionRequest,
     SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
     VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent, start,
@@ -184,6 +185,39 @@ fn startup_and_shutdown_emit_lifecycle_events() {
     );
 
     handle.join().expect("join worker");
+}
+
+#[test]
+fn send_file_before_login_emits_error() {
+    assert_invalid_authenticated_command(
+        Command::SendFile(SendFileRequest {
+            room_id: "!room:example.org".to_owned(),
+            path: PathBuf::from("report.txt"),
+            filename: None,
+            content_type: None,
+        }),
+        Operation::SendFile,
+        "send file requires an authenticated session",
+    );
+}
+
+#[test]
+fn send_file_request_round_trips_and_rejects_unknown_fields() {
+    let request = SendFileRequest {
+        room_id: "!room:example.org".to_owned(),
+        path: PathBuf::from("C:/tmp/report.txt"),
+        filename: Some("report.txt".to_owned()),
+        content_type: Some("application/octet-stream".to_owned()),
+    };
+    let json = serde_json::to_string(&request).expect("serialize send file request");
+    assert_eq!(
+        serde_json::from_str::<SendFileRequest>(&json).expect("deserialize send file request"),
+        request
+    );
+    assert!(serde_json::from_str::<SendFileRequest>(
+        r#"{"room_id":"!room:example.org","path":"report.txt","filename":null,"content_type":null,"extra":true}"#
+    )
+    .is_err());
 }
 
 #[test]

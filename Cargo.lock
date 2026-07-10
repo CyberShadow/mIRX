@@ -2038,6 +2038,7 @@ dependencies = [
  "matrix-sdk",
  "matrix-sdk-base",
  "matrix-sdk-crypto",
+ "mime",
  "serde",
  "serde_json",
  "tempfile",

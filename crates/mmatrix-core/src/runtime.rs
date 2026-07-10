@@ -204,6 +204,7 @@ async fn handle_command(
         }
         Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
+        Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
         Command::SendReaction(request) => handle_send_reaction(event_tx, state, request).await,
         Command::RedactEvent(request) => handle_redact_event(event_tx, state, request).await,
@@ -583,6 +584,27 @@ async fn handle_send_message(
 
     if let Err(err) = matrix::send_message(client, request).await {
         emit_matrix_error(event_tx, Operation::SendMessage, err);
+    }
+
+    false
+}
+
+async fn handle_send_file(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: crate::api::SendFileRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SendFile,
+            "send file requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::send_file(client, request).await {
+        emit_matrix_error(event_tx, Operation::SendFile, err);
     }
 
     false

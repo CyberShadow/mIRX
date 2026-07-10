@@ -22,6 +22,7 @@ pub enum Command {
     RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
+    SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
     SendReaction(SendReactionRequest),
     RedactEvent(RedactEventRequest),
@@ -79,6 +80,15 @@ pub struct SendMessageRequest {
     pub body: String,
     pub thread: Option<SendMessageThreadTarget>,
     pub reply: Option<SendMessageReplyTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendFileRequest {
+    pub room_id: String,
+    pub path: PathBuf,
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -733,6 +743,7 @@ pub enum Operation {
     RejectRoomInvite,
     SetRoomTopic,
     SendMessage,
+    SendFile,
     EditMessage,
     SendReaction,
     RedactEvent,
