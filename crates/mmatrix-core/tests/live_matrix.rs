@@ -676,7 +676,9 @@ fn live_matrix_message_actions_round_trip_is_env_gated() {
         nonce,
         "redaction event for the redaction target",
         |event| {
-            event["type"] == "m.room.redaction" && event["redacts"] == redaction_target.as_str()
+            event["type"] == "m.room.redaction"
+                && (event["redacts"] == redaction_target.as_str()
+                    || event["content"]["redacts"] == redaction_target.as_str())
         },
     ));
 
