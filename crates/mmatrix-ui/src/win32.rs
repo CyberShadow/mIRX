@@ -8270,18 +8270,18 @@ fn build_room_find_state_and_maybe_submit_history_backfill(
             RoomHistoryBackfillStatus::Exhausted => RoomFindHistorySearch::Exhausted,
             RoomHistoryBackfillStatus::Loading { .. } => RoomFindHistorySearch::Loading,
             RoomHistoryBackfillStatus::Failed { message, .. } => {
-                if submit_backfill_room_history_for_room(state, room_id)? {
-                    RoomFindHistorySearch::Loading
-                } else if loading_room_history_room_id(&state.model.room_views).is_some() {
+                if submit_backfill_room_history_for_room(state, room_id)?
+                    || loading_room_history_room_id(&state.model.room_views).is_some()
+                {
                     RoomFindHistorySearch::Loading
                 } else {
                     RoomFindHistorySearch::Failed { message }
                 }
             }
             RoomHistoryBackfillStatus::Idle => {
-                if submit_backfill_room_history_for_room(state, room_id)? {
-                    RoomFindHistorySearch::Loading
-                } else if loading_room_history_room_id(&state.model.room_views).is_some() {
+                if submit_backfill_room_history_for_room(state, room_id)?
+                    || loading_room_history_room_id(&state.model.room_views).is_some()
+                {
                     RoomFindHistorySearch::Loading
                 } else {
                     RoomFindHistorySearch::LocalOnly
