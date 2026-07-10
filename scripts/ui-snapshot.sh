@@ -1541,6 +1541,150 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!focus:example'
       ;;
+    shell-many-open-views)
+      expect_selected='!focus:example'
+      expect_active_view='room:!focus:example'
+      select_views=('thread:!focus:example|$focus-root' 'room:!focus:example')
+      append_events_path="$root_dir/tests/ui-state-updates/shell-many-open-views.json"
+      room_expect_args=(
+        --expect-room '!alerts:example'
+        --expect-room '!focus:example'
+        --expect-room '!support:example'
+        --expect-room '!query:example'
+      )
+      room_direct_expect_args=(
+        --expect-direct-room '!query:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!focus:example::Room: Focus (!focus:example)'
+        --expect-room-view '!focus:example::Topic: dense shell review'
+        --expect-room-view '!focus:example::active room remains readable among many switchbar views'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !focus:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!focus:example::Focus'
+        --expect-switchbar-item 'room:!alerts:example::Alerts'
+        --expect-switchbar-item 'room:!support:example::Support Queue'
+        --expect-switchbar-item 'room:!query:example::Casey [query: @casey:example] [e2ee]'
+        --expect-switchbar-item 'thread:!focus:example|$focus-root::review thread root'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!alerts:example'
+        --expect-switchbar-activity 'room:!support:example'
+        --expect-switchbar-activity 'thread:!focus:example|$focus-root'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!focus:example'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Alerts'
+        --expect-navigation-text 'Focus'
+        --expect-navigation-text 'Support Queue'
+        --expect-navigation-text 'Casey [query: @casey:example] [e2ee]'
+        --expect-navigation-text 'review thread root'
+      )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'Alerts'
+        --expect-navigation-activity 'Support Queue'
+        --expect-navigation-activity 'Focus/review thread root'
+      )
+      expect_switchbar_active='room:!focus:example'
+      ;;
+    shell-long-labels-constrained)
+      expect_selected='!long-focus:example'
+      expect_active_view='room:!long-focus:example'
+      case_frame_size=900x620
+      room_expect_args=(
+        --expect-room '!long-focus:example'
+        --expect-room '!long-inbox:example'
+        --expect-room '!long-query:example'
+      )
+      room_direct_expect_args=(
+        --expect-direct-room '!long-query:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!long-focus:example::Room: Extremely Long Focus Room Name For Native Shell Layout Review (!long-focus:example)'
+        --expect-room-view '!long-focus:example::Topic: A deliberately long active-room topic'
+        --expect-room-view '!long-focus:example::A deliberately long timeline message body checks'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !long-inbox:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!long-focus:example::Extremely Long Focus Room Name For Native Shell Layout Review'
+        --expect-switchbar-item 'room:!long-inbox:example::Incoming Updates With An Intentionally Long Descriptive Room Label'
+        --expect-switchbar-item 'room:!long-query:example::@very-long-direct-user-identifier-for-constrained-shell:example [query: @very-long-direct-user-identifier-for-constrained-shell:example] [e2ee]'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!long-inbox:example'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!long-focus:example'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Extremely Long Focus Room Name For Native Shell Layout Review'
+        --expect-navigation-text 'Incoming Updates With An Intentionally Long Descriptive Room Label'
+        --expect-navigation-text '@very-long-direct-user-identifier-for-constrained-shell:example [query: @very-long-direct-user-identifier-for-constrained-shell:example] [e2ee]'
+      )
+      expect_switchbar_active='room:!long-focus:example'
+      ;;
+    shell-activity-focus-constrained)
+      expect_selected='!active:example'
+      expect_active_view='room:!active:example'
+      case_frame_size=900x620
+      select_views=('thread:!active:example|$active-root' 'room:!active:example')
+      append_events_path="$root_dir/tests/ui-state-updates/shell-activity-focus-constrained.json"
+      room_expect_args=(
+        --expect-room '!active:example'
+        --expect-room '!inbox:example'
+        --expect-room '!mentions:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!active:example::Room: Active Focus (!active:example)'
+        --expect-room-view '!active:example::active room keeps the compose and status shell visible'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !active:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!active:example::Active Focus'
+        --expect-switchbar-item 'room:!inbox:example::Inbox'
+        --expect-switchbar-item 'room:!mentions:example::Mentions'
+        --expect-switchbar-item 'thread:!active:example|$active-root::active thread root'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!inbox:example'
+        --expect-switchbar-activity 'room:!mentions:example'
+        --expect-switchbar-activity 'thread:!active:example|$active-root'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!active:example'
+      )
+      navigation_expect_args=(
+        --expect-navigation-text 'Active Focus'
+        --expect-navigation-text 'Inbox'
+        --expect-navigation-text 'Mentions'
+        --expect-navigation-text 'active thread root'
+      )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'Inbox'
+        --expect-navigation-activity 'Mentions'
+        --expect-navigation-activity 'Active Focus/active thread root'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'status'
+        --expect-no-navigation-activity 'Active Focus'
+      )
+      expect_switchbar_active='room:!active:example'
+      ;;
     typing-indicator)
       expect_selected='!typing:example'
       expect_active_view='room:!typing:example'

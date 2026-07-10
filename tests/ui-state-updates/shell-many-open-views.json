@@ -1,0 +1,58 @@
+[
+  {
+    "RoomActivity": {
+      "room_id": "!alerts:example",
+      "activity_id": "event:$alerts-fresh",
+      "timestamp_ms": 1700000460000,
+      "kind": {
+        "type": "message",
+        "event_id": "$alerts-fresh",
+        "transaction_id": null,
+        "sender": "@erin:example",
+        "presentation": "text",
+        "body": "fresh alert activity",
+        "send_state": { "state": "sent" }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!support:example",
+      "activity_id": "event:$support-fresh",
+      "timestamp_ms": 1700000470000,
+      "kind": {
+        "type": "message",
+        "event_id": "$support-fresh",
+        "transaction_id": null,
+        "sender": "@gina:example",
+        "presentation": "text",
+        "body": "fresh support activity",
+        "send_state": { "state": "sent" }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!focus:example",
+      "activity_id": "event:$focus-thread-fresh",
+      "timestamp_ms": 1700000480000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$focus-root",
+        "in_reply_to_event_id": "$focus-thread",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$focus-thread-fresh",
+        "transaction_id": null,
+        "sender": "@dana:example",
+        "presentation": "text",
+        "body": "fresh inactive thread activity",
+        "send_state": { "state": "sent" }
+      }
+    }
+  }
+]

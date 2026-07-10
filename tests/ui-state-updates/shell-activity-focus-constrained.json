@@ -1,0 +1,58 @@
+[
+  {
+    "RoomActivity": {
+      "room_id": "!inbox:example",
+      "activity_id": "event:$inbox-fresh",
+      "timestamp_ms": 1700020280000,
+      "kind": {
+        "type": "message",
+        "event_id": "$inbox-fresh",
+        "transaction_id": null,
+        "sender": "@carol:example",
+        "presentation": "text",
+        "body": "fresh inbox activity marker",
+        "send_state": { "state": "sent" }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!mentions:example",
+      "activity_id": "event:$mentions-fresh",
+      "timestamp_ms": 1700020290000,
+      "kind": {
+        "type": "message",
+        "event_id": "$mentions-fresh",
+        "transaction_id": null,
+        "sender": "@dave:example",
+        "presentation": "text",
+        "body": "fresh mentions activity marker",
+        "send_state": { "state": "sent" }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!active:example",
+      "activity_id": "event:$active-thread-fresh",
+      "timestamp_ms": 1700020300000,
+      "relation": {
+        "type": "thread",
+        "thread_root_event_id": "$active-root",
+        "in_reply_to_event_id": "$active-thread",
+        "is_falling_back": false
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$active-thread-fresh",
+        "transaction_id": null,
+        "sender": "@frank:example",
+        "presentation": "text",
+        "body": "fresh inactive thread marker",
+        "send_state": { "state": "sent" }
+      }
+    }
+  }
+]
