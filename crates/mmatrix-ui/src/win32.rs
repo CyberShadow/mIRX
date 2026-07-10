@@ -13952,6 +13952,7 @@ mod tests {
     use std::env;
     use std::fs;
     use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use mmatrix_core::RoomStateNoticeActivity;
@@ -13959,6 +13960,19 @@ mod tests {
     use super::*;
 
     static LOCAL_APP_DATA_LOCK: StdMutex<()> = StdMutex::new(());
+    static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    fn unique_test_temp_path(prefix: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after unix epoch")
+            .as_nanos();
+        let counter = TEST_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        env::temp_dir().join(format!(
+            "{prefix}-{}-{timestamp}-{counter}",
+            std::process::id()
+        ))
+    }
 
     fn room(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
         RoomSummary {
@@ -14896,14 +14910,14 @@ mod tests {
     }
 
     fn with_local_app_data<T>(test: impl FnOnce(PathBuf) -> T) -> T {
-        let _guard = LOCAL_APP_DATA_LOCK
-            .lock()
-            .expect("LOCALAPPDATA test mutex must not be poisoned");
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock must be after unix epoch")
-            .as_nanos();
-        let root = env::temp_dir().join(format!("mmatrix-ui-local-app-data-{unique}"));
+        let _guard = match LOCAL_APP_DATA_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                LOCAL_APP_DATA_LOCK.clear_poison();
+                poisoned.into_inner()
+            }
+        };
+        let root = unique_test_temp_path("mmatrix-ui-local-app-data");
         fs::create_dir_all(&root).expect("test LOCALAPPDATA root must be created");
         let previous = env::var_os("LOCALAPPDATA");
         unsafe {
@@ -15077,11 +15091,7 @@ mod tests {
     }
 
     fn start_test_core() -> CoreHandle {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock must be after unix epoch")
-            .as_nanos();
-        let profile_dir = std::env::temp_dir().join(format!("mmatrix-ui-win32-tests-{unique}"));
+        let profile_dir = unique_test_temp_path("mmatrix-ui-win32-tests");
         fs::create_dir_all(&profile_dir).expect("test profile dir must be created");
 
         start(CoreConfig {

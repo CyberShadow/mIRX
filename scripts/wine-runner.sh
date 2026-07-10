@@ -120,9 +120,17 @@ ensure_wineprefix() {
   export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
   export WINEDEBUG="${WINEDEBUG:--all}"
 
-  mkdir -p "$WINEPREFIX"
   if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
-    wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
+    local prefix_lock_name=${WINEPREFIX//\//_}
+    local prefix_lock_file="${TMPDIR:-/var/tmp}/mmatrix-wineprefix-init${prefix_lock_name}.lock"
+    exec 8>"$prefix_lock_file"
+    flock 8
+    mkdir -p "$WINEPREFIX"
+    if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
+      wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
+    fi
+    flock -u 8
+    exec 8>&-
   fi
 }
 
@@ -138,6 +146,20 @@ host_capture_helper() {
   local capture_name
   local capture_path
   local result_file
+  local current_work_file=
+  local current_result_file=
+
+  write_interrupted_result() {
+    if [[ -n "$current_result_file" ]]; then
+      {
+        printf 'error\n'
+        printf 'host screenshot capture helper terminated while processing request\n'
+        printf 'request file: %s\n' "$current_work_file"
+        printf 'DISPLAY: %s\n' "${DISPLAY:-unset}"
+      } >"$current_result_file"
+    fi
+  }
+  trap 'write_interrupted_result; exit 143' TERM INT HUP
 
   while :; do
     shopt -s nullglob
@@ -147,18 +169,31 @@ host_capture_helper() {
         continue
       fi
 
+      current_work_file=$work_file
       capture_name=$(tr -d '\r\n' <"$work_file")
       result_file=${work_file%.working}.result
+      current_result_file=$result_file
       capture_path="$request_dir/$capture_name"
 
-      if import -window root "$capture_path" >"$runner_tmpdir/import.log" 2>&1; then
+      if timeout 10s import -window root "$capture_path" >"$runner_tmpdir/import.log" 2>&1; then
         printf 'ok\n' >"$result_file"
       else
-        printf 'error\n' >"$result_file"
-        cat "$runner_tmpdir/import.log" >>"$result_file"
+        local import_status=$?
+        {
+          printf 'error\n'
+          printf 'request file: %s\n' "$work_file"
+          printf 'capture path: %s\n' "$capture_path"
+          printf 'DISPLAY: %s\n' "${DISPLAY:-unset}"
+          printf 'import exit status: %s\n' "$import_status"
+          printf 'import.log:\n'
+          cat "$runner_tmpdir/import.log"
+        } >"$result_file"
       fi
+      cat "$runner_tmpdir/import.log"
 
       rm -f "$work_file"
+      current_work_file=
+      current_result_file=
     done
     shopt -u nullglob
     sleep 0.05
@@ -172,7 +207,7 @@ start_host_capture_helper() {
   export MMATRIX_TESTKIT_CAPTURE_DIR_WIN
   MMATRIX_TESTKIT_CAPTURE_DIR_WIN=$(unix_to_wine_path "$capture_dir_unix")
 
-  host_capture_helper "$capture_dir_unix" &
+  host_capture_helper "$capture_dir_unix" >"$runner_tmpdir/host-capture-helper.log" 2>&1 &
   helper_pid=$!
 
   if ! import -window root "$capture_dir_unix/preflight.png" >"$runner_tmpdir/import.log" 2>&1; then
@@ -205,8 +240,10 @@ main() {
   require_command Xvfb
   require_command xdpyinfo
   require_command import
+  require_command timeout
+  require_command flock
 
-  runner_tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-wine-runner.${runner_pid}.XXXXXX")
+  runner_tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mmatrix-wine-runner.${runner_pid}.XXXXXX")
   trap cleanup EXIT
   ensure_xvfb
   ensure_wineprefix

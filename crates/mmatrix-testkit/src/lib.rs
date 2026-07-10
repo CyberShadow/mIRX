@@ -2970,8 +2970,25 @@ mod imp {
                     ))
                 })?,
                 Err(error) => {
+                    let working_path = capture_dir.join(format!("{request_id}.working"));
+                    let state = [
+                        ("request", &request_path),
+                        ("working", &working_path),
+                        ("capture", &capture_path),
+                        ("result", &result_path),
+                    ]
+                    .into_iter()
+                    .filter_map(|(name, path)| path.exists().then(|| name))
+                    .collect::<Vec<_>>();
                     let _ = fs::remove_file(&request_path);
-                    return Err(error);
+                    return Err(TestkitError::Timeout(format!(
+                        "{error}; screenshot capture state for request {request_id}: {}",
+                        if state.is_empty() {
+                            "no request, working, capture, or result files exist".to_owned()
+                        } else {
+                            format!("existing files: {}", state.join(", "))
+                        }
+                    )));
                 }
             };
 
