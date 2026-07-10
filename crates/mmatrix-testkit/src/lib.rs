@@ -65,6 +65,8 @@ const COMMAND_ID_APPEND_SYNTHETIC_EVENTS: u32 = 22;
 #[cfg(windows)]
 const COMMAND_ID_RECOVER_E2EE: u32 = 23;
 #[cfg(windows)]
+const COMMAND_ID_SETUP_E2EE_RECOVERY: u32 = 40;
+#[cfg(windows)]
 const COMMAND_ID_ACCEPT_VERIFICATION: u32 = 24;
 #[cfg(windows)]
 const COMMAND_ID_CANCEL_VERIFICATION: u32 = 25;
@@ -227,6 +229,28 @@ impl fmt::Debug for RecoverE2eeArgs {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupE2eeRecoveryArgs {
+    pub passphrase: Option<String>,
+    pub wait_for_backups_to_upload: bool,
+}
+
+impl fmt::Debug for SetupE2eeRecoveryArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SetupE2eeRecoveryArgs")
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "wait_for_backups_to_upload",
+                &self.wait_for_backups_to_upload,
+            )
+            .finish()
+    }
+}
+
 fn default_device_display_name() -> String {
     "mmatrix-ui".to_owned()
 }
@@ -265,6 +289,8 @@ pub struct Model {
     pub rooms: Vec<Room>,
     pub last_activity: Option<RoomMessageActivityLine>,
     pub e2ee_status: Option<E2eeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_e2ee_recovery_setup_result: Option<E2eeRecoverySetupResult>,
     pub last_verification: Option<Verification>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
@@ -286,6 +312,8 @@ pub struct Model {
     pub submitted_verification_actions: Vec<SubmittedVerificationAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_recovery_commands: Vec<SubmittedRecoveryCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_setup_recovery_commands: Vec<SubmittedSetupRecoveryCommand>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
 }
@@ -379,6 +407,19 @@ pub struct SubmittedVerificationAction {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedRecoveryCommand {
     pub secret_redacted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedSetupRecoveryCommand {
+    pub passphrase_redacted: bool,
+    pub wait_for_backups_to_upload: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct E2eeRecoverySetupResult {
+    pub recovery_key_present: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1482,6 +1523,17 @@ impl MmatrixApp {
         })
     }
 
+    pub fn setup_e2ee_recovery(
+        &self,
+        passphrase: Option<&str>,
+        wait_for_backups_to_upload: bool,
+    ) -> Result<(), TestkitError> {
+        self.inner.setup_e2ee_recovery(SetupE2eeRecoveryArgs {
+            passphrase: passphrase.map(str::to_owned),
+            wait_for_backups_to_upload,
+        })
+    }
+
     pub fn accept_verification(&self) -> Result<(), TestkitError> {
         self.inner
             .accept_verification(VerificationActionArgs::default())
@@ -2079,6 +2131,15 @@ mod imp {
         }
 
         pub(crate) fn recover_e2ee(&self, _args: RecoverE2eeArgs) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn setup_e2ee_recovery(
+            &self,
+            _args: SetupE2eeRecoveryArgs,
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -2702,6 +2763,21 @@ mod imp {
             } else {
                 Err(TestkitError::InvalidResponse(
                     "RECOVER_E2EE was not accepted".to_owned(),
+                ))
+            }
+        }
+
+        pub(crate) fn setup_e2ee_recovery(
+            &self,
+            args: SetupE2eeRecoveryArgs,
+        ) -> Result<(), TestkitError> {
+            let response: AcceptedResponse =
+                self.send_command(COMMAND_ID_SETUP_E2EE_RECOVERY, args)?;
+            if response.accepted {
+                Ok(())
+            } else {
+                Err(TestkitError::InvalidResponse(
+                    "SETUP_E2EE_RECOVERY was not accepted".to_owned(),
                 ))
             }
         }

@@ -27,13 +27,13 @@ use mmatrix_testkit::{
     RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SendFileArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiFindState,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    RoomTag, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiError, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
+    UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -451,6 +451,7 @@ fn data_models_round_trip_through_json() {
             send_state: RoomMessageSendState::Sent,
         }),
         e2ee_status: Some(sample_e2ee_status()),
+        last_e2ee_recovery_setup_result: None,
         last_verification: Some(Verification {
             flow_id: "flow".to_owned(),
             user_id: "@alice:example".to_owned(),
@@ -482,6 +483,7 @@ fn data_models_round_trip_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
             message: "failed".to_owned(),
@@ -3602,6 +3604,7 @@ fn model_last_activity_round_trips_through_json() {
             send_state: RoomMessageSendState::Sent,
         }),
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
@@ -3613,6 +3616,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
     };
@@ -3657,6 +3661,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: vec![
             SubmittedMembershipCommand {
@@ -3677,6 +3682,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3738,6 +3744,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: vec![SubmittedMembershipCommand {
             action: MembershipCommandAction::Join,
@@ -3754,6 +3761,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3817,6 +3825,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: vec![SubmittedMembershipCommand {
             action: MembershipCommandAction::Join,
@@ -3836,6 +3845,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3911,6 +3921,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
@@ -3926,6 +3937,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -3981,6 +3993,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
@@ -3997,6 +4010,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4052,6 +4066,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
@@ -4071,6 +4086,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4134,6 +4150,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
@@ -4148,6 +4165,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4245,6 +4263,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             rooms: vec![],
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4271,6 +4290,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: None,
         }
@@ -4322,6 +4342,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
+        last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
@@ -4344,6 +4365,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         ],
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
+        submitted_setup_recovery_commands: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4423,6 +4445,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             rooms: vec![],
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4434,6 +4457,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: None,
         }
@@ -5751,6 +5775,28 @@ fn recover_e2ee_args_reject_unknown_fields() {
             "unexpected":true
         }"#
         )
+        .is_err()
+    );
+}
+
+#[test]
+fn setup_e2ee_recovery_args_round_trip_and_redact_debug() {
+    let args = SetupE2eeRecoveryArgs {
+        passphrase: Some("sample setup passphrase".to_owned()),
+        wait_for_backups_to_upload: true,
+    };
+    assert_eq!(
+        serde_json::from_value::<SetupE2eeRecoveryArgs>(serde_json::to_value(&args).unwrap())
+            .unwrap(),
+        args
+    );
+    assert!(!format!("{args:?}").contains("sample setup passphrase"));
+    assert!(
+        serde_json::from_value::<SetupE2eeRecoveryArgs>(serde_json::json!({
+            "passphrase":"sample setup passphrase",
+            "wait_for_backups_to_upload":false,
+            "unexpected":true,
+        }))
         .is_err()
     );
 }

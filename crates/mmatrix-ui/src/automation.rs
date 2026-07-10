@@ -54,6 +54,7 @@ pub(crate) const COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 36;
 pub(crate) const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
 pub(crate) const COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU: u32 = 38;
 pub(crate) const COMMAND_ID_SEND_FILE: u32 = 39;
+pub(crate) const COMMAND_ID_SETUP_E2EE_RECOVERY: u32 = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -80,6 +81,7 @@ pub(crate) enum CommandKind {
     DumpSelectedNavigationPath,
     AppendSyntheticEvents,
     RecoverE2ee,
+    SetupE2eeRecovery,
     AcceptVerification,
     CancelVerification,
     ConfirmVerificationSas,
@@ -124,6 +126,7 @@ impl CommandKind {
             COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH => Some(Self::DumpSelectedNavigationPath),
             COMMAND_ID_APPEND_SYNTHETIC_EVENTS => Some(Self::AppendSyntheticEvents),
             COMMAND_ID_RECOVER_E2EE => Some(Self::RecoverE2ee),
+            COMMAND_ID_SETUP_E2EE_RECOVERY => Some(Self::SetupE2eeRecovery),
             COMMAND_ID_ACCEPT_VERIFICATION => Some(Self::AcceptVerification),
             COMMAND_ID_CANCEL_VERIFICATION => Some(Self::CancelVerification),
             COMMAND_ID_CONFIRM_VERIFICATION_SAS => Some(Self::ConfirmVerificationSas),
@@ -235,6 +238,10 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: RecoverE2eeArgs,
     },
+    SetupE2eeRecovery {
+        id: String,
+        args: SetupE2eeRecoveryArgs,
+    },
     AcceptVerification {
         id: String,
         args: VerificationActionArgs,
@@ -315,6 +322,7 @@ impl ParsedCommand {
             Self::DumpSelectedNavigationPath { .. } => CommandKind::DumpSelectedNavigationPath,
             Self::AppendSyntheticEvents { .. } => CommandKind::AppendSyntheticEvents,
             Self::RecoverE2ee { .. } => CommandKind::RecoverE2ee,
+            Self::SetupE2eeRecovery { .. } => CommandKind::SetupE2eeRecovery,
             Self::AcceptVerification { .. } => CommandKind::AcceptVerification,
             Self::CancelVerification { .. } => CommandKind::CancelVerification,
             Self::ConfirmVerificationSas { .. } => CommandKind::ConfirmVerificationSas,
@@ -460,6 +468,28 @@ impl fmt::Debug for RecoverE2eeArgs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RecoverE2eeArgs")
             .field("recovery_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetupE2eeRecoveryArgs {
+    pub(crate) passphrase: Option<String>,
+    pub(crate) wait_for_backups_to_upload: bool,
+}
+
+impl fmt::Debug for SetupE2eeRecoveryArgs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SetupE2eeRecoveryArgs")
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "wait_for_backups_to_upload",
+                &self.wait_for_backups_to_upload,
+            )
             .finish()
     }
 }
@@ -919,6 +949,8 @@ pub(crate) struct DumpModel {
     pub(crate) rooms: Vec<DumpRoom>,
     pub(crate) last_activity: Option<DumpRoomMessageActivityLine>,
     pub(crate) e2ee_status: Option<E2eeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_e2ee_recovery_setup_result: Option<DumpE2eeRecoverySetupResult>,
     pub(crate) last_verification: Option<DumpVerification>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_membership_commands: Vec<DumpSubmittedMembershipCommand>,
@@ -940,6 +972,8 @@ pub(crate) struct DumpModel {
     pub(crate) submitted_verification_actions: Vec<DumpSubmittedVerificationAction>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_recovery_commands: Vec<DumpSubmittedRecoveryCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_setup_recovery_commands: Vec<DumpSubmittedSetupRecoveryCommand>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
 }
@@ -1033,6 +1067,19 @@ pub(crate) struct DumpSubmittedVerificationAction {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedRecoveryCommand {
     pub(crate) secret_redacted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedSetupRecoveryCommand {
+    pub(crate) passphrase_redacted: bool,
+    pub(crate) wait_for_backups_to_upload: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpE2eeRecoverySetupResult {
+    pub(crate) recovery_key_present: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1798,6 +1845,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_recover_e2ee_args(&envelope.id, envelope.args)?,
         }),
+        CommandKind::SetupE2eeRecovery => Ok(ParsedCommand::SetupE2eeRecovery {
+            id: envelope.id.clone(),
+            args: parse_setup_e2ee_recovery_args(&envelope.id, envelope.args)?,
+        }),
         CommandKind::AcceptVerification => Ok(ParsedCommand::AcceptVerification {
             id: envelope.id.clone(),
             args: parse_verification_action_args(&envelope.id, envelope.args)?,
@@ -1911,6 +1962,59 @@ fn parse_recover_e2ee_args(
     })
 }
 
+fn parse_setup_e2ee_recovery_args(
+    id: &str,
+    args: Option<Value>,
+) -> Result<SetupE2eeRecoveryArgs, FailureEnvelope> {
+    let args = args.ok_or_else(|| {
+        failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "missing args object for setup_e2ee_recovery command",
+        )
+    })?;
+    let Value::Object(args) = args else {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid setup_e2ee_recovery args: expected object",
+        ));
+    };
+    if args
+        .keys()
+        .any(|key| !matches!(key.as_str(), "passphrase" | "wait_for_backups_to_upload"))
+    {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid setup_e2ee_recovery args: unexpected field; expected only `passphrase` and `wait_for_backups_to_upload`",
+        ));
+    }
+    let passphrase = match args.get("passphrase") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return Err(failure_response(
+                Some(id.to_owned()),
+                "invalid_args",
+                "invalid setup_e2ee_recovery args: `passphrase` must be a string or null",
+            ));
+        }
+    };
+    let Some(Value::Bool(wait_for_backups_to_upload)) = args.get("wait_for_backups_to_upload")
+    else {
+        return Err(failure_response(
+            Some(id.to_owned()),
+            "invalid_args",
+            "invalid setup_e2ee_recovery args: `wait_for_backups_to_upload` must be a boolean",
+        ));
+    };
+    Ok(SetupE2eeRecoveryArgs {
+        passphrase,
+        wait_for_backups_to_upload: *wait_for_backups_to_upload,
+    })
+}
+
 fn parse_verification_action_args(
     id: &str,
     args: Option<Value>,
@@ -1956,27 +2060,27 @@ mod tests {
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
         COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
-        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
-        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
-        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
-        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
-        RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-        VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
-        parse_command_request, success_response,
+        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
+        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, DumpModel,
+        DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
+        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
+        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
+        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomImageMediaState,
+        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
+        DumpRoomMessageSendState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
+        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpSubmittedEditCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpUnsupportedRoomMessageActivity, FindActiveViewArgs, FindActiveViewResponse,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
+        MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
+        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
+        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
+        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs,
+        StatusBarState, SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2216,7 +2320,14 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_SEND_FILE),
             Some(CommandKind::SendFile)
         );
-        assert_eq!(CommandKind::from_id(COMMAND_ID_SEND_FILE + 1), None);
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SETUP_E2EE_RECOVERY),
+            Some(CommandKind::SetupE2eeRecovery)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SETUP_E2EE_RECOVERY + 1),
+            None
+        );
     }
 
     #[test]
@@ -3250,6 +3361,38 @@ mod tests {
     }
 
     #[test]
+    fn setup_e2ee_recovery_round_trips_and_redacts_passphrase() {
+        let command = parse_command_request(
+            COMMAND_ID_SETUP_E2EE_RECOVERY,
+            br#"{"id":"setup","args":{"passphrase":"sample setup passphrase","wait_for_backups_to_upload":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command,
+            ParsedCommand::SetupE2eeRecovery {
+                id: "setup".to_owned(),
+                args: SetupE2eeRecoveryArgs {
+                    passphrase: Some("sample setup passphrase".to_owned()),
+                    wait_for_backups_to_upload: true,
+                },
+            }
+        );
+        assert!(!format!("{command:?}").contains("sample setup passphrase"));
+    }
+
+    #[test]
+    fn setup_e2ee_recovery_rejects_invalid_args_without_echoing_passphrase() {
+        for request in [
+            br#"{"id":"setup","args":{"passphrase":"sample setup passphrase","unexpected":true}}"#.as_slice(),
+            br#"{"id":"setup","args":{"passphrase":true,"wait_for_backups_to_upload":false}}"#.as_slice(),
+            br#"{"id":"setup","args":{"passphrase":"sample setup passphrase","wait_for_backups_to_upload":"yes"}}"#.as_slice(),
+        ] {
+            let error = parse_command_request(COMMAND_ID_SETUP_E2EE_RECOVERY, request).unwrap_err();
+            assert!(!serde_json::to_string(&error).unwrap().contains("sample setup passphrase"));
+        }
+    }
+
+    #[test]
     fn recover_e2ee_shape_errors_do_not_echo_secret() {
         let error = parse_command_request(
             COMMAND_ID_RECOVER_E2EE,
@@ -3579,6 +3722,7 @@ mod tests {
                     }],
                     last_activity: None,
                     e2ee_status: Some(sample_e2ee_status()),
+                    last_e2ee_recovery_setup_result: None,
                     last_verification: None,
                     submitted_membership_commands: Vec::new(),
                     submitted_direct_room_commands: Vec::new(),
@@ -3590,6 +3734,7 @@ mod tests {
                     submitted_history_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
                     submitted_recovery_commands: Vec::new(),
+                    submitted_setup_recovery_commands: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -4163,6 +4308,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: Some(sample_e2ee_status()),
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4174,6 +4320,7 @@ mod tests {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -4237,6 +4384,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4251,6 +4399,7 @@ mod tests {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4291,6 +4440,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4306,6 +4456,7 @@ mod tests {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4368,6 +4519,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4384,6 +4536,7 @@ mod tests {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4448,6 +4601,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4467,6 +4621,7 @@ mod tests {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4538,6 +4693,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4556,6 +4712,7 @@ mod tests {
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -4654,6 +4811,7 @@ mod tests {
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
+            last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
@@ -4676,6 +4834,7 @@ mod tests {
             ],
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
+            submitted_setup_recovery_commands: Vec::new(),
             last_error: None,
             selected_room: Some("!room:example".to_owned()),
         };
@@ -4730,6 +4889,7 @@ mod tests {
                 rooms: Vec::new(),
                 last_activity: None,
                 e2ee_status: None,
+                last_e2ee_recovery_setup_result: None,
                 last_verification: None,
                 submitted_membership_commands: Vec::new(),
                 submitted_direct_room_commands: Vec::new(),
@@ -4741,6 +4901,7 @@ mod tests {
                 submitted_history_commands: Vec::new(),
                 submitted_verification_actions: Vec::new(),
                 submitted_recovery_commands: Vec::new(),
+                submitted_setup_recovery_commands: Vec::new(),
                 last_error: None,
                 selected_room: None,
             }

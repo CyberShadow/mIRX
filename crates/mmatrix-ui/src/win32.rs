@@ -98,21 +98,23 @@ use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, DumpMembershipCommandAction, DumpMessageMenuState, DumpModel,
-        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState,
-        DumpRoomMenuState, DumpRoomMessageActivityLine, DumpRoomReactionSummary,
-        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedVerificationAction, DumpVerificationActionKind,
-        DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
-        LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
-        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
-        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
-        StatusBarState, SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState,
-        UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_SETUP_E2EE_RECOVERY,
+        COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, DumpE2eeRecoverySetupResult,
+        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomImageMediaState, DumpRoomMenuState,
+        DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
+        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
+        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
+        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiFindState, UiRoomHistoryBackfillState, UiRoomState,
+        UiState, VerificationActionArgs, ViewIdentity, WaitIdleResponse, dump_error_from_core,
+        dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
         dump_verification_from_state_event, failure_response, parse_command_request,
         success_response,
@@ -561,6 +563,7 @@ struct UiModel {
     room_views: BTreeMap<String, RoomViewModel>,
     last_activity: Option<LastMessageActivity>,
     last_e2ee_status: Option<E2eeStatus>,
+    last_e2ee_recovery_setup_result: bool,
     last_verification: Option<VerificationStateEvent>,
     last_error: Option<CoreErrorEvent>,
 }
@@ -6834,6 +6837,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.status = "e2ee recovery complete".to_owned();
         }
         Event::E2eeRecoverySetupSucceeded(_) => {
+            state.model.last_e2ee_recovery_setup_result = true;
             state.model.status = "e2ee recovery setup complete".to_owned();
         }
         Event::VerificationRequest(request) => {
@@ -6856,6 +6860,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.room_views.clear();
             state.model.last_activity = None;
             state.model.last_e2ee_status = None;
+            state.model.last_e2ee_recovery_setup_result = false;
             state.model.last_verification = None;
             state.model.last_error = None;
             state.model.room_read_states.clear();
@@ -9758,6 +9763,20 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::SetupE2eeRecovery { id, args } => {
+            submit_setup_e2ee_recovery(
+                state_mut(hwnd),
+                args.passphrase,
+                args.wait_for_backups_to_upload,
+            )
+            .map_err(|message| {
+                failure_response(Some(id.clone()), "setup_e2ee_recovery_failed", message)
+            })?;
+            refresh_status_bar(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "setup_e2ee_recovery_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::AcceptVerification { id, args } => {
             submit_automation_verification_action(hwnd, VerificationAction::Accept, args).map_err(
                 |message| failure_response(Some(id.clone()), "verification_failed", message),
@@ -9823,6 +9842,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::FindActiveView { id, .. }
         | ParsedCommand::AppendSyntheticEvents { id, .. }
         | ParsedCommand::RecoverE2ee { id, .. }
+        | ParsedCommand::SetupE2eeRecovery { id, .. }
         | ParsedCommand::AcceptVerification { id, .. }
         | ParsedCommand::CancelVerification { id, .. }
         | ParsedCommand::ConfirmVerificationSas { id, .. }
@@ -12571,6 +12591,19 @@ fn submitted_recovery_commands_from_state(
         .collect()
 }
 
+fn submitted_setup_recovery_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedSetupRecoveryCommand> {
+    state
+        .submitted_setup_e2ee_recovery
+        .iter()
+        .map(|command| DumpSubmittedSetupRecoveryCommand {
+            passphrase_redacted: command.passphrase_redacted,
+            wait_for_backups_to_upload: command.wait_for_backups_to_upload,
+        })
+        .collect()
+}
+
 fn dump_model_from_state(state: &WindowState) -> DumpModel {
     let model = &state.model;
     DumpModel {
@@ -12582,6 +12615,11 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .as_ref()
             .map(dump_room_message_activity_line_from_last_activity),
         e2ee_status: model.last_e2ee_status.clone(),
+        last_e2ee_recovery_setup_result: model.last_e2ee_recovery_setup_result.then_some(
+            DumpE2eeRecoverySetupResult {
+                recovery_key_present: true,
+            },
+        ),
         last_verification: model
             .last_verification
             .as_ref()
@@ -12596,6 +12634,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_history_commands: submitted_history_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
+        submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }

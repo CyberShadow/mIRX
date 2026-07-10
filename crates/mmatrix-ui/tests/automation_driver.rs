@@ -3123,6 +3123,29 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
 }
 
 #[test]
+fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+
+    app.setup_e2ee_recovery(Some("sample setup passphrase"), true)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.last_error,
+        Some(UiError {
+            operation: "setup_e2ee_recovery".to_owned(),
+            message: "E2EE recovery setup requires an authenticated session".to_owned(),
+        })
+    );
+    assert!(!serde_json::to_string(&model)?.contains("sample setup passphrase"));
+    assert_eq!(app.compose_text()?, "");
+    Ok(())
+}
+
+#[test]
 fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secret()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
