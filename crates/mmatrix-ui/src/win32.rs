@@ -75,20 +75,22 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT,
     CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW,
     DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
-    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC,
-    GetClientRect, GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret,
+    ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN, EnableMenuItem, GWL_STYLE,
+    GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMenu, GetMenuItemCount, GetMenuStringW,
+    GetMessageW, GetParent, GetScrollInfo, GetSubMenu, GetWindowLongPtrW, HMENU, HideCaret,
     IDC_ARROW, IsChild, IsWindow, KillTimer, LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT,
-    LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_POPUP, MF_STRING, MSG, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
-    WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_MDIACTIVATE,
-    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY,
-    WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED,
-    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_BYCOMMAND, MF_BYPOSITION, MF_ENABLED,
+    MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
+    SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
+    SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP,
+    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT,
+    WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY,
+    WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
+    WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
+    WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -124,6 +126,7 @@ const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
 const FIND_DIALOG_CLASS_NAME: &str = "mmatrixWin32FindDialog";
 const FRAME_TITLE: &str = "mmatrix";
+const ACCOUNT_MENU_LABEL: &str = "Account";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
     width: 1024,
     height: 768,
@@ -145,6 +148,10 @@ const MENU_ID_START_SYNC: usize = 40003;
 const MENU_ID_LOGOUT: usize = 40004;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
 const MENU_ID_FIND: usize = 40006;
+const MENU_ID_VERIFY_ACCEPT: usize = 40007;
+const MENU_ID_VERIFY_CANCEL: usize = 40008;
+const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
+const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -3244,6 +3251,27 @@ unsafe extern "system" fn window_proc(
                 default_window_proc(hwnd, message, wparam, lparam)
             }
         }
+        WM_INITMENUPOPUP => {
+            let popup_menu = wparam as HMENU;
+            let result = (|| -> Result<(), String> {
+                let frame_menu = GetMenu(hwnd);
+                if frame_menu.is_null() {
+                    Ok(())
+                } else {
+                    let account_menu =
+                        find_frame_popup_menu_by_label(frame_menu, ACCOUNT_MENU_LABEL)?;
+                    if account_menu == popup_menu {
+                        refresh_account_verification_menu_state(hwnd, popup_menu)
+                    } else {
+                        Ok(())
+                    }
+                }
+            })();
+            if let Err(message) = result {
+                show_error_message(hwnd, "Account", &message);
+            }
+            0
+        }
         WM_CORE_EVENT => {
             handle_core_events(hwnd);
             0
@@ -4736,6 +4764,30 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         MENU_ID_RECOVER_E2EE,
         "Recover E2EE...",
     )?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_VERIFY_ACCEPT,
+        "Accept Verification",
+    )?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_VERIFY_CANCEL,
+        "Cancel Verification",
+    )?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_VERIFY_CONFIRM_SAS,
+        "Confirm SAS",
+    )?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_VERIFY_REJECT_SAS,
+        "Reject SAS",
+    )?;
     append_menu_text(account_menu, MF_STRING, MENU_ID_LOGOUT, "Logout")?;
 
     let frame_menu = CreateMenu();
@@ -4767,6 +4819,83 @@ unsafe fn append_menu_text(
     Ok(())
 }
 
+unsafe fn find_frame_popup_menu_by_label(frame_menu: HMENU, label: &str) -> Result<HMENU, String> {
+    let item_count = GetMenuItemCount(frame_menu);
+    if item_count == -1 {
+        return Err(last_os_error("GetMenuItemCount"));
+    }
+
+    let mut buffer = [0u16; 64];
+    for index in 0..item_count {
+        let length = GetMenuStringW(
+            frame_menu,
+            index as u32,
+            buffer.as_mut_ptr(),
+            buffer.len() as i32,
+            MF_BYPOSITION,
+        );
+        let text = String::from_utf16_lossy(&buffer[..length as usize]);
+        if text == label {
+            let popup_menu = GetSubMenu(frame_menu, index);
+            if popup_menu.is_null() {
+                return Err(format!("{label} popup menu is not available"));
+            }
+            return Ok(popup_menu);
+        }
+    }
+
+    Err(format!("{label} popup menu was not found"))
+}
+
+unsafe fn refresh_account_verification_menu_state(
+    hwnd: HWND,
+    popup_menu: HMENU,
+) -> Result<(), String> {
+    let last_verification = state_ref(hwnd).model.last_verification.as_ref();
+
+    let accept_flags = MF_BYCOMMAND
+        | if verification_menu_action_enabled(last_verification, VerificationAction::Accept) {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_ACCEPT as u32, accept_flags) == -1 {
+        return Err(last_os_error("EnableMenuItem"));
+    }
+
+    let cancel_flags = MF_BYCOMMAND
+        | if verification_menu_action_enabled(last_verification, VerificationAction::Cancel) {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_CANCEL as u32, cancel_flags) == -1 {
+        return Err(last_os_error("EnableMenuItem"));
+    }
+
+    let confirm_flags = MF_BYCOMMAND
+        | if verification_menu_action_enabled(last_verification, VerificationAction::Confirm) {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_CONFIRM_SAS as u32, confirm_flags) == -1 {
+        return Err(last_os_error("EnableMenuItem"));
+    }
+
+    let reject_flags = MF_BYCOMMAND
+        | if verification_menu_action_enabled(last_verification, VerificationAction::Reject) {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_REJECT_SAS as u32, reject_flags) == -1 {
+        return Err(last_os_error("EnableMenuItem"));
+    }
+
+    Ok(())
+}
+
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
     let command_id = wparam & 0xffff;
     let (title, result) = match command_id {
@@ -4788,6 +4917,22 @@ unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> bool {
         MENU_ID_RECOVER_E2EE => (
             "Account",
             show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
+        MENU_ID_VERIFY_ACCEPT => (
+            "Account",
+            submit_menu_verification_action(hwnd, VerificationAction::Accept).map(|_| Some(())),
+        ),
+        MENU_ID_VERIFY_CANCEL => (
+            "Account",
+            submit_menu_verification_action(hwnd, VerificationAction::Cancel).map(|_| Some(())),
+        ),
+        MENU_ID_VERIFY_CONFIRM_SAS => (
+            "Account",
+            submit_menu_verification_action(hwnd, VerificationAction::Confirm).map(|_| Some(())),
+        ),
+        MENU_ID_VERIFY_REJECT_SAS => (
+            "Account",
+            submit_menu_verification_action(hwnd, VerificationAction::Reject).map(|_| Some(())),
         ),
         MENU_ID_LOGOUT => ("Account", submit_logout(state_mut(hwnd)).map(|_| Some(()))),
         _ => return false,
@@ -6225,7 +6370,7 @@ fn render_status_lines(model: &UiModel) -> Vec<String> {
             | VerificationState::Ready
             | VerificationState::Confirmed => {}
         }
-        if let Some(actions) = verification_actions_text(&event.state) {
+        if let Some(actions) = verification_actions_text(Some(event)) {
             lines.push(format!("actions: {actions}"));
         }
     }
@@ -11200,16 +11345,47 @@ fn format_verification_emojis(emojis: &[VerificationEmoji]) -> String {
         .join(" | ")
 }
 
-fn verification_actions_text(state: &VerificationState) -> Option<&'static str> {
-    match state {
-        VerificationState::Requested | VerificationState::Accepted | VerificationState::Ready => {
-            Some("/verify accept, /verify cancel")
-        }
-        VerificationState::SasReady { .. } => {
-            Some("/verify confirm, /verify reject, /verify cancel")
-        }
-        VerificationState::Confirmed => Some("/verify cancel"),
-        VerificationState::Done | VerificationState::Cancelled { .. } => None,
+fn verification_menu_action_enabled(
+    last_verification: Option<&VerificationStateEvent>,
+    action: VerificationAction,
+) -> bool {
+    let Some(event) = last_verification else {
+        return false;
+    };
+
+    match (&event.state, action) {
+        (VerificationState::Requested, VerificationAction::Accept) => true,
+        (VerificationState::Requested, VerificationAction::Cancel) => true,
+        (VerificationState::Accepted, VerificationAction::Cancel) => true,
+        (VerificationState::Ready, VerificationAction::Cancel) => true,
+        (VerificationState::SasReady { .. }, VerificationAction::Cancel) => true,
+        (VerificationState::SasReady { .. }, VerificationAction::Confirm) => true,
+        (VerificationState::SasReady { .. }, VerificationAction::Reject) => true,
+        (VerificationState::Confirmed, VerificationAction::Cancel) => true,
+        _ => false,
+    }
+}
+
+fn verification_actions_text(
+    last_verification: Option<&VerificationStateEvent>,
+) -> Option<&'static str> {
+    let actions = (
+        verification_menu_action_enabled(last_verification, VerificationAction::Accept),
+        verification_menu_action_enabled(last_verification, VerificationAction::Cancel),
+        verification_menu_action_enabled(last_verification, VerificationAction::Confirm),
+        verification_menu_action_enabled(last_verification, VerificationAction::Reject),
+    );
+
+    match actions {
+        (true, true, false, false) => Some(
+            "Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel",
+        ),
+        (false, true, false, false) => Some("Account > Cancel Verification, /verify cancel"),
+        (false, true, true, true) => Some(
+            "Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel",
+        ),
+        (false, false, false, false) => None,
+        _ => unreachable!("verification action text must match the menu action predicate"),
     }
 }
 
@@ -11281,6 +11457,39 @@ unsafe fn submit_automation_verification_action(
             verification_action_label(action)
         ),
     )
+}
+
+unsafe fn submit_menu_verification_action(
+    hwnd: HWND,
+    action: VerificationAction,
+) -> Result<(), String> {
+    {
+        let state = state_mut(hwnd);
+        submit_menu_verification_action_to_state(state, action)?;
+    }
+    set_local_command_status(
+        hwnd,
+        format!(
+            "verification {} submitted",
+            verification_action_label(action)
+        ),
+    )
+}
+
+fn submit_menu_verification_action_to_state(
+    state: &mut WindowState,
+    action: VerificationAction,
+) -> Result<(), String> {
+    if !verification_menu_action_enabled(state.model.last_verification.as_ref(), action) {
+        return Err("verification action is not available in the current state".to_owned());
+    }
+
+    match action {
+        VerificationAction::Accept => submit_accept_verification(state),
+        VerificationAction::Cancel => submit_cancel_verification(state),
+        VerificationAction::Confirm => submit_confirm_verification_sas(state),
+        VerificationAction::Reject => submit_reject_verification_sas(state),
+    }
 }
 
 fn submit_verification_automation_action_to_state(
@@ -16382,7 +16591,9 @@ mod tests {
         assert!(status_text.contains("state: requested"));
         assert!(status_text.contains("flow_id: flow-verify-123"));
         assert!(status_text.contains("from_user: @alice:example"));
-        assert!(status_text.contains("actions: /verify accept, /verify cancel"));
+        assert!(status_text.contains(
+            "actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
+        ));
     }
 
     #[test]
@@ -16419,7 +16630,9 @@ mod tests {
         assert!(status_text.contains("state: sas ready"));
         assert!(status_text.contains("emoji: 🐶 dog | 🔥 fire"));
         assert!(status_text.contains("decimals: 1234-5678-9012"));
-        assert!(status_text.contains("actions: /verify confirm, /verify reject, /verify cancel"));
+        assert!(status_text.contains(
+            "actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
+        ));
         assert!(status_text.contains("operation: send text"));
         assert!(status_text.contains("message: message send failed"));
     }
@@ -17013,6 +17226,103 @@ mod tests {
         assert!(!status_text.contains("/verify confirm"));
         assert!(!status_text.contains("/verify reject"));
         assert!(!status_text.contains("/verify cancel"));
+    }
+
+    fn test_verification_state_event(state: VerificationState) -> VerificationStateEvent {
+        VerificationStateEvent {
+            flow_id: "flow-current".to_owned(),
+            user_id: "@alice:example".to_owned(),
+            state,
+        }
+    }
+
+    fn test_verification_sas_ready_state() -> VerificationState {
+        VerificationState::SasReady {
+            emojis: vec![VerificationEmoji {
+                symbol: "🐶".to_owned(),
+                description: "dog".to_owned(),
+            }],
+            decimals: mmatrix_core::VerificationDecimals {
+                first: 1234,
+                second: 5678,
+                third: 9012,
+            },
+        }
+    }
+
+    #[test]
+    fn verification_menu_action_predicate_matches_state_table() {
+        let assert_actions = |last_verification: Option<&VerificationStateEvent>,
+                              accept: bool,
+                              cancel: bool,
+                              confirm: bool,
+                              reject: bool| {
+            assert_eq!(
+                verification_menu_action_enabled(last_verification, VerificationAction::Accept),
+                accept
+            );
+            assert_eq!(
+                verification_menu_action_enabled(last_verification, VerificationAction::Cancel),
+                cancel
+            );
+            assert_eq!(
+                verification_menu_action_enabled(last_verification, VerificationAction::Confirm),
+                confirm
+            );
+            assert_eq!(
+                verification_menu_action_enabled(last_verification, VerificationAction::Reject),
+                reject
+            );
+        };
+
+        let requested = test_verification_state_event(VerificationState::Requested);
+        let accepted = test_verification_state_event(VerificationState::Accepted);
+        let ready = test_verification_state_event(VerificationState::Ready);
+        let sas_ready = test_verification_state_event(test_verification_sas_ready_state());
+        let confirmed = test_verification_state_event(VerificationState::Confirmed);
+        let done = test_verification_state_event(VerificationState::Done);
+        let cancelled = test_verification_state_event(VerificationState::Cancelled {
+            reason: "timed out".to_owned(),
+            code: "m.timeout".to_owned(),
+            cancelled_by_us: false,
+        });
+
+        assert_actions(None, false, false, false, false);
+        assert_actions(Some(&requested), true, true, false, false);
+        assert_actions(Some(&accepted), false, true, false, false);
+        assert_actions(Some(&ready), false, true, false, false);
+        assert_actions(Some(&sas_ready), false, true, true, true);
+        assert_actions(Some(&confirmed), false, true, false, false);
+        assert_actions(Some(&done), false, false, false, false);
+        assert_actions(Some(&cancelled), false, false, false, false);
+    }
+
+    #[test]
+    fn verification_actions_text_matches_native_menu_affordance_strings() {
+        let requested = test_verification_state_event(VerificationState::Requested);
+        let sas_ready = test_verification_state_event(test_verification_sas_ready_state());
+        let done = test_verification_state_event(VerificationState::Done);
+        let cancelled = test_verification_state_event(VerificationState::Cancelled {
+            reason: "timed out".to_owned(),
+            code: "m.timeout".to_owned(),
+            cancelled_by_us: false,
+        });
+
+        assert_eq!(
+            verification_actions_text(Some(&requested)),
+            Some(
+                "Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
+            )
+        );
+        assert_eq!(
+            verification_actions_text(Some(&sas_ready)),
+            Some(
+                "Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
+            )
+        );
+        assert_eq!(verification_actions_text(Some(&done)), None);
+        assert_eq!(verification_actions_text(Some(&cancelled)), None);
+        assert_eq!(verification_actions_text(None), None);
     }
 
     #[test]
@@ -21277,6 +21587,130 @@ mod tests {
                     user_id: "@alice:example".to_owned(),
                 }),
             ]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_menu_verification_action_rejects_disabled_actions_without_recording_commands() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification =
+            Some(test_verification_state_event(VerificationState::Accepted));
+        let last_verification = state.model.last_verification.clone();
+
+        assert_eq!(
+            submit_menu_verification_action_to_state(&mut state, VerificationAction::Accept),
+            Err("verification action is not available in the current state".to_owned())
+        );
+        assert_eq!(state.model.last_verification, last_verification);
+        assert!(state.recorded_commands.is_empty());
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_menu_verification_action_enqueues_typed_commands_for_requested_flow() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification =
+            Some(test_verification_state_event(VerificationState::Requested));
+        let last_verification = state.model.last_verification.clone();
+
+        submit_menu_verification_action_to_state(&mut state, VerificationAction::Accept).unwrap();
+        submit_menu_verification_action_to_state(&mut state, VerificationAction::Cancel).unwrap();
+
+        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::AcceptVerification(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::CancelVerification(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+            ]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_menu_verification_action_enqueues_typed_commands_for_sas_ready_flow() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification = Some(test_verification_state_event(
+            test_verification_sas_ready_state(),
+        ));
+        let last_verification = state.model.last_verification.clone();
+
+        submit_menu_verification_action_to_state(&mut state, VerificationAction::Confirm).unwrap();
+        submit_menu_verification_action_to_state(&mut state, VerificationAction::Reject).unwrap();
+        submit_menu_verification_action_to_state(&mut state, VerificationAction::Cancel).unwrap();
+
+        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::ConfirmVerificationSas(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::RejectVerificationSas(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+                Command::CancelVerification(VerificationFlowId {
+                    flow_id: "flow-current".to_owned(),
+                    user_id: "@alice:example".to_owned(),
+                }),
+            ]
+        );
+
+        handle
+            .command_sender()
+            .send(Command::Shutdown)
+            .expect("shutdown command must enqueue");
+        handle.join().expect("test core must stop cleanly");
+    }
+
+    #[test]
+    fn submit_verification_helpers_still_allow_accept_after_request_has_advanced() {
+        let mut state = test_state();
+        let handle = start_test_core();
+        state.command_sender = Some(handle.command_sender().clone());
+        state.model.last_verification =
+            Some(test_verification_state_event(VerificationState::Accepted));
+        let last_verification = state.model.last_verification.clone();
+
+        submit_accept_verification(&mut state).unwrap();
+
+        assert_eq!(state.model.last_verification, last_verification);
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::AcceptVerification(VerificationFlowId {
+                flow_id: "flow-current".to_owned(),
+                user_id: "@alice:example".to_owned(),
+            })]
         );
 
         handle

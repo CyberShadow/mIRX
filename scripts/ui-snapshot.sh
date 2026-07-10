@@ -863,6 +863,7 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view 'flow-verify-123'
         --expect-status-view 'message send failed'
+        --expect-status-view 'actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'error during send text'
@@ -904,7 +905,7 @@ configure_case_expectations() {
         --expect-status-view 'state: requested'
         --expect-status-view 'flow_id: flow-verify-request'
         --expect-status-view 'from_user: @alice:example'
-        --expect-status-view 'actions: /verify accept, /verify cancel'
+        --expect-status-view 'actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'verification requested by @alice:example'
@@ -943,7 +944,7 @@ configure_case_expectations() {
         --expect-status-view 'from_user: @alice:example'
         --expect-status-view 'emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
         --expect-status-view 'decimals: 1234-5678-9012'
-        --expect-status-view 'actions: /verify confirm, /verify reject, /verify cancel'
+        --expect-status-view 'actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'verification sas ready with @alice:example'
