@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!history:example",
-        "display_name": "History",
+        "display_name": "History", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

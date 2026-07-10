@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!typing:example",
-        "display_name": "Typing",
+        "display_name": "Typing", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

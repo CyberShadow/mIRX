@@ -204,6 +204,18 @@ configure_case_expectations() {
   verification_text_expect_args=()
 
   case "$case_name" in
+    room-topic)
+      expect_selected='!topic:example'
+      expect_active_view='room:!topic:example'
+      room_expect_args=(
+        --expect-room '!topic:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!topic:example::Room: Topic Room (!topic:example)'
+        --expect-room-view '!topic:example::Topic: incident review'
+      )
+    ;;
+
     multi-room)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'

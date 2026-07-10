@@ -3,7 +3,7 @@
     "SyncedRooms": [
       {
         "room_id": "!beta:example",
-        "display_name": "Beta",
+        "display_name": "Beta", "topic": null,
         "membership": "join",
         "encrypted": false,
         "is_space": false,

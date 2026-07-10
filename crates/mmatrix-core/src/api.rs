@@ -269,6 +269,7 @@ pub enum RoomMembership {
 pub struct RoomSummary {
     pub room_id: String,
     pub display_name: String,
+    pub topic: Option<String>,
     pub membership: RoomMembership,
     pub encrypted: bool,
     pub is_space: bool,

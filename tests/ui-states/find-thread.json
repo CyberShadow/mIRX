@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!find-thread:example",
-        "display_name": "Find Thread",
+        "display_name": "Find Thread", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

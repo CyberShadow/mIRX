@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!reactions:example",
-        "display_name": "Reactions",
+        "display_name": "Reactions", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!find-miss:example",
-        "display_name": "Find Miss",
+        "display_name": "Find Miss", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

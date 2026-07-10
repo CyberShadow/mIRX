@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!ops:example",
-        "display_name": "Ops",
+        "display_name": "Ops", "topic": null,
         "encrypted": true,
         "is_space": false,
         "is_direct": false,
@@ -15,7 +15,7 @@
       },
       {
         "room_id": "!lobby:example",
-        "display_name": "Lobby",
+        "display_name": "Lobby", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,
@@ -26,7 +26,7 @@
       },
       {
         "room_id": "!random:example",
-        "display_name": "Random",
+        "display_name": "Random", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

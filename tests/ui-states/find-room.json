@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!find-room:example",
-        "display_name": "Find Room",
+        "display_name": "Find Room", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!members:example",
-        "display_name": "Members",
+        "display_name": "Members", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

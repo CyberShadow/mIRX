@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!dense:example",
-        "display_name": "Dense",
+        "display_name": "Dense", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

@@ -1112,6 +1112,7 @@ pub(crate) struct DumpRoomTag {
 pub(crate) struct DumpRoom {
     pub(crate) room_id: String,
     pub(crate) display_name: String,
+    pub(crate) topic: Option<String>,
     pub(crate) membership: RoomMembership,
     pub(crate) encrypted: bool,
     pub(crate) is_space: bool,
@@ -1415,6 +1416,7 @@ pub(crate) fn dump_room_from_summary(room: &RoomSummary) -> DumpRoom {
     DumpRoom {
         room_id: room.room_id.clone(),
         display_name: room.display_name.clone(),
+        topic: room.topic.clone(),
         membership: room.membership,
         encrypted: room.encrypted,
         is_space: room.is_space,
@@ -2485,7 +2487,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -2496,6 +2498,7 @@ mod tests {
                         Event::SyncedRooms(vec![RoomSummary {
                             room_id: "!room:example".to_owned(),
                             display_name: "Room".to_owned(),
+            topic: None,
                             membership: RoomMembership::Join,
                             encrypted: true,
                             is_space: false,
@@ -3037,6 +3040,7 @@ mod tests {
             Event::SyncedRooms(vec![RoomSummary {
                 room_id: "!one:example".to_owned(),
                 display_name: "One".to_owned(),
+            topic: None,
                 membership: RoomMembership::Join,
                 encrypted: false,
                 is_space: false,
@@ -3068,7 +3072,7 @@ mod tests {
             serde_json::to_value(&events).unwrap(),
             json!([
                 "Started",
-                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},
+                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
                 {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","message":"send failed"}}
@@ -3105,7 +3109,7 @@ mod tests {
     fn load_command_rejects_unknown_fields_inside_event_payloads() {
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"unexpected":true}]}]}}"#,
         )
         .unwrap_err();
 
@@ -3116,14 +3120,14 @@ mod tests {
                 "ok":false,
                 "err":{
                     "code":"invalid_args",
-                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `topic`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`"
                 }
             })
         );
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}]}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}]}]}]}}"#,
         )
         .unwrap_err();
 
@@ -3141,7 +3145,7 @@ mod tests {
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[]}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[]}]}]}}"#,
         )
         .unwrap_err();
 
@@ -3805,7 +3809,7 @@ mod tests {
                 "json":{
                     "status":"ready",
                     "lifecycle_state":"ready",
-                    "rooms":[{"room_id":"!room:example","display_name":"Room","membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}],
+                    "rooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}],
                     "last_activity":null,
                     "e2ee_status":{
                         "recovery":"incomplete",
@@ -4028,7 +4032,7 @@ mod tests {
             json!({
                 "id":"rooms",
                 "ok":true,
-                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}]}
+                "json":{"rooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}]}
             })
         );
         assert_eq!(
@@ -5057,6 +5061,7 @@ mod tests {
             super::dump_room_from_summary(&RoomSummary {
                 room_id: "!room:example".to_owned(),
                 display_name: "Room".to_owned(),
+                topic: Some("incident review".to_owned()),
                 membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: true,
@@ -5081,6 +5086,7 @@ mod tests {
             super::DumpRoom {
                 room_id: "!room:example".to_owned(),
                 display_name: "Room".to_owned(),
+                topic: Some("incident review".to_owned()),
                 membership: RoomMembership::Join,
                 encrypted: true,
                 is_space: true,

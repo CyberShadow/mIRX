@@ -1182,6 +1182,7 @@ mod tests {
         RoomSummary {
             room_id: room_id.to_owned(),
             display_name: display_name.to_owned(),
+            topic: None,
             membership,
             encrypted: true,
             is_space: false,

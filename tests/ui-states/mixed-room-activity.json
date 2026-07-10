@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!mixed:example",
-        "display_name": "Mixed",
+        "display_name": "Mixed", "topic": null,
         "encrypted": true,
         "is_space": false,
         "is_direct": false,

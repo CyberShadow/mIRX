@@ -360,6 +360,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
         let display_name = room.display_name().await.map_err(|err| {
             MatrixCoreError::new(format!("failed to read room display name: {err}"))
         })?;
+        let topic = room.topic();
         let encrypted = room.latest_encryption_state().await.map_err(|err| {
             MatrixCoreError::new(format!("failed to read room encryption state: {err}"))
         })?;
@@ -385,6 +386,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
         rooms.push(RoomSummary {
             room_id: room.room_id().to_string(),
             display_name: display_name.to_string(),
+            topic,
             membership: RoomMembership::Join,
             encrypted: encrypted.is_encrypted(),
             is_space,
@@ -411,6 +413,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
         invited_summaries.push(RoomSummary {
             room_id: room.room_id().to_string(),
             display_name: display_name.to_string(),
+            topic: None,
             membership: RoomMembership::Invite,
             encrypted: encrypted.is_encrypted(),
             is_space: room.is_space(),

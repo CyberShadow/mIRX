@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!focus:example",
-        "display_name": "Focus",
+        "display_name": "Focus", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,
@@ -15,7 +15,7 @@
       },
       {
         "room_id": "!inbox:example",
-        "display_name": "Inbox",
+        "display_name": "Inbox", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,
@@ -26,7 +26,7 @@
       },
       {
         "room_id": "!docs:example",
-        "display_name": "Docs",
+        "display_name": "Docs", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,

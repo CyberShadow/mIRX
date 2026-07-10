@@ -4,7 +4,7 @@
     "SyncedRooms": [
       {
         "room_id": "!verify:example",
-        "display_name": "Verify",
+        "display_name": "Verify", "topic": null,
         "encrypted": true,
         "is_space": false,
         "is_direct": false,
@@ -15,7 +15,7 @@
       },
       {
         "room_id": "!support:example",
-        "display_name": "Support",
+        "display_name": "Support", "topic": null,
         "encrypted": false,
         "is_space": false,
         "is_direct": false,
