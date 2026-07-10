@@ -91,6 +91,8 @@ const COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 36;
 #[cfg(windows)]
 const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
 #[cfg(windows)]
+const COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU: u32 = 38;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -1343,6 +1345,10 @@ impl MmatrixApp {
         self.inner.redact_selected_message_via_menu()
     }
 
+    pub fn save_attachment_via_message_menu(&self) -> Result<(), TestkitError> {
+        self.inner.save_attachment_via_message_menu()
+    }
+
     pub fn room_activity(&self, room_id: Option<&str>) -> Result<Vec<RoomActivity>, TestkitError> {
         self.inner.room_activity(room_id)
     }
@@ -1896,6 +1902,12 @@ mod imp {
             ))
         }
 
+        pub(crate) fn save_attachment_via_message_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn room_activity(
             &self,
             _room_id: Option<&str>,
@@ -2368,6 +2380,14 @@ mod imp {
                 COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU,
                 EmptyArgs {},
                 "REDACT_SELECTED_MESSAGE_VIA_MENU",
+            )
+        }
+
+        pub(crate) fn save_attachment_via_message_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
+                EmptyArgs {},
+                "SAVE_ATTACHMENT_VIA_MESSAGE_MENU",
             )
         }
 

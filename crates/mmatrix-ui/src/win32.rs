@@ -5554,10 +5554,10 @@ unsafe fn invoke_menu_command_for_automation(hwnd: HWND, command_id: usize) -> R
     if !room_action_enabled {
         return Err("room menu action is disabled".to_owned());
     }
-    let Some(result) = handle_menu_command(hwnd, command_id) else {
+    let Some((_, result)) = menu_command_result(hwnd, command_id) else {
         return Err(format!("unknown menu command {command_id}"));
     };
-    result
+    result.and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned()))
 }
 
 unsafe fn submit_room_menu_action(
@@ -9144,6 +9144,14 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::SaveAttachmentViaMessageMenu { id } => {
+            invoke_menu_command_for_automation(hwnd, MENU_ID_MESSAGE_SAVE_ATTACHMENT).map_err(
+                |message| {
+                    failure_response(Some(id.clone()), "selected_message_unavailable", message)
+                },
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::DumpSelectedNavigationPath { id } => {
             let path = dump_selected_navigation_path(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "ui_state_unavailable", message)
@@ -9382,6 +9390,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::PartRoomViaRoomMenu { id }
         | ParsedCommand::ReplyToSelectedMessageViaMenu { id }
         | ParsedCommand::RedactSelectedMessageViaMenu { id }
+        | ParsedCommand::SaveAttachmentViaMessageMenu { id }
         | ParsedCommand::DumpSelectedNavigationPath { id }
         | ParsedCommand::DumpRoomActivity { id, .. }
         | ParsedCommand::ListRooms { id }

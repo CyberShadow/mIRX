@@ -17,7 +17,9 @@ use mmatrix_core::{
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
+    RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
+    RoomMediaKind as CoreRoomMediaKind, RoomMembers, RoomMembership,
+    RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
     StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
@@ -10138,6 +10140,14 @@ fn automation_driver_message_menu_reply_prefills_selected_event()
     assert!(!enabled.save_attachment_enabled);
     assert_eq!(enabled.selected_event_id.as_deref(), Some("$react-normal"));
 
+    let error = app
+        .save_attachment_via_message_menu()
+        .expect_err("save attachment must reject a selected text message");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { code, .. } if code == "selected_message_unavailable"
+    ));
+
     app.reply_to_selected_message_via_menu()?;
     assert_eq!(app.compose_text()?, "/reply $react-normal ");
     let model = app.dump_model()?;
@@ -10147,6 +10157,78 @@ fn automation_driver_message_menu_reply_prefills_selected_event()
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
+}
+
+fn assert_message_menu_attachment_save(
+    fixture_name: &str,
+    event_id: &str,
+    filename: &str,
+    bytes: Vec<u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path(fixture_name);
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!media:example.org")?;
+    app.select_timeline_event(event_id)?;
+
+    let menu = app.dump_message_menu_state()?;
+    assert!(menu.save_attachment_enabled);
+    assert_eq!(menu.selected_event_id.as_deref(), Some(event_id));
+
+    app.save_attachment_via_message_menu()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomMedia(CoreRoomMedia {
+        room_id: "!media:example.org".to_owned(),
+        activity_id: format!("event:{event_id}"),
+        event_id: event_id.to_owned(),
+        kind: CoreRoomMediaKind::Loaded {
+            format: CoreRoomMediaFormat::File,
+            bytes: bytes.clone(),
+        },
+    })])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let saved_path = local_app_data
+        .join("mmatrix")
+        .join("ui-shell")
+        .join("attachments")
+        .join("_media_example.org")
+        .join(event_id.replace(['$', ':'], "_"))
+        .join(filename);
+    assert_eq!(fs::read(&saved_path)?, bytes);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_message_menu_save_file_attachment_writes_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_message_menu_attachment_save(
+        "file-message.json",
+        "$file1:example.org",
+        "report.pdf",
+        b"deterministic file attachment bytes\n".to_vec(),
+    )
+}
+
+#[test]
+fn automation_driver_message_menu_save_audio_attachment_writes_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_message_menu_attachment_save(
+        "audio-message.json",
+        "$audio1:example.org",
+        "voice-note.ogg",
+        vec![0x4f, 0x67, 0x67, 0x53, 0, 2, 4, 6, 8],
+    )
 }
 
 #[test]

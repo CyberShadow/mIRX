@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 19;
+pub(crate) const PROTOCOL_VERSION: u32 = 20;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -52,6 +52,7 @@ pub(crate) const COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU: u32 = 34;
 pub(crate) const COMMAND_ID_PART_ROOM_VIA_ROOM_MENU: u32 = 35;
 pub(crate) const COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 36;
 pub(crate) const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
+pub(crate) const COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU: u32 = 38;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -92,6 +93,7 @@ pub(crate) enum CommandKind {
     PartRoomViaRoomMenu,
     ReplyToSelectedMessageViaMenu,
     RedactSelectedMessageViaMenu,
+    SaveAttachmentViaMessageMenu,
 }
 
 impl CommandKind {
@@ -136,6 +138,9 @@ impl CommandKind {
                 Some(Self::ReplyToSelectedMessageViaMenu)
             }
             COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
+            COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => {
+                Some(Self::SaveAttachmentViaMessageMenu)
+            }
             _ => None,
         }
     }
@@ -273,6 +278,9 @@ pub(crate) enum ParsedCommand {
     RedactSelectedMessageViaMenu {
         id: String,
     },
+    SaveAttachmentViaMessageMenu {
+        id: String,
+    },
 }
 
 impl ParsedCommand {
@@ -317,6 +325,7 @@ impl ParsedCommand {
                 CommandKind::ReplyToSelectedMessageViaMenu
             }
             Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
+            Self::SaveAttachmentViaMessageMenu { .. } => CommandKind::SaveAttachmentViaMessageMenu,
         }
     }
 }
@@ -1716,6 +1725,10 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::RedactSelectedMessageViaMenu { id: envelope.id })
         }
+        CommandKind::SaveAttachmentViaMessageMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::SaveAttachmentViaMessageMenu { id: envelope.id })
+        }
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -1918,6 +1931,7 @@ mod tests {
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
         COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
@@ -2015,8 +2029,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_19() {
-        assert_eq!(PROTOCOL_VERSION, 19);
+    fn protocol_version_is_20() {
+        assert_eq!(PROTOCOL_VERSION, 20);
     }
 
     #[test]
@@ -2170,11 +2184,15 @@ mod tests {
             Some(CommandKind::RedactSelectedMessageViaMenu)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU),
+            Some(CommandKind::SaveAttachmentViaMessageMenu)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_LOGIN - 1),
             Some(CommandKind::SelectView)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU + 1),
+            CommandKind::from_id(COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU + 1),
             None
         );
     }
@@ -2405,6 +2423,7 @@ mod tests {
             (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
             (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
             (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
+            (COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, "save-attachment"),
         ] {
             assert!(
                 parse_command_request(
@@ -3144,6 +3163,7 @@ mod tests {
             (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
             (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
             (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
+            (COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, "save-attachment"),
         ] {
             let request = format!(r#"{{"id":"{request_id}","args":{{"unexpected":true}}}}"#);
             let error = parse_command_request(command_id, request.as_bytes())
