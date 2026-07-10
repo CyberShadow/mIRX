@@ -1842,13 +1842,13 @@ fn room_preview_activity_matches(
 ) -> bool {
     room_view.activities.iter().any(|activity| {
         activity.activity_id == activity_id
-            && matches!(
+            && (matches!(
                 &activity.kind,
                 RoomActivityKind::Image(message) if message.event_id == event_id
             ) || matches!(
                 &activity.kind,
                 RoomActivityKind::Video(message) if message.event_id == event_id
-            )
+            ))
     })
 }
 
@@ -14412,6 +14412,34 @@ mod tests {
         )))
     }
 
+    fn video_message(room_id: &str, event_id: &str) -> Event {
+        Event::RoomActivity(Box::new(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: format!("event:{event_id}"),
+            timestamp_ms: 1_710_000_000_000,
+            relation: None,
+            kind: RoomActivityKind::Video(Box::new(mmatrix_core::RoomVideoActivity {
+                event_id: event_id.to_owned(),
+                sender: "@alice:example.org".to_owned(),
+                body: "clip.mp4".to_owned(),
+                filename: Some("clip.mp4".to_owned()),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/video".to_owned(),
+                },
+                info: Some(RoomVideoInfo {
+                    mimetype: Some("video/mp4".to_owned()),
+                    size: Some(34_567),
+                    duration_ms: Some(12_000),
+                    width: Some(1920),
+                    height: Some(1080),
+                    thumbnail_source: Some(RoomMediaSource::Plain {
+                        url: "mxc://example.org/video-thumbnail".to_owned(),
+                    }),
+                }),
+            })),
+        }))
+    }
+
     fn encrypted_image_activity(
         room_id: &str,
         event_id: &str,
@@ -17482,6 +17510,39 @@ mod tests {
                 message: "current".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn video_preview_media_event_with_stale_activity_id_is_ignored() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            video_message("!ops:example", "$video1:example.org"),
+        )
+        .unwrap();
+
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$stale-video:example.org",
+                "$video1:example.org",
+                RoomMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "stale".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+
+        assert!(state
+            .model
+            .room_views
+            .get("!ops:example")
+            .expect("room view must exist")
+            .preview_media
+            .is_empty());
     }
 
     #[test]

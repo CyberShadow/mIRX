@@ -5756,7 +5756,8 @@ mod tests {
                         "width":1920u64,
                         "height":1080u64,
                         "thumbnail_source":{"type":"plain","url":"mxc://example.org/video-thumbnail"}
-                    }
+                    },
+                    "media_state":null
                 }
             })
         );
