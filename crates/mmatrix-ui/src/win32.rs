@@ -128,6 +128,7 @@ const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
 const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32SetupE2eeDialog";
+const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoveryKeyHandoffDialog";
 const FIND_DIALOG_CLASS_NAME: &str = "mmatrixWin32FindDialog";
 const FRAME_TITLE: &str = "mmatrix";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
@@ -177,6 +178,8 @@ const SETUP_E2EE_DIALOG_PASSPHRASE_ID: u16 = 5013;
 const SETUP_E2EE_DIALOG_WAIT_ID: u16 = 5014;
 const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
 const SETUP_E2EE_DIALOG_CANCEL_ID: usize = 5016;
+const RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID: u16 = 5017;
+const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
 const FIND_DIALOG_QUERY_ID: u16 = 5010;
 const FIND_DIALOG_OK_ID: usize = 5011;
 const FIND_DIALOG_CANCEL_ID: usize = 5012;
@@ -2355,6 +2358,13 @@ struct SetupE2eeRecoveryDialogState {
     cancel_button: HWND,
 }
 
+struct RecoveryKeyHandoffDialogState {
+    recovery_key: String,
+    instruction_label: HWND,
+    recovery_key_edit: HWND,
+    acknowledge_button: HWND,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SubmittedSetupE2eeRecovery {
     passphrase_redacted: bool,
@@ -2673,6 +2683,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     register_login_dialog_class(instance)?;
     register_recover_e2ee_dialog_class(instance)?;
     register_setup_e2ee_dialog_class(instance)?;
+    register_recovery_key_handoff_dialog_class(instance)?;
     register_find_dialog_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
@@ -3375,6 +3386,36 @@ fn register_setup_e2ee_dialog_class(instance: *mut c_void) -> Result<(), String>
         let error = unsafe { GetLastError() };
         if error != 1410 {
             return Err(last_os_error("RegisterClassExW setup e2ee dialog"));
+        }
+    }
+
+    Ok(())
+}
+
+fn register_recovery_key_handoff_dialog_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(recovery_key_handoff_dialog_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error(
+                "RegisterClassExW recovery key handoff dialog",
+            ));
         }
     }
 
@@ -4919,6 +4960,52 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
     }
 }
 
+unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_NCCREATE => {
+            let create = &*(lparam as *const CREATESTRUCTW);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            1
+        }
+        WM_CREATE => match create_recovery_key_handoff_dialog_controls(hwnd) {
+            Ok(()) => 0,
+            Err(message) => {
+                eprintln!("{message}");
+                -1
+            }
+        },
+        WM_COMMAND if wparam & 0xffff == RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID => {
+            clear_recovery_key_handoff_dialog_key(hwnd);
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_CLOSE => {
+            clear_recovery_key_handoff_dialog_key(hwnd);
+            DestroyWindow(hwnd);
+            0
+        }
+        WM_SIZE => {
+            layout_recovery_key_handoff_dialog(hwnd);
+            0
+        }
+        WM_NCDESTROY => {
+            let state_ptr =
+                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoveryKeyHandoffDialogState;
+            if !state_ptr.is_null() {
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                drop(Box::from_raw(state_ptr));
+            }
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
 unsafe extern "system" fn find_dialog_window_proc(
     hwnd: HWND,
     message: u32,
@@ -6137,6 +6224,50 @@ unsafe fn create_find_dialog_controls(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
+unsafe fn create_recovery_key_handoff_dialog_controls(hwnd: HWND) -> Result<(), String> {
+    let instance = GetModuleHandleW(null());
+    let state = recovery_key_handoff_dialog_state_mut(hwnd)
+        .expect("recovery key handoff dialog state must exist");
+
+    state.instruction_label = create_login_dialog_control(
+        hwnd,
+        STATIC_CLASS_NAME,
+        "Save this recovery key now. It will not be shown again.",
+        WS_CHILD | WS_VISIBLE,
+        0,
+        0,
+        instance,
+    )?;
+    state.recovery_key_edit = create_login_dialog_control(
+        hwnd,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD
+            | WS_VISIBLE
+            | WS_BORDER
+            | WS_TABSTOP
+            | ES_MULTILINE as u32
+            | ES_READONLY as u32
+            | ES_AUTOVSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+        RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID,
+        instance,
+    )?;
+    set_window_text(state.recovery_key_edit, &state.recovery_key);
+    state.acknowledge_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "I Saved It",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        0,
+        RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID as u16,
+        instance,
+    )?;
+
+    layout_recovery_key_handoff_dialog(hwnd);
+    Ok(())
+}
+
 unsafe fn create_login_dialog_control(
     parent: HWND,
     class_name: &str,
@@ -6467,6 +6598,47 @@ unsafe fn layout_find_dialog(hwnd: HWND) {
     );
 }
 
+unsafe fn layout_recovery_key_handoff_dialog(hwnd: HWND) {
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let input_width = (width - 32).max(0);
+    let label_height = 18;
+    let input_height = 72;
+    let spacing = 8;
+    let button_width = 96;
+    let button_height = 28;
+
+    let Some(state) = recovery_key_handoff_dialog_state(hwnd) else {
+        return;
+    };
+
+    MoveWindow(
+        state.instruction_label,
+        16,
+        16,
+        input_width,
+        label_height,
+        1,
+    );
+    MoveWindow(
+        state.recovery_key_edit,
+        16,
+        16 + label_height + spacing,
+        input_width,
+        input_height,
+        1,
+    );
+    MoveWindow(
+        state.acknowledge_button,
+        width - 16 - button_width,
+        16 + label_height + spacing + input_height + 12,
+        button_width,
+        button_height,
+        1,
+    );
+}
+
 unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
@@ -6685,6 +6857,26 @@ unsafe fn setup_e2ee_dialog_state_mut(
 ) -> Option<&'static mut SetupE2eeRecoveryDialogState> {
     let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SetupE2eeRecoveryDialogState;
     (!state.is_null()).then_some(&mut *state)
+}
+
+unsafe fn recovery_key_handoff_dialog_state(
+    hwnd: HWND,
+) -> Option<&'static RecoveryKeyHandoffDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RecoveryKeyHandoffDialogState;
+    (!state.is_null()).then_some(&*state)
+}
+
+unsafe fn recovery_key_handoff_dialog_state_mut(
+    hwnd: HWND,
+) -> Option<&'static mut RecoveryKeyHandoffDialogState> {
+    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoveryKeyHandoffDialogState;
+    (!state.is_null()).then_some(&mut *state)
+}
+
+unsafe fn clear_recovery_key_handoff_dialog_key(hwnd: HWND) {
+    if let Some(state) = recovery_key_handoff_dialog_state(hwnd) {
+        set_window_text(state.recovery_key_edit, "");
+    }
 }
 
 unsafe fn find_dialog_state(hwnd: HWND) -> Option<&'static FindDialogState> {
@@ -10904,7 +11096,7 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
     let mut history_backfill_anchor = None;
     for event in events {
         if let Event::E2eeRecoverySetupSucceeded(result) = &event {
-            show_e2ee_recovery_key(hwnd, &result.recovery_key);
+            show_e2ee_recovery_key(hwnd, &result.recovery_key)?;
         }
         let state = state_mut(hwnd);
         if history_backfill_anchor.is_none()
@@ -13330,12 +13522,58 @@ fn show_error_message(hwnd: HWND, title: &str, message: &str) {
     }
 }
 
-fn show_e2ee_recovery_key(hwnd: HWND, recovery_key: &str) {
+unsafe fn show_e2ee_recovery_key(owner: HWND, recovery_key: &str) -> Result<(), String> {
+    let instance = GetModuleHandleW(null());
+    let dialog_state = Box::new(RecoveryKeyHandoffDialogState {
+        recovery_key: recovery_key.to_owned(),
+        instruction_label: null_mut(),
+        recovery_key_edit: null_mut(),
+        acknowledge_button: null_mut(),
+    });
+    let dialog_state_ptr = Box::into_raw(dialog_state);
+    let class_name = wide_null(RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME);
     let title = wide_null("E2EE Recovery Key");
-    let message = wide_null(recovery_key);
-    unsafe {
-        MessageBoxW(hwnd, message.as_ptr(), title.as_ptr(), MB_OK);
+    let dialog = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        460,
+        210,
+        owner,
+        null_mut(),
+        instance,
+        dialog_state_ptr.cast(),
+    );
+    if dialog.is_null() {
+        drop(Box::from_raw(dialog_state_ptr));
+        return Err(last_os_error("CreateWindowExW recovery key handoff dialog"));
     }
+
+    EnableWindow(owner, 0);
+    ShowWindow(dialog, SW_SHOW);
+
+    let mut message = MSG::default();
+    while IsWindow(dialog) != 0 {
+        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
+        if get_result <= 0 {
+            break;
+        }
+        let frame = frame_window_for(message.hwnd);
+        if !frame.is_null() {
+            let mdi_client = state_ref(frame).controls.mdi_client;
+            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
+                continue;
+            }
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    EnableWindow(owner, 1);
+    Ok(())
 }
 
 fn wide_null(text: &str) -> Vec<u16> {

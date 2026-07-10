@@ -27,20 +27,21 @@ use mmatrix_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
-    ComposeKey, FindActiveViewResult, FrameSize, LaunchOptions, MdiView, MembershipCommandAction,
-    MmatrixApp, Model, NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-    RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
-    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiError, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    ComposeKey, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize, LaunchOptions, MdiView,
+    MembershipCommandAction, MmatrixApp, Model, NavigationNode, NavigationPathSegment, Room,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
+    SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindState,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -82,6 +83,8 @@ const RECOVER_E2EE_DIALOG_SECRET_ID: i32 = 5007;
 const RECOVER_E2EE_DIALOG_OK_ID: usize = 5008;
 const SETUP_E2EE_DIALOG_PASSPHRASE_ID: i32 = 5013;
 const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
+const RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID: i32 = 5017;
+const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -1894,6 +1897,98 @@ unsafe extern "system" fn find_recover_e2ee_dialog_window(hwnd: HWND, lparam: is
     }
 }
 
+unsafe fn recovery_key_handoff_dialog_hwnd(frame: HWND, class_name_wide: *const u16) -> HWND {
+    let dialog = unsafe { FindWindowW(class_name_wide, std::ptr::null()) };
+    if !dialog.is_null() {
+        return dialog;
+    }
+
+    let dialog = unsafe { GetLastActivePopup(frame) };
+    if dialog != frame && unsafe { class_name(dialog) } == "mmatrixWin32RecoveryKeyHandoffDialog" {
+        dialog
+    } else {
+        let thread_id = unsafe { GetWindowThreadProcessId(frame, std::ptr::null_mut()) };
+        let mut dialog = 0 as HWND;
+        unsafe {
+            EnumThreadWindows(
+                thread_id,
+                Some(find_recovery_key_handoff_dialog_window),
+                (&raw mut dialog) as isize,
+            );
+        }
+        dialog
+    }
+}
+
+unsafe extern "system" fn find_recovery_key_handoff_dialog_window(
+    hwnd: HWND,
+    lparam: isize,
+) -> i32 {
+    if unsafe { class_name(hwnd) } == "mmatrixWin32RecoveryKeyHandoffDialog" {
+        unsafe { *(lparam as *mut HWND) = hwnd };
+        0
+    } else {
+        1
+    }
+}
+
+fn acknowledge_recovery_key_handoff(app: &MmatrixApp) -> Result<(), Box<dyn std::error::Error>> {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let class_name_wide = wide_null("mmatrixWin32RecoveryKeyHandoffDialog");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let dialog = loop {
+        let dialog = unsafe { recovery_key_handoff_dialog_hwnd(frame, class_name_wide.as_ptr()) };
+        if !dialog.is_null() {
+            break dialog;
+        }
+        if Instant::now() >= deadline {
+            panic!("recovery key handoff dialog did not appear within five seconds");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    };
+
+    assert_eq!(
+        unsafe { class_name(dialog) },
+        "mmatrixWin32RecoveryKeyHandoffDialog"
+    );
+    assert!(
+        !unsafe { GetDlgItem(dialog, RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID) }.is_null(),
+        "recovery key handoff dialog key edit control must exist"
+    );
+    let acknowledge_button =
+        unsafe { GetDlgItem(dialog, RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID as i32) };
+    assert!(
+        !acknowledge_button.is_null(),
+        "recovery key handoff dialog acknowledgement button must exist"
+    );
+    assert_eq!(
+        unsafe { read_window_text(acknowledge_button) },
+        "I Saved It"
+    );
+    assert_ne!(
+        unsafe {
+            PostMessageW(
+                dialog,
+                WM_COMMAND,
+                RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID as WPARAM,
+                0,
+            )
+        },
+        0,
+        "posting recovery key handoff acknowledgement must succeed"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { IsWindow(dialog) } != 0 {
+        if Instant::now() >= deadline {
+            panic!("recovery key handoff dialog did not close within five seconds");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
 fn submit_recover_e2ee_menu_dialog(
     app: &MmatrixApp,
     secret: &str,
@@ -3272,6 +3367,51 @@ fn automation_driver_setup_e2ee_recovery_menu_dialog_submits_once_and_redacts_pa
         }]
     );
     assert!(!serde_json::to_string(&model)?.contains(passphrase));
+    Ok(())
+}
+
+#[test]
+fn automation_driver_e2ee_recovery_setup_success_handoff_acknowledges_and_never_persists_key()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let recovery_key = "automation recovery key must not persist";
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::E2eeRecoverySetupSucceeded(mmatrix_core::E2eeRecoverySetupSucceeded {
+            recovery_key: recovery_key.to_owned(),
+        }),
+    ])?;
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+
+    acknowledge_recovery_key_handoff(&app)?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "e2ee recovery setup complete");
+    assert_eq!(
+        model.last_e2ee_recovery_setup_result,
+        Some(E2eeRecoverySetupResult {
+            recovery_key_present: true,
+        })
+    );
+    assert!(!serde_json::to_string(&model)?.contains(recovery_key));
+
+    app.select_status_view()?;
+    app.wait_idle(Duration::from_secs(2))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(!view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        recovery_key
+    ));
+    assert!(!ui_state.status_bar.text.contains(recovery_key));
+    assert!(!serde_json::to_string(&ui_state)?.contains(recovery_key));
+    assert_eq!(app.compose_text()?, "");
+
+    let _ = fs::remove_file(&state_path);
     Ok(())
 }
 
