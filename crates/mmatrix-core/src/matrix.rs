@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use matrix_sdk::{
-    attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo},
     Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
+    attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo},
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::{SyncOrStrippedState, TimelineEvent},
@@ -72,10 +72,10 @@ use crate::api::{
     RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -2512,7 +2512,10 @@ pub(crate) async fn send_file(
     let path = request.path.clone();
     let (bytes, size) = tokio::task::spawn_blocking(move || {
         let metadata = std::fs::metadata(&path).map_err(|err| {
-            MatrixCoreError::new(format!("failed to read file path {}: {err}", path.display()))
+            MatrixCoreError::new(format!(
+                "failed to read file path {}: {err}",
+                path.display()
+            ))
         })?;
         if !metadata.is_file() {
             return Err(MatrixCoreError::new(format!(
@@ -2521,7 +2524,10 @@ pub(crate) async fn send_file(
             )));
         }
         let bytes = std::fs::read(&path).map_err(|err| {
-            MatrixCoreError::new(format!("failed to read file path {}: {err}", path.display()))
+            MatrixCoreError::new(format!(
+                "failed to read file path {}: {err}",
+                path.display()
+            ))
         })?;
         Ok((bytes, metadata.len()))
     })
@@ -2549,7 +2555,8 @@ pub(crate) async fn send_file(
     };
     let size = UInt::new(size)
         .ok_or_else(|| MatrixCoreError::new(format!("file size cannot fit Matrix UInt: {size}")))?;
-    let config = AttachmentConfig::new().info(AttachmentInfo::File(BaseFileInfo { size: Some(size) }));
+    let config =
+        AttachmentConfig::new().info(AttachmentInfo::File(BaseFileInfo { size: Some(size) }));
 
     room.send_attachment(filename, &mime, bytes, config)
         .await

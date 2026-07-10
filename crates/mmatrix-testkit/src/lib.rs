@@ -1417,7 +1417,8 @@ impl MmatrixApp {
         filename: Option<&str>,
         content_type: Option<&str>,
     ) -> Result<String, TestkitError> {
-        self.inner.send_file_target(room_id, path, filename, content_type)
+        self.inner
+            .send_file_target(room_id, path, filename, content_type)
     }
 
     pub fn compose_text(&self) -> Result<String, TestkitError> {
@@ -1657,13 +1658,13 @@ struct SendTextArgs<'a> {
     body: &'a str,
 }
 
-#[cfg(windows)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct SendFileArgs<'a> {
-    room_id: Option<&'a str>,
-    path: &'a str,
-    filename: Option<&'a str>,
-    content_type: Option<&'a str>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendFileArgs<'a> {
+    pub room_id: Option<&'a str>,
+    pub path: &'a str,
+    pub filename: Option<&'a str>,
+    pub content_type: Option<&'a str>,
 }
 
 #[cfg(windows)]
@@ -2590,7 +2591,12 @@ mod imp {
         ) -> Result<String, TestkitError> {
             let response: SendTextResponse = self.send_command(
                 COMMAND_ID_SEND_FILE,
-                SendFileArgs { room_id, path, filename, content_type },
+                SendFileArgs {
+                    room_id,
+                    path,
+                    filename,
+                    content_type,
+                },
             )?;
             if response.accepted {
                 Ok(response.room_id)

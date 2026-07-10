@@ -1954,13 +1954,13 @@ mod tests {
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
-        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
-        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
-        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
-        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
-        DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomImageMediaState, DumpRoomMediaSource, DumpRoomMessageActivity,
         DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomReactionSummary,
         DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
@@ -1971,11 +1971,11 @@ mod tests {
         NoArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
         RestoreSessionArgs, RoomMemberView, SelectNavigationPathArgs, SelectRoomArgs,
         SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs, SendTextResponse,
-        SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState, UiFindState,
-        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+        VerificationActionArgs, ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response,
+        parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -2215,10 +2215,7 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_SEND_FILE),
             Some(CommandKind::SendFile)
         );
-        assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SEND_FILE + 1),
-            None
-        );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_SEND_FILE + 1), None);
     }
 
     #[test]

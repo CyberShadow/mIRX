@@ -27,7 +27,7 @@ use mmatrix_testkit::{
     RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
+    RoomTag, SendFileArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
     SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError, UiFindState,
@@ -46,6 +46,29 @@ fn stored_session() -> StoredSession {
         access_token: "secret-token".to_owned(),
         refresh_token: Some("refresh-token".to_owned()),
     }
+}
+
+#[test]
+fn send_file_args_serialize_to_the_strict_automation_shape() {
+    let args = SendFileArgs {
+        room_id: Some("!room:example"),
+        path: "C:\\tmp\\report.txt",
+        filename: Some("report.txt"),
+        content_type: Some("application/octet-stream"),
+    };
+    assert_eq!(
+        serde_json::to_value(args).expect("serialize send file args"),
+        serde_json::json!({
+            "room_id":"!room:example",
+            "path":"C:\\tmp\\report.txt",
+            "filename":"report.txt",
+            "content_type":"application/octet-stream"
+        })
+    );
+    assert!(serde_json::from_str::<SendFileArgs<'_>>(
+        r#"{"room_id":null,"path":"report.txt","filename":null,"content_type":null,"extra":true}"#
+    )
+    .is_err());
 }
 
 fn sample_e2ee_status() -> E2eeStatus {

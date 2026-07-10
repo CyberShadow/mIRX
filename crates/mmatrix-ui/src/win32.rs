@@ -27,9 +27,9 @@ use mmatrix_core::{
     RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetRoomTopicRequest, StoredSession, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -9276,13 +9276,33 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                     format!("room is not joined: {room_id}"),
                 ));
             }
-            state.command_sender.as_ref()
-                .ok_or_else(|| failure_response(Some(id.clone()), "send_failed", "core command sender is not available".to_owned()))?
+            state
+                .command_sender
+                .as_ref()
+                .ok_or_else(|| {
+                    failure_response(
+                        Some(id.clone()),
+                        "send_failed",
+                        "core command sender is not available".to_owned(),
+                    )
+                })?
                 .send(command.clone())
-                .map_err(|err| failure_response(Some(id.clone()), "send_failed", format!("failed to enqueue send file command: {err}")))?;
+                .map_err(|err| {
+                    failure_response(
+                        Some(id.clone()),
+                        "send_failed",
+                        format!("failed to enqueue send file command: {err}"),
+                    )
+                })?;
             #[cfg(test)]
             state.recorded_commands.push(command);
-            serialize_success_json(&id, SendTextResponse { accepted: true, room_id })
+            serialize_success_json(
+                &id,
+                SendTextResponse {
+                    accepted: true,
+                    room_id,
+                },
+            )
         }
         ParsedCommand::DumpComposeText { id } => {
             let text = dump_compose_text(hwnd).map_err(|message| {
@@ -10937,7 +10957,9 @@ fn submit_send_file_slash_command(state: &mut WindowState, path: String) -> Resu
             room_id.clone()
         }
         ViewId::Room(room_id) => return Err(format!("room is not joined: {room_id}")),
-        ViewId::Thread { .. } => return Err("file attachments cannot target threads yet".to_owned()),
+        ViewId::Thread { .. } => {
+            return Err("file attachments cannot target threads yet".to_owned());
+        }
         ViewId::Status => return Err("no room selected".to_owned()),
     };
     let command = Command::SendFile(SendFileRequest {
@@ -12683,6 +12705,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::RejectRoomInvite => "reject room invitation",
         Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
+        Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",
         Operation::SendReaction => "send reaction",
         Operation::RedactEvent => "redact event",
