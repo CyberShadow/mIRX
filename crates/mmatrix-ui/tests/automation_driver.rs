@@ -10560,6 +10560,17 @@ fn automation_driver_message_menu_save_audio_attachment_writes_file()
 }
 
 #[test]
+fn automation_driver_message_menu_save_video_attachment_writes_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_message_menu_attachment_save(
+        "video-message.json",
+        "$video1:example.org",
+        "clip.mp4",
+        vec![0, 0, 0, 0x18, b'f', b't', b'y', b'p', b'm', b'p', b'4'],
+    )
+}
+
+#[test]
 fn automation_driver_message_menu_redact_records_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

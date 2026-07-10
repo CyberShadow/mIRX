@@ -101,8 +101,8 @@ use crate::{
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, DumpE2eeRecoverySetupResult, DumpMembershipCommandAction,
         DumpMessageMenuState, DumpModel, DumpRoomActivity, DumpRoomActivityKind,
-        DumpRoomActivityResponse, DumpRoomPreviewMediaState, DumpRoomMenuState,
-        DumpRoomMessageActivityLine, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
+        DumpRoomActivityResponse, DumpRoomMenuState, DumpRoomMessageActivityLine,
+        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
         DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
@@ -7370,16 +7370,15 @@ fn push_room_activity_row(
             });
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let body = format!("sent video: {display_name}{metadata_suffix}");
-            let mut row =
-                TimelineRow::log(
-                    TimelineRowKind::Video,
-                    format!("* {timestamp} {} {body}", message.sender),
-                    timestamp,
-                    format!("* {}", message.sender),
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity));
+            let mut row = TimelineRow::log(
+                TimelineRowKind::Video,
+                format!("* {timestamp} {} {body}", message.sender),
+                timestamp,
+                format!("* {}", message.sender),
+                body,
+            )
+            .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+            .with_event_id(room_activity_event_id(activity));
             row.image_state = image_state.flatten();
             rows.push(row);
         }
@@ -8796,11 +8795,7 @@ fn collect_lazy_room_preview_media_requests<'a>(
                 }
                 _ => return None,
             };
-            if !room_view.should_request_preview_media(
-                &activity.activity_id,
-                event_id,
-                &format,
-            ) {
+            if !room_view.should_request_preview_media(&activity.activity_id, event_id, &format) {
                 return None;
             }
             let source = source?;
@@ -14413,6 +14408,10 @@ mod tests {
     }
 
     fn video_message(room_id: &str, event_id: &str) -> Event {
+        video_message_with_thumbnail(room_id, event_id, true)
+    }
+
+    fn video_message_with_thumbnail(room_id: &str, event_id: &str, has_thumbnail: bool) -> Event {
         Event::RoomActivity(Box::new(RoomActivity {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
@@ -14432,7 +14431,7 @@ mod tests {
                     duration_ms: Some(12_000),
                     width: Some(1920),
                     height: Some(1080),
-                    thumbnail_source: Some(RoomMediaSource::Plain {
+                    thumbnail_source: has_thumbnail.then(|| RoomMediaSource::Plain {
                         url: "mxc://example.org/video-thumbnail".to_owned(),
                     }),
                 }),
@@ -17536,13 +17535,103 @@ mod tests {
         )
         .unwrap();
 
-        assert!(state
-            .model
-            .room_views
-            .get("!ops:example")
-            .expect("room view must exist")
-            .preview_media
-            .is_empty());
+        assert!(
+            state
+                .model
+                .room_views
+                .get("!ops:example")
+                .expect("room view must exist")
+                .preview_media
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn video_preview_dispatch_uses_thumbnail_source_and_skips_missing_thumbnail() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            video_message("!ops:example", "$video1:example.org"),
+        )
+        .unwrap();
+        let requests = {
+            let view = state.model.room_views.get("!ops:example").unwrap();
+            collect_lazy_room_preview_media_requests(view, view.activities.iter())
+        };
+        dispatch_lazy_room_preview_media_requests(&mut state, "!ops:example", requests).unwrap();
+        assert_eq!(
+            state.recorded_commands[0],
+            Command::FetchRoomMedia(FetchRoomMediaRequest {
+                room_id: "!ops:example".to_owned(),
+                activity_id: "event:$video1:example.org".to_owned(),
+                event_id: "$video1:example.org".to_owned(),
+                source: RoomMediaSource::Plain {
+                    url: "mxc://example.org/video-thumbnail".to_owned()
+                },
+                format: timeline_thumbnail_format(),
+            })
+        );
+        stop_test_core(handle);
+
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            video_message_with_thumbnail("!ops:example", "$video2:example.org", false),
+        )
+        .unwrap();
+        let view = state.model.room_views.get("!ops:example").unwrap();
+        assert!(collect_lazy_room_preview_media_requests(view, view.activities.iter()).is_empty());
+    }
+
+    #[test]
+    fn video_preview_media_projects_failure_and_ignores_wrong_format() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            video_message("!ops:example", "$video1:example.org"),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$video1:example.org",
+                "$video1:example.org",
+                RoomMediaKind::Failed {
+                    format: timeline_thumbnail_format(),
+                    message: "unavailable".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        assert!(
+            build_room_timeline_rows(&state.model, "!ops:example")
+                .iter()
+                .any(|row| matches!(
+                    row.image_state,
+                    Some(TimelineImageState::Failed { ref message }) if message == "unavailable"
+                ))
+        );
+        apply_core_event(
+            &mut state,
+            room_preview_media_event(
+                "!ops:example",
+                "event:$video1:example.org",
+                "$video1:example.org",
+                RoomMediaKind::Failed {
+                    format: RoomMediaFormat::File,
+                    message: "wrong".to_owned(),
+                },
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            state.model.room_views["!ops:example"].preview_media.len(),
+            1
+        );
     }
 
     #[test]
