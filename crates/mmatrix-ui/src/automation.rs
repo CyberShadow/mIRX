@@ -1325,6 +1325,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RoomReadState => "room_read_state",
         Operation::E2eeStatus => "e2ee_status",
         Operation::RecoverE2ee => "recover_e2ee",
+        Operation::SetupE2eeRecovery => "setup_e2ee_recovery",
         Operation::Verification => "verification",
         Operation::Logout => "logout",
         Operation::Shutdown => "shutdown",
