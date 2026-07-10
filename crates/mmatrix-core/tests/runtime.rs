@@ -10,14 +10,14 @@ use mmatrix_core::{
     RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-    RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, SendMessageRequest, SendReactionRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -1890,8 +1890,7 @@ fn room_media_events_round_trip_through_serde() {
 
     for event in [loaded_event, failed_event] {
         let json = serde_json::to_string(&event).expect("serialize room media event");
-        let restored: Event =
-            serde_json::from_str(&json).expect("deserialize room media event");
+        let restored: Event = serde_json::from_str(&json).expect("deserialize room media event");
         assert_eq!(restored, event);
     }
 }

@@ -897,6 +897,7 @@ pub struct RoomMenuState {
 pub struct MessageMenuState {
     pub reply_enabled: bool,
     pub redact_enabled: bool,
+    pub save_attachment_enabled: bool,
     pub selected_event_id: Option<String>,
 }
 

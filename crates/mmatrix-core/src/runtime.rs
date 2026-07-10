@@ -211,9 +211,7 @@ async fn handle_command(
         Command::BackfillRoomHistory(request) => {
             handle_backfill_room_history(event_tx, state, request).await
         }
-        Command::FetchRoomMedia(request) => {
-            handle_fetch_room_media(event_tx, state, request).await
-        }
+        Command::FetchRoomMedia(request) => handle_fetch_room_media(event_tx, state, request).await,
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
         Command::RecoverE2ee(request) => handle_recover_e2ee(event_tx, state, &request).await,
         Command::AcceptVerification(flow) => {

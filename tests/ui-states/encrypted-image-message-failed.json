@@ -70,7 +70,7 @@
     }
   },
   {
-    "RoomImageMedia": {
+    "RoomMedia": {
       "room_id": "!images:example.org",
       "activity_id": "event:$image-typed:example.org",
       "event_id": "$image-typed:example.org",

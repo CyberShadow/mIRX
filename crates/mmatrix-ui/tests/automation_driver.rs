@@ -10128,12 +10128,14 @@ fn automation_driver_message_menu_reply_prefills_selected_event()
     let disabled = app.dump_message_menu_state()?;
     assert!(!disabled.reply_enabled);
     assert!(!disabled.redact_enabled);
+    assert!(!disabled.save_attachment_enabled);
     assert_eq!(disabled.selected_event_id, None);
 
     app.select_timeline_event("$react-normal")?;
     let enabled = app.dump_message_menu_state()?;
     assert!(enabled.reply_enabled);
     assert!(enabled.redact_enabled);
+    assert!(!enabled.save_attachment_enabled);
     assert_eq!(enabled.selected_event_id.as_deref(), Some("$react-normal"));
 
     app.reply_to_selected_message_via_menu()?;

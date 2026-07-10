@@ -65,14 +65,14 @@ use crate::api::{
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetRoomTopicRequest, SpaceChildSummary, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SetRoomTopicRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -711,10 +711,7 @@ pub(crate) fn summarize_joined_room_read_states(client: &Client) -> Vec<RoomRead
         .collect()
 }
 
-pub(crate) async fn fetch_room_media(
-    client: &Client,
-    request: FetchRoomMediaRequest,
-) -> RoomMedia {
+pub(crate) async fn fetch_room_media(client: &Client, request: FetchRoomMediaRequest) -> RoomMedia {
     let FetchRoomMediaRequest {
         room_id,
         activity_id,
@@ -2736,8 +2733,8 @@ mod tests {
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
-        room_history_backfill_events_from_timeline, room_media_request_parameters,
-        room_list_update_is_relevant, room_members_from_parts, room_message_event_content,
+        room_history_backfill_events_from_timeline, room_list_update_is_relevant,
+        room_media_request_parameters, room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags,
         room_timeline_event_from_sync_message, room_typing_from_sync_typing,
@@ -2750,13 +2747,12 @@ mod tests {
         ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind, RoomActivityRelation,
         RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
         RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
-        RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-        RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
-        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
-        SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
-        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
+        RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+        RoomStateNoticeContent, RoomTagSummary, RoomTyping, SendMessageReplyTarget,
+        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, SessionMeta,

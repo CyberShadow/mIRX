@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use mmatrix_core::{
     BackfillRoomHistoryRequest as CoreBackfillRoomHistoryRequest, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event as CoreEvent,
-    FetchRoomImageMediaRequest as CoreFetchRoomImageMediaRequest, RoomActivity as CoreRoomActivity,
+    FetchRoomMediaRequest as CoreFetchRoomMediaRequest, RoomActivity as CoreRoomActivity,
     RoomActivityKind as CoreRoomActivityKind, RoomActivityUpdate as CoreRoomActivityUpdate,
     RoomActivityUpdateKind as CoreRoomActivityUpdateKind,
     RoomActivityUpdateTarget as CoreRoomActivityUpdateTarget,
     RoomHistoryBackfill as CoreRoomHistoryBackfill,
-    RoomHistoryBackfillEvent as CoreRoomHistoryBackfillEvent, RoomImageMedia as CoreRoomImageMedia,
-    RoomImageMediaFormat as CoreRoomImageMediaFormat, RoomImageMediaKind as CoreRoomImageMediaKind,
+    RoomHistoryBackfillEvent as CoreRoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia,
+    RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind,
     RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
 use mmatrix_testkit::{
@@ -314,6 +314,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
     let message = mmatrix_testkit::MessageMenuState {
         reply_enabled: true,
         redact_enabled: true,
+        save_attachment_enabled: false,
         selected_event_id: Some("$event:example".to_owned()),
     };
     assert_eq!(
@@ -2723,16 +2724,16 @@ fn fetch_room_image_media_request_round_trips_through_json() {
         request
     );
     assert_eq!(
-        serde_json::from_value::<CoreFetchRoomImageMediaRequest>(json)
+        serde_json::from_value::<CoreFetchRoomMediaRequest>(json)
             .expect("deserialize core image media request"),
-        CoreFetchRoomImageMediaRequest {
+        CoreFetchRoomMediaRequest {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$image:example".to_owned(),
             event_id: "$image:example".to_owned(),
             source: CoreRoomMediaSource::Plain {
                 url: "mxc://example.org/image".to_owned(),
             },
-            format: CoreRoomImageMediaFormat::Thumbnail {
+            format: CoreRoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
@@ -2820,9 +2821,9 @@ fn encrypted_fetch_room_image_media_request_round_trips_through_json() {
         request
     );
     assert_eq!(
-        serde_json::from_value::<CoreFetchRoomImageMediaRequest>(json)
+        serde_json::from_value::<CoreFetchRoomMediaRequest>(json)
             .expect("deserialize core encrypted image media request"),
-        CoreFetchRoomImageMediaRequest {
+        CoreFetchRoomMediaRequest {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$image:example".to_owned(),
             event_id: "$image:example".to_owned(),
@@ -2841,7 +2842,7 @@ fn encrypted_fetch_room_image_media_request_round_trips_through_json() {
                 },
                 v: "v2".to_owned(),
             },
-            format: CoreRoomImageMediaFormat::Thumbnail {
+            format: CoreRoomMediaFormat::Thumbnail {
                 width: 160,
                 height: 120,
             },
@@ -3290,14 +3291,14 @@ fn room_image_media_round_trips_through_json() {
         loaded
     );
     assert_eq!(
-        serde_json::from_value::<CoreRoomImageMedia>(loaded_json)
+        serde_json::from_value::<CoreRoomMedia>(loaded_json)
             .expect("deserialize core loaded room image media"),
-        CoreRoomImageMedia {
+        CoreRoomMedia {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$image:example".to_owned(),
             event_id: "$image:example".to_owned(),
-            kind: CoreRoomImageMediaKind::Loaded {
-                format: CoreRoomImageMediaFormat::Thumbnail {
+            kind: CoreRoomMediaKind::Loaded {
+                format: CoreRoomMediaFormat::Thumbnail {
                     width: 160,
                     height: 120,
                 },
@@ -3316,14 +3317,14 @@ fn room_image_media_round_trips_through_json() {
         failed
     );
     assert_eq!(
-        serde_json::from_value::<CoreRoomImageMedia>(failed_json)
+        serde_json::from_value::<CoreRoomMedia>(failed_json)
             .expect("deserialize core failed room image media"),
-        CoreRoomImageMedia {
+        CoreRoomMedia {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$image:example".to_owned(),
             event_id: "$image:example".to_owned(),
-            kind: CoreRoomImageMediaKind::Failed {
-                format: CoreRoomImageMediaFormat::File,
+            kind: CoreRoomMediaKind::Failed {
+                format: CoreRoomMediaFormat::File,
                 message: "failed to fetch room image media: unavailable".to_owned(),
             },
         }
