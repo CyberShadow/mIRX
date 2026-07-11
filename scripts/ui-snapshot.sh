@@ -1918,7 +1918,7 @@ configure_case_expectations() {
         --expect-room-activity '!encrypted:example.org::"session_id":"SESSIONID"'
       )
       room_view_expect_args=(
-        --expect-room-view '!encrypted:example.org::Room: Encrypted (!encrypted:example.org)'
+        --expect-room-view '!encrypted:example.org::Room: Encrypted [e2ee] (!encrypted:example.org)'
         --expect-room-view '!encrypted:example.org::* [16:00] @alice:example.org sent an encrypted message that could not be decrypted'
       )
       status_bar_expect_args=(
