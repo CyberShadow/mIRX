@@ -573,7 +573,9 @@ async fn handle_kick_room_member(
         return false;
     }
 
-    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
+    if let Err(err) =
+        matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
+    {
         emit_matrix_error(event_tx, Operation::KickRoomMember, err);
     }
 
@@ -599,7 +601,9 @@ async fn handle_ban_room_member(
         return false;
     }
 
-    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
+    if let Err(err) =
+        matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
+    {
         emit_matrix_error(event_tx, Operation::BanRoomMember, err);
     }
 

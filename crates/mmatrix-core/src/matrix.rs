@@ -581,6 +581,20 @@ pub(crate) async fn emit_room_snapshot(
     Ok(())
 }
 
+pub(crate) async fn emit_joined_room_members_snapshot(
+    client: &Client,
+    event_tx: &EventSender,
+    room_id: &str,
+) -> Result<(), MatrixCoreError> {
+    let authenticated_user_id = client.user_id().ok_or_else(|| {
+        MatrixCoreError::new("cannot summarize joined room members without an authenticated user")
+    })?;
+    let room = joined_room_by_id(client, room_id)?;
+    let members = joined_room_members(authenticated_user_id, &room).await?;
+    emit_event(event_tx, Event::RoomMembers(members));
+    Ok(())
+}
+
 async fn emit_room_snapshot_or_room_list_error(client: &Client, events: &EventSender) {
     if let Err(err) = emit_room_snapshot(client, events).await {
         emit_event(
@@ -1137,10 +1151,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     });
 
     let member_events = events.clone();
-    let member_authenticated_user_id = client.user_id().map(ToOwned::to_owned);
+    let member_client = client.clone();
     client.add_event_handler(move |event: SyncRoomMemberEvent, room: Room| {
         let events = member_events.clone();
-        let authenticated_user_id = member_authenticated_user_id.clone();
+        let client = member_client.clone();
         async move {
             if let SyncRoomMemberEvent::Original(event) = event {
                 emit_event(
@@ -1152,9 +1166,9 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
                 );
             }
 
-            if let Some(authenticated_user_id) = authenticated_user_id
+            if let Some(authenticated_user_id) = client.user_id()
                 && let Ok(snapshot) =
-                    joined_room_members_no_sync(&authenticated_user_id, &room).await
+                    joined_room_members_no_sync(authenticated_user_id, &room).await
             {
                 emit_event(&events, Event::RoomMembers(snapshot));
             }
@@ -3014,7 +3028,8 @@ mod tests {
         map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
-        moderation_capabilities, outgoing_events_from_local_echo_event, owned_event_id_from_str,
+        joined_room_members, joined_room_members_no_sync, moderation_capabilities,
+        outgoing_events_from_local_echo_event, owned_event_id_from_str,
         reaction_event_content, read_file_bytes, room_activity_from_sync_member,
         room_activity_from_sync_message, room_activity_from_sync_topic,
         room_activity_update_from_indexed_reaction_redaction,
@@ -3065,6 +3080,103 @@ mod tests {
             moderation_capabilities(actor, higher, true, true, &50, &100),
             (false, false)
         );
+    }
+
+    #[test]
+    fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let client = client_with_joined_members(serde_json::json!([
+                {
+                    "type": "m.room.member",
+                    "state_key": "@alice:example.org",
+                    "sender": "@alice:example.org",
+                    "event_id": "$alice:example.org",
+                    "origin_server_ts": 1u64,
+                    "content": { "membership": "join", "displayname": "Alice" }
+                },
+                {
+                    "type": "m.room.member",
+                    "state_key": "@bob:example.org",
+                    "sender": "@bob:example.org",
+                    "event_id": "$bob:example.org",
+                    "origin_server_ts": 2u64,
+                    "content": { "membership": "join", "displayname": "Bob" }
+                }
+            ]))
+            .await;
+            let room = client
+                .get_room(room_id().as_ref())
+                .expect("joined room from sync response");
+            let actor = client.user_id().expect("authenticated user");
+
+            assert_eq!(
+                joined_room_members(actor, &room).await.expect("synced members"),
+                joined_room_members_no_sync(actor, &room)
+                    .await
+                    .expect("cached members")
+            );
+            assert_eq!(
+                joined_room_members_no_sync(actor, &room)
+                    .await
+                    .expect("cached members"),
+                RoomMembers {
+                    room_id: "!room:example.org".to_owned(),
+                    members: vec![
+                        RoomMemberSummary {
+                            user_id: "@alice:example.org".to_owned(),
+                            display_name: Some("Alice".to_owned()),
+                            can_kick: false,
+                            can_ban: false,
+                        },
+                        RoomMemberSummary {
+                            user_id: "@bob:example.org".to_owned(),
+                            display_name: Some("Bob".to_owned()),
+                            can_kick: false,
+                            can_ban: false,
+                        },
+                    ],
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn joined_member_snapshots_reject_a_missing_authenticated_member() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let client = client_with_joined_members(serde_json::json!([{
+                "type": "m.room.member",
+                "state_key": "@bob:example.org",
+                "sender": "@bob:example.org",
+                "event_id": "$bob:example.org",
+                "origin_server_ts": 1u64,
+                "content": { "membership": "join" }
+            }]))
+            .await;
+            let room = client
+                .get_room(room_id().as_ref())
+                .expect("joined room from sync response");
+            let err = joined_room_members_no_sync(
+                client.user_id().expect("authenticated user"),
+                &room,
+            )
+            .await
+            .expect_err("authenticated member must be present");
+
+            assert_eq!(
+                err.to_string(),
+                "authenticated user is not a joined member of room: !room:example.org"
+            );
+        });
     }
 
     #[test]
@@ -3185,7 +3297,7 @@ mod tests {
         RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
         RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
         RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
-        RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
+        RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
         RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
         RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
@@ -3236,6 +3348,7 @@ mod tests {
         store::StoreConfig,
     };
     use matrix_sdk_crypto::CrossSigningStatus;
+    use matrix_sdk_test::ruma_response_from_json;
 
     fn room_id() -> OwnedRoomId {
         OwnedRoomId::try_from("!room:example.org").expect("valid room id")
@@ -3380,6 +3493,43 @@ mod tests {
         });
 
         (runtime, client, room_send_queue)
+    }
+
+    async fn client_with_joined_members(member_events: serde_json::Value) -> Client {
+        let base_client = BaseClient::new(
+            StoreConfig::new(CrossProcessLockConfig::SingleProcess),
+            ThreadingSupport::Disabled,
+            DmRoomDefinition::MatrixSpec,
+        );
+        base_client
+            .activate(
+                SessionMeta {
+                    user_id: OwnedUserId::try_from("@alice:example.org")
+                        .expect("valid user id"),
+                    device_id: "DEVICE".into(),
+                },
+                matrix_sdk::store::RoomLoadSettings::default(),
+                None,
+            )
+            .await
+            .expect("activate base client");
+        let response = ruma_response_from_json(&serde_json::json!({
+            "next_batch": "s1",
+            "rooms": { "join": { "!room:example.org": {
+                "state": { "events": member_events },
+                "timeline": { "events": [], "limited": false, "prev_batch": "p1" }
+            }}}
+        }));
+        base_client
+            .receive_sync_response(response)
+            .await
+            .expect("receive sync response");
+        Client::builder()
+            .homeserver_url("http://localhost")
+            .base_client(base_client)
+            .build()
+            .await
+            .expect("build matrix client")
     }
 
     fn room_media_request(source: RoomMediaSource) -> FetchRoomMediaRequest {
