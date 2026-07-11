@@ -688,6 +688,7 @@ configure_case_expectations() {
       expect_selected='!find-miss:example'
       expect_active_view='room:!find-miss:example'
       find_active_view_query='missing needle'
+      expect_active_find_history='loading'
       room_expect_args=(
         --expect-room '!find-miss:example'
       )
@@ -696,7 +697,7 @@ configure_case_expectations() {
         --expect-room-view '!find-miss:example::beta follow-up'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'find: no matches for "missing needle"'
+        --expect-status-bar 'find: loading older history for "missing needle"'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
