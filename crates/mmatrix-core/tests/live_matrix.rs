@@ -1,6 +1,7 @@
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use matrix_sdk::{
@@ -19,7 +20,7 @@ use mmatrix_core::{
     Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, EditMessageRequest, Event,
     FetchRoomMediaRequest, LoginRequest, MarkRoomReadRequest, RedactEventRequest, RoomMediaFormat,
     RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary, SendFileRequest,
-    SendMessageRequest, SendReactionRequest, StoredSession, start,
+    SendMessageRequest, SendReactionRequest, SetRoomTopicRequest, StoredSession, start,
 };
 use tempfile::TempDir;
 
@@ -211,6 +212,50 @@ fn wait_for_live_synced_rooms(handle: &CoreHandle, context: &str) -> Vec<RoomSum
     }
 
     panic!("timed out waiting for synced rooms during {context}");
+}
+
+fn wait_for_live_room_topic(handle: &CoreHandle, room_id: &str, expected_topic: &str) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    while Instant::now() < deadline {
+        let event = match handle.events().recv_timeout(Duration::from_secs(2)) {
+            Ok(event) => event,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("topic refresh event channel disconnected")
+            }
+        };
+
+        match event {
+            Event::SyncedRooms(rooms)
+                if rooms.iter().any(|room| {
+                    room.room_id == room_id && room.topic.as_deref() == Some(expected_topic)
+                }) =>
+            {
+                return;
+            }
+            Event::SyncedRooms(_) => {}
+            Event::SessionUpdated { session } => {
+                assert_non_empty_session(&session, "session update");
+            }
+            Event::RoomActivity(_)
+            | Event::RoomActivityUpdate(_)
+            | Event::RoomTyping(_)
+            | Event::RoomMembers(_)
+            | Event::RoomReadState(_)
+            | Event::E2eeStatus(_)
+            | Event::E2eeRecoverySucceeded(_) => {}
+            Event::Error(err) => {
+                panic!(
+                    "live topic refresh failed during {:?}: {}",
+                    err.operation, err.message
+                )
+            }
+            other => panic!("unexpected live topic refresh event: {other:?}"),
+        }
+    }
+
+    panic!("timed out waiting for room {room_id} topic {expected_topic}");
 }
 
 fn live_shutdown_and_join(handle: CoreHandle) {
@@ -567,6 +612,35 @@ fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
         .expect("query m.fully_read room account data");
     assert_eq!(fully_read_event_id, event_id);
 
+    live_shutdown_and_join(handle);
+}
+
+#[test]
+fn live_matrix_set_room_topic_refreshes_synced_room_summary_is_env_gated() {
+    let Some(env) = live_matrix_env_with_room() else {
+        return;
+    };
+
+    let (_temp_dir, handle) = live_start_core();
+    live_send_login(
+        &handle,
+        env.homeserver_url,
+        env.username,
+        env.password,
+        "mmatrix live topic refresh test",
+    );
+    wait_for_live_login_and_synced_rooms(&handle);
+
+    let topic = format!("mmatrix live topic refresh {}", live_nonce());
+    handle
+        .command_sender()
+        .send(Command::SetRoomTopic(SetRoomTopicRequest {
+            room_id: env.room_id.clone(),
+            topic: topic.clone(),
+        }))
+        .expect("send set room topic");
+
+    wait_for_live_room_topic(&handle, &env.room_id, &topic);
     live_shutdown_and_join(handle);
 }
 

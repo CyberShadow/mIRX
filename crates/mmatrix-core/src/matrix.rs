@@ -649,7 +649,9 @@ pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons
 
 pub(crate) fn room_list_update_is_relevant(reasons: RoomInfoNotableUpdateReasons) -> bool {
     reasons.intersects(
-        RoomInfoNotableUpdateReasons::MEMBERSHIP | RoomInfoNotableUpdateReasons::DISPLAY_NAME,
+        RoomInfoNotableUpdateReasons::MEMBERSHIP
+            | RoomInfoNotableUpdateReasons::DISPLAY_NAME
+            | RoomInfoNotableUpdateReasons::NONE,
     )
 }
 
@@ -5126,17 +5128,25 @@ mod tests {
     }
 
     #[test]
-    fn room_read_update_relevance_ignores_display_name() {
-        assert!(!room_read_update_is_relevant(
-            RoomInfoNotableUpdateReasons::DISPLAY_NAME
-        ));
+    fn room_read_update_relevance_ignores_room_summary_metadata_reasons() {
+        for reasons in [
+            RoomInfoNotableUpdateReasons::DISPLAY_NAME,
+            RoomInfoNotableUpdateReasons::MEMBERSHIP,
+            RoomInfoNotableUpdateReasons::NONE,
+        ] {
+            assert!(
+                !room_read_update_is_relevant(reasons),
+                "{reasons:?} should be ignored"
+            );
+        }
     }
 
     #[test]
-    fn room_list_update_relevance_tracks_membership_and_display_name() {
+    fn room_list_update_relevance_tracks_membership_display_name_and_catch_all_metadata() {
         for reasons in [
             RoomInfoNotableUpdateReasons::MEMBERSHIP,
             RoomInfoNotableUpdateReasons::DISPLAY_NAME,
+            RoomInfoNotableUpdateReasons::NONE,
         ] {
             assert!(
                 room_list_update_is_relevant(reasons),
@@ -5152,7 +5162,6 @@ mod tests {
             RoomInfoNotableUpdateReasons::UNREAD_MARKER,
             RoomInfoNotableUpdateReasons::RECENCY_STAMP,
             RoomInfoNotableUpdateReasons::LATEST_EVENT,
-            RoomInfoNotableUpdateReasons::NONE,
         ] {
             assert!(
                 !room_list_update_is_relevant(reasons),
