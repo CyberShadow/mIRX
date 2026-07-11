@@ -27,15 +27,15 @@ use mmatrix_testkit::{
     RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource, RoomMemberView,
     RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, RoomVideoActivity, RoomVideoInfo, SendFileArgs,
-    SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewIdentity,
+    RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
+    RoomVideoActivity, RoomVideoInfo, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild,
+    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
+    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
+    UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[cfg(not(windows))]
@@ -1490,6 +1490,36 @@ fn room_activity_unsupported_message_round_trips_through_json() {
     assert_eq!(
         serde_json::from_value::<RoomActivity>(json)
             .expect("deserialize unsupported message activity"),
+        activity
+    );
+}
+
+#[test]
+fn room_activity_unable_to_decrypt_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "$encrypted1:example.org".to_owned(),
+        timestamp_ms: 1_710_000_000_000,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
+            event_id: "$encrypted1:example.org".to_owned(),
+            sender: "@alice:example.org".to_owned(),
+            session_id: Some("SESSIONID".to_owned()),
+            reason: RoomUnableToDecryptReason::MissingMegolmSession,
+        }),
+    };
+    let json = serde_json::json!({
+        "room_id":"!room:example", "activity_id":"$encrypted1:example.org",
+        "timestamp_ms":1710000000000u64, "relation":null, "reactions":[],
+        "kind":{"type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
+        "sender":"@alice:example.org", "session_id":"SESSIONID",
+        "reason":"missing_megolm_session"}
+    });
+
+    assert_eq!(serde_json::to_value(&activity).unwrap(), json);
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).unwrap(),
         activity
     );
 }

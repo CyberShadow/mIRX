@@ -1,0 +1,44 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!alpha:example.org",
+        "display_name": "Alpha", "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!encrypted:example.org",
+        "display_name": "Encrypted", "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!encrypted:example.org",
+      "activity_id": "$encrypted-utd1:example.org",
+      "timestamp_ms": 1710000000000,
+      "kind": {
+        "type": "unable_to_decrypt",
+        "event_id": "$encrypted-utd1:example.org",
+        "sender": "@alice:example.org",
+        "session_id": "SESSIONID",
+        "reason": "missing_megolm_session"
+      },
+      "relation": null
+    }
+  }
+]

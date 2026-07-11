@@ -418,6 +418,7 @@ enum TimelineRowKind {
     Audio,
     Video,
     Unsupported,
+    UnableToDecrypt,
     StateNotice,
     Plain,
 }
@@ -745,7 +746,8 @@ impl RoomViewModel {
             | RoomActivityKind::File(_)
             | RoomActivityKind::Audio(_)
             | RoomActivityKind::Video(_)
-            | RoomActivityKind::UnsupportedMessage(_) => self.activities.push(activity),
+            | RoomActivityKind::UnsupportedMessage(_)
+            | RoomActivityKind::UnableToDecrypt(_) => self.activities.push(activity),
             RoomActivityKind::StateNotice(notice) => {
                 if let RoomStateNoticeContent::Topic { topic } = &notice.content {
                     self.topic = Some(topic.clone());
@@ -1615,6 +1617,16 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             body: format!("[unsupported {}] {}", message.msgtype, message.body),
             send_state: RoomMessageSendState::Sent,
         }),
+        RoomActivityKind::UnableToDecrypt(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: "[encrypted] Unable to decrypt message".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
         RoomActivityKind::Image(message) => Some(LastMessageActivity {
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
@@ -1682,6 +1694,7 @@ fn room_activity_marks_inactive_room(activity: &RoomActivity) -> bool {
         RoomActivityKind::Audio(_) => true,
         RoomActivityKind::Video(_) => true,
         RoomActivityKind::UnsupportedMessage(_) => true,
+        RoomActivityKind::UnableToDecrypt(_) => true,
         RoomActivityKind::StateNotice(_) => true,
         RoomActivityKind::Redacted(_) => true,
     }
@@ -1698,6 +1711,7 @@ fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
         RoomActivityKind::Audio(message) => Some(message.event_id.as_str()),
         RoomActivityKind::Video(message) => Some(message.event_id.as_str()),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::UnableToDecrypt(message) => Some(message.event_id.as_str()),
         RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
         RoomActivityKind::Redacted(activity) => Some(activity.event_id.as_str()),
         _ => None,
@@ -1746,6 +1760,7 @@ fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
                 .to_owned(),
         ),
         RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
+        RoomActivityKind::UnableToDecrypt(_) => Some("Unable to decrypt message".to_owned()),
         RoomActivityKind::StateNotice(_) => None,
         RoomActivityKind::Redacted(_) => Some("Message redacted".to_owned()),
     }
@@ -1818,6 +1833,7 @@ fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
         | RoomActivityKind::Audio(_)
         | RoomActivityKind::Video(_)
         | RoomActivityKind::UnsupportedMessage(_)
+        | RoomActivityKind::UnableToDecrypt(_)
         | RoomActivityKind::StateNotice(_)
         | RoomActivityKind::Redacted(_) => room_activity_event_id(activity),
         _ => None,
@@ -4670,6 +4686,7 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         | TimelineRowKind::Audio
         | TimelineRowKind::Video => rgb(0x1F, 0x64, 0x5A),
         TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
+        TimelineRowKind::UnableToDecrypt => rgb(0x8A, 0x5A, 0x18),
         TimelineRowKind::StateNotice => rgb(0x3D, 0x67, 0x35),
     }
 }
@@ -7471,6 +7488,21 @@ fn push_room_activity_row(
             rows.push(
                 TimelineRow::log(
                     TimelineRowKind::Unsupported,
+                    format!("* {timestamp} {} {body}", message.sender),
+                    timestamp,
+                    format!("* {}", message.sender),
+                    body,
+                )
+                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+                .with_event_id(room_activity_event_id(activity)),
+            );
+        }
+        RoomActivityKind::UnableToDecrypt(message) => {
+            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+            let body = "sent an encrypted message that could not be decrypted".to_owned();
+            rows.push(
+                TimelineRow::log(
+                    TimelineRowKind::UnableToDecrypt,
                     format!("* {timestamp} {} {body}", message.sender),
                     timestamp,
                     format!("* {}", message.sender),
@@ -14690,6 +14722,26 @@ mod tests {
         )))
     }
 
+    fn unable_to_decrypt_activity(
+        room_id: &str,
+        event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+    ) -> Event {
+        Event::RoomActivity(Box::new(RoomActivity {
+            room_id: room_id.to_owned(),
+            activity_id: event_id.to_owned(),
+            timestamp_ms,
+            relation: None,
+            kind: RoomActivityKind::UnableToDecrypt(mmatrix_core::RoomUnableToDecryptActivity {
+                event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                session_id: Some("SESSIONID".to_owned()),
+                reason: mmatrix_core::RoomUnableToDecryptReason::MissingMegolmSession,
+            }),
+        }))
+    }
+
     fn image_activity(
         room_id: &str,
         event_id: &str,
@@ -17622,6 +17674,31 @@ mod tests {
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
                 "* [16:00] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                    .to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn render_room_lines_include_unable_to_decrypt_placeholder() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        apply_core_event(
+            &mut state,
+            unable_to_decrypt_activity(
+                "!ops:example",
+                "$encrypted1:example.org",
+                "@alice:example.org",
+                1_710_000_000_000,
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            render_room_lines(&state.model, "!ops:example"),
+            vec![
+                "Room: Ops [e2ee] (!ops:example)".to_owned(),
+                "* [16:00] @alice:example.org sent an encrypted message that could not be decrypted"
                     .to_owned(),
             ]
         );

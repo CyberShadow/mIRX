@@ -357,8 +357,31 @@ pub enum RoomActivityKind {
     Audio(Box<RoomAudioActivity>),
     Video(Box<RoomVideoActivity>),
     UnsupportedMessage(UnsupportedRoomMessageActivity),
+    UnableToDecrypt(RoomUnableToDecryptActivity),
     StateNotice(RoomStateNoticeActivity),
     Redacted(RoomRedactedActivity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomUnableToDecryptActivity {
+    pub event_id: String,
+    pub sender: String,
+    pub session_id: Option<String>,
+    pub reason: RoomUnableToDecryptReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomUnableToDecryptReason {
+    Unknown,
+    MalformedEncryptedEvent,
+    MissingMegolmSession,
+    UnknownMegolmMessageIndex,
+    MegolmDecryptionFailure,
+    PayloadDeserializationFailure,
+    MismatchedIdentityKeys,
+    SenderIdentityNotTrusted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

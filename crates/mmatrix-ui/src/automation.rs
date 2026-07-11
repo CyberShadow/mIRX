@@ -1189,8 +1189,18 @@ pub(crate) enum DumpRoomActivityKind {
     Audio(Box<DumpRoomAudioActivity>),
     Video(Box<DumpRoomVideoActivity>),
     UnsupportedMessage(DumpUnsupportedRoomMessageActivity),
+    UnableToDecrypt(DumpRoomUnableToDecryptActivity),
     StateNotice(DumpRoomStateNoticeActivity),
     Redacted(DumpRoomRedactedActivity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomUnableToDecryptActivity {
+    pub(crate) event_id: String,
+    pub(crate) sender: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) reason: mmatrix_core::RoomUnableToDecryptReason,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1538,6 +1548,14 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::UnsupportedMessage(message) => DumpRoomActivityKind::UnsupportedMessage(
             dump_unsupported_room_message_activity_from_core(message),
         ),
+        RoomActivityKind::UnableToDecrypt(message) => {
+            DumpRoomActivityKind::UnableToDecrypt(DumpRoomUnableToDecryptActivity {
+                event_id: message.event_id.clone(),
+                sender: message.sender.clone(),
+                session_id: message.session_id.clone(),
+                reason: message.reason.clone(),
+            })
+        }
         RoomActivityKind::StateNotice(notice) => {
             DumpRoomActivityKind::StateNotice(dump_room_state_notice_activity_from_core(notice))
         }

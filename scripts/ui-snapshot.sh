@@ -1904,6 +1904,40 @@ configure_case_expectations() {
         --expect-no-navigation-text 'custom payload'
       )
       ;;
+    undecryptable-encrypted-message)
+      expect_selected='!alpha:example.org'
+      expect_active_view='room:!alpha:example.org'
+      room_expect_args=(
+        --expect-room '!alpha:example.org'
+        --expect-room '!encrypted:example.org'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!encrypted:example.org::unable_to_decrypt'
+        --expect-room-activity '!encrypted:example.org::$encrypted-utd1:example.org'
+        --expect-room-activity '!encrypted:example.org::"reason":"missing_megolm_session"'
+        --expect-room-activity '!encrypted:example.org::"session_id":"SESSIONID"'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!encrypted:example.org::Room: Encrypted (!encrypted:example.org)'
+        --expect-room-view '!encrypted:example.org::* [16:00] @alice:example.org sent an encrypted message that could not be decrypted'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'timeline update from !encrypted:example.org'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!alpha:example.org::Alpha'
+        --expect-switchbar-item 'room:!encrypted:example.org::Encrypted'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!encrypted:example.org'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!alpha:example.org'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!alpha:example.org'
+      ;;
     file-message)
       expect_selected='!media:example.org'
       expect_active_view='room:!media:example.org'

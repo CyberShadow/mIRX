@@ -10,7 +10,10 @@ use matrix_sdk::{
     attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo},
     authentication::matrix::MatrixSession,
     config::SyncSettings,
-    deserialized_responses::{SyncOrStrippedState, TimelineEvent},
+    deserialized_responses::{
+        SyncOrStrippedState, TimelineEvent, TimelineEventKind, UnableToDecryptInfo,
+        UnableToDecryptReason,
+    },
     encryption::{
         BackupDownloadStrategy, EncryptionSettings,
         backups::BackupState,
@@ -72,11 +75,11 @@ use crate::api::{
     RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
     RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomVideoActivity, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -2766,12 +2769,67 @@ fn room_history_backfill_events_from_timeline(
         .collect()
 }
 
+fn room_activity_from_unable_to_decrypt_timeline_event(
+    room_id: &str,
+    event: &TimelineEvent,
+    utd_info: &UnableToDecryptInfo,
+) -> Option<RoomActivity> {
+    let event_id = event.event_id()?.to_string();
+
+    Some(RoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: event_id.clone(),
+        timestamp_ms: event.timestamp()?.get().into(),
+        relation: None,
+        kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
+            event_id,
+            sender: event.sender()?.to_string(),
+            session_id: utd_info.session_id.clone(),
+            reason: room_unable_to_decrypt_reason_from_sdk(&utd_info.reason),
+        }),
+    })
+}
+
+fn room_unable_to_decrypt_reason_from_sdk(
+    reason: &UnableToDecryptReason,
+) -> RoomUnableToDecryptReason {
+    match reason {
+        UnableToDecryptReason::Unknown => RoomUnableToDecryptReason::Unknown,
+        UnableToDecryptReason::MalformedEncryptedEvent => {
+            RoomUnableToDecryptReason::MalformedEncryptedEvent
+        }
+        UnableToDecryptReason::MissingMegolmSession { .. } => {
+            RoomUnableToDecryptReason::MissingMegolmSession
+        }
+        UnableToDecryptReason::UnknownMegolmMessageIndex => {
+            RoomUnableToDecryptReason::UnknownMegolmMessageIndex
+        }
+        UnableToDecryptReason::MegolmDecryptionFailure => {
+            RoomUnableToDecryptReason::MegolmDecryptionFailure
+        }
+        UnableToDecryptReason::PayloadDeserializationFailure => {
+            RoomUnableToDecryptReason::PayloadDeserializationFailure
+        }
+        UnableToDecryptReason::MismatchedIdentityKeys => {
+            RoomUnableToDecryptReason::MismatchedIdentityKeys
+        }
+        UnableToDecryptReason::SenderIdentityNotTrusted(_) => {
+            RoomUnableToDecryptReason::SenderIdentityNotTrusted
+        }
+    }
+}
+
 fn room_history_backfill_event_from_timeline_event(
     room_id: &str,
     event: &TimelineEvent,
     redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
     reaction_index: &mut BTreeMap<String, ReactionEventIndexEntry>,
 ) -> Option<RoomHistoryBackfillEvent> {
+    if let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &event.kind {
+        return room_activity_from_unable_to_decrypt_timeline_event(room_id, event, utd_info)
+            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)));
+    }
+
     let raw = event.raw();
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMessageEvent>() {
@@ -2869,9 +2927,60 @@ mod tests {
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags,
         room_timeline_event_from_sync_message, room_typing_from_sync_typing,
-        sorted_room_member_summaries_from_parts, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        room_unable_to_decrypt_reason_from_sdk, sorted_room_member_summaries_from_parts,
+        verification_flow_id_from_to_device, verification_request_from_to_device,
+        verification_requested_state_event,
     };
+
+    #[test]
+    fn room_history_backfill_maps_unable_to_decrypt_event() {
+        let event = TimelineEvent::from_utd(
+            Raw::new(&serde_json::json!({
+                "type": "m.room.encrypted",
+                "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                "event_id": "$encrypted1:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000000u64
+            }))
+            .expect("serialize raw encrypted timeline event")
+            .cast_unchecked(),
+            UnableToDecryptInfo {
+                session_id: Some("SESSIONID".to_owned()),
+                reason: UnableToDecryptReason::MissingMegolmSession {
+                    withheld_code: None,
+                },
+            },
+        );
+
+        assert_eq!(
+            room_history_backfill_event_from_timeline_event(
+                "!room:example.org",
+                &event,
+                &RedactionRules::V1,
+                &mut BTreeMap::new(),
+            ),
+            Some(RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "$encrypted1:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                relation: None,
+                kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
+                    event_id: "$encrypted1:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    session_id: Some("SESSIONID".to_owned()),
+                    reason: RoomUnableToDecryptReason::MissingMegolmSession,
+                }),
+            })))
+        );
+    }
+
+    #[test]
+    fn unable_to_decrypt_reason_mapping_covers_sdk_reasons() {
+        assert_eq!(
+            room_unable_to_decrypt_reason_from_sdk(&UnableToDecryptReason::MegolmDecryptionFailure),
+            RoomUnableToDecryptReason::MegolmDecryptionFailure,
+        );
+    }
 
     #[test]
     fn read_file_bytes_reads_regular_files_and_rejects_missing_and_directories() {
@@ -2902,14 +3011,14 @@ mod tests {
         RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
         RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomVideoActivity, RoomVideoInfo,
-        SendMessageReplyTarget, SendMessageThreadTarget, UnsupportedRoomMessageActivity,
-        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+        RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
+        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, SessionMeta,
-        deserialized_responses::TimelineEvent,
+        deserialized_responses::{TimelineEvent, UnableToDecryptInfo, UnableToDecryptReason},
         encryption::{
             backups::BackupState,
             recovery::RecoveryState,
