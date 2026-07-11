@@ -97,6 +97,10 @@ const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
 #[cfg(windows)]
 const COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU: u32 = 38;
 #[cfg(windows)]
+const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
+#[cfg(windows)]
+const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -990,6 +994,8 @@ pub struct RoomMenuState {
 #[serde(deny_unknown_fields)]
 pub struct MessageMenuState {
     pub reply_enabled: bool,
+    pub edit_enabled: bool,
+    pub react_enabled: bool,
     pub redact_enabled: bool,
     pub save_attachment_enabled: bool,
     pub selected_event_id: Option<String>,
@@ -1441,6 +1447,14 @@ impl MmatrixApp {
 
     pub fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
         self.inner.reply_to_selected_message_via_menu()
+    }
+
+    pub fn edit_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+        self.inner.edit_selected_message_via_menu()
+    }
+
+    pub fn react_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+        self.inner.react_to_selected_message_via_menu()
     }
 
     pub fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
@@ -2033,6 +2047,18 @@ mod imp {
             ))
         }
 
+        pub(crate) fn edit_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn react_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
@@ -2530,6 +2556,22 @@ mod imp {
                 COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
                 EmptyArgs {},
                 "REPLY_TO_SELECTED_MESSAGE_VIA_MENU",
+            )
+        }
+
+        pub(crate) fn edit_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
+                EmptyArgs {},
+                "EDIT_SELECTED_MESSAGE_VIA_MENU",
+            )
+        }
+
+        pub(crate) fn react_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU,
+                EmptyArgs {},
+                "REACT_TO_SELECTED_MESSAGE_VIA_MENU",
             )
         }
 

@@ -163,6 +163,8 @@ const MENU_ID_ROOM_PART: usize = 40013;
 const MENU_ID_MESSAGE_REPLY: usize = 40014;
 const MENU_ID_MESSAGE_REDACT: usize = 40015;
 const MENU_ID_MESSAGE_SAVE_ATTACHMENT: usize = 40016;
+const MENU_ID_MESSAGE_EDIT: usize = 40017;
+const MENU_ID_MESSAGE_REACT: usize = 40018;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -5307,6 +5309,13 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         MENU_ID_MESSAGE_REPLY,
         "Reply to Message",
     )?;
+    append_menu_text(message_menu, MF_STRING, MENU_ID_MESSAGE_EDIT, "Edit Message")?;
+    append_menu_text(
+        message_menu,
+        MF_STRING,
+        MENU_ID_MESSAGE_REACT,
+        "React to Message",
+    )?;
     append_menu_text(
         message_menu,
         MF_STRING,
@@ -5537,7 +5546,12 @@ unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<()
         } else {
             MF_GRAYED
         };
-    for item_id in [MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_REDACT] {
+    for item_id in [
+        MENU_ID_MESSAGE_REPLY,
+        MENU_ID_MESSAGE_EDIT,
+        MENU_ID_MESSAGE_REACT,
+        MENU_ID_MESSAGE_REDACT,
+    ] {
         if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
         }
@@ -5670,6 +5684,8 @@ unsafe fn dump_message_menu_state(hwnd: HWND) -> Result<DumpMessageMenuState, St
     let enabled = action_state.selected_event_id.is_some();
     Ok(DumpMessageMenuState {
         reply_enabled: enabled,
+        edit_enabled: enabled,
+        react_enabled: enabled,
         redact_enabled: enabled,
         save_attachment_enabled: action_state.save_attachment_enabled,
         selected_event_id: action_state.selected_event_id,
@@ -5724,6 +5740,14 @@ unsafe fn menu_command_result(
         MENU_ID_MESSAGE_REPLY => (
             "Message",
             prefill_reply_to_selected_message(hwnd).map(|_| Some(())),
+        ),
+        MENU_ID_MESSAGE_EDIT => (
+            "Message",
+            prefill_edit_selected_message(hwnd).map(|_| Some(())),
+        ),
+        MENU_ID_MESSAGE_REACT => (
+            "Message",
+            prefill_react_to_selected_message(hwnd).map(|_| Some(())),
         ),
         MENU_ID_MESSAGE_REDACT => (
             "Message",
@@ -5944,6 +5968,34 @@ unsafe fn prefill_reply_to_selected_message(hwnd: HWND) -> Result<(), String> {
 
 fn reply_compose_text(event_id: &str) -> String {
     format!("/reply {event_id} ")
+}
+
+unsafe fn prefill_edit_selected_message(hwnd: HWND) -> Result<(), String> {
+    let Some(event_id) = selected_timeline_event_id_for_automation(hwnd) else {
+        set_local_command_status(hwnd, "no message selected".to_owned())?;
+        return Err("no message selected".to_owned());
+    };
+    set_compose_text(hwnd, &edit_compose_text(&event_id))?;
+    SetFocus(compose_edit(hwnd)?);
+    Ok(())
+}
+
+fn edit_compose_text(event_id: &str) -> String {
+    format!("/edit {event_id} ")
+}
+
+unsafe fn prefill_react_to_selected_message(hwnd: HWND) -> Result<(), String> {
+    let Some(event_id) = selected_timeline_event_id_for_automation(hwnd) else {
+        set_local_command_status(hwnd, "no message selected".to_owned())?;
+        return Err("no message selected".to_owned());
+    };
+    set_compose_text(hwnd, &react_compose_text(&event_id))?;
+    SetFocus(compose_edit(hwnd)?);
+    Ok(())
+}
+
+fn react_compose_text(event_id: &str) -> String {
+    format!("/react {event_id} ")
 }
 
 unsafe fn submit_redact_selected_message(hwnd: HWND) -> Result<(), String> {
@@ -9999,6 +10051,18 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::EditSelectedMessageViaMenu { id } => {
+            invoke_menu_command_for_automation(hwnd, MENU_ID_MESSAGE_EDIT).map_err(|message| {
+                failure_response(Some(id.clone()), "selected_message_unavailable", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::ReactToSelectedMessageViaMenu { id } => {
+            invoke_menu_command_for_automation(hwnd, MENU_ID_MESSAGE_REACT).map_err(|message| {
+                failure_response(Some(id.clone()), "selected_message_unavailable", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::RedactSelectedMessageViaMenu { id } => {
             invoke_menu_command_for_automation(hwnd, MENU_ID_MESSAGE_REDACT).map_err(
                 |message| {
@@ -10329,6 +10393,8 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::RejectInviteViaRoomMenu { id }
         | ParsedCommand::PartRoomViaRoomMenu { id }
         | ParsedCommand::ReplyToSelectedMessageViaMenu { id }
+        | ParsedCommand::EditSelectedMessageViaMenu { id }
+        | ParsedCommand::ReactToSelectedMessageViaMenu { id }
         | ParsedCommand::RedactSelectedMessageViaMenu { id }
         | ParsedCommand::SaveAttachmentViaMessageMenu { id }
         | ParsedCommand::DumpSelectedNavigationPath { id }
@@ -24066,6 +24132,27 @@ mod tests {
                 install_test_active_timeline_event(hwnd, "$event-id");
                 prefill_reply_to_selected_message(hwnd).unwrap();
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "/reply $event-id ");
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn edit_and_react_menu_prefill_do_not_submit_a_command() {
+        let mut state = test_state();
+        state.active_view = room_view_id("!room:example");
+        state.selected_timeline_event = Some(SelectedTimelineEvent {
+            view_id: state.active_view.clone(),
+            event_id: "$event-id".to_owned(),
+        });
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_active_timeline_event(hwnd, "$event-id");
+                prefill_edit_selected_message(hwnd).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/edit $event-id ");
+                prefill_react_to_selected_message(hwnd).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/react $event-id ");
                 assert!(state_ref(hwnd).recorded_commands.is_empty());
             });
         }

@@ -10773,7 +10773,7 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 }
 
 #[test]
-fn automation_driver_message_menu_reply_prefills_selected_event()
+fn automation_driver_message_menu_actions_prefill_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
@@ -10790,13 +10790,33 @@ fn automation_driver_message_menu_reply_prefills_selected_event()
 
     let disabled = app.dump_message_menu_state()?;
     assert!(!disabled.reply_enabled);
+    assert!(!disabled.edit_enabled);
+    assert!(!disabled.react_enabled);
     assert!(!disabled.redact_enabled);
     assert!(!disabled.save_attachment_enabled);
     assert_eq!(disabled.selected_event_id, None);
 
+    let error = app
+        .edit_selected_message_via_menu()
+        .expect_err("edit must reject without a selected message");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { code, .. } if code == "selected_message_unavailable"
+    ));
+
+    let error = app
+        .react_to_selected_message_via_menu()
+        .expect_err("react must reject without a selected message");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { code, .. } if code == "selected_message_unavailable"
+    ));
+
     app.select_timeline_event("$react-normal")?;
     let enabled = app.dump_message_menu_state()?;
     assert!(enabled.reply_enabled);
+    assert!(enabled.edit_enabled);
+    assert!(enabled.react_enabled);
     assert!(enabled.redact_enabled);
     assert!(!enabled.save_attachment_enabled);
     assert_eq!(enabled.selected_event_id.as_deref(), Some("$react-normal"));
@@ -10813,6 +10833,24 @@ fn automation_driver_message_menu_reply_prefills_selected_event()
     assert_eq!(app.compose_text()?, "/reply $react-normal ");
     let model = app.dump_model()?;
     assert!(model.submitted_reply_commands.is_empty());
+    assert!(model.submitted_edit_commands.is_empty());
+    assert!(model.submitted_reaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+
+    app.edit_selected_message_via_menu()?;
+    assert_eq!(app.compose_text()?, "/edit $react-normal ");
+    let model = app.dump_model()?;
+    assert!(model.submitted_reply_commands.is_empty());
+    assert!(model.submitted_edit_commands.is_empty());
+    assert!(model.submitted_reaction_commands.is_empty());
+    assert!(model.submitted_redaction_commands.is_empty());
+
+    app.react_to_selected_message_via_menu()?;
+    assert_eq!(app.compose_text()?, "/react $react-normal ");
+    let model = app.dump_model()?;
+    assert!(model.submitted_reply_commands.is_empty());
+    assert!(model.submitted_edit_commands.is_empty());
+    assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
 
     drop(app);

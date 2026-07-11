@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 22;
+pub(crate) const PROTOCOL_VERSION: u32 = 23;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -56,6 +56,8 @@ pub(crate) const COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU: u32 = 37;
 pub(crate) const COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU: u32 = 38;
 pub(crate) const COMMAND_ID_SEND_FILE: u32 = 39;
 pub(crate) const COMMAND_ID_SETUP_E2EE_RECOVERY: u32 = 40;
+pub(crate) const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
+pub(crate) const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -96,6 +98,8 @@ pub(crate) enum CommandKind {
     RejectInviteViaRoomMenu,
     PartRoomViaRoomMenu,
     ReplyToSelectedMessageViaMenu,
+    EditSelectedMessageViaMenu,
+    ReactToSelectedMessageViaMenu,
     RedactSelectedMessageViaMenu,
     SaveAttachmentViaMessageMenu,
     SendFile,
@@ -143,6 +147,8 @@ impl CommandKind {
             COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU => {
                 Some(Self::ReplyToSelectedMessageViaMenu)
             }
+            COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU => Some(Self::EditSelectedMessageViaMenu),
+            COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU => Some(Self::ReactToSelectedMessageViaMenu),
             COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
             COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => Some(Self::SaveAttachmentViaMessageMenu),
             COMMAND_ID_SEND_FILE => Some(Self::SendFile),
@@ -288,6 +294,12 @@ pub(crate) enum ParsedCommand {
     ReplyToSelectedMessageViaMenu {
         id: String,
     },
+    EditSelectedMessageViaMenu {
+        id: String,
+    },
+    ReactToSelectedMessageViaMenu {
+        id: String,
+    },
     RedactSelectedMessageViaMenu {
         id: String,
     },
@@ -339,6 +351,8 @@ impl ParsedCommand {
             Self::ReplyToSelectedMessageViaMenu { .. } => {
                 CommandKind::ReplyToSelectedMessageViaMenu
             }
+            Self::EditSelectedMessageViaMenu { .. } => CommandKind::EditSelectedMessageViaMenu,
+            Self::ReactToSelectedMessageViaMenu { .. } => CommandKind::ReactToSelectedMessageViaMenu,
             Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
             Self::SaveAttachmentViaMessageMenu { .. } => CommandKind::SaveAttachmentViaMessageMenu,
         }
@@ -635,6 +649,8 @@ pub(crate) struct DumpRoomMenuState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpMessageMenuState {
     pub(crate) reply_enabled: bool,
+    pub(crate) edit_enabled: bool,
+    pub(crate) react_enabled: bool,
     pub(crate) redact_enabled: bool,
     pub(crate) save_attachment_enabled: bool,
     pub(crate) selected_event_id: Option<String>,
@@ -1876,6 +1892,14 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::ReplyToSelectedMessageViaMenu { id: envelope.id })
         }
+        CommandKind::EditSelectedMessageViaMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::EditSelectedMessageViaMenu { id: envelope.id })
+        }
+        CommandKind::ReactToSelectedMessageViaMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::ReactToSelectedMessageViaMenu { id: envelope.id })
+        }
         CommandKind::RedactSelectedMessageViaMenu => {
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::RedactSelectedMessageViaMenu { id: envelope.id })
@@ -2141,9 +2165,11 @@ mod tests {
         COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_DUMP_VERIFICATION_MENU_STATE,
         COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
+        COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
@@ -2245,8 +2271,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_22() {
-        assert_eq!(PROTOCOL_VERSION, 22);
+    fn protocol_version_is_23() {
+        assert_eq!(PROTOCOL_VERSION, 23);
     }
 
     #[test]
@@ -2396,6 +2422,14 @@ mod tests {
             Some(CommandKind::ReplyToSelectedMessageViaMenu)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU),
+            Some(CommandKind::EditSelectedMessageViaMenu)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU),
+            Some(CommandKind::ReactToSelectedMessageViaMenu)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU),
             Some(CommandKind::RedactSelectedMessageViaMenu)
         );
@@ -2416,7 +2450,7 @@ mod tests {
             Some(CommandKind::SetupE2eeRecovery)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SETUP_E2EE_RECOVERY + 1),
+            CommandKind::from_id(COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU + 1),
             None
         );
     }
@@ -2663,6 +2697,8 @@ mod tests {
             (COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU, "reject"),
             (COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, "part"),
             (COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, "reply"),
+            (COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, "edit"),
+            (COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, "react"),
             (COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, "redact"),
             (
                 COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
@@ -3772,7 +3808,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":22,
+                    "protocol_version":23,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

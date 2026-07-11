@@ -359,6 +359,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
     );
     let message = mmatrix_testkit::MessageMenuState {
         reply_enabled: true,
+        edit_enabled: true,
+        react_enabled: true,
         redact_enabled: true,
         save_attachment_enabled: false,
         selected_event_id: Some("$event:example".to_owned()),
