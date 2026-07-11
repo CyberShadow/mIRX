@@ -81,20 +81,21 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
     ES_WANTRETURN, EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect,
     GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild,
-    IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_ITEMFROMPOINT, LB_RESETCONTENT,
-    LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW,
-    MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
-    SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
-    WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY,
-    WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN,
-    WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL,
-    WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE,
-    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT,
+    LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK,
+    MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
+    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
+    SB_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW,
+    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
+    WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
+    WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN,
+    WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER,
+    WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use crate::{
@@ -4418,23 +4419,58 @@ unsafe fn invoke_member_context_menu_for_automation(
     user_id: &str,
     command: &ContextMenuCommand,
 ) -> Result<(), String> {
-    select_member_for_automation(hwnd, user_id)?;
-    invoke_selected_member_context_menu_for_automation(hwnd, command)
+    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+    let lparam = member_context_lparam_for_automation(hwnd, list, user_id)?;
+    let command = member_context_menu_command_id(command)?;
+    show_member_context_menu(hwnd, list, lparam, Some(command))
 }
 
 unsafe fn invoke_selected_member_context_menu_for_automation(
     hwnd: HWND,
     command: &ContextMenuCommand,
 ) -> Result<(), String> {
-    let command = match command {
+    let command = member_context_menu_command_id(command)?;
+    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+    show_member_context_menu(hwnd, list, -1, Some(command))
+}
+
+fn member_context_menu_command_id(command: &ContextMenuCommand) -> Result<usize, String> {
+    Ok(match command {
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
         ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
         ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
         _ => return Err("member context menu command is unavailable".to_owned()),
+    })
+}
+
+unsafe fn member_context_lparam_for_automation(
+    hwnd: HWND,
+    list: HWND,
+    user_id: &str,
+) -> Result<LPARAM, String> {
+    let index = active_member_rows(hwnd)
+        .iter()
+        .position(|member| member.user_id == user_id)
+        .ok_or_else(|| format!("unknown_member: {user_id}"))?;
+    let mut rect = RECT::default();
+    if SendMessageW(
+        list,
+        LB_GETITEMRECT,
+        index,
+        &mut rect as *mut RECT as LPARAM,
+    ) == LB_ERR as isize
+    {
+        return Err("member context menu target is unavailable".to_owned());
+    }
+    let mut point = POINT {
+        x: (rect.left + rect.right) / 2,
+        y: (rect.top + rect.bottom) / 2,
     };
-    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
-    show_member_context_menu(hwnd, list, -1, Some(command))
+    if ClientToScreen(list, &mut point) == 0 {
+        return Err(last_os_error("ClientToScreen"));
+    }
+    Ok(((point.y as u32 as usize) << 16 | (point.x as u16 as usize)) as LPARAM)
 }
 
 fn validate_selected_timeline_event(

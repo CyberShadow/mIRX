@@ -1040,6 +1040,8 @@ fn room_members_event(room_id: &str, members: &[(&str, Option<&str>)]) -> Event 
             .map(|(user_id, display_name)| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
                 display_name: display_name.map(str::to_owned),
+                can_kick: false,
+                can_ban: false,
             })
             .collect(),
     })
@@ -3627,6 +3629,7 @@ fn automation_driver_member_menu_state_tracks_selected_member()
 fn automation_driver_member_menu_moderation_uses_clicked_member()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
+    app.select_member("@sam-one:example")?;
     app.open_member_context_menu("@casey:example", ContextMenuCommand::KickMember)?;
     assert_eq!(
         app.dump_model()?.submitted_member_moderation_commands,
@@ -3652,6 +3655,10 @@ fn automation_driver_member_menu_moderation_uses_clicked_member()
             },
         ]
     );
+    assert_eq!(
+        app.dump_member_menu_state()?.selected_user_id.as_deref(),
+        Some("@casey:example")
+    );
     Ok(())
 }
 
@@ -3667,11 +3674,11 @@ fn automation_driver_member_menu_moderation_respects_independent_permissions()
     let error = app
         .open_selected_member_context_menu(ContextMenuCommand::BanMember)
         .expect_err("disabled ban must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("member context menu action is disabled")
-    );
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { message, .. }
+            if message == "member context menu action is disabled"
+    ));
     assert_eq!(
         app.dump_model()?.submitted_member_moderation_commands,
         vec![SubmittedMemberModerationCommand {
