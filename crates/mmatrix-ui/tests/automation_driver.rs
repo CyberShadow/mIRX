@@ -3749,6 +3749,111 @@ fn automation_driver_selected_member_context_menu_uses_keyboard_selection()
 }
 
 #[test]
+fn automation_driver_member_moderation_uses_current_keyboard_selection_after_click()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.open_member_context_menu("@alice:example", ContextMenuCommand::MentionMember)?;
+    app.select_member("@casey:example")?;
+    assert_eq!(
+        app.dump_member_menu_state()?.selected_user_id.as_deref(),
+        Some("@casey:example")
+    );
+    app.open_selected_member_context_menu(ContextMenuCommand::KickMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_member_moderation_commands,
+        vec![SubmittedMemberModerationCommand {
+            action: MemberModerationAction::Kick,
+            room_id: "!members:example".to_owned(),
+            user_id: "@casey:example".to_owned(),
+        }]
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_moderation_resolves_room_and_thread_parent_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.select_member("@casey:example")?;
+    app.open_selected_member_context_menu(ContextMenuCommand::KickMember)?;
+    app.open_selected_member_context_menu(ContextMenuCommand::BanMember)?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        message_event_with_event_id(
+            "!members:example",
+            "$members-thread-root",
+            "@alice:example",
+            1_700_000_090_000,
+            CoreRoomMessagePresentationKind::Text,
+            "member list thread root",
+        ),
+        message_event_with_event_id_and_relation(
+            "!members:example",
+            "$members-thread-reply",
+            "@casey:example",
+            1_700_000_120_000,
+            Some(CoreRoomActivityRelation::Thread {
+                thread_root_event_id: "$members-thread-root".to_owned(),
+                in_reply_to_event_id: Some("$members-thread-root".to_owned()),
+                is_falling_back: false,
+            }),
+            CoreRoomMessagePresentationKind::Text,
+            "member list thread reply",
+        ),
+    ])?)?;
+    app.select_view(thread_identity("!members:example", "$members-thread-root"))?;
+    app.select_member("@casey:example")?;
+    app.open_selected_member_context_menu(ContextMenuCommand::KickMember)?;
+    app.open_selected_member_context_menu(ContextMenuCommand::BanMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_member_moderation_commands,
+        vec![
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Kick,
+                room_id: "!members:example".to_owned(),
+                user_id: "@casey:example".to_owned(),
+            },
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Ban,
+                room_id: "!members:example".to_owned(),
+                user_id: "@casey:example".to_owned(),
+            },
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Kick,
+                room_id: "!members:example".to_owned(),
+                user_id: "@casey:example".to_owned(),
+            },
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Ban,
+                room_id: "!members:example".to_owned(),
+                user_id: "@casey:example".to_owned(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_moderation_status_view_has_no_target()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.select_view(ViewIdentity::Status)?;
+    assert_eq!(app.dump_member_menu_state()?.selected_user_id, None);
+    let error = app
+        .open_selected_member_context_menu(ContextMenuCommand::KickMember)
+        .expect_err("status view must not submit member moderation");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { message, .. } if message == "member list is unavailable"
+    ));
+    assert!(
+        app.dump_model()?
+            .submitted_member_moderation_commands
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
 fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

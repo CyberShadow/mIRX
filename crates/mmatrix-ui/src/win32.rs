@@ -5906,10 +5906,13 @@ unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
 }
 
 unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
-    state_ref(hwnd)
-        .views
-        .get(&state_ref(hwnd).active_view)
-        .map(|view| room_content_member_list(view.content))
+    match &state_ref(hwnd).active_view {
+        ViewId::Status => None,
+        ViewId::Room(_) | ViewId::Thread { .. } => state_ref(hwnd)
+            .views
+            .get(&state_ref(hwnd).active_view)
+            .map(|view| room_content_member_list(view.content)),
+    }
 }
 
 unsafe fn selected_member_row(hwnd: HWND) -> Option<RoomMemberView> {
@@ -5972,8 +5975,20 @@ unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> Result<(), 
         .position(|member| member.user_id == user_id)
         .ok_or_else(|| format!("unknown_member: {user_id}"))?;
     let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
-    if SendMessageW(list, LB_SETCURSEL, index, 0) == LB_ERR as isize {
-        return Err("member selection failed".to_owned());
+    let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
+    if selected == LB_ERR as isize {
+        if SendMessageW(list, LB_SETCURSEL, index, 0) == LB_ERR as isize {
+            return Err("member selection failed".to_owned());
+        }
+    } else {
+        let key = if index > selected as usize {
+            VK_DOWN_KEY
+        } else {
+            VK_UP_KEY
+        };
+        for _ in 0..index.abs_diff(selected as usize) {
+            SendMessageW(list, WM_KEYDOWN, key, 0);
+        }
     }
     Ok(())
 }
