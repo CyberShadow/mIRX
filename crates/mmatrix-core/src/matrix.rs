@@ -3023,11 +3023,11 @@ mod tests {
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
         ReactionEventIndexEntry, attach_reply_relation, attach_thread_relation,
-        attach_thread_reply_relation, backfill_room_history, cancelled_state,
+        attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
         direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
-        joined_room_members, joined_room_members_no_sync, map_cross_signing_status, map_decimals,
-        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        joined_room_members, joined_room_members_no_sync, kick_room_member,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
         outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
         read_file_bytes, room_activity_from_sync_member, room_activity_from_sync_message,
@@ -3151,6 +3151,206 @@ mod tests {
                     .await
                     .expect("synced members"),
                 expected
+            );
+        });
+    }
+
+    #[test]
+    fn kick_room_member_submits_exact_sdk_request_and_rejects_invalid_or_non_joined_rooms() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            mock_server.mock_kick_user().ok().expect(1).mount().await;
+
+            kick_room_member(
+                &client,
+                &KickRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect("kick joined member");
+
+            let requests = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled");
+            let kick_requests = requests
+                .iter()
+                .filter(|request| request.url.path().ends_with("/kick"))
+                .collect::<Vec<_>>();
+            assert_eq!(kick_requests.len(), 1);
+            assert_eq!(
+                kick_requests[0].url.path(),
+                "/_matrix/client/v3/rooms/!room:example.org/kick"
+            );
+            assert_eq!(
+                kick_requests[0]
+                    .body_json::<serde_json::Value>()
+                    .expect("kick JSON body"),
+                serde_json::json!({ "user_id": "@target:example.org" })
+            );
+
+            let invalid_room = kick_room_member(
+                &client,
+                &KickRoomMemberRequest {
+                    room_id: "invalid-room-id".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect_err("invalid room id");
+            assert_eq!(
+                invalid_room.to_string(),
+                "invalid Matrix room id: leading sigil is incorrect or missing"
+            );
+
+            let invalid_user = kick_room_member(
+                &client,
+                &KickRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "invalid-user-id".to_owned(),
+                },
+            )
+            .await
+            .expect_err("invalid user id");
+            assert_eq!(
+                invalid_user.to_string(),
+                "invalid Matrix user id: leading sigil is incorrect or missing"
+            );
+
+            let non_joined_room = kick_room_member(
+                &client,
+                &KickRoomMemberRequest {
+                    room_id: "!other:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect_err("non-joined room");
+            assert_eq!(
+                non_joined_room.to_string(),
+                "joined room not found: !other:example.org"
+            );
+
+            assert_eq!(
+                mock_server
+                    .received_requests()
+                    .await
+                    .expect("request recording enabled")
+                    .iter()
+                    .filter(|request| request.url.path().ends_with("/kick"))
+                    .count(),
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn ban_room_member_submits_exact_sdk_request_and_rejects_invalid_or_non_joined_rooms() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            mock_server.mock_ban_user().ok().expect(1).mount().await;
+
+            ban_room_member(
+                &client,
+                &BanRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect("ban joined member");
+
+            let requests = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled");
+            let ban_requests = requests
+                .iter()
+                .filter(|request| request.url.path().ends_with("/ban"))
+                .collect::<Vec<_>>();
+            assert_eq!(ban_requests.len(), 1);
+            assert_eq!(
+                ban_requests[0].url.path(),
+                "/_matrix/client/v3/rooms/!room:example.org/ban"
+            );
+            assert_eq!(
+                ban_requests[0]
+                    .body_json::<serde_json::Value>()
+                    .expect("ban JSON body"),
+                serde_json::json!({ "user_id": "@target:example.org" })
+            );
+
+            let invalid_room = ban_room_member(
+                &client,
+                &BanRoomMemberRequest {
+                    room_id: "invalid-room-id".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect_err("invalid room id");
+            assert_eq!(
+                invalid_room.to_string(),
+                "invalid Matrix room id: leading sigil is incorrect or missing"
+            );
+
+            let invalid_user = ban_room_member(
+                &client,
+                &BanRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "invalid-user-id".to_owned(),
+                },
+            )
+            .await
+            .expect_err("invalid user id");
+            assert_eq!(
+                invalid_user.to_string(),
+                "invalid Matrix user id: leading sigil is incorrect or missing"
+            );
+
+            let non_joined_room = ban_room_member(
+                &client,
+                &BanRoomMemberRequest {
+                    room_id: "!other:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect_err("non-joined room");
+            assert_eq!(
+                non_joined_room.to_string(),
+                "joined room not found: !other:example.org"
+            );
+
+            assert_eq!(
+                mock_server
+                    .received_requests()
+                    .await
+                    .expect("request recording enabled")
+                    .iter()
+                    .filter(|request| request.url.path().ends_with("/ban"))
+                    .count(),
+                1
             );
         });
     }
@@ -3405,18 +3605,19 @@ mod tests {
         );
     }
     use crate::api::{
-        BackfillRoomHistoryRequest, CoreErrorEvent, E2eeBackupState, E2eeCrossSigningStatus,
-        E2eeRecoveryState, Event, FetchRoomMediaRequest, Operation,
-        ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind, RoomActivityRelation,
-        RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-        RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
-        RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
-        RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
-        RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
-        SendMessageThreadTarget, UnsupportedRoomMessageActivity, VerificationDecimals,
-        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
+        BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreErrorEvent, E2eeBackupState,
+        E2eeCrossSigningStatus, E2eeRecoveryState, Event, FetchRoomMediaRequest,
+        KickRoomMemberRequest, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity,
+        RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+        RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+        RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfillEvent,
+        RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+        RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
+        RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
+        RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget, SendMessageThreadTarget,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, RoomMemberships, SessionMeta,
