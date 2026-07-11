@@ -83,9 +83,40 @@ fn submitted_member_moderation_command_has_a_strict_json_contract() {
             "user_id": "@bob:example.org"
         })
     );
+    assert_eq!(
+        serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
+            "action": "ban",
+            "room_id": "!ops:example.org",
+            "user_id": "@carol:example.org"
+        }))
+        .unwrap(),
+        SubmittedMemberModerationCommand {
+            action: MemberModerationAction::Ban,
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@carol:example.org".to_owned(),
+        }
+    );
     assert!(serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
         "action": "ban", "room_id": "!ops:example.org", "user_id": "@bob:example.org", "extra": true
     })).is_err());
+    assert!(
+        serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
+            "room_id": "!ops:example.org", "user_id": "@bob:example.org"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
+            "action": "kick", "user_id": "@bob:example.org"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
+            "action": "kick", "room_id": "!ops:example.org"
+        }))
+        .is_err()
+    );
     assert!(
         serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
             "action": "invalid", "room_id": "!ops:example.org", "user_id": "@bob:example.org"
@@ -3971,6 +4002,54 @@ fn model_submitted_membership_commands_round_trip_through_json() {
 }
 
 #[test]
+fn model_submitted_member_moderation_commands_round_trip_and_default_to_empty() {
+    let value = serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "submitted_member_moderation_commands": [
+            {"action": "kick", "room_id": "!ops:example.org", "user_id": "@bob:example.org"},
+            {"action": "ban", "room_id": "!ops:example.org", "user_id": "@carol:example.org"}
+        ],
+        "last_error": null,
+        "selected_room": null
+    });
+    let model = serde_json::from_value::<Model>(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&model).unwrap(), value);
+    assert_eq!(
+        model.submitted_member_moderation_commands,
+        vec![
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Kick,
+                room_id: "!ops:example.org".to_owned(),
+                user_id: "@bob:example.org".to_owned(),
+            },
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Ban,
+                room_id: "!ops:example.org".to_owned(),
+                user_id: "@carol:example.org".to_owned(),
+            },
+        ]
+    );
+
+    let model = serde_json::from_value::<Model>(serde_json::json!({
+        "status": "synced",
+        "lifecycle_state": "ready",
+        "rooms": [],
+        "last_activity": null,
+        "e2ee_status": null,
+        "last_verification": null,
+        "last_error": null,
+        "selected_room": null
+    }))
+    .unwrap();
+    assert!(model.submitted_member_moderation_commands.is_empty());
+}
+
+#[test]
 fn model_submitted_direct_room_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
@@ -5391,7 +5470,31 @@ fn data_models_reject_unknown_fields() {
             "user_id":"@alice:example",
             "display_name":"Alice",
             "label":"Alice",
+            "can_kick":true,
+            "can_ban":false,
             "unexpected":true
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMemberView>(
+            r#"{
+            "user_id":"@alice:example",
+            "display_name":"Alice",
+            "label":"Alice",
+            "can_ban":false
+        }"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMemberView>(
+            r#"{
+            "user_id":"@alice:example",
+            "display_name":"Alice",
+            "label":"Alice",
+            "can_kick":true
         }"#
         )
         .is_err()

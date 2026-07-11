@@ -6263,8 +6263,8 @@ unsafe fn invoke_menu_command_for_automation(hwnd: HWND, command_id: usize) -> R
     result.and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned()))
 }
 
-fn context_menu_command_id(command: &ContextMenuCommand) -> usize {
-    match command {
+fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
+    Some(match command {
         ContextMenuCommand::AcceptInvite => MENU_ID_ROOM_ACCEPT_INVITE,
         ContextMenuCommand::RejectInvite => MENU_ID_ROOM_REJECT_INVITE,
         ContextMenuCommand::PartRoom => MENU_ID_ROOM_PART,
@@ -6275,14 +6275,16 @@ fn context_menu_command_id(command: &ContextMenuCommand) -> usize {
         ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
-    }
+        ContextMenuCommand::KickMember | ContextMenuCommand::BanMember => return None,
+    })
 }
 
 unsafe fn invoke_navigation_context_menu_for_automation(
     hwnd: HWND,
     command: &ContextMenuCommand,
 ) -> Result<(), String> {
-    let command_id = context_menu_command_id(command);
+    let command_id = context_menu_command_id(command)
+        .ok_or_else(|| "room context menu command is unavailable".to_owned())?;
     if !matches!(
         command_id,
         MENU_ID_ROOM_ACCEPT_INVITE | MENU_ID_ROOM_REJECT_INVITE | MENU_ID_ROOM_PART
@@ -6297,7 +6299,8 @@ unsafe fn invoke_timeline_context_menu_for_automation(
     command: &ContextMenuCommand,
     event_id: Option<&str>,
 ) -> Result<(), String> {
-    let command_id = context_menu_command_id(command);
+    let command_id = context_menu_command_id(command)
+        .ok_or_else(|| "message context menu command is unavailable".to_owned())?;
     if !matches!(
         command_id,
         MENU_ID_MESSAGE_REPLY
@@ -14617,6 +14620,8 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::CreateDirectRoom => "create direct room",
         Operation::LeaveRoom => "leave room",
         Operation::RejectRoomInvite => "reject room invitation",
+        Operation::KickRoomMember => "kick room member",
+        Operation::BanRoomMember => "ban room member",
         Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
