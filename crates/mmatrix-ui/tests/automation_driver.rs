@@ -11168,6 +11168,7 @@ fn assert_message_menu_attachment_save(
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!media:example.org")?;
+    app.select_timeline_event(event_id)?;
 
     let menu = app.dump_message_menu_state()?;
     assert!(menu.save_attachment_enabled);
