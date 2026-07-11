@@ -2413,17 +2413,19 @@ mod tests {
         AcceptedResponse, COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, COMMAND_ID_ACCEPT_VERIFICATION,
         COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_CANCEL_VERIFICATION,
         COMMAND_ID_CONFIRM_VERIFICATION_SAS, COMMAND_ID_DUMP_COMPOSE_TEXT,
-        COMMAND_ID_DUMP_MESSAGE_MENU_STATE, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
-        COMMAND_ID_DUMP_ROOM_MENU_STATE, COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH,
-        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_DUMP_VERIFICATION_MENU_STATE,
-        COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_FIND_ACTIVE_VIEW,
-        COMMAND_ID_GET_VERSION, COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU, COMMAND_ID_LIST_ROOMS,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
+        COMMAND_ID_DUMP_MEMBER_MENU_STATE, COMMAND_ID_DUMP_MESSAGE_MENU_STATE,
+        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
+        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
+        COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU,
+        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
+        COMMAND_ID_LOGOUT, COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU,
         COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
-        COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
+        COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING,
+        COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU, COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
         COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
@@ -2447,15 +2449,15 @@ mod tests {
         DumpSubmittedSetupRecoveryCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, OpenMemberContextMenuArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse,
-        RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView, SelectMemberArgs,
-        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
-        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
-        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs,
-        StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
-        UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, VerificationActionArgs,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        NoArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
+        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
+        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectRoomArgs,
+        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
+        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
+        SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
+        WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn stored_session() -> StoredSession {
@@ -3032,6 +3034,43 @@ mod tests {
         assert_eq!(
             parse_command_request(COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, br#"{"id":"member-menu","args":{"user_id":"@bob:example","command":"query_member"}}"#).unwrap(),
             ParsedCommand::OpenMemberContextMenu { id: "member-menu".to_owned(), args: OpenMemberContextMenuArgs { user_id: "@bob:example".to_owned(), command: ContextMenuCommand::QueryMember } }
+        );
+        assert!(matches!(
+            parse_command_request(
+                COMMAND_ID_DUMP_MEMBER_MENU_STATE,
+                br#"{"id":"member-state"}"#
+            )
+            .unwrap(),
+            ParsedCommand::DumpMemberMenuState { .. }
+        ));
+        assert!(matches!(
+            parse_command_request(
+                COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU,
+                br#"{"id":"query-member"}"#
+            )
+            .unwrap(),
+            ParsedCommand::QuerySelectedMemberViaMenu { .. }
+        ));
+        assert!(matches!(
+            parse_command_request(
+                COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU,
+                br#"{"id":"mention-member"}"#
+            )
+            .unwrap(),
+            ParsedCommand::MentionSelectedMemberViaMenu { .. }
+        ));
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
+                br#"{"id":"selected-member-menu","args":{"command":"mention_member"}}"#
+            )
+            .unwrap(),
+            ParsedCommand::OpenSelectedMemberContextMenu {
+                id: "selected-member-menu".to_owned(),
+                args: OpenSelectedMemberContextMenuArgs {
+                    command: ContextMenuCommand::MentionMember
+                }
+            }
         );
         for (command_id, id) in [
             (COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, "accept"),

@@ -2781,13 +2781,25 @@ mod imp {
             self.send_command(COMMAND_ID_DUMP_MEMBER_MENU_STATE, EmptyArgs {})
         }
         pub(crate) fn select_member(&self, user_id: &str) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_SELECT_MEMBER, SelectMemberArgs { user_id })
+            self.send_accepted_command(
+                COMMAND_ID_SELECT_MEMBER,
+                SelectMemberArgs { user_id },
+                "SELECT_MEMBER",
+            )
         }
         pub(crate) fn query_selected_member_via_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU, EmptyArgs {})
+            self.send_accepted_command(
+                COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU,
+                EmptyArgs {},
+                "QUERY_SELECTED_MEMBER_VIA_MENU",
+            )
         }
         pub(crate) fn mention_selected_member_via_menu(&self) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU, EmptyArgs {})
+            self.send_accepted_command(
+                COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU,
+                EmptyArgs {},
+                "MENTION_SELECTED_MEMBER_VIA_MENU",
+            )
         }
         pub(crate) fn open_member_context_menu(
             &self,
@@ -2797,6 +2809,7 @@ mod imp {
             self.send_accepted_command(
                 COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
                 OpenMemberContextMenuArgs { user_id, command },
+                "OPEN_MEMBER_CONTEXT_MENU",
             )
         }
         pub(crate) fn open_selected_member_context_menu(
@@ -2806,6 +2819,7 @@ mod imp {
             self.send_accepted_command(
                 COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
                 OpenSelectedMemberContextMenuArgs { command },
+                "OPEN_SELECTED_MEMBER_CONTEXT_MENU",
             )
         }
 

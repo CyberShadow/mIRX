@@ -48,6 +48,14 @@ fn context_menu_command_serializes_to_strict_shape() {
         serde_json::to_string(&ContextMenuCommand::QueryMember).unwrap(),
         "\"query_member\""
     );
+    assert_eq!(
+        serde_json::to_string(&ContextMenuCommand::MentionMember).unwrap(),
+        "\"mention_member\""
+    );
+    assert_eq!(
+        serde_json::from_str::<ContextMenuCommand>("\"mention_member\"").unwrap(),
+        ContextMenuCommand::MentionMember
+    );
     assert!(serde_json::from_str::<ContextMenuCommand>("\"invalid\"").is_err());
 }
 

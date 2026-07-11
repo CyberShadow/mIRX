@@ -3583,6 +3583,101 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+fn launch_member_list_app() -> Result<MmatrixApp, Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("member-list.json");
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            fixture_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!members:example")?;
+    Ok(app)
+}
+
+#[test]
+fn automation_driver_member_menu_state_tracks_selected_member()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    assert_eq!(app.dump_member_menu_state()?.selected_user_id, None);
+    assert!(!app.dump_member_menu_state()?.query_enabled);
+    app.select_member("@bob:example")?;
+    let state = app.dump_member_menu_state()?;
+    assert!(state.query_enabled && state.mention_enabled);
+    assert_eq!(state.selected_user_id.as_deref(), Some("@bob:example"));
+    assert_eq!(state.selected_label.as_deref(), Some("Bob"));
+    app.select_member("@sam-two:example")?;
+    let state = app.dump_member_menu_state()?;
+    assert_eq!(state.selected_user_id.as_deref(), Some("@sam-two:example"));
+    assert_eq!(
+        state.selected_label.as_deref(),
+        Some("Sam (@sam-two:example)")
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_menu_query_selected_member_records_direct_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.select_member("@bob:example")?;
+    app.query_selected_member_via_menu()?;
+    assert_eq!(
+        app.dump_model()?.submitted_direct_room_commands,
+        vec![SubmittedDirectRoomCommand {
+            user_id: "@bob:example".to_owned()
+        }]
+    );
+    assert_eq!(app.compose_text()?, "");
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_context_menu_query_clicked_member_without_prior_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.open_member_context_menu("@alice:example", ContextMenuCommand::QueryMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_direct_room_commands,
+        vec![SubmittedDirectRoomCommand {
+            user_id: "@alice:example".to_owned()
+        }]
+    );
+    assert_eq!(
+        app.dump_member_menu_state()?.selected_user_id.as_deref(),
+        Some("@alice:example")
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_menu_mentions_display_name_or_user_id()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.select_member("@alice:example")?;
+    app.mention_selected_member_via_menu()?;
+    assert_eq!(app.compose_text()?, "Alice ");
+    app.set_compose_text("")?;
+    app.select_member("@ghost:example")?;
+    app.mention_selected_member_via_menu()?;
+    assert_eq!(app.compose_text()?, "@ghost:example ");
+    Ok(())
+}
+
+#[test]
+fn automation_driver_selected_member_context_menu_uses_keyboard_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.select_member("@bob:example")?;
+    app.open_selected_member_context_menu(ContextMenuCommand::MentionMember)?;
+    assert_eq!(app.compose_text()?, "Bob ");
+    Ok(())
+}
+
 #[test]
 fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 -> Result<(), Box<dyn std::error::Error>> {
