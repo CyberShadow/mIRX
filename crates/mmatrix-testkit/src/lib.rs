@@ -138,7 +138,13 @@ pub struct FrameSize {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContextMenuCommand {
-    AcceptInvite, RejectInvite, PartRoom, ReplyMessage, EditMessage, ReactMessage, RedactMessage,
+    AcceptInvite,
+    RejectInvite,
+    PartRoom,
+    ReplyMessage,
+    EditMessage,
+    ReactMessage,
+    RedactMessage,
     SaveAttachment,
 }
 
@@ -1492,10 +1498,32 @@ impl MmatrixApp {
         self.inner.save_attachment_via_message_menu()
     }
 
-    pub fn open_navigation_context_menu(&self, path: Vec<NavigationPathSegment>, command: ContextMenuCommand) -> Result<(), TestkitError> { self.inner.open_navigation_context_menu(path, command) }
-    pub fn open_selected_navigation_context_menu(&self, command: ContextMenuCommand) -> Result<(), TestkitError> { self.inner.open_selected_navigation_context_menu(command) }
-    pub fn open_timeline_context_menu(&self, event_id: &str, command: ContextMenuCommand) -> Result<(), TestkitError> { self.inner.open_timeline_context_menu(event_id, command) }
-    pub fn open_selected_timeline_context_menu(&self, command: ContextMenuCommand) -> Result<(), TestkitError> { self.inner.open_selected_timeline_context_menu(command) }
+    pub fn open_navigation_context_menu(
+        &self,
+        path: Vec<NavigationPathSegment>,
+        command: ContextMenuCommand,
+    ) -> Result<(), TestkitError> {
+        self.inner.open_navigation_context_menu(path, command)
+    }
+    pub fn open_selected_navigation_context_menu(
+        &self,
+        command: ContextMenuCommand,
+    ) -> Result<(), TestkitError> {
+        self.inner.open_selected_navigation_context_menu(command)
+    }
+    pub fn open_timeline_context_menu(
+        &self,
+        event_id: &str,
+        command: ContextMenuCommand,
+    ) -> Result<(), TestkitError> {
+        self.inner.open_timeline_context_menu(event_id, command)
+    }
+    pub fn open_selected_timeline_context_menu(
+        &self,
+        command: ContextMenuCommand,
+    ) -> Result<(), TestkitError> {
+        self.inner.open_selected_timeline_context_menu(command)
+    }
 
     pub fn room_activity(&self, room_id: Option<&str>) -> Result<Vec<RoomActivity>, TestkitError> {
         self.inner.room_activity(room_id)
@@ -1793,15 +1821,22 @@ struct OpenNavigationContextMenuArgs {
 #[cfg(windows)]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
-struct OpenSelectedNavigationContextMenuArgs { command: ContextMenuCommand }
+struct OpenSelectedNavigationContextMenuArgs {
+    command: ContextMenuCommand,
+}
 #[cfg(windows)]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
-struct OpenTimelineContextMenuArgs<'a> { event_id: &'a str, command: ContextMenuCommand }
+struct OpenTimelineContextMenuArgs<'a> {
+    event_id: &'a str,
+    command: ContextMenuCommand,
+}
 #[cfg(windows)]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
-struct OpenSelectedTimelineContextMenuArgs { command: ContextMenuCommand }
+struct OpenSelectedTimelineContextMenuArgs {
+    command: ContextMenuCommand,
+}
 
 #[cfg(windows)]
 #[derive(Serialize)]
@@ -2147,10 +2182,40 @@ mod imp {
             ))
         }
 
-        pub(crate) fn open_navigation_context_menu(&self, _path: Vec<NavigationPathSegment>, _command: ContextMenuCommand) -> Result<(), TestkitError> { Err(TestkitError::UnsupportedPlatform("mmatrix-testkit requires the Windows target")) }
-        pub(crate) fn open_selected_navigation_context_menu(&self, _command: ContextMenuCommand) -> Result<(), TestkitError> { Err(TestkitError::UnsupportedPlatform("mmatrix-testkit requires the Windows target")) }
-        pub(crate) fn open_timeline_context_menu(&self, _event_id: &str, _command: ContextMenuCommand) -> Result<(), TestkitError> { Err(TestkitError::UnsupportedPlatform("mmatrix-testkit requires the Windows target")) }
-        pub(crate) fn open_selected_timeline_context_menu(&self, _command: ContextMenuCommand) -> Result<(), TestkitError> { Err(TestkitError::UnsupportedPlatform("mmatrix-testkit requires the Windows target")) }
+        pub(crate) fn open_navigation_context_menu(
+            &self,
+            _path: Vec<NavigationPathSegment>,
+            _command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn open_selected_navigation_context_menu(
+            &self,
+            _command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn open_timeline_context_menu(
+            &self,
+            _event_id: &str,
+            _command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn open_selected_timeline_context_menu(
+            &self,
+            _command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
 
         pub(crate) fn room_activity(
             &self,
@@ -2688,17 +2753,47 @@ mod imp {
             )
         }
 
-        pub(crate) fn open_navigation_context_menu(&self, path: Vec<NavigationPathSegment>, command: ContextMenuCommand) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, OpenNavigationContextMenuArgs { path, command }, "OPEN_NAVIGATION_CONTEXT_MENU")
+        pub(crate) fn open_navigation_context_menu(
+            &self,
+            path: Vec<NavigationPathSegment>,
+            command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU,
+                OpenNavigationContextMenuArgs { path, command },
+                "OPEN_NAVIGATION_CONTEXT_MENU",
+            )
         }
-        pub(crate) fn open_selected_navigation_context_menu(&self, command: ContextMenuCommand) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU, OpenSelectedNavigationContextMenuArgs { command }, "OPEN_SELECTED_NAVIGATION_CONTEXT_MENU")
+        pub(crate) fn open_selected_navigation_context_menu(
+            &self,
+            command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
+                OpenSelectedNavigationContextMenuArgs { command },
+                "OPEN_SELECTED_NAVIGATION_CONTEXT_MENU",
+            )
         }
-        pub(crate) fn open_timeline_context_menu(&self, event_id: &str, command: ContextMenuCommand) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU, OpenTimelineContextMenuArgs { event_id, command }, "OPEN_TIMELINE_CONTEXT_MENU")
+        pub(crate) fn open_timeline_context_menu(
+            &self,
+            event_id: &str,
+            command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
+                OpenTimelineContextMenuArgs { event_id, command },
+                "OPEN_TIMELINE_CONTEXT_MENU",
+            )
         }
-        pub(crate) fn open_selected_timeline_context_menu(&self, command: ContextMenuCommand) -> Result<(), TestkitError> {
-            self.send_accepted_command(COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, OpenSelectedTimelineContextMenuArgs { command }, "OPEN_SELECTED_TIMELINE_CONTEXT_MENU")
+        pub(crate) fn open_selected_timeline_context_menu(
+            &self,
+            command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU,
+                OpenSelectedTimelineContextMenuArgs { command },
+                "OPEN_SELECTED_TIMELINE_CONTEXT_MENU",
+            )
         }
 
         fn send_accepted_command<Args: Serialize>(

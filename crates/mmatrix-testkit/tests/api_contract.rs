@@ -17,15 +17,15 @@ use mmatrix_core::{
     RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
 use mmatrix_testkit::{
-    BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FetchRoomImageMediaRequest,
-    FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions, LoginArgs, MdiState,
-    MdiView, MembershipCommandAction, Model, NavigationNode, NavigationPathSegment,
-    ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomImageMedia,
-    RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource, RoomMemberView,
-    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
+    FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions,
+    LoginArgs, MdiState, MdiView, MembershipCommandAction, Model, NavigationNode,
+    NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource,
+    RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
     RoomVideoActivity, RoomVideoInfo, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild,
@@ -40,7 +40,10 @@ use mmatrix_testkit::{
 
 #[test]
 fn context_menu_command_serializes_to_strict_shape() {
-    assert_eq!(serde_json::to_string(&ContextMenuCommand::PartRoom).unwrap(), "\"part_room\"");
+    assert_eq!(
+        serde_json::to_string(&ContextMenuCommand::PartRoom).unwrap(),
+        "\"part_room\""
+    );
     assert!(serde_json::from_str::<ContextMenuCommand>("\"invalid\"").is_err());
 }
 

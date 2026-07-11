@@ -27,21 +27,21 @@ use mmatrix_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
-    ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize, LaunchOptions, MdiView,
-    MembershipCommandAction, MmatrixApp, Model, NavigationNode, NavigationPathSegment, Room,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
-    SubmittedHistoryCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
-    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
+    LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp, Model, NavigationNode,
+    NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMediaState,
+    RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedEditCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
+    UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -10780,7 +10780,7 @@ fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
     assert!(menu.reject_invite_enabled);
     assert!(!menu.part_room_enabled);
 
-    app.accept_invite_via_room_menu()?;
+    app.open_selected_navigation_context_menu(ContextMenuCommand::AcceptInvite)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let accepted = app.dump_model()?;
@@ -10831,7 +10831,8 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
     assert!(!menu.reject_invite_enabled);
     assert!(menu.part_room_enabled);
 
-    app.part_room_via_room_menu()?;
+    let path = app.selected_navigation_path()?;
+    app.open_navigation_context_menu(path, ContextMenuCommand::PartRoom)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let model = app.dump_model()?;
@@ -10971,9 +10972,14 @@ fn automation_driver_message_menu_actions_prefill_selected_event()
 #[test]
 fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prior_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path().map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
-    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], launch_options(Some(local_app_data.clone())))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(fixture_state_path("reactions.json"))?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -10981,7 +10987,10 @@ fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prio
     assert_eq!(app.dump_message_menu_state()?.selected_event_id, None);
     app.open_timeline_context_menu("$react-normal", ContextMenuCommand::ReplyMessage)?;
     assert_eq!(app.compose_text()?, "/reply $react-normal ");
-    assert_eq!(app.dump_message_menu_state()?.selected_event_id.as_deref(), Some("$react-normal"));
+    assert_eq!(
+        app.dump_message_menu_state()?.selected_event_id.as_deref(),
+        Some("$react-normal")
+    );
     let model = app.dump_model()?;
     assert!(model.submitted_reply_commands.is_empty());
     drop(app);
@@ -10992,9 +11001,14 @@ fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prio
 #[test]
 fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path().map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
-    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], launch_options(Some(local_app_data.clone())))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
     app.load_events(&fs::read_to_string(fixture_state_path("reactions.json"))?)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -11025,13 +11039,12 @@ fn assert_message_menu_attachment_save(
     app.load_events(&fs::read_to_string(&fixture_path)?)?;
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!media:example.org")?;
-    app.select_timeline_event(event_id)?;
 
     let menu = app.dump_message_menu_state()?;
     assert!(menu.save_attachment_enabled);
     assert_eq!(menu.selected_event_id.as_deref(), Some(event_id));
 
-    app.save_attachment_via_message_menu()?;
+    app.open_timeline_context_menu(event_id, ContextMenuCommand::SaveAttachment)?;
     app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomMedia(
         CoreRoomMedia {
             room_id: "!media:example.org".to_owned(),
@@ -11145,8 +11158,7 @@ fn automation_driver_message_menu_redact_from_thread_targets_parent_room()
 
     let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
     app.select_view(thread_view_identity.clone())?;
-    app.select_timeline_event("$react-thread-reply")?;
-    app.redact_selected_message_via_menu()?;
+    app.open_timeline_context_menu("$react-thread-reply", ContextMenuCommand::RedactMessage)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     assert_eq!(

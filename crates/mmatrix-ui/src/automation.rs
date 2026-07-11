@@ -169,9 +169,13 @@ impl CommandKind {
             COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => Some(Self::SaveAttachmentViaMessageMenu),
             COMMAND_ID_SEND_FILE => Some(Self::SendFile),
             COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU => Some(Self::OpenNavigationContextMenu),
-            COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU => Some(Self::OpenSelectedNavigationContextMenu),
+            COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU => {
+                Some(Self::OpenSelectedNavigationContextMenu)
+            }
             COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU => Some(Self::OpenTimelineContextMenu),
-            COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU => Some(Self::OpenSelectedTimelineContextMenu),
+            COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU => {
+                Some(Self::OpenSelectedTimelineContextMenu)
+            }
             _ => None,
         }
     }
@@ -334,10 +338,22 @@ pub(crate) enum ParsedCommand {
     SaveAttachmentViaMessageMenu {
         id: String,
     },
-    OpenNavigationContextMenu { id: String, args: OpenNavigationContextMenuArgs },
-    OpenSelectedNavigationContextMenu { id: String, args: OpenSelectedNavigationContextMenuArgs },
-    OpenTimelineContextMenu { id: String, args: OpenTimelineContextMenuArgs },
-    OpenSelectedTimelineContextMenu { id: String, args: OpenSelectedTimelineContextMenuArgs },
+    OpenNavigationContextMenu {
+        id: String,
+        args: OpenNavigationContextMenuArgs,
+    },
+    OpenSelectedNavigationContextMenu {
+        id: String,
+        args: OpenSelectedNavigationContextMenuArgs,
+    },
+    OpenTimelineContextMenu {
+        id: String,
+        args: OpenTimelineContextMenuArgs,
+    },
+    OpenSelectedTimelineContextMenu {
+        id: String,
+        args: OpenSelectedTimelineContextMenuArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -392,9 +408,13 @@ impl ParsedCommand {
             Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
             Self::SaveAttachmentViaMessageMenu { .. } => CommandKind::SaveAttachmentViaMessageMenu,
             Self::OpenNavigationContextMenu { .. } => CommandKind::OpenNavigationContextMenu,
-            Self::OpenSelectedNavigationContextMenu { .. } => CommandKind::OpenSelectedNavigationContextMenu,
+            Self::OpenSelectedNavigationContextMenu { .. } => {
+                CommandKind::OpenSelectedNavigationContextMenu
+            }
             Self::OpenTimelineContextMenu { .. } => CommandKind::OpenTimelineContextMenu,
-            Self::OpenSelectedTimelineContextMenu { .. } => CommandKind::OpenSelectedTimelineContextMenu,
+            Self::OpenSelectedTimelineContextMenu { .. } => {
+                CommandKind::OpenSelectedTimelineContextMenu
+            }
         }
     }
 }
@@ -484,7 +504,13 @@ pub(crate) struct SelectNavigationPathArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ContextMenuCommand {
-    AcceptInvite, RejectInvite, PartRoom, ReplyMessage, EditMessage, ReactMessage, RedactMessage,
+    AcceptInvite,
+    RejectInvite,
+    PartRoom,
+    ReplyMessage,
+    EditMessage,
+    ReactMessage,
+    RedactMessage,
     SaveAttachment,
 }
 
@@ -496,13 +522,20 @@ pub(crate) struct OpenNavigationContextMenuArgs {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OpenSelectedNavigationContextMenuArgs { pub(crate) command: ContextMenuCommand }
+pub(crate) struct OpenSelectedNavigationContextMenuArgs {
+    pub(crate) command: ContextMenuCommand,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OpenTimelineContextMenuArgs { pub(crate) event_id: String, pub(crate) command: ContextMenuCommand }
+pub(crate) struct OpenTimelineContextMenuArgs {
+    pub(crate) event_id: String,
+    pub(crate) command: ContextMenuCommand,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OpenSelectedTimelineContextMenuArgs { pub(crate) command: ContextMenuCommand }
+pub(crate) struct OpenSelectedTimelineContextMenuArgs {
+    pub(crate) command: ContextMenuCommand,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1993,20 +2026,33 @@ pub(crate) fn parse_command_request(
         }
         CommandKind::OpenNavigationContextMenu => Ok(ParsedCommand::OpenNavigationContextMenu {
             id: envelope.id.clone(),
-            args: parse_args_required::<OpenNavigationContextMenuArgs>(&envelope.id, envelope.args)?,
+            args: parse_args_required::<OpenNavigationContextMenuArgs>(
+                &envelope.id,
+                envelope.args,
+            )?,
         }),
-        CommandKind::OpenSelectedNavigationContextMenu => Ok(ParsedCommand::OpenSelectedNavigationContextMenu {
-            id: envelope.id.clone(),
-            args: parse_args_required::<OpenSelectedNavigationContextMenuArgs>(&envelope.id, envelope.args)?,
-        }),
+        CommandKind::OpenSelectedNavigationContextMenu => {
+            Ok(ParsedCommand::OpenSelectedNavigationContextMenu {
+                id: envelope.id.clone(),
+                args: parse_args_required::<OpenSelectedNavigationContextMenuArgs>(
+                    &envelope.id,
+                    envelope.args,
+                )?,
+            })
+        }
         CommandKind::OpenTimelineContextMenu => Ok(ParsedCommand::OpenTimelineContextMenu {
             id: envelope.id.clone(),
             args: parse_args_required::<OpenTimelineContextMenuArgs>(&envelope.id, envelope.args)?,
         }),
-        CommandKind::OpenSelectedTimelineContextMenu => Ok(ParsedCommand::OpenSelectedTimelineContextMenu {
-            id: envelope.id.clone(),
-            args: parse_args_required::<OpenSelectedTimelineContextMenuArgs>(&envelope.id, envelope.args)?,
-        }),
+        CommandKind::OpenSelectedTimelineContextMenu => {
+            Ok(ParsedCommand::OpenSelectedTimelineContextMenu {
+                id: envelope.id.clone(),
+                args: parse_args_required::<OpenSelectedTimelineContextMenuArgs>(
+                    &envelope.id,
+                    envelope.args,
+                )?,
+            })
+        }
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -2265,12 +2311,12 @@ mod tests {
         COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_FIND_ACTIVE_VIEW,
         COMMAND_ID_GET_VERSION, COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU, COMMAND_ID_LIST_ROOMS,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
+        COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
+        COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
         COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
-        COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
@@ -2518,10 +2564,22 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_PART_ROOM_VIA_ROOM_MENU),
             Some(CommandKind::PartRoomViaRoomMenu)
         );
-        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU), Some(CommandKind::OpenNavigationContextMenu));
-        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU), Some(CommandKind::OpenSelectedNavigationContextMenu));
-        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU), Some(CommandKind::OpenTimelineContextMenu));
-        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU), Some(CommandKind::OpenSelectedTimelineContextMenu));
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU),
+            Some(CommandKind::OpenNavigationContextMenu)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU),
+            Some(CommandKind::OpenSelectedNavigationContextMenu)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU),
+            Some(CommandKind::OpenTimelineContextMenu)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU),
+            Some(CommandKind::OpenSelectedTimelineContextMenu)
+        );
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU),
             Some(CommandKind::ReplyToSelectedMessageViaMenu)
@@ -2571,13 +2629,38 @@ mod tests {
     #[test]
     fn context_menu_commands_require_strict_valid_args() {
         for (command_id, args) in [
-            (COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, r#"{"path":[],"command":"part_room"}"#),
-            (COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU, r#"{"command":"accept_invite"}"#),
-            (COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU, r#"{"event_id":"$event","command":"reply_message"}"#),
-            (COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, r#"{"command":"edit_message"}"#),
+            (
+                COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU,
+                r#"{"path":[],"command":"part_room"}"#,
+            ),
+            (
+                COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
+                r#"{"command":"accept_invite"}"#,
+            ),
+            (
+                COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
+                r#"{"event_id":"$event","command":"reply_message"}"#,
+            ),
+            (
+                COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU,
+                r#"{"command":"edit_message"}"#,
+            ),
         ] {
-            assert!(parse_command_request(command_id, format!(r#"{{"id":"context","args":{args}}}"#).as_bytes()).is_ok());
-            assert!(parse_command_request(command_id, format!(r#"{{"id":"context","args":{{"command":"invalid","extra":true}}}}"#).as_bytes()).is_err());
+            assert!(
+                parse_command_request(
+                    command_id,
+                    format!(r#"{{"id":"context","args":{args}}}"#).as_bytes()
+                )
+                .is_ok()
+            );
+            assert!(
+                parse_command_request(
+                    command_id,
+                    format!(r#"{{"id":"context","args":{{"command":"invalid","extra":true}}}}"#)
+                        .as_bytes()
+                )
+                .is_err()
+            );
             assert!(parse_command_request(command_id, br#"{"id":"context"}"#).is_err());
         }
     }
