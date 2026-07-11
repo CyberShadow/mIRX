@@ -3025,11 +3025,11 @@ mod tests {
         ReactionEventIndexEntry, attach_reply_relation, attach_thread_relation,
         attach_thread_reply_relation, backfill_room_history, cancelled_state,
         direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
-        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        joined_room_members, joined_room_members_no_sync, map_cross_signing_status, map_decimals,
+        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
-        joined_room_members, joined_room_members_no_sync, moderation_capabilities,
-        outgoing_events_from_local_echo_event, owned_event_id_from_str,
+        moderation_capabilities, outgoing_events_from_local_echo_event, owned_event_id_from_str,
         reaction_event_content, read_file_bytes, room_activity_from_sync_member,
         room_activity_from_sync_message, room_activity_from_sync_topic,
         room_activity_update_from_indexed_reaction_redaction,
@@ -3115,7 +3115,9 @@ mod tests {
             let actor = client.user_id().expect("authenticated user");
 
             assert_eq!(
-                joined_room_members(actor, &room).await.expect("synced members"),
+                joined_room_members(actor, &room)
+                    .await
+                    .expect("synced members"),
                 joined_room_members_no_sync(actor, &room)
                     .await
                     .expect("cached members")
@@ -3165,12 +3167,10 @@ mod tests {
             let room = client
                 .get_room(room_id().as_ref())
                 .expect("joined room from sync response");
-            let err = joined_room_members_no_sync(
-                client.user_id().expect("authenticated user"),
-                &room,
-            )
-            .await
-            .expect_err("authenticated member must be present");
+            let err =
+                joined_room_members_no_sync(client.user_id().expect("authenticated user"), &room)
+                    .await
+                    .expect_err("authenticated member must be present");
 
             assert_eq!(
                 err.to_string(),
@@ -3504,8 +3504,7 @@ mod tests {
         base_client
             .activate(
                 SessionMeta {
-                    user_id: OwnedUserId::try_from("@alice:example.org")
-                        .expect("valid user id"),
+                    user_id: OwnedUserId::try_from("@alice:example.org").expect("valid user id"),
                     device_id: "DEVICE".into(),
                 },
                 matrix_sdk::store::RoomLoadSettings::default(),
