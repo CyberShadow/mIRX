@@ -569,6 +569,8 @@ pub(crate) enum ContextMenuCommand {
     SaveAttachment,
     QueryMember,
     MentionMember,
+    KickMember,
+    BanMember,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -839,6 +841,8 @@ pub(crate) struct DumpMessageMenuState {
 pub(crate) struct DumpMemberMenuState {
     pub(crate) query_enabled: bool,
     pub(crate) mention_enabled: bool,
+    pub(crate) kick_enabled: bool,
+    pub(crate) ban_enabled: bool,
     pub(crate) selected_user_id: Option<String>,
     pub(crate) selected_label: Option<String>,
 }
@@ -1101,6 +1105,8 @@ pub(crate) struct RoomMemberView {
     pub(crate) user_id: String,
     pub(crate) display_name: Option<String>,
     pub(crate) label: String,
+    pub(crate) can_kick: bool,
+    pub(crate) can_ban: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1170,6 +1176,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_membership_commands: Vec<DumpSubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_member_moderation_commands: Vec<DumpSubmittedMemberModerationCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_direct_room_commands: Vec<DumpSubmittedDirectRoomCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_topic_commands: Vec<DumpSubmittedRoomTopicCommand>,
@@ -1198,6 +1206,21 @@ pub(crate) struct DumpModel {
 pub(crate) struct DumpSubmittedMembershipCommand {
     pub(crate) action: DumpMembershipCommandAction,
     pub(crate) target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedMemberModerationCommand {
+    pub(crate) action: DumpMemberModerationAction,
+    pub(crate) room_id: String,
+    pub(crate) user_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpMemberModerationAction {
+    Kick,
+    Ban,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1609,6 +1632,8 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::CreateDirectRoom => "create_direct_room",
         Operation::LeaveRoom => "leave_room",
         Operation::RejectRoomInvite => "reject_room_invite",
+        Operation::KickRoomMember => "kick_room_member",
+        Operation::BanRoomMember => "ban_room_member",
         Operation::SetRoomTopic => "set_room_topic",
         Operation::SendMessage => "send_text",
         Operation::SendFile => "send_file",
@@ -3035,6 +3060,24 @@ mod tests {
             parse_command_request(COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, br#"{"id":"member-menu","args":{"user_id":"@bob:example","command":"query_member"}}"#).unwrap(),
             ParsedCommand::OpenMemberContextMenu { id: "member-menu".to_owned(), args: OpenMemberContextMenuArgs { user_id: "@bob:example".to_owned(), command: ContextMenuCommand::QueryMember } }
         );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, br#"{"id":"member-menu","args":{"user_id":"@bob:example","command":"kick_member"}}"#).unwrap(),
+            ParsedCommand::OpenMemberContextMenu { id: "member-menu".to_owned(), args: OpenMemberContextMenuArgs { user_id: "@bob:example".to_owned(), command: ContextMenuCommand::KickMember } }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
+                br#"{"id":"member-menu","args":{"user_id":"@bob:example","command":"ban_member"}}"#
+            )
+            .unwrap(),
+            ParsedCommand::OpenMemberContextMenu {
+                id: "member-menu".to_owned(),
+                args: OpenMemberContextMenuArgs {
+                    user_id: "@bob:example".to_owned(),
+                    command: ContextMenuCommand::BanMember
+                }
+            }
+        );
         assert!(matches!(
             parse_command_request(
                 COMMAND_ID_DUMP_MEMBER_MENU_STATE,
@@ -4241,6 +4284,7 @@ mod tests {
                     last_e2ee_recovery_setup_result: None,
                     last_verification: None,
                     submitted_membership_commands: Vec::new(),
+                    submitted_member_moderation_commands: Vec::new(),
                     submitted_direct_room_commands: Vec::new(),
                     submitted_room_topic_commands: Vec::new(),
                     submitted_reaction_commands: Vec::new(),
@@ -4607,6 +4651,8 @@ mod tests {
                                     user_id: "@alice:example".to_owned(),
                                     display_name: Some("Alice".to_owned()),
                                     label: "Alice".to_owned(),
+                                    can_kick: true,
+                                    can_ban: false,
                                 }],
                             },
                             MdiView {
@@ -4721,7 +4767,9 @@ mod tests {
                                     {
                                         "user_id":"@alice:example",
                                         "display_name":"Alice",
-                                        "label":"Alice"
+                                        "label":"Alice",
+                                        "can_kick":true,
+                                        "can_ban":false
                                     }
                                 ]
                             },
@@ -4830,6 +4878,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -4908,6 +4957,7 @@ mod tests {
             }),
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -4956,6 +5006,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: vec![DumpSubmittedRoomTopicCommand {
                 room_id: "!ops:example".to_owned(),
@@ -5012,6 +5063,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5091,6 +5143,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5173,6 +5226,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5265,6 +5319,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: vec![DumpSubmittedReactionCommand {
@@ -5383,6 +5438,7 @@ mod tests {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5461,6 +5517,7 @@ mod tests {
                 last_e2ee_recovery_setup_result: None,
                 last_verification: None,
                 submitted_membership_commands: Vec::new(),
+                submitted_member_moderation_commands: Vec::new(),
                 submitted_direct_room_commands: Vec::new(),
                 submitted_room_topic_commands: Vec::new(),
                 submitted_reaction_commands: Vec::new(),

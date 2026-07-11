@@ -160,6 +160,8 @@ pub enum ContextMenuCommand {
     SaveAttachment,
     QueryMember,
     MentionMember,
+    KickMember,
+    BanMember,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +169,8 @@ pub enum ContextMenuCommand {
 pub struct MemberMenuState {
     pub query_enabled: bool,
     pub mention_enabled: bool,
+    pub kick_enabled: bool,
+    pub ban_enabled: bool,
     pub selected_user_id: Option<String>,
     pub selected_label: Option<String>,
 }
@@ -348,6 +352,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_membership_commands: Vec<SubmittedMembershipCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_member_moderation_commands: Vec<SubmittedMemberModerationCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_direct_room_commands: Vec<SubmittedDirectRoomCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_topic_commands: Vec<SubmittedRoomTopicCommand>,
@@ -376,6 +382,21 @@ pub struct Model {
 pub struct SubmittedMembershipCommand {
     pub action: MembershipCommandAction,
     pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedMemberModerationCommand {
+    pub action: MemberModerationAction,
+    pub room_id: String,
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberModerationAction {
+    Kick,
+    Ban,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1330,6 +1351,8 @@ pub struct RoomMemberView {
     pub user_id: String,
     pub display_name: Option<String>,
     pub label: String,
+    pub can_kick: bool,
+    pub can_ban: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

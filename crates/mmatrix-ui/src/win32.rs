@@ -2333,6 +2333,8 @@ fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
                 user_id: member.user_id.clone(),
                 display_name: member.display_name.clone(),
                 label,
+                can_kick: member.can_kick,
+                can_ban: member.can_ban,
             }
         })
         .collect()
@@ -5858,6 +5860,8 @@ unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, Stri
     Ok(DumpMemberMenuState {
         query_enabled: state.query_enabled,
         mention_enabled: state.mention_enabled,
+        kick_enabled: false,
+        ban_enabled: false,
         selected_user_id: state.selected_user_id,
         selected_label: state.selected_label,
     })
@@ -13983,6 +13987,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .as_ref()
             .map(dump_verification_from_state_event),
         submitted_membership_commands: submitted_membership_commands_from_state(state),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),

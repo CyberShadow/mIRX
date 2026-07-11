@@ -19,17 +19,18 @@ use mmatrix_core::{
 use mmatrix_testkit::{
     BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
     FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions,
-    LoginArgs, MdiState, MdiView, MemberMenuState, MembershipCommandAction, Model, NavigationNode,
-    NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
-    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource,
-    RoomMemberView, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
-    RoomVideoActivity, RoomVideoInfo, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild,
-    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
+    LoginArgs, MdiState, MdiView, MemberMenuState, MemberModerationAction, MembershipCommandAction,
+    Model, NavigationNode, NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs,
+    RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
+    RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity,
+    RoomVideoInfo, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
     SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
     SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
     SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
@@ -56,7 +57,41 @@ fn context_menu_command_serializes_to_strict_shape() {
         serde_json::from_str::<ContextMenuCommand>("\"mention_member\"").unwrap(),
         ContextMenuCommand::MentionMember
     );
+    assert_eq!(
+        serde_json::to_string(&ContextMenuCommand::KickMember).unwrap(),
+        "\"kick_member\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ContextMenuCommand::BanMember).unwrap(),
+        "\"ban_member\""
+    );
     assert!(serde_json::from_str::<ContextMenuCommand>("\"invalid\"").is_err());
+}
+
+#[test]
+fn submitted_member_moderation_command_has_a_strict_json_contract() {
+    let command = SubmittedMemberModerationCommand {
+        action: MemberModerationAction::Kick,
+        room_id: "!ops:example.org".to_owned(),
+        user_id: "@bob:example.org".to_owned(),
+    };
+    assert_eq!(
+        serde_json::to_value(&command).unwrap(),
+        serde_json::json!({
+            "action": "kick",
+            "room_id": "!ops:example.org",
+            "user_id": "@bob:example.org"
+        })
+    );
+    assert!(serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
+        "action": "ban", "room_id": "!ops:example.org", "user_id": "@bob:example.org", "extra": true
+    })).is_err());
+    assert!(
+        serde_json::from_value::<SubmittedMemberModerationCommand>(serde_json::json!({
+            "action": "invalid", "room_id": "!ops:example.org", "user_id": "@bob:example.org"
+        }))
+        .is_err()
+    );
 }
 
 #[cfg(not(windows))]
@@ -396,6 +431,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
     let member = MemberMenuState {
         query_enabled: true,
         mention_enabled: true,
+        kick_enabled: true,
+        ban_enabled: false,
         selected_user_id: Some("@bob:example".to_owned()),
         selected_label: Some("Bob".to_owned()),
     };
@@ -422,7 +459,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         }))
         .is_err()
     );
-    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"query_enabled": true, "mention_enabled": true, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"query_enabled": true, "mention_enabled": true, "kick_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"query_enabled": true, "mention_enabled": true, "ban_enabled": false, "selected_user_id": null, "selected_label": null})).is_err());
 }
 
 #[test]
@@ -535,6 +573,7 @@ fn data_models_round_trip_through_json() {
             },
         }),
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -610,6 +649,8 @@ fn data_models_round_trip_through_json() {
                         user_id: "@alice:example".to_owned(),
                         display_name: Some("Alice".to_owned()),
                         label: "Alice".to_owned(),
+                        can_kick: true,
+                        can_ban: false,
                     }],
                 },
                 MdiView {
@@ -855,6 +896,8 @@ fn data_models_round_trip_through_json() {
                                 "user_id": "@alice:example",
                                 "display_name": "Alice",
                                 "label": "Alice",
+                                "can_kick": true,
+                                "can_ban": false,
                             }
                         ],
                     },
@@ -3796,6 +3839,7 @@ fn model_last_activity_round_trips_through_json() {
         last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -3862,6 +3906,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
                 target: "!ops:example.org".to_owned(),
             },
         ],
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -3939,6 +3984,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
             action: MembershipCommandAction::Join,
             target: "#ops:example.org".to_owned(),
         }],
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: vec![SubmittedDirectRoomCommand {
             user_id: "@alice:example.org".to_owned(),
         }],
@@ -4020,6 +4066,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
             action: MembershipCommandAction::Join,
             target: "#ops:example.org".to_owned(),
         }],
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: vec![SubmittedDirectRoomCommand {
             user_id: "@alice:example.org".to_owned(),
         }],
@@ -4113,6 +4160,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: vec![SubmittedReactionCommand {
@@ -4185,6 +4233,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4258,6 +4307,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4342,6 +4392,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4455,6 +4506,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: vec![SubmittedReactionCommand {
@@ -4534,6 +4586,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         last_e2ee_recovery_setup_result: None,
         last_verification: None,
         submitted_membership_commands: Vec::new(),
+        submitted_member_moderation_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4637,6 +4690,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             last_e2ee_recovery_setup_result: None,
             last_verification: None,
             submitted_membership_commands: Vec::new(),
+            submitted_member_moderation_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
