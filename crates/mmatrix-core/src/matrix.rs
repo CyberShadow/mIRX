@@ -3054,29 +3054,21 @@ mod tests {
         runtime.block_on(async {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
-            let member_events = serde_json::json!([
+            let state_events = serde_json::json!([
                 {
-                    "type": "m.room.member",
-                    "state_key": "@example:localhost",
+                    "type": "m.room.create",
+                    "state_key": "",
                     "sender": "@example:localhost",
-                    "event_id": "$actor:localhost",
+                    "event_id": "$create:localhost",
                     "origin_server_ts": 1u64,
-                    "content": { "membership": "join", "displayname": "Actor" }
-                },
-                {
-                    "type": "m.room.member",
-                    "state_key": "@bob:localhost",
-                    "sender": "@bob:localhost",
-                    "event_id": "$bob:localhost",
-                    "origin_server_ts": 2u64,
-                    "content": { "membership": "join", "displayname": "Bob" }
+                    "content": { "creator": "@example:localhost" }
                 },
                 {
                     "type": "m.room.power_levels",
                     "state_key": "",
                     "sender": "@example:localhost",
                     "event_id": "$power:localhost",
-                    "origin_server_ts": 3u64,
+                    "origin_server_ts": 2u64,
                     "content": {
                         "ban": 75,
                         "events": {},
@@ -3088,11 +3080,27 @@ mod tests {
                         "users": { "@example:localhost": 51 },
                         "users_default": 10
                     }
+                },
+                {
+                    "type": "m.room.member",
+                    "state_key": "@example:localhost",
+                    "sender": "@example:localhost",
+                    "event_id": "$actor:localhost",
+                    "origin_server_ts": 3u64,
+                    "content": { "membership": "join", "displayname": "Actor" }
+                },
+                {
+                    "type": "m.room.member",
+                    "state_key": "@bob:localhost",
+                    "sender": "@bob:localhost",
+                    "event_id": "$bob:localhost",
+                    "origin_server_ts": 4u64,
+                    "content": { "membership": "join", "displayname": "Bob" }
                 }
             ]);
             mock_server
                 .mock_get_members()
-                .ok(raw_room_member_events(&member_events))
+                .ok(raw_room_member_events(&state_events))
                 .mock_once()
                 .mount()
                 .await;
@@ -3100,7 +3108,7 @@ mod tests {
                 .sync_room(
                     &client,
                     JoinedRoomBuilder::new(room_id().as_ref())
-                        .add_state_bulk(raw_sync_state_events(&member_events)),
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
                 )
                 .await;
             let actor = client.user_id().expect("authenticated user");
@@ -3157,33 +3165,15 @@ mod tests {
         runtime.block_on(async {
             let client = client_with_joined_members(serde_json::json!([
                 {
-                    "type": "m.room.member", "state_key": "@alice:example.org",
-                    "sender": "@alice:example.org", "event_id": "$alice:example.org",
+                    "type": "m.room.create", "state_key": "",
+                    "sender": "@alice:example.org", "event_id": "$create:example.org",
                     "origin_server_ts": 1u64,
-                    "content": { "membership": "join", "displayname": "Actor" }
-                },
-                {
-                    "type": "m.room.member", "state_key": "@default:example.org",
-                    "sender": "@default:example.org", "event_id": "$default:example.org",
-                    "origin_server_ts": 2u64,
-                    "content": { "membership": "join", "displayname": "Default" }
-                },
-                {
-                    "type": "m.room.member", "state_key": "@equal:example.org",
-                    "sender": "@equal:example.org", "event_id": "$equal:example.org",
-                    "origin_server_ts": 3u64,
-                    "content": { "membership": "join", "displayname": "Equal" }
-                },
-                {
-                    "type": "m.room.member", "state_key": "@higher:example.org",
-                    "sender": "@higher:example.org", "event_id": "$higher:example.org",
-                    "origin_server_ts": 4u64,
-                    "content": { "membership": "join", "displayname": "Higher" }
+                    "content": { "creator": "@alice:example.org" }
                 },
                 {
                     "type": "m.room.power_levels", "state_key": "",
                     "sender": "@alice:example.org", "event_id": "$power:example.org",
-                    "origin_server_ts": 5u64,
+                    "origin_server_ts": 2u64,
                     "content": {
                         "ban": 75, "events": {}, "events_default": 0, "invite": 50,
                         "kick": 100, "redact": 50, "state_default": 50, "users_default": 10,
@@ -3193,6 +3183,30 @@ mod tests {
                             "@higher:example.org": 100
                         }
                     }
+                },
+                {
+                    "type": "m.room.member", "state_key": "@alice:example.org",
+                    "sender": "@alice:example.org", "event_id": "$alice:example.org",
+                    "origin_server_ts": 3u64,
+                    "content": { "membership": "join", "displayname": "Actor" }
+                },
+                {
+                    "type": "m.room.member", "state_key": "@default:example.org",
+                    "sender": "@default:example.org", "event_id": "$default:example.org",
+                    "origin_server_ts": 4u64,
+                    "content": { "membership": "join", "displayname": "Default" }
+                },
+                {
+                    "type": "m.room.member", "state_key": "@equal:example.org",
+                    "sender": "@equal:example.org", "event_id": "$equal:example.org",
+                    "origin_server_ts": 5u64,
+                    "content": { "membership": "join", "displayname": "Equal" }
+                },
+                {
+                    "type": "m.room.member", "state_key": "@higher:example.org",
+                    "sender": "@higher:example.org", "event_id": "$higher:example.org",
+                    "origin_server_ts": 6u64,
+                    "content": { "membership": "join", "displayname": "Higher" }
                 }
             ]))
             .await;
@@ -3460,6 +3474,7 @@ mod tests {
             .as_array()
             .expect("member event array")
             .iter()
+            .filter(|event| event["type"] == "m.room.member")
             .map(|event| {
                 Raw::<RoomMemberEvent>::from_json_string(event.to_string())
                     .expect("serialize raw member event")
@@ -3471,12 +3486,15 @@ mod tests {
         let events = events.as_array().expect("state event array");
         events
             .iter()
-            .filter(|event| event["type"] == "m.room.power_levels")
+            .filter(|event| event["type"] == "m.room.create")
             .chain(
                 events
                     .iter()
-                    .filter(|event| event["type"] != "m.room.power_levels"),
+                    .filter(|event| event["type"] == "m.room.power_levels"),
             )
+            .chain(events.iter().filter(|event| {
+                event["type"] != "m.room.create" && event["type"] != "m.room.power_levels"
+            }))
             .map(|event| {
                 Raw::<AnySyncStateEvent>::from_json_string(event.to_string())
                     .expect("serialize raw sync state event")
