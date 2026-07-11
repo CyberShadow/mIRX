@@ -28,20 +28,21 @@ use mmatrix_core::{
 };
 use mmatrix_testkit::{
     ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
-    LaunchOptions, MdiView, MembershipCommandAction, MmatrixApp, Model, NavigationNode,
-    NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMediaState,
-    RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedEditCommand, SubmittedHistoryCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    LaunchOptions, MdiView, MemberModerationAction, MembershipCommandAction, MmatrixApp, Model,
+    NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
+    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -3608,14 +3609,76 @@ fn automation_driver_member_menu_state_tracks_selected_member()
     app.select_member("@casey:example")?;
     let state = app.dump_member_menu_state()?;
     assert!(state.query_enabled && state.mention_enabled);
+    assert!(state.kick_enabled && state.ban_enabled);
     assert_eq!(state.selected_user_id.as_deref(), Some("@casey:example"));
     assert_eq!(state.selected_label.as_deref(), Some("Casey"));
     app.select_member("@sam-two:example")?;
     let state = app.dump_member_menu_state()?;
     assert_eq!(state.selected_user_id.as_deref(), Some("@sam-two:example"));
+    assert!(!state.kick_enabled && !state.ban_enabled);
     assert_eq!(
         state.selected_label.as_deref(),
         Some("Sam (@sam-two:example)")
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_menu_moderation_uses_clicked_member()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.open_member_context_menu("@casey:example", ContextMenuCommand::KickMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_member_moderation_commands,
+        vec![SubmittedMemberModerationCommand {
+            action: MemberModerationAction::Kick,
+            room_id: "!members:example".to_owned(),
+            user_id: "@casey:example".to_owned(),
+        }]
+    );
+    app.open_member_context_menu("@casey:example", ContextMenuCommand::BanMember)?;
+    assert_eq!(
+        app.dump_model()?.submitted_member_moderation_commands,
+        vec![
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Kick,
+                room_id: "!members:example".to_owned(),
+                user_id: "@casey:example".to_owned(),
+            },
+            SubmittedMemberModerationCommand {
+                action: MemberModerationAction::Ban,
+                room_id: "!members:example".to_owned(),
+                user_id: "@casey:example".to_owned(),
+            },
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_menu_moderation_respects_independent_permissions()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.select_member("@sam-one:example")?;
+    let state = app.dump_member_menu_state()?;
+    assert!(state.kick_enabled);
+    assert!(!state.ban_enabled);
+    app.open_selected_member_context_menu(ContextMenuCommand::KickMember)?;
+    let error = app
+        .open_selected_member_context_menu(ContextMenuCommand::BanMember)
+        .expect_err("disabled ban must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("member context menu action is disabled")
+    );
+    assert_eq!(
+        app.dump_model()?.submitted_member_moderation_commands,
+        vec![SubmittedMemberModerationCommand {
+            action: MemberModerationAction::Kick,
+            room_id: "!members:example".to_owned(),
+            user_id: "@sam-one:example".to_owned(),
+        }]
     );
     Ok(())
 }

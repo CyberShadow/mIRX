@@ -16,11 +16,12 @@ use std::thread;
 use std::time::Duration;
 
 use mmatrix_core::{
-    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CommandSender, CoreConfig,
-    CoreErrorEvent, CoreHandle, CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus,
-    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomMediaRequest, JoinRoomRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
-    Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
+    CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
+    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
+    EditMessageRequest, Event, FetchRoomMediaRequest, JoinRoomRequest, KickRoomMemberRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioInfo, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo,
@@ -82,8 +83,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild,
     IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_ITEMFROMPOINT, LB_RESETCONTENT,
     LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW,
-    MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW,
+    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
     SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
     SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
@@ -102,19 +103,20 @@ use crate::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberMenuState,
-        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
+        DumpMemberModerationAction, DumpMembershipCommandAction, DumpMessageMenuState, DumpModel,
+        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
         DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
-        DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
-        FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
-        ListRoomsResponse, LoadEventsResponse, MdiState, MdiView, NavigationNode,
-        NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView,
-        SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse,
-        StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
+        DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
+        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
+        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
+        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
+        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
         UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
         WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
         dump_room_from_summary, dump_room_message_send_state_from_core,
@@ -171,6 +173,8 @@ const MENU_ID_ROOM_JOIN: usize = 40020;
 const MENU_ID_ROOM_QUERY: usize = 40021;
 const MENU_ID_MEMBER_QUERY: usize = 40022;
 const MENU_ID_MEMBER_MENTION: usize = 40023;
+const MENU_ID_MEMBER_KICK: usize = 40024;
+const MENU_ID_MEMBER_BAN: usize = 40025;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -4334,9 +4338,12 @@ unsafe fn show_member_context_menu(
     let menu = state_ref(frame).controls.member_menu;
     refresh_member_menu_state(frame, menu)?;
     let action_state = active_member_action_state(frame);
-    if requested_command.is_some_and(|command| {
-        !matches!(command, MENU_ID_MEMBER_QUERY | MENU_ID_MEMBER_MENTION)
-            || !action_state.query_enabled
+    if requested_command.is_some_and(|command| match command {
+        MENU_ID_MEMBER_QUERY => !action_state.query_enabled,
+        MENU_ID_MEMBER_MENTION => !action_state.mention_enabled,
+        MENU_ID_MEMBER_KICK => !action_state.kick_enabled,
+        MENU_ID_MEMBER_BAN => !action_state.ban_enabled,
+        _ => true,
     }) {
         return Err("member context menu action is disabled".to_owned());
     }
@@ -4366,6 +4373,46 @@ unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
+unsafe fn submit_selected_member_moderation(hwnd: HWND, kick: bool) -> Result<(), String> {
+    let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
+    if if kick {
+        !member.can_kick
+    } else {
+        !member.can_ban
+    } {
+        return Err("member context menu action is disabled".to_owned());
+    }
+    let room_id = match &state_ref(hwnd).active_view {
+        ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id.clone(),
+        ViewId::Status => return Err("no room selected".to_owned()),
+    };
+    let command = if kick {
+        Command::KickRoomMember(KickRoomMemberRequest {
+            room_id: room_id.clone(),
+            user_id: member.user_id.clone(),
+        })
+    } else {
+        Command::BanRoomMember(BanRoomMemberRequest {
+            room_id: room_id.clone(),
+            user_id: member.user_id.clone(),
+        })
+    };
+    let sender = state_ref(hwnd)
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue member moderation command: {err}"))?;
+    state_mut(hwnd).recorded_commands.push(command);
+    state_mut(hwnd).model.status = if kick {
+        format!("kick submitted: {}", member.user_id)
+    } else {
+        format!("ban submitted: {}", member.user_id)
+    };
+    refresh_status_bar(hwnd)
+}
+
 unsafe fn invoke_member_context_menu_for_automation(
     hwnd: HWND,
     user_id: &str,
@@ -4382,6 +4429,8 @@ unsafe fn invoke_selected_member_context_menu_for_automation(
     let command = match command {
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
+        ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
+        ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
         _ => return Err("member context menu command is unavailable".to_owned()),
     };
     let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
@@ -5519,6 +5568,16 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         MENU_ID_MEMBER_MENTION,
         "Mention/Insert Name",
     )?;
+    if AppendMenuW(member_menu, MF_SEPARATOR, 0, null()) == 0 {
+        return Err(last_os_error("AppendMenuW"));
+    }
+    append_menu_text(
+        member_menu,
+        MF_STRING,
+        MENU_ID_MEMBER_KICK,
+        "Kick from Room",
+    )?;
+    append_menu_text(member_menu, MF_STRING, MENU_ID_MEMBER_BAN, "Ban from Room")?;
     append_menu_text(
         message_menu,
         MF_STRING,
@@ -5788,6 +5847,8 @@ unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<()
 struct MemberMenuActionState {
     query_enabled: bool,
     mention_enabled: bool,
+    kick_enabled: bool,
+    ban_enabled: bool,
     selected_user_id: Option<String>,
     selected_label: Option<String>,
 }
@@ -5829,6 +5890,8 @@ unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
     MemberMenuActionState {
         query_enabled: selected.is_some(),
         mention_enabled: selected.is_some(),
+        kick_enabled: selected.as_ref().is_some_and(|member| member.can_kick),
+        ban_enabled: selected.as_ref().is_some_and(|member| member.can_ban),
         selected_user_id: selected.as_ref().map(|member| member.user_id.clone()),
         selected_label: selected.map(|member| member.label),
     }
@@ -5836,13 +5899,13 @@ unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
 
 unsafe fn refresh_member_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
     let action_state = active_member_action_state(hwnd);
-    for item in [MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_MENTION] {
-        let flags = MF_BYCOMMAND
-            | if action_state.query_enabled {
-                MF_ENABLED
-            } else {
-                MF_GRAYED
-            };
+    for (item, enabled) in [
+        (MENU_ID_MEMBER_QUERY, action_state.query_enabled),
+        (MENU_ID_MEMBER_MENTION, action_state.mention_enabled),
+        (MENU_ID_MEMBER_KICK, action_state.kick_enabled),
+        (MENU_ID_MEMBER_BAN, action_state.ban_enabled),
+    ] {
+        let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
         if EnableMenuItem(popup_menu, item as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
         }
@@ -5860,8 +5923,8 @@ unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, Stri
     Ok(DumpMemberMenuState {
         query_enabled: state.query_enabled,
         mention_enabled: state.mention_enabled,
-        kick_enabled: false,
-        ban_enabled: false,
+        kick_enabled: state.kick_enabled,
+        ban_enabled: state.ban_enabled,
         selected_user_id: state.selected_user_id,
         selected_label: state.selected_label,
     })
@@ -6078,6 +6141,14 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_MEMBER_QUERY => ("Member", query_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_MEMBER_MENTION => ("Member", mention_selected_member(hwnd).map(|_| Some(()))),
+        MENU_ID_MEMBER_KICK => (
+            "Member",
+            submit_selected_member_moderation(hwnd, true).map(|_| Some(())),
+        ),
+        MENU_ID_MEMBER_BAN => (
+            "Member",
+            submit_selected_member_moderation(hwnd, false).map(|_| Some(())),
+        ),
         MENU_ID_LOGIN => (
             "Account",
             show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -6275,7 +6346,8 @@ fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
         ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
-        ContextMenuCommand::KickMember | ContextMenuCommand::BanMember => return None,
+        ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
+        ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
     })
 }
 
@@ -13751,6 +13823,34 @@ fn dump_submitted_membership_command(command: &Command) -> Option<DumpSubmittedM
     }
 }
 
+fn dump_submitted_member_moderation_command(
+    command: &Command,
+) -> Option<DumpSubmittedMemberModerationCommand> {
+    match command {
+        Command::KickRoomMember(request) => Some(DumpSubmittedMemberModerationCommand {
+            action: DumpMemberModerationAction::Kick,
+            room_id: request.room_id.clone(),
+            user_id: request.user_id.clone(),
+        }),
+        Command::BanRoomMember(request) => Some(DumpSubmittedMemberModerationCommand {
+            action: DumpMemberModerationAction::Ban,
+            room_id: request.room_id.clone(),
+            user_id: request.user_id.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn submitted_member_moderation_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedMemberModerationCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_member_moderation_command)
+        .collect()
+}
+
 fn dump_submitted_direct_room_command(command: &Command) -> Option<DumpSubmittedDirectRoomCommand> {
     match command {
         Command::CreateDirectRoom(request) => Some(DumpSubmittedDirectRoomCommand {
@@ -13990,7 +14090,9 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
             .as_ref()
             .map(dump_verification_from_state_event),
         submitted_membership_commands: submitted_membership_commands_from_state(state),
-        submitted_member_moderation_commands: Vec::new(),
+        submitted_member_moderation_commands: submitted_member_moderation_commands_from_state(
+            state,
+        ),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
