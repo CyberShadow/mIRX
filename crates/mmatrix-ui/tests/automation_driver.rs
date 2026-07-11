@@ -3605,11 +3605,11 @@ fn automation_driver_member_menu_state_tracks_selected_member()
     let app = launch_member_list_app()?;
     assert_eq!(app.dump_member_menu_state()?.selected_user_id, None);
     assert!(!app.dump_member_menu_state()?.query_enabled);
-    app.select_member("@bob:example")?;
+    app.select_member("@casey:example")?;
     let state = app.dump_member_menu_state()?;
     assert!(state.query_enabled && state.mention_enabled);
-    assert_eq!(state.selected_user_id.as_deref(), Some("@bob:example"));
-    assert_eq!(state.selected_label.as_deref(), Some("Bob"));
+    assert_eq!(state.selected_user_id.as_deref(), Some("@casey:example"));
+    assert_eq!(state.selected_label.as_deref(), Some("Casey"));
     app.select_member("@sam-two:example")?;
     let state = app.dump_member_menu_state()?;
     assert_eq!(state.selected_user_id.as_deref(), Some("@sam-two:example"));
@@ -3624,12 +3624,12 @@ fn automation_driver_member_menu_state_tracks_selected_member()
 fn automation_driver_member_menu_query_selected_member_records_direct_room()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
-    app.select_member("@bob:example")?;
+    app.select_member("@casey:example")?;
     app.query_selected_member_via_menu()?;
     assert_eq!(
         app.dump_model()?.submitted_direct_room_commands,
         vec![SubmittedDirectRoomCommand {
-            user_id: "@bob:example".to_owned()
+            user_id: "@casey:example".to_owned()
         }]
     );
     assert_eq!(app.compose_text()?, "");
@@ -3672,9 +3672,9 @@ fn automation_driver_member_menu_mentions_display_name_or_user_id()
 fn automation_driver_selected_member_context_menu_uses_keyboard_selection()
 -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_member_list_app()?;
-    app.select_member("@bob:example")?;
+    app.select_member("@casey:example")?;
     app.open_selected_member_context_menu(ContextMenuCommand::MentionMember)?;
-    assert_eq!(app.compose_text()?, "Bob ");
+    assert_eq!(app.compose_text()?, "Casey ");
     Ok(())
 }
 
