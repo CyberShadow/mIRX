@@ -10884,6 +10884,40 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 }
 
 #[test]
+fn automation_driver_selected_navigation_context_menu_rejects_invite()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&invite_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!invite:example")?;
+
+    app.open_selected_navigation_context_menu(ContextMenuCommand::RejectInvite)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "reject submitted: !invite:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::RejectInvite,
+            target: "!invite:example".to_owned(),
+        }]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_message_menu_actions_prefill_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()

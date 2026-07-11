@@ -11227,12 +11227,8 @@ unsafe fn selected_tree_item(tree: HWND) -> Option<isize> {
 }
 
 unsafe fn tree_item_context_screen_point(tree: HWND, item: isize) -> Result<(i32, i32), String> {
-    let mut rect = RECT {
-        left: item as i32,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
+    let mut rect = RECT::default();
+    std::ptr::write_unaligned((&mut rect as *mut RECT).cast::<isize>(), item);
     if SendMessageW(tree, TVM_GETITEMRECT, 1, (&mut rect as *mut RECT) as LPARAM) == 0 {
         return Err("tree item rectangle is unavailable".to_owned());
     }
