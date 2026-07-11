@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 24;
+pub(crate) const PROTOCOL_VERSION: u32 = 25;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -60,6 +60,10 @@ pub(crate) const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
 pub(crate) const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
 pub(crate) const COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU: u32 = 43;
 pub(crate) const COMMAND_ID_QUERY_USER_VIA_ROOM_MENU: u32 = 44;
+pub(crate) const COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU: u32 = 45;
+pub(crate) const COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU: u32 = 46;
+pub(crate) const COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU: u32 = 47;
+pub(crate) const COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU: u32 = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -107,6 +111,10 @@ pub(crate) enum CommandKind {
     RedactSelectedMessageViaMenu,
     SaveAttachmentViaMessageMenu,
     SendFile,
+    OpenNavigationContextMenu,
+    OpenSelectedNavigationContextMenu,
+    OpenTimelineContextMenu,
+    OpenSelectedTimelineContextMenu,
 }
 
 impl CommandKind {
@@ -160,6 +168,10 @@ impl CommandKind {
             COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
             COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => Some(Self::SaveAttachmentViaMessageMenu),
             COMMAND_ID_SEND_FILE => Some(Self::SendFile),
+            COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU => Some(Self::OpenNavigationContextMenu),
+            COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU => Some(Self::OpenSelectedNavigationContextMenu),
+            COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU => Some(Self::OpenTimelineContextMenu),
+            COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU => Some(Self::OpenSelectedTimelineContextMenu),
             _ => None,
         }
     }
@@ -322,6 +334,10 @@ pub(crate) enum ParsedCommand {
     SaveAttachmentViaMessageMenu {
         id: String,
     },
+    OpenNavigationContextMenu { id: String, args: OpenNavigationContextMenuArgs },
+    OpenSelectedNavigationContextMenu { id: String, args: OpenSelectedNavigationContextMenuArgs },
+    OpenTimelineContextMenu { id: String, args: OpenTimelineContextMenuArgs },
+    OpenSelectedTimelineContextMenu { id: String, args: OpenSelectedTimelineContextMenuArgs },
 }
 
 impl ParsedCommand {
@@ -375,6 +391,10 @@ impl ParsedCommand {
             }
             Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
             Self::SaveAttachmentViaMessageMenu { .. } => CommandKind::SaveAttachmentViaMessageMenu,
+            Self::OpenNavigationContextMenu { .. } => CommandKind::OpenNavigationContextMenu,
+            Self::OpenSelectedNavigationContextMenu { .. } => CommandKind::OpenSelectedNavigationContextMenu,
+            Self::OpenTimelineContextMenu { .. } => CommandKind::OpenTimelineContextMenu,
+            Self::OpenSelectedTimelineContextMenu { .. } => CommandKind::OpenSelectedTimelineContextMenu,
         }
     }
 }
@@ -460,6 +480,29 @@ pub(crate) struct SendComposeKeyArgs {
 pub(crate) struct SelectNavigationPathArgs {
     pub(crate) path: Vec<NavigationPathSegment>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ContextMenuCommand {
+    AcceptInvite, RejectInvite, PartRoom, ReplyMessage, EditMessage, ReactMessage, RedactMessage,
+    SaveAttachment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenNavigationContextMenuArgs {
+    pub(crate) path: Vec<NavigationPathSegment>,
+    pub(crate) command: ContextMenuCommand,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenSelectedNavigationContextMenuArgs { pub(crate) command: ContextMenuCommand }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenTimelineContextMenuArgs { pub(crate) event_id: String, pub(crate) command: ContextMenuCommand }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenSelectedTimelineContextMenuArgs { pub(crate) command: ContextMenuCommand }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1948,6 +1991,22 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::SaveAttachmentViaMessageMenu { id: envelope.id })
         }
+        CommandKind::OpenNavigationContextMenu => Ok(ParsedCommand::OpenNavigationContextMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<OpenNavigationContextMenuArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::OpenSelectedNavigationContextMenu => Ok(ParsedCommand::OpenSelectedNavigationContextMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<OpenSelectedNavigationContextMenuArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::OpenTimelineContextMenu => Ok(ParsedCommand::OpenTimelineContextMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<OpenTimelineContextMenuArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::OpenSelectedTimelineContextMenu => Ok(ParsedCommand::OpenSelectedTimelineContextMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<OpenSelectedTimelineContextMenuArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,

@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT,
-    RECT, SIZE, WPARAM,
+    POINT, RECT, SIZE, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_WINDOW, CreateSolidBrush, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE,
@@ -66,7 +66,7 @@ use windows_sys::Win32::UI::Controls::{
     TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTATE_MARKED, TBSTYLE_EX_MIXEDBUTTONS,
     TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
     TVGN_ROOT, TVI_LAST, TVI_ROOT, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0,
-    TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMW, TVM_GETNEXTITEM,
+    TVHITTESTINFO, TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
     TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -77,18 +77,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW,
     DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN,
-    EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
+    ClientToScreen, EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
     GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild, IsWindow, KillTimer,
     LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK,
     MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW,
     MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
     SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TranslateMDISysAccel,
+    ScreenToClient, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TrackPopupMenu, TPM_RETURNCMD, TPM_RIGHTBUTTON, TranslateMDISysAccel,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
     WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_CONTEXTMENU,
     WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
     WS_VSCROLL,
@@ -110,7 +110,7 @@ use crate::{
         DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
+        ContextMenuCommand, ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
         SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
         SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
         UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity,
@@ -3571,6 +3571,12 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_CONTEXTMENU if wparam as HWND == state_ref(hwnd).controls.tree => {
+            if let Err(message) = show_navigation_room_context_menu(hwnd, lparam) {
+                show_error_message(hwnd, "Room", &message);
+            }
+            0
+        }
         WM_CORE_EVENT => {
             handle_core_events(hwnd);
             0
@@ -3694,6 +3700,13 @@ unsafe extern "system" fn timeline_window_proc(
         WM_VSCROLL => scroll_timeline(hwnd, wparam),
         WM_LBUTTONDOWN => {
             select_timeline_row(hwnd, lparam);
+            0
+        }
+        WM_CONTEXTMENU => {
+            let frame = frame_window_for(hwnd);
+            if let Err(message) = show_timeline_message_context_menu(hwnd, lparam) {
+                show_error_message(frame, "Message", &message);
+            }
             0
         }
         WM_PAINT => {
@@ -4170,16 +4183,24 @@ unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
 
 unsafe fn select_timeline_row(hwnd: HWND, lparam: LPARAM) {
     let y = ((lparam >> 16) as i16) as i32;
+    select_timeline_event_at_client_y(hwnd, y);
+}
+
+unsafe fn timeline_event_id_at_client_y(hwnd: HWND, y: i32) -> Option<String> {
     let state = timeline_state_ref(hwnd);
     let line_index = y
         .checked_sub(state.vertical_padding)
         .filter(|offset| *offset >= 0)
         .map(|offset| state.top_line + (offset / state.line_height) as usize);
-    let event_id = line_index
+    line_index
         .and_then(|index| state.paint_lines.get(index))
         .and_then(|line| line.source_row_index)
         .and_then(|index| state.source_rows.get(index))
-        .and_then(|row| row.event_id.clone());
+        .and_then(|row| row.event_id.clone())
+}
+
+unsafe fn select_timeline_event_at_client_y(hwnd: HWND, y: i32) {
+    let event_id = timeline_event_id_at_client_y(hwnd, y);
     let frame = frame_window_for(hwnd);
     let window_state = state_mut(frame);
     window_state.selected_timeline_event = event_id.map(|event_id| SelectedTimelineEvent {
@@ -4187,6 +4208,42 @@ unsafe fn select_timeline_row(hwnd: HWND, lparam: LPARAM) {
         event_id,
     });
     InvalidateRect(hwnd, null(), 1);
+}
+
+unsafe fn context_menu_screen_point_for_lparam(lparam: LPARAM) -> Option<(i32, i32)> {
+    (lparam != -1).then(|| (((lparam as i16) as i32), (((lparam >> 16) as i16) as i32)))
+}
+
+unsafe fn default_context_point_for_window(hwnd: HWND) -> Result<(i32, i32), String> {
+    let mut rect = RECT::default();
+    if GetClientRect(hwnd, &mut rect) == 0 { return Err(last_os_error("GetClientRect")); }
+    let mut point = POINT { x: (rect.right - rect.left) / 2, y: (rect.bottom - rect.top) / 2 };
+    if ClientToScreen(hwnd, &mut point) == 0 { return Err(last_os_error("ClientToScreen")); }
+    Ok((point.x, point.y))
+}
+
+unsafe fn show_context_menu(hwnd: HWND, menu: HMENU, x: i32, y: i32) -> Result<Option<usize>, String> {
+    let command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd, null());
+    Ok((command != 0).then_some(command as usize))
+}
+
+unsafe fn show_timeline_message_context_menu(timeline: HWND, lparam: LPARAM) -> Result<(), String> {
+    let frame = frame_window_for(timeline);
+    let (x, y) = match context_menu_screen_point_for_lparam(lparam) {
+        Some((x, y)) => {
+            let mut point = POINT { x, y };
+            if ScreenToClient(timeline, &mut point) == 0 { return Err(last_os_error("ScreenToClient")); }
+            select_timeline_event_at_client_y(timeline, point.y);
+            (x, y)
+        }
+        None => default_context_point_for_window(timeline)?,
+    };
+    let menu = state_ref(frame).controls.message_menu;
+    refresh_message_menu_state(frame, menu)?;
+    if let Some(command) = show_context_menu(frame, menu, x, y)? {
+        if let Some(result) = handle_menu_command(frame, command) { result?; }
+    }
+    Ok(())
 }
 
 fn validate_selected_timeline_event(
@@ -5952,6 +6009,47 @@ unsafe fn invoke_menu_command_for_automation(hwnd: HWND, command_id: usize) -> R
         return Err(format!("unknown menu command {command_id}"));
     };
     result.and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned()))
+}
+
+fn context_menu_command_id(command: &ContextMenuCommand) -> usize {
+    match command {
+        ContextMenuCommand::AcceptInvite => MENU_ID_ROOM_ACCEPT_INVITE,
+        ContextMenuCommand::RejectInvite => MENU_ID_ROOM_REJECT_INVITE,
+        ContextMenuCommand::PartRoom => MENU_ID_ROOM_PART,
+        ContextMenuCommand::ReplyMessage => MENU_ID_MESSAGE_REPLY,
+        ContextMenuCommand::EditMessage => MENU_ID_MESSAGE_EDIT,
+        ContextMenuCommand::ReactMessage => MENU_ID_MESSAGE_REACT,
+        ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
+        ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
+    }
+}
+
+unsafe fn invoke_navigation_context_menu_for_automation(
+    hwnd: HWND,
+    command: &ContextMenuCommand,
+) -> Result<(), String> {
+    let command_id = context_menu_command_id(command);
+    if !matches!(command_id, MENU_ID_ROOM_ACCEPT_INVITE | MENU_ID_ROOM_REJECT_INVITE | MENU_ID_ROOM_PART) {
+        return Err("room context menu command is unavailable".to_owned());
+    }
+    refresh_room_menu_state(hwnd, state_ref(hwnd).controls.room_menu)?;
+    invoke_menu_command_for_automation(hwnd, command_id)
+}
+
+unsafe fn invoke_timeline_context_menu_for_automation(
+    hwnd: HWND,
+    command: &ContextMenuCommand,
+) -> Result<(), String> {
+    let command_id = context_menu_command_id(command);
+    if !matches!(command_id, MENU_ID_MESSAGE_REPLY | MENU_ID_MESSAGE_EDIT | MENU_ID_MESSAGE_REACT | MENU_ID_MESSAGE_REDACT | MENU_ID_MESSAGE_SAVE_ATTACHMENT) {
+        return Err("message context menu command is unavailable".to_owned());
+    }
+    refresh_message_menu_state(hwnd, state_ref(hwnd).controls.message_menu)?;
+    let action_state = active_message_action_state_for_automation(hwnd);
+    if action_state.selected_event_id.is_none() || (command_id == MENU_ID_MESSAGE_SAVE_ATTACHMENT && !action_state.save_attachment_enabled) {
+        return Err("message context menu action is disabled".to_owned());
+    }
+    invoke_menu_command_for_automation(hwnd, command_id)
 }
 
 unsafe fn submit_room_menu_action(
@@ -10125,6 +10223,29 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::OpenNavigationContextMenu { id, args } => {
+            select_navigation_path(hwnd, &args.path).map_err(|message| failure_response(Some(id.clone()), "room_context_menu_unavailable", message))?;
+            invoke_navigation_context_menu_for_automation(hwnd, &args.command).map_err(|message| failure_response(Some(id.clone()), "room_menu_action_failed", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::OpenSelectedNavigationContextMenu { id, args } => {
+            let tree = state_ref(hwnd).controls.tree;
+            let item = selected_tree_item(tree).ok_or_else(|| failure_response(Some(id.clone()), "room_context_menu_unavailable", "room context menu target is unavailable".to_owned()))?;
+            let is_room = matches!(state_ref(hwnd).tree_items.get(&item), Some(ViewId::Room(_)));
+            if !is_room { return Err(failure_response(Some(id.clone()), "room_context_menu_unavailable", "room context menu target is not a room".to_owned())); }
+            invoke_navigation_context_menu_for_automation(hwnd, &args.command).map_err(|message| failure_response(Some(id.clone()), "room_menu_action_failed", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::OpenTimelineContextMenu { id, args } => {
+            select_timeline_event_for_automation(hwnd, &args.event_id).map_err(|message| failure_response(Some(id.clone()), "selected_message_unavailable", message))?;
+            invoke_timeline_context_menu_for_automation(hwnd, &args.command).map_err(|message| failure_response(Some(id.clone()), "selected_message_unavailable", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::OpenSelectedTimelineContextMenu { id, args } => {
+            if selected_timeline_event_id_for_automation(hwnd).is_none() { return Err(failure_response(Some(id.clone()), "selected_message_unavailable", "selected message is unavailable".to_owned())); }
+            invoke_timeline_context_menu_for_automation(hwnd, &args.command).map_err(|message| failure_response(Some(id.clone()), "selected_message_unavailable", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::DumpSelectedNavigationPath { id } => {
             let path = dump_selected_navigation_path(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "ui_state_unavailable", message)
@@ -10445,6 +10566,10 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::ReactToSelectedMessageViaMenu { id }
         | ParsedCommand::RedactSelectedMessageViaMenu { id }
         | ParsedCommand::SaveAttachmentViaMessageMenu { id }
+        | ParsedCommand::OpenNavigationContextMenu { id, .. }
+        | ParsedCommand::OpenSelectedNavigationContextMenu { id, .. }
+        | ParsedCommand::OpenTimelineContextMenu { id, .. }
+        | ParsedCommand::OpenSelectedTimelineContextMenu { id, .. }
         | ParsedCommand::DumpSelectedNavigationPath { id }
         | ParsedCommand::DumpRoomActivity { id, .. }
         | ParsedCommand::ListRooms { id }
@@ -10972,6 +11097,52 @@ unsafe fn select_navigation_path(hwnd: HWND, path: &[NavigationPathSegment]) -> 
         activate_view(hwnd, &view_id, Some(current))?;
     }
 
+    Ok(())
+}
+
+unsafe fn tree_item_at_screen_point(tree: HWND, x: i32, y: i32) -> Option<isize> {
+    let mut hit = TVHITTESTINFO { pt: POINT { x, y }, flags: 0, hItem: 0 };
+    (ScreenToClient(tree, &mut hit.pt) != 0)
+        .then(|| SendMessageW(tree, TVM_HITTEST, 0, (&mut hit as *mut TVHITTESTINFO) as LPARAM) as isize)
+        .filter(|item| *item != 0)
+}
+
+unsafe fn selected_tree_item(tree: HWND) -> Option<isize> {
+    let item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
+    (item != 0).then_some(item)
+}
+
+unsafe fn tree_item_context_screen_point(tree: HWND, item: isize) -> Result<(i32, i32), String> {
+    let mut rect = RECT { left: item as i32, top: 0, right: 0, bottom: 0 };
+    if SendMessageW(tree, TVM_GETITEMRECT, 1, (&mut rect as *mut RECT) as LPARAM) == 0 {
+        return Err("tree item rectangle is unavailable".to_owned());
+    }
+    let mut point = POINT { x: rect.left, y: rect.top + (rect.bottom - rect.top) / 2 };
+    if ClientToScreen(tree, &mut point) == 0 { return Err(last_os_error("ClientToScreen")); }
+    Ok((point.x, point.y))
+}
+
+unsafe fn show_navigation_room_context_menu(frame: HWND, lparam: LPARAM) -> Result<(), String> {
+    let tree = state_ref(frame).controls.tree;
+    let (item, point) = match context_menu_screen_point_for_lparam(lparam) {
+        Some((x, y)) => {
+            let item = tree_item_at_screen_point(tree, x, y).ok_or_else(|| "room context menu target is unavailable".to_owned())?;
+            SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, item as LPARAM);
+            (item, (x, y))
+        }
+        None => {
+            let item = selected_tree_item(tree).ok_or_else(|| "room context menu target is unavailable".to_owned())?;
+            (item, tree_item_context_screen_point(tree, item)?)
+        }
+    };
+    let Some(view_id) = state_ref(frame).tree_items.get(&item).cloned() else { return Ok(()); };
+    if !matches!(view_id, ViewId::Room(_)) { return Ok(()); }
+    activate_view(frame, &view_id, Some(item))?;
+    let menu = state_ref(frame).controls.room_menu;
+    refresh_room_menu_state(frame, menu)?;
+    if let Some(command) = show_context_menu(frame, menu, point.0, point.1)? {
+        if let Some(result) = handle_menu_command(frame, command) { result?; }
+    }
     Ok(())
 }
 
