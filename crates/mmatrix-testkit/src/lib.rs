@@ -113,6 +113,18 @@ const COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU: u32 = 47;
 #[cfg(windows)]
 const COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU: u32 = 48;
 #[cfg(windows)]
+const COMMAND_ID_DUMP_MEMBER_MENU_STATE: u32 = 49;
+#[cfg(windows)]
+const COMMAND_ID_SELECT_MEMBER: u32 = 50;
+#[cfg(windows)]
+const COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU: u32 = 51;
+#[cfg(windows)]
+const COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU: u32 = 52;
+#[cfg(windows)]
+const COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU: u32 = 53;
+#[cfg(windows)]
+const COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU: u32 = 54;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -146,6 +158,17 @@ pub enum ContextMenuCommand {
     ReactMessage,
     RedactMessage,
     SaveAttachment,
+    QueryMember,
+    MentionMember,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberMenuState {
+    pub query_enabled: bool,
+    pub mention_enabled: bool,
+    pub selected_user_id: Option<String>,
+    pub selected_label: Option<String>,
 }
 
 impl FrameSize {
@@ -1454,6 +1477,37 @@ impl MmatrixApp {
         self.inner.dump_message_menu_state()
     }
 
+    pub fn dump_member_menu_state(&self) -> Result<MemberMenuState, TestkitError> {
+        self.inner.dump_member_menu_state()
+    }
+
+    pub fn select_member(&self, user_id: &str) -> Result<(), TestkitError> {
+        self.inner.select_member(user_id)
+    }
+
+    pub fn query_selected_member_via_menu(&self) -> Result<(), TestkitError> {
+        self.inner.query_selected_member_via_menu()
+    }
+
+    pub fn mention_selected_member_via_menu(&self) -> Result<(), TestkitError> {
+        self.inner.mention_selected_member_via_menu()
+    }
+
+    pub fn open_member_context_menu(
+        &self,
+        user_id: &str,
+        command: ContextMenuCommand,
+    ) -> Result<(), TestkitError> {
+        self.inner.open_member_context_menu(user_id, command)
+    }
+
+    pub fn open_selected_member_context_menu(
+        &self,
+        command: ContextMenuCommand,
+    ) -> Result<(), TestkitError> {
+        self.inner.open_selected_member_context_menu(command)
+    }
+
     pub fn select_timeline_event(&self, event_id: &str) -> Result<(), TestkitError> {
         self.inner.select_timeline_event(event_id)
     }
@@ -1840,6 +1894,26 @@ struct OpenSelectedTimelineContextMenuArgs {
 
 #[cfg(windows)]
 #[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectMemberArgs<'a> {
+    user_id: &'a str,
+}
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpenMemberContextMenuArgs<'a> {
+    user_id: &'a str,
+    command: ContextMenuCommand,
+}
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpenSelectedMemberContextMenuArgs {
+    command: ContextMenuCommand,
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
 struct JoinRoomViaRoomMenuArgs<'a> {
     target: &'a str,
 }
@@ -2111,6 +2185,44 @@ mod imp {
         }
 
         pub(crate) fn dump_message_menu_state(&self) -> Result<MessageMenuState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn dump_member_menu_state(&self) -> Result<MemberMenuState, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn select_member(&self, _user_id: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn query_selected_member_via_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn mention_selected_member_via_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn open_member_context_menu(
+            &self,
+            _user_id: &str,
+            _command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+        pub(crate) fn open_selected_member_context_menu(
+            &self,
+            _command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -2663,6 +2775,38 @@ mod imp {
 
         pub(crate) fn dump_message_menu_state(&self) -> Result<MessageMenuState, TestkitError> {
             self.send_command(COMMAND_ID_DUMP_MESSAGE_MENU_STATE, EmptyArgs {})
+        }
+
+        pub(crate) fn dump_member_menu_state(&self) -> Result<MemberMenuState, TestkitError> {
+            self.send_command(COMMAND_ID_DUMP_MEMBER_MENU_STATE, EmptyArgs {})
+        }
+        pub(crate) fn select_member(&self, user_id: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_SELECT_MEMBER, SelectMemberArgs { user_id })
+        }
+        pub(crate) fn query_selected_member_via_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU, EmptyArgs {})
+        }
+        pub(crate) fn mention_selected_member_via_menu(&self) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU, EmptyArgs {})
+        }
+        pub(crate) fn open_member_context_menu(
+            &self,
+            user_id: &str,
+            command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
+                OpenMemberContextMenuArgs { user_id, command },
+            )
+        }
+        pub(crate) fn open_selected_member_context_menu(
+            &self,
+            command: ContextMenuCommand,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
+                OpenSelectedMemberContextMenuArgs { command },
+            )
         }
 
         pub(crate) fn select_timeline_event(&self, event_id: &str) -> Result<(), TestkitError> {

@@ -76,13 +76,14 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT,
     CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW,
-    DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar,
-    ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN,
-    EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
-    GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild, IsWindow, KillTimer,
-    LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK,
-    MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW,
-    MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
+    DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
+    ES_WANTRETURN, EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect,
+    GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild,
+    IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_ITEMFROMPOINT, LB_RESETCONTENT,
+    LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW,
+    MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
     SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
     SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
@@ -100,7 +101,7 @@ use crate::{
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult,
+        ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberMenuState,
         DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
@@ -168,6 +169,8 @@ const MENU_ID_MESSAGE_EDIT: usize = 40018;
 const MENU_ID_MESSAGE_REACT: usize = 40019;
 const MENU_ID_ROOM_JOIN: usize = 40020;
 const MENU_ID_ROOM_QUERY: usize = 40021;
+const MENU_ID_MEMBER_QUERY: usize = 40022;
+const MENU_ID_MEMBER_MENTION: usize = 40023;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -239,6 +242,7 @@ struct Controls {
     switchbar: HWND,
     room_menu: HMENU,
     message_menu: HMENU,
+    member_menu: HMENU,
     account_menu: HMENU,
 }
 
@@ -3578,6 +3582,20 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_CONTEXTMENU => {
+            let member_list = state_ref(hwnd)
+                .views
+                .get(&state_ref(hwnd).active_view)
+                .map(|view| room_content_member_list(view.content));
+            if member_list == Some(wparam as HWND) {
+                if let Err(message) = show_member_context_menu(hwnd, wparam as HWND, lparam, None) {
+                    show_error_message(hwnd, "Member", &message);
+                }
+                0
+            } else {
+                default_window_proc(hwnd, message, wparam, lparam)
+            }
+        }
         WM_CORE_EVENT => {
             handle_core_events(hwnd);
             0
@@ -3604,6 +3622,11 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DESTROY => {
+            let member_menu = state_ref(hwnd).controls.member_menu;
+            if !member_menu.is_null() {
+                DestroyMenu(member_menu);
+                state_mut(hwnd).controls.member_menu = null_mut();
+            }
             if let Some(sender) = state_mut(hwnd).command_sender.as_ref() {
                 let _ = sender.send(Command::Shutdown);
             }
@@ -4276,6 +4299,91 @@ unsafe fn show_timeline_message_context_menu(
         }
     }
     Ok(())
+}
+
+unsafe fn show_member_context_menu(
+    frame: HWND,
+    member_list: HWND,
+    lparam: LPARAM,
+    requested_command: Option<usize>,
+) -> Result<(), String> {
+    let (x, y) = match context_menu_screen_point_for_lparam(lparam) {
+        Some((x, y)) => {
+            let mut point = POINT { x, y };
+            if ScreenToClient(member_list, &mut point) == 0 {
+                return Err(last_os_error("ScreenToClient"));
+            }
+            let hit = SendMessageW(
+                member_list,
+                LB_ITEMFROMPOINT,
+                0,
+                ((point.y as u32 as usize) << 16 | point.x as u16 as usize) as LPARAM,
+            );
+            if (hit as usize & 0xffff_0000) != 0 {
+                return Ok(());
+            }
+            if SendMessageW(member_list, LB_SETCURSEL, hit as usize, 0) == LB_ERR as isize {
+                return Ok(());
+            }
+            (x, y)
+        }
+        None => default_context_point_for_window(member_list)?,
+    };
+    let menu = state_ref(frame).controls.member_menu;
+    refresh_member_menu_state(frame, menu)?;
+    let action_state = active_member_action_state(frame);
+    if requested_command.is_some_and(|command| {
+        !matches!(command, MENU_ID_MEMBER_QUERY | MENU_ID_MEMBER_MENTION)
+            || !action_state.query_enabled
+    }) {
+        return Err("member context menu action is disabled".to_owned());
+    }
+    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)? {
+        if let Some(result) = handle_menu_command(frame, command) {
+            result?;
+        }
+    }
+    Ok(())
+}
+
+unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
+    let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
+    let status = submit_query_slash_command(state_mut(hwnd), member.user_id)?;
+    state_mut(hwnd).model.status = status;
+    refresh_status_bar(hwnd)
+}
+
+unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
+    let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
+    let mention = member
+        .display_name
+        .filter(|name| !name.is_empty())
+        .unwrap_or(member.user_id);
+    set_compose_text(hwnd, &format!("{mention} "))?;
+    SetFocus(compose_edit(hwnd)?);
+    Ok(())
+}
+
+unsafe fn invoke_member_context_menu_for_automation(
+    hwnd: HWND,
+    user_id: &str,
+    command: &ContextMenuCommand,
+) -> Result<(), String> {
+    select_member_for_automation(hwnd, user_id)?;
+    invoke_selected_member_context_menu_for_automation(hwnd, command)
+}
+
+unsafe fn invoke_selected_member_context_menu_for_automation(
+    hwnd: HWND,
+    command: &ContextMenuCommand,
+) -> Result<(), String> {
+    let command = match command {
+        ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
+        ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
+        _ => return Err("member context menu command is unavailable".to_owned()),
+    };
+    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+    show_member_context_menu(hwnd, list, -1, Some(command))
 }
 
 fn validate_selected_timeline_event(
@@ -5397,6 +5505,18 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         MENU_ID_MESSAGE_REPLY,
         "Reply to Message",
     )?;
+
+    let member_menu = CreatePopupMenu();
+    if member_menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    append_menu_text(member_menu, MF_STRING, MENU_ID_MEMBER_QUERY, "Query User")?;
+    append_menu_text(
+        member_menu,
+        MF_STRING,
+        MENU_ID_MEMBER_MENTION,
+        "Mention/Insert Name",
+    )?;
     append_menu_text(
         message_menu,
         MF_STRING,
@@ -5487,6 +5607,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     let controls = &mut state_mut(hwnd).controls;
     controls.room_menu = room_menu;
     controls.message_menu = message_menu;
+    controls.member_menu = member_menu;
     controls.account_menu = account_menu;
     if DrawMenuBar(hwnd) == 0 {
         return Err(last_os_error("DrawMenuBar"));
@@ -5657,6 +5778,99 @@ unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<()
         };
     if EnableMenuItem(popup_menu, MENU_ID_MESSAGE_SAVE_ATTACHMENT as u32, flags) == -1 {
         return Err(last_os_error("EnableMenuItem"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MemberMenuActionState {
+    query_enabled: bool,
+    mention_enabled: bool,
+    selected_user_id: Option<String>,
+    selected_label: Option<String>,
+}
+
+unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
+    let state = state_ref(hwnd);
+    let room_id = match &state.active_view {
+        ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id,
+        ViewId::Status => return Vec::new(),
+    };
+    room_member_view_rows(
+        state
+            .model
+            .room_views
+            .get(room_id)
+            .map(|view| view.members.as_slice())
+            .unwrap_or_default(),
+    )
+}
+
+unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
+    state_ref(hwnd)
+        .views
+        .get(&state_ref(hwnd).active_view)
+        .map(|view| room_content_member_list(view.content))
+}
+
+unsafe fn selected_member_row(hwnd: HWND) -> Option<RoomMemberView> {
+    let list = active_member_list(hwnd)?;
+    let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
+    if selected == LB_ERR as isize {
+        return None;
+    }
+    active_member_rows(hwnd).get(selected as usize).cloned()
+}
+
+unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
+    let selected = selected_member_row(hwnd);
+    MemberMenuActionState {
+        query_enabled: selected.is_some(),
+        mention_enabled: selected.is_some(),
+        selected_user_id: selected.as_ref().map(|member| member.user_id.clone()),
+        selected_label: selected.map(|member| member.label),
+    }
+}
+
+unsafe fn refresh_member_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    let action_state = active_member_action_state(hwnd);
+    for item in [MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_MENTION] {
+        let flags = MF_BYCOMMAND
+            | if action_state.query_enabled {
+                MF_ENABLED
+            } else {
+                MF_GRAYED
+            };
+        if EnableMenuItem(popup_menu, item as u32, flags) == -1 {
+            return Err(last_os_error("EnableMenuItem"));
+        }
+    }
+    Ok(())
+}
+
+unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
+    let menu = state_ref(hwnd).controls.member_menu;
+    if menu.is_null() {
+        return Err("Member menu is not available".to_owned());
+    }
+    refresh_member_menu_state(hwnd, menu)?;
+    let state = active_member_action_state(hwnd);
+    Ok(DumpMemberMenuState {
+        query_enabled: state.query_enabled,
+        mention_enabled: state.mention_enabled,
+        selected_user_id: state.selected_user_id,
+        selected_label: state.selected_label,
+    })
+}
+
+unsafe fn select_member_for_automation(hwnd: HWND, user_id: &str) -> Result<(), String> {
+    let index = active_member_rows(hwnd)
+        .iter()
+        .position(|member| member.user_id == user_id)
+        .ok_or_else(|| format!("unknown_member: {user_id}"))?;
+    let list = active_member_list(hwnd).ok_or_else(|| "member list is unavailable".to_owned())?;
+    if SendMessageW(list, LB_SETCURSEL, index, 0) == LB_ERR as isize {
+        return Err("member selection failed".to_owned());
     }
     Ok(())
 }
@@ -5858,6 +6072,8 @@ unsafe fn menu_command_result(
             "Message",
             save_selected_message_attachment(hwnd).map(|_| Some(())),
         ),
+        MENU_ID_MEMBER_QUERY => ("Member", query_selected_member(hwnd).map(|_| Some(()))),
+        MENU_ID_MEMBER_MENTION => ("Member", mention_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_LOGIN => (
             "Account",
             show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -6053,6 +6269,8 @@ fn context_menu_command_id(command: &ContextMenuCommand) -> usize {
         ContextMenuCommand::ReactMessage => MENU_ID_MESSAGE_REACT,
         ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
         ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
+        ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
+        ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
     }
 }
 
@@ -10221,6 +10439,44 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, state)
         }
+        ParsedCommand::DumpMemberMenuState { id } => {
+            let state = dump_member_menu_state(hwnd).map_err(|message| {
+                failure_response(Some(id.clone()), "member_menu_unavailable", message)
+            })?;
+            serialize_success_json(&id, state)
+        }
+        ParsedCommand::SelectMember { id, args } => {
+            select_member_for_automation(hwnd, &args.user_id).map_err(|message| {
+                failure_response(Some(id.clone()), "selected_member_unavailable", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::QuerySelectedMemberViaMenu { id } => {
+            invoke_menu_command_for_automation(hwnd, MENU_ID_MEMBER_QUERY).map_err(|message| {
+                failure_response(Some(id.clone()), "selected_member_unavailable", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::MentionSelectedMemberViaMenu { id } => {
+            invoke_menu_command_for_automation(hwnd, MENU_ID_MEMBER_MENTION).map_err(
+                |message| {
+                    failure_response(Some(id.clone()), "selected_member_unavailable", message)
+                },
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::OpenMemberContextMenu { id, args } => {
+            invoke_member_context_menu_for_automation(hwnd, &args.user_id, &args.command).map_err(
+                |message| failure_response(Some(id.clone()), "member_menu_action_failed", message),
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::OpenSelectedMemberContextMenu { id, args } => {
+            invoke_selected_member_context_menu_for_automation(hwnd, &args.command).map_err(
+                |message| failure_response(Some(id.clone()), "member_menu_action_failed", message),
+            )?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::SelectTimelineEvent { id, args } => {
             select_timeline_event_for_automation(hwnd, &args.event_id).map_err(|message| {
                 let code = if message.starts_with("unknown_event:") {
@@ -10658,7 +10914,13 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::DumpVerificationMenuState { id }
         | ParsedCommand::DumpRoomMenuState { id }
         | ParsedCommand::DumpMessageMenuState { id }
+        | ParsedCommand::DumpMemberMenuState { id }
         | ParsedCommand::SelectTimelineEvent { id, .. }
+        | ParsedCommand::SelectMember { id, .. }
+        | ParsedCommand::QuerySelectedMemberViaMenu { id }
+        | ParsedCommand::MentionSelectedMemberViaMenu { id }
+        | ParsedCommand::OpenMemberContextMenu { id, .. }
+        | ParsedCommand::OpenSelectedMemberContextMenu { id, .. }
         | ParsedCommand::AcceptInviteViaRoomMenu { id }
         | ParsedCommand::RejectInviteViaRoomMenu { id }
         | ParsedCommand::PartRoomViaRoomMenu { id }

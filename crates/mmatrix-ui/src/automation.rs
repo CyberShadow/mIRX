@@ -64,6 +64,12 @@ pub(crate) const COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU: u32 = 45;
 pub(crate) const COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU: u32 = 46;
 pub(crate) const COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU: u32 = 47;
 pub(crate) const COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU: u32 = 48;
+pub(crate) const COMMAND_ID_DUMP_MEMBER_MENU_STATE: u32 = 49;
+pub(crate) const COMMAND_ID_SELECT_MEMBER: u32 = 50;
+pub(crate) const COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU: u32 = 51;
+pub(crate) const COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU: u32 = 52;
+pub(crate) const COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU: u32 = 53;
+pub(crate) const COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU: u32 = 54;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -115,6 +121,12 @@ pub(crate) enum CommandKind {
     OpenSelectedNavigationContextMenu,
     OpenTimelineContextMenu,
     OpenSelectedTimelineContextMenu,
+    DumpMemberMenuState,
+    SelectMember,
+    QuerySelectedMemberViaMenu,
+    MentionSelectedMemberViaMenu,
+    OpenMemberContextMenu,
+    OpenSelectedMemberContextMenu,
 }
 
 impl CommandKind {
@@ -175,6 +187,14 @@ impl CommandKind {
             COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU => Some(Self::OpenTimelineContextMenu),
             COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU => {
                 Some(Self::OpenSelectedTimelineContextMenu)
+            }
+            COMMAND_ID_DUMP_MEMBER_MENU_STATE => Some(Self::DumpMemberMenuState),
+            COMMAND_ID_SELECT_MEMBER => Some(Self::SelectMember),
+            COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU => Some(Self::QuerySelectedMemberViaMenu),
+            COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU => Some(Self::MentionSelectedMemberViaMenu),
+            COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU => Some(Self::OpenMemberContextMenu),
+            COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU => {
+                Some(Self::OpenSelectedMemberContextMenu)
             }
             _ => None,
         }
@@ -354,6 +374,27 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: OpenSelectedTimelineContextMenuArgs,
     },
+    DumpMemberMenuState {
+        id: String,
+    },
+    SelectMember {
+        id: String,
+        args: SelectMemberArgs,
+    },
+    QuerySelectedMemberViaMenu {
+        id: String,
+    },
+    MentionSelectedMemberViaMenu {
+        id: String,
+    },
+    OpenMemberContextMenu {
+        id: String,
+        args: OpenMemberContextMenuArgs,
+    },
+    OpenSelectedMemberContextMenu {
+        id: String,
+        args: OpenSelectedMemberContextMenuArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -415,6 +456,14 @@ impl ParsedCommand {
             Self::OpenSelectedTimelineContextMenu { .. } => {
                 CommandKind::OpenSelectedTimelineContextMenu
             }
+            Self::DumpMemberMenuState { .. } => CommandKind::DumpMemberMenuState,
+            Self::SelectMember { .. } => CommandKind::SelectMember,
+            Self::QuerySelectedMemberViaMenu { .. } => CommandKind::QuerySelectedMemberViaMenu,
+            Self::MentionSelectedMemberViaMenu { .. } => CommandKind::MentionSelectedMemberViaMenu,
+            Self::OpenMemberContextMenu { .. } => CommandKind::OpenMemberContextMenu,
+            Self::OpenSelectedMemberContextMenu { .. } => {
+                CommandKind::OpenSelectedMemberContextMenu
+            }
         }
     }
 }
@@ -453,6 +502,12 @@ pub(crate) struct SelectRoomArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectTimelineEventArgs {
     pub(crate) event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectMemberArgs {
+    pub(crate) user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -512,6 +567,8 @@ pub(crate) enum ContextMenuCommand {
     ReactMessage,
     RedactMessage,
     SaveAttachment,
+    QueryMember,
+    MentionMember,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -534,6 +591,19 @@ pub(crate) struct OpenTimelineContextMenuArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OpenSelectedTimelineContextMenuArgs {
+    pub(crate) command: ContextMenuCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenMemberContextMenuArgs {
+    pub(crate) user_id: String,
+    pub(crate) command: ContextMenuCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenSelectedMemberContextMenuArgs {
     pub(crate) command: ContextMenuCommand,
 }
 
@@ -762,6 +832,15 @@ pub(crate) struct DumpMessageMenuState {
     pub(crate) redact_enabled: bool,
     pub(crate) save_attachment_enabled: bool,
     pub(crate) selected_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpMemberMenuState {
+    pub(crate) query_enabled: bool,
+    pub(crate) mention_enabled: bool,
+    pub(crate) selected_user_id: Option<String>,
+    pub(crate) selected_label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2053,6 +2132,35 @@ pub(crate) fn parse_command_request(
                 )?,
             })
         }
+        CommandKind::DumpMemberMenuState => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::DumpMemberMenuState { id: envelope.id })
+        }
+        CommandKind::SelectMember => Ok(ParsedCommand::SelectMember {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SelectMemberArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::QuerySelectedMemberViaMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::QuerySelectedMemberViaMenu { id: envelope.id })
+        }
+        CommandKind::MentionSelectedMemberViaMenu => {
+            parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
+            Ok(ParsedCommand::MentionSelectedMemberViaMenu { id: envelope.id })
+        }
+        CommandKind::OpenMemberContextMenu => Ok(ParsedCommand::OpenMemberContextMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<OpenMemberContextMenuArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::OpenSelectedMemberContextMenu => {
+            Ok(ParsedCommand::OpenSelectedMemberContextMenu {
+                id: envelope.id.clone(),
+                args: parse_args_required::<OpenSelectedMemberContextMenuArgs>(
+                    &envelope.id,
+                    envelope.args,
+                )?,
+            })
+        }
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -2311,33 +2419,36 @@ mod tests {
         COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_FIND_ACTIVE_VIEW,
         COMMAND_ID_GET_VERSION, COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU, COMMAND_ID_LIST_ROOMS,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
-        COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
+        COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU,
+        COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
+        COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
         COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
-        COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
-        COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
-        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse,
-        DumpE2eeRecoverySetupResult, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
-        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
-        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
-        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
-        DumpUnsupportedRoomMessageActivity, FindActiveViewArgs, FindActiveViewResponse,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs, MdiState,
-        MdiView, NavigationNode, NavigationPathSegment, NoArgs, PROTOCOL_VERSION, ParsedCommand,
-        PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView,
+        COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_MEMBER,
+        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
+        COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult,
+        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
+        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
+        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
+        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
+        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
+        DumpRoomMessageSendState, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
+        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpRoomVideoActivity, DumpRoomVideoInfo, DumpSubmittedEditCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
+        NoArgs, OpenMemberContextMenuArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse,
+        RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView, SelectMemberArgs,
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
         SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
         SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs,
@@ -2549,6 +2660,10 @@ mod tests {
             Some(CommandKind::DumpMessageMenuState)
         );
         assert_eq!(
+            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU),
+            Some(CommandKind::OpenSelectedMemberContextMenu)
+        );
+        assert_eq!(
             CommandKind::from_id(COMMAND_ID_SELECT_TIMELINE_EVENT),
             Some(CommandKind::SelectTimelineEvent)
         );
@@ -2621,7 +2736,7 @@ mod tests {
             Some(CommandKind::QueryUserViaRoomMenu)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU + 1),
+            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU + 1),
             None
         );
     }
@@ -2656,8 +2771,7 @@ mod tests {
             assert!(
                 parse_command_request(
                     command_id,
-                    format!(r#"{{"id":"context","args":{{"command":"invalid","extra":true}}}}"#)
-                        .as_bytes()
+                    br#"{"id":"context","args":{"command":"invalid","extra":true}}"#,
                 )
                 .is_err()
             );
@@ -2901,6 +3015,23 @@ mod tests {
                     event_id: "$event:example".to_owned()
                 }
             }
+        );
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_MEMBER,
+                br#"{"id":"select-member","args":{"user_id":"@bob:example"}}"#
+            )
+            .unwrap(),
+            ParsedCommand::SelectMember {
+                id: "select-member".to_owned(),
+                args: SelectMemberArgs {
+                    user_id: "@bob:example".to_owned()
+                }
+            }
+        );
+        assert_eq!(
+            parse_command_request(COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, br#"{"id":"member-menu","args":{"user_id":"@bob:example","command":"query_member"}}"#).unwrap(),
+            ParsedCommand::OpenMemberContextMenu { id: "member-menu".to_owned(), args: OpenMemberContextMenuArgs { user_id: "@bob:example".to_owned(), command: ContextMenuCommand::QueryMember } }
         );
         for (command_id, id) in [
             (COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, "accept"),

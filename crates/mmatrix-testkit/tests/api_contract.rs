@@ -19,7 +19,7 @@ use mmatrix_core::{
 use mmatrix_testkit::{
     BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
     FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions,
-    LoginArgs, MdiState, MdiView, MembershipCommandAction, Model, NavigationNode,
+    LoginArgs, MdiState, MdiView, MemberMenuState, MembershipCommandAction, Model, NavigationNode,
     NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
@@ -43,6 +43,10 @@ fn context_menu_command_serializes_to_strict_shape() {
     assert_eq!(
         serde_json::to_string(&ContextMenuCommand::PartRoom).unwrap(),
         "\"part_room\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ContextMenuCommand::QueryMember).unwrap(),
+        "\"query_member\""
     );
     assert!(serde_json::from_str::<ContextMenuCommand>("\"invalid\"").is_err());
 }
@@ -381,6 +385,16 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         .expect("deserialize message menu state"),
         message
     );
+    let member = MemberMenuState {
+        query_enabled: true,
+        mention_enabled: true,
+        selected_user_id: Some("@bob:example".to_owned()),
+        selected_label: Some("Bob".to_owned()),
+    };
+    assert_eq!(
+        serde_json::from_value::<MemberMenuState>(serde_json::to_value(&member).unwrap()).unwrap(),
+        member
+    );
 
     assert!(
         serde_json::from_value::<mmatrix_testkit::RoomMenuState>(serde_json::json!({
@@ -400,6 +414,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         }))
         .is_err()
     );
+    assert!(serde_json::from_value::<MemberMenuState>(serde_json::json!({"query_enabled": true, "mention_enabled": true, "selected_user_id": null, "selected_label": null, "unexpected": true})).is_err());
 }
 
 #[test]
@@ -6137,6 +6152,15 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
     unsupported(app.part_room_via_room_menu());
     unsupported(app.reply_to_selected_message_via_menu());
     unsupported(app.redact_selected_message_via_menu());
+    assert!(matches!(
+        app.dump_member_menu_state(),
+        Err(TestkitError::UnsupportedPlatform(_))
+    ));
+    unsupported(app.select_member("@bob:example"));
+    unsupported(app.query_selected_member_via_menu());
+    unsupported(app.mention_selected_member_via_menu());
+    unsupported(app.open_member_context_menu("@bob:example", ContextMenuCommand::QueryMember));
+    unsupported(app.open_selected_member_context_menu(ContextMenuCommand::MentionMember));
 }
 
 #[cfg(not(windows))]
