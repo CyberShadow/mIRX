@@ -54,8 +54,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect,
     GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, PostMessageW, SB_PAGEDOWN, SB_VERT, SCROLLINFO, SIF_ALL,
-    SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
+    GetWindowThreadProcessId, IsWindow, PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO,
+    SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
     WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
@@ -3805,7 +3805,11 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
             before.nPage > 0,
             "vertical scrollbar must report a visible page size"
         );
-        assert_eq!(before.nPos, 0, "timeline should start at the top");
+        assert_eq!(
+            before.nPos,
+            before.nMax - before.nPage as i32 + 1,
+            "timeline should start at the bottom"
+        );
     } else {
         // Wine can refuse cross-process GetScrollInfo on a custom WS_VSCROLL child even when
         // the in-process control state is valid. In that case verify size/style plus observable
@@ -3815,32 +3819,88 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
                 && timeline_rect.bottom - timeline_rect.top > 0,
             "timeline child must have a visible client rect"
         );
+        assert!(before_top_line > 0, "timeline should start below the top");
+    }
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!beta:example",
+        "@bob:example",
+        1_700_005_800_000,
+        "scroll row 80",
+    )])?)?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "scroll row 80",
+        Duration::from_secs(5),
+    )?;
+    let after_tail_append = unsafe { scrollbar_info(timeline_hwnd) };
+    let after_tail_append_top_line = unsafe { timeline_top_line(timeline_hwnd) };
+    if let Some(after_tail_append) = after_tail_append {
         assert_eq!(
-            before_top_line, 0,
-            "wrapped timeline should start at the top before page-down"
+            after_tail_append.nPos,
+            after_tail_append.nMax - after_tail_append.nPage as i32 + 1,
+            "appending at the tail must keep the timeline at the new bottom"
+        );
+    } else {
+        assert!(
+            after_tail_append_top_line > before_top_line,
+            "appending at the tail must advance the timeline bottom"
         );
     }
 
     unsafe {
-        SendMessageW(timeline_hwnd, WM_VSCROLL, SB_PAGEDOWN as WPARAM, 0);
+        SendMessageW(timeline_hwnd, WM_VSCROLL, SB_PAGEUP as WPARAM, 0);
     }
 
     let after_top_line = unsafe { timeline_top_line(timeline_hwnd) };
+    let after_page_up = unsafe { scrollbar_info(timeline_hwnd) };
     if let Some(before) = before {
         let after = unsafe { scrollbar_info(timeline_hwnd) }
             .expect("GetScrollInfo should keep succeeding once it succeeds for the timeline child");
         assert!(
-            after.nPos > before.nPos,
-            "page-down must advance scrollbar position: before={}, after={}",
+            after.nPos < before.nPos,
+            "page-up must move scrollbar away from the tail: before={}, after={}",
             before.nPos,
             after.nPos
         );
     } else {
         assert!(
-            after_top_line > before_top_line,
-            "page-down must advance the timeline top line: before={}, after={}",
+            after_top_line < before_top_line,
+            "page-up must move the timeline away from the tail: before={}, after={}",
             before_top_line,
             after_top_line
+        );
+    }
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!beta:example",
+        "@bob:example",
+        1_700_005_860_000,
+        "scroll row 81",
+    )])?)?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "scroll row 81",
+        Duration::from_secs(5),
+    )?;
+    let after_scrolled_append = unsafe { scrollbar_info(timeline_hwnd) };
+    let after_scrolled_append_top_line = unsafe { timeline_top_line(timeline_hwnd) };
+    if let (Some(after_page_up), Some(after_scrolled_append)) =
+        (after_page_up, after_scrolled_append)
+    {
+        assert_eq!(
+            after_scrolled_append.nPos, after_page_up.nPos,
+            "appending away from the tail must retain the current position"
+        );
+        assert!(
+            after_scrolled_append.nPos
+                < after_scrolled_append.nMax - after_scrolled_append.nPage as i32 + 1,
+            "appending away from the tail must not jump to the bottom"
+        );
+    } else {
+        assert_eq!(
+            after_scrolled_append_top_line, after_top_line,
+            "appending away from the tail must retain the current top line"
         );
     }
 
@@ -4304,6 +4364,15 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     );
     assert_eq!(app.selected_navigation_path()?, expected_path);
     assert_compose_has_focus(&app);
+    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    unsafe {
+        SendMessageW(timeline_hwnd, WM_VSCROLL, SB_TOP as WPARAM, 0);
+    }
+    assert_eq!(
+        unsafe { timeline_top_line(timeline_hwnd) },
+        0,
+        "backfill must start from the oldest visible current row"
+    );
     app.trigger_active_timeline_history_backfill()?;
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
@@ -4335,6 +4404,11 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
         ],
     )])?)?;
     app.wait_idle(Duration::from_secs(5))?;
+
+    assert!(
+        unsafe { timeline_top_line(timeline_hwnd) } > 0,
+        "backfill must preserve the current row that was visible before prepending older rows"
+    );
 
     let mut expected_activity = vec![
         text_entry_with_event_id(
@@ -4585,20 +4659,25 @@ fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
             before.nPage > 0,
             "vertical scrollbar must report a visible page size"
         );
+        assert_eq!(
+            before.nPos,
+            before.nMax - before.nPage as i32 + 1,
+            "wrapped timeline should start at the bottom"
+        );
     } else {
         assert!(
             timeline_rect.right - timeline_rect.left > 0
                 && timeline_rect.bottom - timeline_rect.top > 0,
             "timeline child must have a visible client rect"
         );
-        assert_eq!(
-            before_top_line, 0,
-            "wrapped timeline should start at the top before page-down"
+        assert!(
+            before_top_line > 0,
+            "wrapped timeline should start below the top"
         );
     }
 
     unsafe {
-        SendMessageW(timeline_hwnd, WM_VSCROLL, SB_PAGEDOWN as WPARAM, 0);
+        SendMessageW(timeline_hwnd, WM_VSCROLL, SB_PAGEUP as WPARAM, 0);
     }
 
     let after_top_line = unsafe { timeline_top_line(timeline_hwnd) };
@@ -4606,15 +4685,15 @@ fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
         let after = unsafe { scrollbar_info(timeline_hwnd) }
             .expect("GetScrollInfo should keep succeeding once it succeeds for the timeline child");
         assert!(
-            after.nPos > before.nPos,
-            "page-down must advance scrollbar position for wrapped rows: before={}, after={}",
+            after.nPos < before.nPos,
+            "page-up must move scrollbar position for wrapped rows: before={}, after={}",
             before.nPos,
             after.nPos
         );
     } else {
         assert!(
-            after_top_line > before_top_line,
-            "page-down must advance the timeline top line for wrapped rows: before={}, after={}",
+            after_top_line < before_top_line,
+            "page-up must move the timeline top line for wrapped rows: before={}, after={}",
             before_top_line,
             after_top_line
         );

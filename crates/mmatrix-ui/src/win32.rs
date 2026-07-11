@@ -4102,13 +4102,32 @@ unsafe fn apply_timeline_content(
     rendered_text: String,
     lines: Vec<String>,
     paint_lines: Vec<TimelinePaintLine>,
+    retain_tail: bool,
 ) {
+    let visible_rows = timeline_visible_rows(hwnd);
+    let (top_line, tail_pinned) = {
+        let state = timeline_state_ref(hwnd);
+        (
+            state.top_line,
+            timeline_is_tail_pinned(
+                state.source_rows.len(),
+                state.top_line,
+                state.paint_lines.len(),
+                visible_rows,
+            ),
+        )
+    };
     let state = timeline_state_mut(hwnd);
     state.source_rows = source_rows;
     state.rendered_text = rendered_text;
     state.lines = lines;
     state.paint_lines = paint_lines;
-    clamp_timeline_top_line(hwnd);
+    state.top_line = timeline_top_line_after_content_replaced(
+        top_line,
+        tail_pinned && retain_tail,
+        state.paint_lines.len(),
+        visible_rows,
+    );
     update_timeline_scrollbar(hwnd);
     InvalidateRect(hwnd, null(), 1);
 }
@@ -4116,7 +4135,7 @@ unsafe fn apply_timeline_content(
 unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
     let (rendered_text, lines) = normalize_timeline_text(&wide_ptr_to_string(text_ptr));
     let paint_lines = plain_timeline_paint_lines(&lines);
-    apply_timeline_content(hwnd, Vec::new(), rendered_text, lines, paint_lines);
+    apply_timeline_content(hwnd, Vec::new(), rendered_text, lines, paint_lines, false);
     1
 }
 
@@ -4130,7 +4149,7 @@ unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
             .map(|row| row.logical_text.clone())
             .collect::<Vec<_>>()
     );
-    apply_timeline_content(hwnd, rows.to_vec(), rendered_text, lines, paint_lines);
+    apply_timeline_content(hwnd, rows.to_vec(), rendered_text, lines, paint_lines, true);
 }
 
 unsafe fn select_timeline_row(hwnd: HWND, lparam: LPARAM) {
@@ -4248,6 +4267,28 @@ fn timeline_max_top_line(line_count: usize, visible_rows: usize) -> usize {
 
 fn clamped_timeline_top_line(top_line: usize, line_count: usize, visible_rows: usize) -> usize {
     top_line.min(timeline_max_top_line(line_count, visible_rows))
+}
+
+fn timeline_is_tail_pinned(
+    source_row_count: usize,
+    top_line: usize,
+    line_count: usize,
+    visible_rows: usize,
+) -> bool {
+    source_row_count == 0 || top_line >= timeline_max_top_line(line_count, visible_rows)
+}
+
+fn timeline_top_line_after_content_replaced(
+    previous_top_line: usize,
+    tail_pinned: bool,
+    line_count: usize,
+    visible_rows: usize,
+) -> usize {
+    if tail_pinned {
+        timeline_max_top_line(line_count, visible_rows)
+    } else {
+        clamped_timeline_top_line(previous_top_line, line_count, visible_rows)
+    }
 }
 
 unsafe fn clamp_timeline_top_line(hwnd: HWND) {
@@ -19292,6 +19333,20 @@ mod tests {
         assert_eq!(clamped_timeline_top_line(8, 10, 3), 7);
         assert_eq!(clamped_timeline_top_line(8, 10, 5), 5);
         assert_eq!(clamped_timeline_top_line(2, 10, 20), 0);
+    }
+
+    #[test]
+    fn timeline_content_replacement_follows_tail_or_retains_scrolled_position() {
+        assert!(timeline_is_tail_pinned(0, 0, 0, 3));
+        assert_eq!(timeline_top_line_after_content_replaced(0, true, 10, 3), 7);
+
+        assert!(timeline_is_tail_pinned(8, 5, 8, 3));
+        assert_eq!(timeline_top_line_after_content_replaced(5, true, 12, 3), 9);
+
+        assert!(!timeline_is_tail_pinned(8, 2, 8, 3));
+        assert_eq!(timeline_top_line_after_content_replaced(2, false, 12, 3), 2);
+
+        assert_eq!(timeline_top_line_after_content_replaced(8, false, 10, 5), 5);
     }
 
     #[test]
