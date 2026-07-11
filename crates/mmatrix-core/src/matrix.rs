@@ -3029,10 +3029,9 @@ mod tests {
         map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
         map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
-        moderation_capabilities, outgoing_events_from_local_echo_event, owned_event_id_from_str,
-        reaction_event_content, read_file_bytes, room_activity_from_sync_member,
-        room_activity_from_sync_message, room_activity_from_sync_topic,
-        room_activity_update_from_indexed_reaction_redaction,
+        outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
+        read_file_bytes, room_activity_from_sync_member, room_activity_from_sync_message,
+        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
@@ -3046,44 +3045,110 @@ mod tests {
     };
 
     #[test]
-    fn moderation_capabilities_require_independent_sdk_permissions_and_lower_target_power() {
-        let actor = <&matrix_sdk::ruma::UserId>::try_from("@actor:example.org")
-            .expect("valid actor user id");
-        let lower = <&matrix_sdk::ruma::UserId>::try_from("@lower:example.org")
-            .expect("valid lower user id");
-        let equal = <&matrix_sdk::ruma::UserId>::try_from("@equal:example.org")
-            .expect("valid equal user id");
-        let higher = <&matrix_sdk::ruma::UserId>::try_from("@higher:example.org")
-            .expect("valid higher user id");
+    fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
 
-        assert_eq!(
-            moderation_capabilities(actor, lower, true, false, &50, &0),
-            (true, false)
-        );
-        assert_eq!(
-            moderation_capabilities(actor, lower, false, true, &50, &0),
-            (false, true)
-        );
-        assert_eq!(
-            moderation_capabilities(actor, lower, false, false, &50, &0),
-            (false, false)
-        );
-        assert_eq!(
-            moderation_capabilities(actor, actor, true, true, &50, &50),
-            (false, false)
-        );
-        assert_eq!(
-            moderation_capabilities(actor, equal, true, true, &50, &50),
-            (false, false)
-        );
-        assert_eq!(
-            moderation_capabilities(actor, higher, true, true, &50, &100),
-            (false, false)
-        );
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let member_events = serde_json::json!([
+                {
+                    "type": "m.room.member",
+                    "state_key": "@example:localhost",
+                    "sender": "@example:localhost",
+                    "event_id": "$actor:localhost",
+                    "origin_server_ts": 1u64,
+                    "content": { "membership": "join", "displayname": "Actor" }
+                },
+                {
+                    "type": "m.room.member",
+                    "state_key": "@bob:localhost",
+                    "sender": "@bob:localhost",
+                    "event_id": "$bob:localhost",
+                    "origin_server_ts": 2u64,
+                    "content": { "membership": "join", "displayname": "Bob" }
+                },
+                {
+                    "type": "m.room.power_levels",
+                    "state_key": "",
+                    "sender": "@example:localhost",
+                    "event_id": "$power:localhost",
+                    "origin_server_ts": 3u64,
+                    "content": {
+                        "ban": 75,
+                        "events": {},
+                        "events_default": 0,
+                        "invite": 50,
+                        "kick": 50,
+                        "redact": 50,
+                        "state_default": 50,
+                        "users": { "@example:localhost": 51 },
+                        "users_default": 10
+                    }
+                }
+            ]);
+            mock_server
+                .mock_get_members()
+                .ok(raw_room_member_events(&member_events))
+                .mock_once()
+                .mount()
+                .await;
+            let room = mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&member_events)),
+                )
+                .await;
+            let actor = client.user_id().expect("authenticated user");
+            let sdk_actor = room
+                .members_no_sync(RoomMemberships::JOIN)
+                .await
+                .expect("cached SDK members")
+                .into_iter()
+                .find(|member| member.user_id() == actor)
+                .expect("actor SDK member");
+
+            assert!(sdk_actor.can_kick());
+            assert!(!sdk_actor.can_ban());
+            let expected = RoomMembers {
+                room_id: "!room:example.org".to_owned(),
+                members: vec![
+                    RoomMemberSummary {
+                        user_id: "@example:localhost".to_owned(),
+                        display_name: Some("Actor".to_owned()),
+                        can_kick: false,
+                        can_ban: false,
+                    },
+                    RoomMemberSummary {
+                        user_id: "@bob:localhost".to_owned(),
+                        display_name: Some("Bob".to_owned()),
+                        can_kick: true,
+                        can_ban: false,
+                    },
+                ],
+            };
+
+            assert_eq!(
+                joined_room_members_no_sync(actor, &room)
+                    .await
+                    .expect("cached members"),
+                expected
+            );
+            assert_eq!(
+                joined_room_members(actor, &room)
+                    .await
+                    .expect("synced members"),
+                expected
+            );
+        });
     }
 
     #[test]
-    fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
+    fn joined_member_snapshots_project_sdk_kick_and_ban_permissions_for_each_target_power() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -3092,46 +3157,89 @@ mod tests {
         runtime.block_on(async {
             let client = client_with_joined_members(serde_json::json!([
                 {
-                    "type": "m.room.member",
-                    "state_key": "@alice:example.org",
-                    "sender": "@alice:example.org",
-                    "event_id": "$alice:example.org",
+                    "type": "m.room.member", "state_key": "@alice:example.org",
+                    "sender": "@alice:example.org", "event_id": "$alice:example.org",
                     "origin_server_ts": 1u64,
-                    "content": { "membership": "join", "displayname": "Alice" }
+                    "content": { "membership": "join", "displayname": "Actor" }
                 },
                 {
-                    "type": "m.room.member",
-                    "state_key": "@bob:example.org",
-                    "sender": "@bob:example.org",
-                    "event_id": "$bob:example.org",
+                    "type": "m.room.member", "state_key": "@default:example.org",
+                    "sender": "@default:example.org", "event_id": "$default:example.org",
                     "origin_server_ts": 2u64,
-                    "content": { "membership": "join", "displayname": "Bob" }
+                    "content": { "membership": "join", "displayname": "Default" }
+                },
+                {
+                    "type": "m.room.member", "state_key": "@equal:example.org",
+                    "sender": "@equal:example.org", "event_id": "$equal:example.org",
+                    "origin_server_ts": 3u64,
+                    "content": { "membership": "join", "displayname": "Equal" }
+                },
+                {
+                    "type": "m.room.member", "state_key": "@higher:example.org",
+                    "sender": "@higher:example.org", "event_id": "$higher:example.org",
+                    "origin_server_ts": 4u64,
+                    "content": { "membership": "join", "displayname": "Higher" }
+                },
+                {
+                    "type": "m.room.power_levels", "state_key": "",
+                    "sender": "@alice:example.org", "event_id": "$power:example.org",
+                    "origin_server_ts": 5u64,
+                    "content": {
+                        "ban": 75, "events": {}, "events_default": 0, "invite": 50,
+                        "kick": 100, "redact": 50, "state_default": 50, "users_default": 10,
+                        "users": {
+                            "@alice:example.org": 76,
+                            "@equal:example.org": 76,
+                            "@higher:example.org": 100
+                        }
+                    }
                 }
             ]))
             .await;
             let room = client
                 .get_room(room_id().as_ref())
                 .expect("joined room from sync response");
-            let actor = client.user_id().expect("authenticated user");
+            let members = room
+                .members_no_sync(RoomMemberships::JOIN)
+                .await
+                .expect("cached SDK members");
+            let actor = members
+                .iter()
+                .find(|member| member.user_id().as_str() == "@alice:example.org")
+                .expect("actor SDK member");
 
+            assert!(!actor.can_kick());
+            assert!(actor.can_ban());
             assert_eq!(
-                joined_room_members_no_sync(actor, &room)
+                joined_room_members_no_sync(client.user_id().expect("authenticated user"), &room)
                     .await
-                    .expect("cached members"),
+                    .expect("projected SDK members"),
                 RoomMembers {
                     room_id: "!room:example.org".to_owned(),
                     members: vec![
                         RoomMemberSummary {
                             user_id: "@alice:example.org".to_owned(),
-                            display_name: Some("Alice".to_owned()),
+                            display_name: Some("Actor".to_owned()),
                             can_kick: false,
-                            can_ban: false,
+                            can_ban: false
                         },
                         RoomMemberSummary {
-                            user_id: "@bob:example.org".to_owned(),
-                            display_name: Some("Bob".to_owned()),
+                            user_id: "@default:example.org".to_owned(),
+                            display_name: Some("Default".to_owned()),
                             can_kick: false,
-                            can_ban: false,
+                            can_ban: true
+                        },
+                        RoomMemberSummary {
+                            user_id: "@equal:example.org".to_owned(),
+                            display_name: Some("Equal".to_owned()),
+                            can_kick: false,
+                            can_ban: false
+                        },
+                        RoomMemberSummary {
+                            user_id: "@higher:example.org".to_owned(),
+                            display_name: Some("Higher".to_owned()),
+                            can_kick: false,
+                            can_ban: false
                         },
                     ],
                 }
@@ -3297,7 +3405,7 @@ mod tests {
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
-        Client, SessionMeta,
+        Client, RoomMemberships, SessionMeta,
         deserialized_responses::{TimelineEvent, UnableToDecryptInfo, UnableToDecryptReason},
         encryption::{
             backups::BackupState,
@@ -3310,13 +3418,13 @@ mod tests {
             UInt,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
-                AnyMessageLikeEventContent, ToDeviceEvent,
+                AnyMessageLikeEventContent, AnySyncStateEvent, ToDeviceEvent,
                 direct::DirectEventContent,
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 reaction::OriginalSyncReactionEvent,
                 room::MediaSource,
                 room::{
-                    member::OriginalSyncRoomMemberEvent,
+                    member::{OriginalSyncRoomMemberEvent, RoomMemberEvent},
                     message::{
                         MessageType, OriginalSyncRoomMessageEvent, ReplacementMetadata,
                         RoomMessageEventContent,
@@ -3332,6 +3440,7 @@ mod tests {
         },
         send_queue::{LocalEchoContent, RoomSendQueue, RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
+        test_utils::mocks::MatrixMockServer,
     };
     use matrix_sdk_base::cross_process_lock::CrossProcessLockConfig;
     use matrix_sdk_base::{
@@ -3340,10 +3449,39 @@ mod tests {
         store::StoreConfig,
     };
     use matrix_sdk_crypto::CrossSigningStatus;
-    use matrix_sdk_test::ruma_response_from_json;
+    use matrix_sdk_test::{JoinedRoomBuilder, ruma_response_from_json};
 
     fn room_id() -> OwnedRoomId {
         OwnedRoomId::try_from("!room:example.org").expect("valid room id")
+    }
+
+    fn raw_room_member_events(events: &serde_json::Value) -> Vec<Raw<RoomMemberEvent>> {
+        events
+            .as_array()
+            .expect("member event array")
+            .iter()
+            .map(|event| {
+                Raw::<RoomMemberEvent>::from_json_string(event.to_string())
+                    .expect("serialize raw member event")
+            })
+            .collect()
+    }
+
+    fn raw_sync_state_events(events: &serde_json::Value) -> Vec<Raw<AnySyncStateEvent>> {
+        let events = events.as_array().expect("state event array");
+        events
+            .iter()
+            .filter(|event| event["type"] == "m.room.power_levels")
+            .chain(
+                events
+                    .iter()
+                    .filter(|event| event["type"] != "m.room.power_levels"),
+            )
+            .map(|event| {
+                Raw::<AnySyncStateEvent>::from_json_string(event.to_string())
+                    .expect("serialize raw sync state event")
+            })
+            .collect()
     }
 
     fn transaction_id() -> OwnedTransactionId {
