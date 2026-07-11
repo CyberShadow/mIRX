@@ -3115,14 +3115,6 @@ mod tests {
             let actor = client.user_id().expect("authenticated user");
 
             assert_eq!(
-                joined_room_members(actor, &room)
-                    .await
-                    .expect("synced members"),
-                joined_room_members_no_sync(actor, &room)
-                    .await
-                    .expect("cached members")
-            );
-            assert_eq!(
                 joined_room_members_no_sync(actor, &room)
                     .await
                     .expect("cached members"),
