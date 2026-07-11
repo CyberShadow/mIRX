@@ -3583,7 +3583,7 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
-fn launch_member_list_app() -> Result<MmatrixApp, Box<dyn std::error::Error>> {
+fn launch_member_list_app() -> Result<GuiTestApp, Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list.json");
