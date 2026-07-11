@@ -12648,7 +12648,10 @@ fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<
 unsafe fn submit_join_room_menu_target(hwnd: HWND, target: String) -> Result<(), String> {
     let target = target.trim().to_owned();
     if target.is_empty() {
-        return Err("join room target cannot be empty".to_owned());
+        let message = "join room target cannot be empty";
+        state_mut(hwnd).model.status = message.to_owned();
+        refresh_status_bar(hwnd)?;
+        return Err(message.to_owned());
     }
     let status = submit_join_slash_command(state_mut(hwnd), target)?;
     state_mut(hwnd).model.status = status;
@@ -12673,7 +12676,10 @@ fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Resul
 unsafe fn submit_query_user_menu_target(hwnd: HWND, user_id: String) -> Result<(), String> {
     let user_id = user_id.trim().to_owned();
     if user_id.is_empty() {
-        return Err("query user ID cannot be empty".to_owned());
+        let message = "query user ID cannot be empty";
+        state_mut(hwnd).model.status = message.to_owned();
+        refresh_status_bar(hwnd)?;
+        return Err(message.to_owned());
     }
     let status = submit_query_slash_command(state_mut(hwnd), user_id)?;
     state_mut(hwnd).model.status = status;
