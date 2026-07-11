@@ -19,6 +19,8 @@ pub enum Command {
     AcceptRoomInvite(AcceptRoomInviteRequest),
     CreateDirectRoom(CreateDirectRoomRequest),
     LeaveRoom(LeaveRoomRequest),
+    KickRoomMember(KickRoomMemberRequest),
+    BanRoomMember(BanRoomMemberRequest),
     RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
@@ -132,6 +134,20 @@ pub struct CreateDirectRoomRequest {
 #[serde(deny_unknown_fields)]
 pub struct LeaveRoomRequest {
     pub room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KickRoomMemberRequest {
+    pub room_id: String,
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BanRoomMemberRequest {
+    pub room_id: String,
+    pub user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -611,6 +627,8 @@ pub struct RoomTyping {
 pub struct RoomMemberSummary {
     pub user_id: String,
     pub display_name: Option<String>,
+    pub can_kick: bool,
+    pub can_ban: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -870,6 +888,8 @@ pub enum Operation {
     AcceptRoomInvite,
     CreateDirectRoom,
     LeaveRoom,
+    KickRoomMember,
+    BanRoomMember,
     RejectRoomInvite,
     SetRoomTopic,
     SendMessage,

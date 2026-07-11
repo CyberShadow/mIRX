@@ -200,6 +200,7 @@ async fn handle_command(
             handle_create_direct_room(event_tx, state, request).await
         }
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
+        Command::KickRoomMember(_) | Command::BanRoomMember(_) => false,
         Command::RejectRoomInvite(request) => {
             handle_reject_room_invite(event_tx, state, request).await
         }
@@ -1217,6 +1218,8 @@ mod tests {
                 .map(|(user_id, display_name)| RoomMemberSummary {
                     user_id: (*user_id).to_owned(),
                     display_name: display_name.map(str::to_owned),
+                    can_kick: false,
+                    can_ban: false,
                 })
                 .collect(),
         }

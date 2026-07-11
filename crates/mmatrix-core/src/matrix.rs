@@ -577,6 +577,8 @@ fn sorted_room_member_summaries_from_parts(
         .map(|(user_id, display_name)| RoomMemberSummary {
             user_id,
             display_name,
+            can_kick: false,
+            can_ban: false,
         })
         .collect::<Vec<_>>();
 
@@ -3619,22 +3621,32 @@ mod tests {
                 RoomMemberSummary {
                     user_id: "@beta:example.org".to_owned(),
                     display_name: Some(String::new()),
+                    can_kick: false,
+                    can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@charlie:example.org".to_owned(),
                     display_name: None,
+                    can_kick: false,
+                    can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
                     display_name: Some("ALICE".to_owned()),
+                    can_kick: false,
+                    can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@echo:example.org".to_owned(),
                     display_name: Some("alice".to_owned()),
+                    can_kick: false,
+                    can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@delta:example.org".to_owned(),
                     display_name: Some("beta".to_owned()),
+                    can_kick: false,
+                    can_ban: false,
                 },
             ]
         );
@@ -3656,14 +3668,20 @@ mod tests {
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
                     display_name: Some("same".to_owned()),
+                    can_kick: false,
+                    can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@mike:example.org".to_owned(),
                     display_name: Some("same".to_owned()),
+                    can_kick: false,
+                    can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@zulu:example.org".to_owned(),
                     display_name: Some("Same".to_owned()),
+                    can_kick: false,
+                    can_ban: false,
                 },
             ]
         );
