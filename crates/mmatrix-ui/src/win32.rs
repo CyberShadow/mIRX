@@ -4388,14 +4388,17 @@ fn timeline_history_backfill_anchor_row_index(
     rows: &[TimelineRow],
     visible_source_row_index: usize,
 ) -> Option<usize> {
-    let visible_row = rows.get(visible_source_row_index)?;
-    if visible_row.event_id.is_some() {
-        return Some(visible_source_row_index);
-    }
     rows.iter()
         .enumerate()
         .skip(visible_source_row_index)
-        .find_map(|(index, row)| row.event_id.is_some().then_some(index))
+        .find_map(|(index, row)| (!timeline_row_is_fixed_room_context(row)).then_some(index))
+}
+
+fn timeline_row_is_fixed_room_context(row: &TimelineRow) -> bool {
+    matches!(
+        &row.kind,
+        TimelineRowKind::Header | TimelineRowKind::Topic | TimelineRowKind::Typing
+    )
 }
 
 unsafe fn restore_room_history_backfill_anchor(hwnd: HWND, anchor: TimelineBackfillAnchor) {
@@ -19368,9 +19371,14 @@ mod tests {
     }
 
     #[test]
-    fn history_backfill_anchor_skips_room_context_for_the_first_visible_event() {
+    fn history_backfill_anchor_skips_only_fixed_room_context() {
         let rows = vec![
             TimelineRow::full_width(TimelineRowKind::Header, "Room: Beta".to_owned()),
+            TimelineRow::full_width(TimelineRowKind::Topic, "Topic: incident".to_owned()),
+            TimelineRow::full_width(
+                TimelineRowKind::ReactionSummary,
+                "    reactions: 👍 x1".to_owned(),
+            ),
             TimelineRow::log(
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
@@ -19386,11 +19394,11 @@ mod tests {
 
         assert_eq!(
             timeline_history_backfill_anchor_row_index(&rows, 0),
-            Some(1)
+            Some(2)
         );
         assert_eq!(
-            timeline_history_backfill_anchor_row_index(&rows, 1),
-            Some(1)
+            timeline_history_backfill_anchor_row_index(&rows, 2),
+            Some(2)
         );
     }
 
