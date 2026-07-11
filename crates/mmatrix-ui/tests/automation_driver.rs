@@ -11466,7 +11466,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         0,
         None,
         None,
-        UiFindHistorySearchState::LocalOnly,
+        UiFindHistorySearchState::Loading,
     );
     let miss_state = app.dump_ui_state()?;
     assert_eq!(miss_state.mdi.active, thread_view_identity);
@@ -11478,19 +11478,27 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         0,
         None,
         None,
-        UiFindHistorySearchState::LocalOnly,
+        UiFindHistorySearchState::Loading,
     );
     assert!(
         miss_state
             .status_bar
             .text
-            .contains("find: no matches for \"lobby\"")
+            .contains("find: loading older history for \"lobby\"")
     );
 
     let model = app.dump_model()?;
     assert_eq!(model.selected_room.as_deref(), Some("!ops:example"));
     assert_eq!(model.last_error, None);
-    assert_no_submitted_commands(&model);
+    assert_no_non_history_submitted_commands(&model);
+    assert_eq!(
+        model.submitted_history_commands,
+        vec![SubmittedHistoryCommand {
+            room_id: "!ops:example".to_owned(),
+            from: None,
+            limit: 50,
+        }]
+    );
 
     Ok(())
 }
