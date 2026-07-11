@@ -1525,6 +1525,20 @@ fn room_activity_unable_to_decrypt_round_trips_through_json() {
 }
 
 #[test]
+fn room_activity_unable_to_decrypt_rejects_unknown_fields() {
+    let json = serde_json::json!({
+        "room_id":"!room:example", "activity_id":"$encrypted1:example.org",
+        "timestamp_ms":1710000000000u64, "relation":null, "reactions":[],
+        "kind":{"type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
+        "sender":"@alice:example.org", "session_id":"SESSIONID",
+        "reason":"missing_megolm_session", "unexpected":true}
+    });
+
+    assert!(serde_json::from_value::<RoomActivity>(json.clone()).is_err());
+    assert!(serde_json::from_value::<CoreRoomActivity>(json).is_err());
+}
+
+#[test]
 fn room_activity_image_round_trips_through_json() {
     let activity = RoomActivity {
         room_id: "!room:example".to_owned(),

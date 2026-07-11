@@ -2983,6 +2983,47 @@ mod tests {
     }
 
     #[test]
+    fn room_history_backfill_events_deliver_unable_to_decrypt_activity() {
+        let event = TimelineEvent::from_utd(
+            Raw::new(&serde_json::json!({
+                "type": "m.room.encrypted",
+                "content": {"algorithm": "m.megolm.v1.aes-sha2"},
+                "event_id": "$encrypted-vector:example.org",
+                "sender": "@alice:example.org",
+                "origin_server_ts": 1700000000000u64
+            }))
+            .expect("serialize raw encrypted timeline event")
+            .cast_unchecked(),
+            UnableToDecryptInfo {
+                session_id: Some("SESSIONID".to_owned()),
+                reason: UnableToDecryptReason::MissingMegolmSession {
+                    withheld_code: None,
+                },
+            },
+        );
+
+        assert_eq!(
+            room_history_backfill_events_from_timeline(
+                "!room:example.org",
+                vec![event],
+                RedactionRules::V1,
+            ),
+            vec![RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                room_id: "!room:example.org".to_owned(),
+                activity_id: "$encrypted-vector:example.org".to_owned(),
+                timestamp_ms: 1_700_000_000_000,
+                relation: None,
+                kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
+                    event_id: "$encrypted-vector:example.org".to_owned(),
+                    sender: "@alice:example.org".to_owned(),
+                    session_id: Some("SESSIONID".to_owned()),
+                    reason: RoomUnableToDecryptReason::MissingMegolmSession,
+                }),
+            }))]
+        );
+    }
+
+    #[test]
     fn read_file_bytes_reads_regular_files_and_rejects_missing_and_directories() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let file = temp.path().join("report.txt");
