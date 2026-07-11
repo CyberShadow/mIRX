@@ -5309,7 +5309,12 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         MENU_ID_MESSAGE_REPLY,
         "Reply to Message",
     )?;
-    append_menu_text(message_menu, MF_STRING, MENU_ID_MESSAGE_EDIT, "Edit Message")?;
+    append_menu_text(
+        message_menu,
+        MF_STRING,
+        MENU_ID_MESSAGE_EDIT,
+        "Edit Message",
+    )?;
     append_menu_text(
         message_menu,
         MF_STRING,

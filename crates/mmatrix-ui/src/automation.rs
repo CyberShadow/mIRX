@@ -148,7 +148,9 @@ impl CommandKind {
                 Some(Self::ReplyToSelectedMessageViaMenu)
             }
             COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU => Some(Self::EditSelectedMessageViaMenu),
-            COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU => Some(Self::ReactToSelectedMessageViaMenu),
+            COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU => {
+                Some(Self::ReactToSelectedMessageViaMenu)
+            }
             COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU => Some(Self::RedactSelectedMessageViaMenu),
             COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU => Some(Self::SaveAttachmentViaMessageMenu),
             COMMAND_ID_SEND_FILE => Some(Self::SendFile),
@@ -352,7 +354,9 @@ impl ParsedCommand {
                 CommandKind::ReplyToSelectedMessageViaMenu
             }
             Self::EditSelectedMessageViaMenu { .. } => CommandKind::EditSelectedMessageViaMenu,
-            Self::ReactToSelectedMessageViaMenu { .. } => CommandKind::ReactToSelectedMessageViaMenu,
+            Self::ReactToSelectedMessageViaMenu { .. } => {
+                CommandKind::ReactToSelectedMessageViaMenu
+            }
             Self::RedactSelectedMessageViaMenu { .. } => CommandKind::RedactSelectedMessageViaMenu,
             Self::SaveAttachmentViaMessageMenu { .. } => CommandKind::SaveAttachmentViaMessageMenu,
         }
@@ -2163,13 +2167,12 @@ mod tests {
         COMMAND_ID_DUMP_MESSAGE_MENU_STATE, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_DUMP_ROOM_MENU_STATE, COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH,
         COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_DUMP_VERIFICATION_MENU_STATE,
-        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
-        COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING, COMMAND_ID_RECOVER_E2EE,
+        COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_FIND_ACTIVE_VIEW,
+        COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
+        COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING,
+        COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
