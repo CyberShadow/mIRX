@@ -1751,6 +1751,11 @@ fn assert_navigation_activity(ui_state: &UiState, path_substrings: &[&str], expe
 }
 
 fn assert_no_submitted_commands(model: &Model) {
+    assert_no_non_history_submitted_commands(model);
+    assert!(model.submitted_history_commands.is_empty());
+}
+
+fn assert_no_non_history_submitted_commands(model: &Model) {
     assert!(model.submitted_membership_commands.is_empty());
     assert!(model.submitted_direct_room_commands.is_empty());
     assert!(model.submitted_room_topic_commands.is_empty());
@@ -1758,7 +1763,8 @@ fn assert_no_submitted_commands(model: &Model) {
     assert!(model.submitted_edit_commands.is_empty());
     assert!(model.submitted_reply_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
-    assert!(model.submitted_history_commands.is_empty());
+    assert!(model.submitted_recovery_commands.is_empty());
+    assert!(model.submitted_setup_recovery_commands.is_empty());
     assert!(model.submitted_verification_actions.is_empty());
 }
 
@@ -1770,6 +1776,7 @@ fn assert_find_result(
     match_count: usize,
     current_match_index: Option<usize>,
     selected_text: Option<&str>,
+    history_search: UiFindHistorySearchState,
 ) {
     assert_eq!(result.active, active.clone());
     assert_eq!(result.query, query);
@@ -1777,7 +1784,7 @@ fn assert_find_result(
     assert_eq!(result.match_count, match_count);
     assert_eq!(result.current_match_index, current_match_index);
     assert_eq!(result.selected_text.as_deref(), selected_text);
-    assert_eq!(result.history_search, UiFindHistorySearchState::LocalOnly);
+    assert_eq!(result.history_search, history_search);
 }
 
 fn assert_ui_active_find(
@@ -1788,6 +1795,7 @@ fn assert_ui_active_find(
     match_count: usize,
     current_match_index: Option<usize>,
     selected_text: Option<&str>,
+    history_search: UiFindHistorySearchState,
 ) {
     assert_eq!(
         ui_state.active_find,
@@ -1798,7 +1806,7 @@ fn assert_ui_active_find(
             match_count,
             current_match_index,
             selected_text: selected_text.map(str::to_owned),
-            history_search: UiFindHistorySearchState::LocalOnly,
+            history_search,
         })
     );
 }
@@ -3987,6 +3995,7 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
         1,
         Some(0),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         ui_state
@@ -11044,6 +11053,7 @@ fn automation_driver_slash_find_updates_active_room_without_sending_text()
         1,
         Some(0),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         ui_state
@@ -11118,6 +11128,7 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
         2,
         Some(0),
         Some(matching_lines[0]),
+        UiFindHistorySearchState::LocalOnly,
     );
     let first_state = app.dump_ui_state()?;
     assert_eq!(first_state.mdi.active, search_view_identity);
@@ -11129,6 +11140,7 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
         2,
         Some(0),
         Some(matching_lines[0]),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(first_state.status_bar.text.contains("find: 1/2 \"needle\""));
 
@@ -11141,6 +11153,7 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
         2,
         Some(1),
         Some(matching_lines[1]),
+        UiFindHistorySearchState::LocalOnly,
     );
     let second_state = app.dump_ui_state()?;
     assert_eq!(second_state.mdi.active, search_view_identity);
@@ -11152,6 +11165,7 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
         2,
         Some(1),
         Some(matching_lines[1]),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         second_state
@@ -11169,6 +11183,7 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
         2,
         Some(0),
         Some(matching_lines[0]),
+        UiFindHistorySearchState::LocalOnly,
     );
     let wrapped_state = app.dump_ui_state()?;
     assert_eq!(wrapped_state.mdi.active, search_view_identity);
@@ -11180,6 +11195,7 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
         2,
         Some(0),
         Some(matching_lines[0]),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         wrapped_state
@@ -11236,6 +11252,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         1,
         Some(0),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
     let positive_state = app.dump_ui_state()?;
     assert_eq!(positive_state.mdi.active, thread_view_identity);
@@ -11247,6 +11264,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         1,
         Some(0),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         positive_state
@@ -11264,6 +11282,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         0,
         None,
         None,
+        UiFindHistorySearchState::LocalOnly,
     );
     let miss_state = app.dump_ui_state()?;
     assert_eq!(miss_state.mdi.active, thread_view_identity);
@@ -11275,6 +11294,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         0,
         None,
         None,
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         miss_state
@@ -11321,6 +11341,7 @@ fn automation_driver_find_active_status_view_matches_status_lines()
         1,
         Some(0),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
 
     let ui_state = app.dump_ui_state()?;
@@ -11334,6 +11355,7 @@ fn automation_driver_find_active_status_view_matches_status_lines()
         1,
         Some(0),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         ui_state
@@ -11368,7 +11390,7 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
 
     let beta_view_identity = room_identity("!beta:example");
     let before_state = app.dump_ui_state()?;
-    let before_view = find_view(&before_state, &beta_view_identity).clone();
+    assert_eq!(before_state.mdi.active, beta_view_identity);
 
     let result = app.find_active_view("missing search term")?;
     assert_find_result(
@@ -11379,12 +11401,16 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
         0,
         None,
         None,
+        UiFindHistorySearchState::Loading,
     );
 
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, beta_view_identity);
     assert_active_switchbar_item(&ui_state, &beta_view_identity);
-    assert_eq!(find_view(&ui_state, &beta_view_identity), &before_view);
+    assert!(view_contains(
+        find_view(&ui_state, &beta_view_identity),
+        "* Loading older history..."
+    ));
     assert_ui_active_find(
         &ui_state,
         &room_identity("!beta:example"),
@@ -11393,18 +11419,27 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
         0,
         None,
         None,
+        UiFindHistorySearchState::Loading,
     );
     assert!(
         ui_state
             .status_bar
             .text
-            .contains("find: no matches for \"missing search term\"")
+            .contains("find: loading older history for \"missing search term\"")
     );
 
     let model = app.dump_model()?;
     assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
     assert_eq!(model.last_error, None);
-    assert_no_submitted_commands(&model);
+    assert_no_non_history_submitted_commands(&model);
+    assert_eq!(
+        model.submitted_history_commands,
+        vec![SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: None,
+            limit: 50,
+        }]
+    );
 
     let _ = fs::remove_file(&state_path);
     Ok(())
@@ -11446,7 +11481,16 @@ fn automation_driver_find_active_view_empty_query_matches_slash_find_validation(
     assert_no_submitted_commands(&slash_model);
 
     let result = app.find_active_view("")?;
-    assert_find_result(&result, &beta_view_identity, "", false, 0, None, None);
+    assert_find_result(
+        &result,
+        &beta_view_identity,
+        "",
+        false,
+        0,
+        None,
+        None,
+        UiFindHistorySearchState::LocalOnly,
+    );
 
     let automation_ui_state = app.dump_ui_state()?;
     assert_eq!(automation_ui_state.mdi.active, beta_view_identity);
@@ -11530,6 +11574,7 @@ fn automation_driver_find_active_view_preserves_per_view_state()
         1,
         Some(0),
         Some(alpha_line),
+        UiFindHistorySearchState::LocalOnly,
     );
 
     app.select_room("!beta:example")?;
@@ -11550,6 +11595,7 @@ fn automation_driver_find_active_view_preserves_per_view_state()
         2,
         Some(1),
         Some(beta_lines[1]),
+        UiFindHistorySearchState::LocalOnly,
     );
 
     app.select_room("!alpha:example")?;
@@ -11563,6 +11609,7 @@ fn automation_driver_find_active_view_preserves_per_view_state()
         1,
         Some(0),
         Some(alpha_line),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         restored_alpha_state
@@ -11582,6 +11629,7 @@ fn automation_driver_find_active_view_preserves_per_view_state()
         2,
         Some(1),
         Some(beta_lines[1]),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(
         restored_beta_state
@@ -11645,6 +11693,7 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
         2,
         Some(1),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
@@ -11671,6 +11720,7 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
         3,
         Some(2),
         Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
     );
     assert!(ui_state.status_bar.text.contains("find: 3/3 \"needle\""));
     assert_eq!(
