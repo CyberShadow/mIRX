@@ -4276,7 +4276,7 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
 }
 
 #[test]
-fn trigger_active_timeline_history_backfill_rejects_thread_view()
+fn trigger_active_timeline_history_backfill_submits_for_thread_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path = mmatrix_ui_exe_path()
         .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
@@ -4291,17 +4291,84 @@ fn trigger_active_timeline_history_backfill_rejects_thread_view()
     app.wait_idle(Duration::from_secs(5))?;
     app.select_view(thread_identity("!ops:example", "$thread-root"))?;
 
-    let error = app
-        .trigger_active_timeline_history_backfill()
-        .expect_err("thread view must not trigger room history backfill");
-    assert!(matches!(
-        error,
-        TestkitError::InvalidResponse(message)
-            if message.contains("active view is not a room view")
-    ));
+    app.trigger_active_timeline_history_backfill()?;
+    assert_eq!(
+        app.dump_model()?.submitted_history_commands,
+        vec![SubmittedHistoryCommand {
+            room_id: "!ops:example".to_owned(),
+            from: None,
+            limit: 50,
+        }]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn render_state_thread_find_backfill_matches_older_thread_reply()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("find-thread.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let view_id = thread_identity("!find-thread:example", "$find-thread-root");
+    app.select_view(view_id.clone())?;
+
+    let result = app.find_active_view("older thread needle")?;
+    assert_eq!(result.history_search, UiFindHistorySearchState::Loading);
+    assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!find-thread:example",
+        "start",
+        Some("next"),
+        vec![
+            history_backfill_event_from_event(message_event_with_event_id_and_relation(
+                "!find-thread:example",
+                "$find-thread-older",
+                "@erin:example",
+                1_699_999_000_000,
+                Some(CoreRoomActivityRelation::Thread {
+                    thread_root_event_id: "$find-thread-root".to_owned(),
+                    in_reply_to_event_id: Some("$find-thread-root".to_owned()),
+                    is_falling_back: false,
+                }),
+                CoreRoomMessagePresentationKind::Text,
+                "older thread needle",
+            )),
+            history_backfill_event_from_event(text_event_with_event_id(
+                "!find-thread:example",
+                "$find-thread-older-room-only",
+                "@frank:example",
+                1_699_999_060_000,
+                "older room-only needle",
+            )),
+        ],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let thread_view = find_view(&ui_state, &view_id);
+    let selected_text = only_view_line_containing(thread_view, "older thread needle");
+    assert_ui_active_find(
+        &ui_state,
+        &view_id,
+        "older thread needle",
+        true,
+        1,
+        Some(0),
+        Some(selected_text),
+        UiFindHistorySearchState::LocalOnly,
+    );
+    assert!(view_contains(thread_view, "older thread needle"));
+    assert!(!view_contains(thread_view, "older room-only needle"));
     Ok(())
 }
 

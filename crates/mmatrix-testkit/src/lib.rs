@@ -2274,9 +2274,9 @@ mod imp {
         FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId,
-        SB_PAGEDOWN, SB_PAGEUP, SendMessageW, WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH,
-        WM_MDIGETACTIVE, WM_VSCROLL,
+        EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId, SB_PAGEUP,
+        SB_TOP, SendMessageW, WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE,
+        WM_VSCROLL,
     };
 
     use super::*;
@@ -2636,21 +2636,10 @@ mod imp {
 
         pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
             let active_child = self.active_mdi_child_hwnd()?;
-            self.require_active_room_view(active_child)?;
+            self.require_active_timeline_view(active_child)?;
             let content = self.active_mdi_content_hwnd()?;
             let timeline_hwnd = self.child_window_with_class(content, TIMELINE_CLASS_NAME)?;
-            let before_top_line = unsafe { timeline_top_line(timeline_hwnd) };
-
-            if before_top_line == 0 {
-                unsafe { send_timeline_scroll(timeline_hwnd, SB_PAGEDOWN as usize) };
-                let after_page_down = unsafe { timeline_top_line(timeline_hwnd) };
-                if after_page_down <= 0 {
-                    return Err(TestkitError::InvalidResponse(format!(
-                        "page-down did not move the active room timeline away from the top: before={before_top_line}, after={after_page_down}"
-                    )));
-                }
-            }
-
+            unsafe { send_timeline_scroll(timeline_hwnd, SB_TOP as usize) };
             unsafe { send_timeline_scroll(timeline_hwnd, SB_PAGEUP as usize) };
             let after_page_up = unsafe { timeline_top_line(timeline_hwnd) };
             if after_page_up != 0 {
@@ -3050,7 +3039,7 @@ mod imp {
             Ok(active_child)
         }
 
-        fn require_active_room_view(&self, active_child: HWND) -> Result<(), TestkitError> {
+        fn require_active_timeline_view(&self, active_child: HWND) -> Result<(), TestkitError> {
             let active_child_title = unsafe { read_window_text(active_child) };
             let ui_state = self.dump_ui_state()?;
             let active_view = ui_state
@@ -3070,9 +3059,9 @@ mod imp {
                 )));
             }
             match &active_view.identity {
-                ViewIdentity::Room { .. } => Ok(()),
+                ViewIdentity::Room { .. } | ViewIdentity::Thread { .. } => Ok(()),
                 _ => Err(TestkitError::InvalidResponse(format!(
-                    "active view is not a room view: {:?}",
+                    "active view is not a room or thread view: {:?}",
                     active_view.identity
                 ))),
             }

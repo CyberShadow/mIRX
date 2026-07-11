@@ -656,6 +656,27 @@ configure_case_expectations() {
         --expect-no-navigation-text 'room-only lobby note'
       )
       ;;
+    find-thread-history-match)
+      expect_selected='!find-thread:example'
+      expect_active_view='thread:!find-thread:example|$find-thread-root'
+      select_views=('thread:!find-thread:example|$find-thread-root')
+      ordered_actions=(
+        'find:history needle'
+        "append:$root_dir/tests/ui-state-updates/find-thread-history-match.json"
+      )
+      expect_active_find_history='local_only'
+      expect_active_find_selected_text='older thread history needle'
+      view_expect_args=(
+        --expect-view 'thread:!find-thread:example|$find-thread-root::older thread history needle'
+      )
+      view_forbid_args=(
+        --expect-no-view 'thread:!find-thread:example|$find-thread-root::older room-only history needle'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'find: 1/1 "history needle"'
+      )
+      expect_switchbar_active='thread:!find-thread:example|$find-thread-root'
+      ;;
     find-status)
       expect_active_view='status'
       find_active_view_query='flow-verify-request'
