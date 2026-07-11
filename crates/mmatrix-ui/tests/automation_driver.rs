@@ -27,7 +27,7 @@ use mmatrix_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mmatrix_testkit::{
-    ComposeKey, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize, LaunchOptions, MdiView,
+    ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize, LaunchOptions, MdiView,
     MembershipCommandAction, MmatrixApp, Model, NavigationNode, NavigationPathSegment, Room,
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
@@ -2591,7 +2591,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 24);
+    assert_eq!(version.protocol_version, 25);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -10963,6 +10963,45 @@ fn automation_driver_message_menu_actions_prefill_selected_event()
     assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
 
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prior_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path().map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], launch_options(Some(local_app_data.clone())))?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path("reactions.json"))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!reactions:example")?;
+    assert_eq!(app.dump_message_menu_state()?.selected_event_id, None);
+    app.open_timeline_context_menu("$react-normal", ContextMenuCommand::ReplyMessage)?;
+    assert_eq!(app.compose_text()?, "/reply $react-normal ");
+    assert_eq!(app.dump_message_menu_state()?.selected_event_id.as_deref(), Some("$react-normal"));
+    let model = app.dump_model()?;
+    assert!(model.submitted_reply_commands.is_empty());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path().map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], launch_options(Some(local_app_data.clone())))?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path("reactions.json"))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!reactions:example")?;
+    app.select_timeline_event("$react-normal")?;
+    app.open_selected_timeline_context_menu(ContextMenuCommand::EditMessage)?;
+    assert_eq!(app.compose_text()?, "/edit $react-normal ");
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

@@ -72,19 +72,20 @@ use windows_sys::Win32::UI::Controls::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, SetFocus, VK_CONTROL,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT,
     CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW,
     DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawMenuBar,
     ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, ES_WANTRETURN,
-    ClientToScreen, EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
+    EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetMessageW, GetParent,
     GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild, IsWindow, KillTimer,
     LB_ADDSTRING, LB_RESETCONTENT, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK,
     MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_STRING, MSG, MessageBoxW,
     MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
     SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL,
     SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW,
-    ScreenToClient, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TrackPopupMenu, TPM_RETURNCMD, TPM_RIGHTBUTTON, TranslateMDISysAccel,
+    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TrackPopupMenu, TPM_RETURNCMD, TPM_RIGHTBUTTON, TranslateMDISysAccel,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_COPYDATA,
     WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN,
     WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE,
@@ -3572,7 +3573,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_CONTEXTMENU if wparam as HWND == state_ref(hwnd).controls.tree => {
-            if let Err(message) = show_navigation_room_context_menu(hwnd, lparam) {
+            if let Err(message) = show_navigation_room_context_menu(hwnd, lparam, None) {
                 show_error_message(hwnd, "Room", &message);
             }
             0
@@ -3704,7 +3705,7 @@ unsafe extern "system" fn timeline_window_proc(
         }
         WM_CONTEXTMENU => {
             let frame = frame_window_for(hwnd);
-            if let Err(message) = show_timeline_message_context_menu(hwnd, lparam) {
+            if let Err(message) = show_timeline_message_context_menu(hwnd, lparam, None) {
                 show_error_message(frame, "Message", &message);
             }
             0
@@ -4222,12 +4223,25 @@ unsafe fn default_context_point_for_window(hwnd: HWND) -> Result<(i32, i32), Str
     Ok((point.x, point.y))
 }
 
-unsafe fn show_context_menu(hwnd: HWND, menu: HMENU, x: i32, y: i32) -> Result<Option<usize>, String> {
+unsafe fn show_context_menu(
+    hwnd: HWND,
+    menu: HMENU,
+    x: i32,
+    y: i32,
+    requested_command: Option<usize>,
+) -> Result<Option<usize>, String> {
+    if let Some(command) = requested_command {
+        return Ok(Some(command));
+    }
     let command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd, null());
     Ok((command != 0).then_some(command as usize))
 }
 
-unsafe fn show_timeline_message_context_menu(timeline: HWND, lparam: LPARAM) -> Result<(), String> {
+unsafe fn show_timeline_message_context_menu(
+    timeline: HWND,
+    lparam: LPARAM,
+    requested_command: Option<usize>,
+) -> Result<(), String> {
     let frame = frame_window_for(timeline);
     let (x, y) = match context_menu_screen_point_for_lparam(lparam) {
         Some((x, y)) => {
@@ -4240,7 +4254,14 @@ unsafe fn show_timeline_message_context_menu(timeline: HWND, lparam: LPARAM) -> 
     };
     let menu = state_ref(frame).controls.message_menu;
     refresh_message_menu_state(frame, menu)?;
-    if let Some(command) = show_context_menu(frame, menu, x, y)? {
+    let action_state = active_message_action_state_for_automation(frame);
+    if requested_command.is_some_and(|command| {
+        action_state.selected_event_id.is_none()
+            || (command == MENU_ID_MESSAGE_SAVE_ATTACHMENT && !action_state.save_attachment_enabled)
+    }) {
+        return Err("message context menu action is disabled".to_owned());
+    }
+    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)? {
         if let Some(result) = handle_menu_command(frame, command) { result?; }
     }
     Ok(())
@@ -6032,8 +6053,7 @@ unsafe fn invoke_navigation_context_menu_for_automation(
     if !matches!(command_id, MENU_ID_ROOM_ACCEPT_INVITE | MENU_ID_ROOM_REJECT_INVITE | MENU_ID_ROOM_PART) {
         return Err("room context menu command is unavailable".to_owned());
     }
-    refresh_room_menu_state(hwnd, state_ref(hwnd).controls.room_menu)?;
-    invoke_menu_command_for_automation(hwnd, command_id)
+    show_navigation_room_context_menu(hwnd, -1, Some(command_id))
 }
 
 unsafe fn invoke_timeline_context_menu_for_automation(
@@ -6044,12 +6064,13 @@ unsafe fn invoke_timeline_context_menu_for_automation(
     if !matches!(command_id, MENU_ID_MESSAGE_REPLY | MENU_ID_MESSAGE_EDIT | MENU_ID_MESSAGE_REACT | MENU_ID_MESSAGE_REDACT | MENU_ID_MESSAGE_SAVE_ATTACHMENT) {
         return Err("message context menu command is unavailable".to_owned());
     }
-    refresh_message_menu_state(hwnd, state_ref(hwnd).controls.message_menu)?;
-    let action_state = active_message_action_state_for_automation(hwnd);
-    if action_state.selected_event_id.is_none() || (command_id == MENU_ID_MESSAGE_SAVE_ATTACHMENT && !action_state.save_attachment_enabled) {
-        return Err("message context menu action is disabled".to_owned());
-    }
-    invoke_menu_command_for_automation(hwnd, command_id)
+    let active_view = state_ref(hwnd).active_view.clone();
+    let content = state_ref(hwnd)
+        .views
+        .get(&active_view)
+        .ok_or_else(|| "message context menu target is unavailable".to_owned())?
+        .content;
+    show_timeline_message_context_menu(room_content_timeline(content), -1, Some(command_id))
 }
 
 unsafe fn submit_room_menu_action(
@@ -11122,7 +11143,11 @@ unsafe fn tree_item_context_screen_point(tree: HWND, item: isize) -> Result<(i32
     Ok((point.x, point.y))
 }
 
-unsafe fn show_navigation_room_context_menu(frame: HWND, lparam: LPARAM) -> Result<(), String> {
+unsafe fn show_navigation_room_context_menu(
+    frame: HWND,
+    lparam: LPARAM,
+    requested_command: Option<usize>,
+) -> Result<(), String> {
     let tree = state_ref(frame).controls.tree;
     let (item, point) = match context_menu_screen_point_for_lparam(lparam) {
         Some((x, y)) => {
@@ -11140,7 +11165,15 @@ unsafe fn show_navigation_room_context_menu(frame: HWND, lparam: LPARAM) -> Resu
     activate_view(frame, &view_id, Some(item))?;
     let menu = state_ref(frame).controls.room_menu;
     refresh_room_menu_state(frame, menu)?;
-    if let Some(command) = show_context_menu(frame, menu, point.0, point.1)? {
+    let action_state = active_room_action_state(state_ref(frame));
+    if requested_command.is_some_and(|command| {
+        (command == MENU_ID_ROOM_ACCEPT_INVITE && !action_state.accept_invite_enabled)
+            || (command == MENU_ID_ROOM_REJECT_INVITE && !action_state.reject_invite_enabled)
+            || (command == MENU_ID_ROOM_PART && !action_state.part_room_enabled)
+    }) {
+        return Err("room context menu action is disabled".to_owned());
+    }
+    if let Some(command) = show_context_menu(frame, menu, point.0, point.1, requested_command)? {
         if let Some(result) = handle_menu_command(frame, command) { result?; }
     }
     Ok(())

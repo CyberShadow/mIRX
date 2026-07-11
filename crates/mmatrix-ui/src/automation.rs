@@ -2269,6 +2269,8 @@ mod tests {
         COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RECOVER_E2EE,
         COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
+        COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_NAVIGATION_PATH,
         COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
@@ -2370,8 +2372,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_24() {
-        assert_eq!(PROTOCOL_VERSION, 24);
+    fn protocol_version_is_25() {
+        assert_eq!(PROTOCOL_VERSION, 25);
     }
 
     #[test]
@@ -2516,6 +2518,10 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_PART_ROOM_VIA_ROOM_MENU),
             Some(CommandKind::PartRoomViaRoomMenu)
         );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU), Some(CommandKind::OpenNavigationContextMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU), Some(CommandKind::OpenSelectedNavigationContextMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU), Some(CommandKind::OpenTimelineContextMenu));
+        assert_eq!(CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU), Some(CommandKind::OpenSelectedTimelineContextMenu));
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU),
             Some(CommandKind::ReplyToSelectedMessageViaMenu)
@@ -2560,6 +2566,20 @@ mod tests {
             CommandKind::from_id(COMMAND_ID_QUERY_USER_VIA_ROOM_MENU + 1),
             None
         );
+    }
+
+    #[test]
+    fn context_menu_commands_require_strict_valid_args() {
+        for (command_id, args) in [
+            (COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, r#"{"path":[],"command":"part_room"}"#),
+            (COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU, r#"{"command":"accept_invite"}"#),
+            (COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU, r#"{"event_id":"$event","command":"reply_message"}"#),
+            (COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, r#"{"command":"edit_message"}"#),
+        ] {
+            assert!(parse_command_request(command_id, format!(r#"{{"id":"context","args":{args}}}"#).as_bytes()).is_ok());
+            assert!(parse_command_request(command_id, format!(r#"{{"id":"context","args":{{"command":"invalid","extra":true}}}}"#).as_bytes()).is_err());
+            assert!(parse_command_request(command_id, br#"{"id":"context"}"#).is_err());
+        }
     }
 
     #[test]
@@ -3915,7 +3935,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":24,
+                    "protocol_version":25,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
