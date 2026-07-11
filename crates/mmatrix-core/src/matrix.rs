@@ -3018,7 +3018,9 @@ pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> Stor
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
@@ -3030,8 +3032,9 @@ mod tests {
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
         outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
-        read_file_bytes, room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
+        read_file_bytes, register_event_handlers, restore_session, room_activity_from_sync_member,
+        room_activity_from_sync_message, room_activity_from_sync_topic,
+        room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
@@ -3152,6 +3155,67 @@ mod tests {
                     .expect("synced members"),
                 expected
             );
+        });
+    }
+
+    #[test]
+    fn member_handler_registered_before_restore_projects_using_restored_user() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server
+                .client_builder()
+                .unlogged()
+                .build()
+                .await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events);
+            restore_session(
+                &client,
+                StoredSession {
+                    user_id: "@example:localhost".to_owned(),
+                    device_id: "DEVICE".to_owned(),
+                    access_token: "access-token".to_owned(),
+                    refresh_token: None,
+                },
+            )
+            .await
+            .expect("restore authenticated session");
+
+            let state_events = serde_json::json!([
+                { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
+                { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": { "kick": 50, "ban": 50, "users_default": 0, "users": { "@example:localhost": 100 }, "events": {} } },
+                { "type": "m.room.member", "state_key": "@example:localhost", "sender": "@example:localhost", "event_id": "$actor:localhost", "origin_server_ts": 3u64, "content": { "membership": "join", "displayname": "Actor" } },
+                { "type": "m.room.member", "state_key": "@target:localhost", "sender": "@target:localhost", "event_id": "$target:localhost", "origin_server_ts": 4u64, "content": { "membership": "join", "displayname": "Target" } }
+            ]);
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
+                )
+                .await;
+
+            let mut snapshots = Vec::new();
+            for _ in 0..2 {
+                if let Event::RoomMembers(snapshot) = event_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("member handler event")
+                {
+                    snapshots.push(snapshot);
+                }
+            }
+            assert_eq!(snapshots.len(), 1);
+            assert!(snapshots[0]
+                .members
+                .iter()
+                .find(|member| member.user_id == "@target:localhost")
+                .expect("target member")
+                .can_kick);
         });
     }
 
@@ -3616,7 +3680,7 @@ mod tests {
         RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
         RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
         RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget, SendMessageThreadTarget,
-        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
         VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{

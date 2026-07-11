@@ -1234,13 +1234,272 @@ mod tests {
 
     use super::{
         EventSender, WorkerState, emit_initial_synced_rooms_members_and_read_states,
-        handle_start_sync, run_worker, shutdown_state,
+        handle_command, handle_start_sync, run_worker, shutdown_state,
     };
     use crate::api::CoreConfig;
     use crate::api::{
-        Event, Operation, RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState,
-        RoomSummary,
+        BanRoomMemberRequest, Command, Event, KickRoomMemberRequest, Operation, RoomMemberSummary,
+        RoomMembers, RoomMembership, RoomReadState, RoomSummary,
     };
+    use matrix_sdk::{
+        ruma::{
+            OwnedRoomId,
+            events::{AnySyncStateEvent, room::member::RoomMemberEvent},
+            serde::Raw,
+        },
+        test_utils::mocks::MatrixMockServer,
+    };
+    use matrix_sdk_test::JoinedRoomBuilder;
+
+    fn room_id() -> OwnedRoomId {
+        OwnedRoomId::try_from("!room:example.org").expect("valid room id")
+    }
+
+    fn joined_members() -> Vec<Raw<RoomMemberEvent>> {
+        [
+            serde_json::json!({
+                "type": "m.room.member", "state_key": "@example:localhost",
+                "sender": "@example:localhost", "event_id": "$actor:localhost",
+                "origin_server_ts": 1u64,
+                "content": { "membership": "join", "displayname": "Actor" }
+            }),
+            serde_json::json!({
+                "type": "m.room.member", "state_key": "@target:example.org",
+                "sender": "@target:example.org", "event_id": "$target:example.org",
+                "origin_server_ts": 2u64,
+                "content": { "membership": "join", "displayname": "Target" }
+            }),
+        ]
+        .into_iter()
+        .map(|event| Raw::from_json_string(event.to_string()).expect("raw member event"))
+        .collect()
+    }
+
+    fn joined_member_state() -> Vec<Raw<AnySyncStateEvent>> {
+        [
+            serde_json::json!({
+                "type": "m.room.create", "state_key": "", "sender": "@example:localhost",
+                "event_id": "$create:localhost", "origin_server_ts": 0u64,
+                "content": { "creator": "@example:localhost" }
+            }),
+            serde_json::json!({
+                "type": "m.room.member", "state_key": "@example:localhost",
+                "sender": "@example:localhost", "event_id": "$actor:localhost",
+                "origin_server_ts": 1u64,
+                "content": { "membership": "join", "displayname": "Actor" }
+            }),
+            serde_json::json!({
+                "type": "m.room.member", "state_key": "@target:example.org",
+                "sender": "@target:example.org", "event_id": "$target:example.org",
+                "origin_server_ts": 2u64,
+                "content": { "membership": "join", "displayname": "Target" }
+            }),
+        ]
+        .into_iter()
+        .map(|event| Raw::from_json_string(event.to_string()).expect("raw state event"))
+        .collect()
+    }
+
+    fn ready_state(client: matrix_sdk::Client) -> WorkerState {
+        WorkerState::Ready {
+            client,
+            sync_task: None,
+            room_list_update_task: tokio::task::spawn_local(async {}),
+            room_read_state_update_task: tokio::task::spawn_local(async {}),
+            e2ee_recovery_state_task: tokio::task::spawn_local(async {}),
+            e2ee_backup_state_task: tokio::task::spawn_local(async {}),
+            session_update_task: tokio::task::spawn_local(async {}),
+            send_queue_update_task: tokio::task::spawn_local(async {}),
+            verification_tasks: HashMap::new(),
+        }
+    }
+
+    async fn assert_ready_moderation_success(command: Command, path: &str, mock_ban: bool) {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        mock_server
+            .sync_room(
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref()).add_state_bulk(joined_member_state()),
+            )
+            .await;
+        mock_server
+            .mock_get_members()
+            .ok(joined_members())
+            .mock_once()
+            .mount()
+            .await;
+        if mock_ban {
+            mock_server.mock_ban_user().ok().expect(1).mount().await;
+        } else {
+            mock_server.mock_kick_user().ok().expect(1).mount().await;
+        }
+
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut state = ready_state(client);
+        let config = CoreConfig {
+            profile_dir: std::env::temp_dir().join("mmatrix-core-runtime-test"),
+            store_passphrase: "test-store-passphrase".to_owned(),
+        };
+        assert!(!handle_command(command, &config, &event_tx, &mut state).await);
+
+        match event_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("authoritative room members snapshot")
+        {
+            Event::RoomMembers(snapshot) => {
+                assert_eq!(snapshot.room_id, "!room:example.org");
+                assert!(
+                    snapshot
+                        .members
+                        .iter()
+                        .any(|member| member.user_id == "@target:example.org")
+                );
+            }
+            other => panic!("expected room members snapshot, got {other:?}"),
+        }
+        assert_eq!(event_rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled")
+                .iter()
+                .filter(|request| request.url.path().ends_with(path))
+                .count(),
+            1
+        );
+        shutdown_state(&mut state);
+    }
+
+    #[test]
+    fn ready_kick_submits_once_then_emits_authoritative_members_snapshot() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            assert_ready_moderation_success(
+                Command::KickRoomMember(KickRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                }),
+                "/kick",
+                false,
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn ready_ban_submits_once_then_emits_authoritative_members_snapshot() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            assert_ready_moderation_success(
+                Command::BanRoomMember(BanRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                }),
+                "/ban",
+                true,
+            )
+            .await;
+        });
+    }
+
+    async fn assert_ready_moderation_rejection(command: Command, operation: Operation, path: &str) {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        let room = mock_server
+            .sync_room(
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref()).add_state_bulk(joined_member_state()),
+            )
+            .await;
+        assert!(
+            room.members_no_sync(matrix_sdk::RoomMemberships::JOIN)
+                .await
+                .expect("cached members")
+                .iter()
+                .any(|member| member.user_id().as_str() == "@target:example.org")
+        );
+
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut state = ready_state(client);
+        let config = CoreConfig {
+            profile_dir: std::env::temp_dir().join("mmatrix-core-runtime-test"),
+            store_passphrase: "test-store-passphrase".to_owned(),
+        };
+        assert!(!handle_command(command, &config, &event_tx, &mut state).await);
+
+        match event_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("moderation rejection")
+        {
+            Event::Error(error) => assert_eq!(error.operation, operation),
+            other => panic!("expected moderation error, got {other:?}"),
+        }
+        assert_eq!(event_rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled")
+                .iter()
+                .filter(|request| request.url.path().ends_with(path))
+                .count(),
+            1
+        );
+        assert!(
+            room.members_no_sync(matrix_sdk::RoomMemberships::JOIN)
+                .await
+                .expect("cached members after rejection")
+                .iter()
+                .any(|member| member.user_id().as_str() == "@target:example.org")
+        );
+        shutdown_state(&mut state);
+    }
+
+    #[test]
+    fn ready_kick_rejection_emits_error_without_snapshot_or_optimistic_removal() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            assert_ready_moderation_rejection(
+                Command::KickRoomMember(KickRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                }),
+                Operation::KickRoomMember,
+                "/kick",
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn ready_ban_rejection_emits_error_without_snapshot_or_optimistic_removal() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            assert_ready_moderation_rejection(
+                Command::BanRoomMember(BanRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                }),
+                Operation::BanRoomMember,
+                "/ban",
+            )
+            .await;
+        });
+    }
 
     fn room_summary(room_id: &str, display_name: &str, membership: RoomMembership) -> RoomSummary {
         RoomSummary {
