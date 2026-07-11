@@ -367,6 +367,30 @@ fn leave_room_before_login_emits_leave_room_error() {
 }
 
 #[test]
+fn kick_room_member_before_login_emits_kick_room_member_error() {
+    assert_invalid_authenticated_command(
+        Command::KickRoomMember(KickRoomMemberRequest {
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@bob:example.org".to_owned(),
+        }),
+        Operation::KickRoomMember,
+        "kick room member requires an authenticated session",
+    );
+}
+
+#[test]
+fn ban_room_member_before_login_emits_ban_room_member_error() {
+    assert_invalid_authenticated_command(
+        Command::BanRoomMember(BanRoomMemberRequest {
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@bob:example.org".to_owned(),
+        }),
+        Operation::BanRoomMember,
+        "ban room member requires an authenticated session",
+    );
+}
+
+#[test]
 fn accept_room_invite_before_login_emits_accept_room_invite_error() {
     assert_invalid_authenticated_command(
         Command::AcceptRoomInvite(AcceptRoomInviteRequest {

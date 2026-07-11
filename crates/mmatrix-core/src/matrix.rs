@@ -64,22 +64,23 @@ use mime::Mime;
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    BackfillRoomHistoryRequest, CoreConfig, CoreErrorEvent, E2eeBackupState, E2eeBackupStatus,
-    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomMediaRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo,
-    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent,
+    BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent, E2eeBackupState,
+    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
+    Event, FetchRoomMediaRequest, KickRoomMemberRequest, LoginRequest, MarkRoomReadRequest,
+    Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity,
+    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -502,6 +503,36 @@ pub(crate) async fn leave_joined_room(
     Ok(())
 }
 
+pub(crate) async fn kick_room_member(
+    client: &Client,
+    request: &KickRoomMemberRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room = joined_room_by_id(client, room_id.as_str())?;
+
+    room.kick_user(user_id, None)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to kick Matrix room member: {err}")))
+}
+
+pub(crate) async fn ban_room_member(
+    client: &Client,
+    request: &BanRoomMemberRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room = joined_room_by_id(client, room_id.as_str())?;
+
+    room.ban_user(user_id, None)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to ban Matrix room member: {err}")))
+}
+
 pub(crate) async fn reject_room_invite(
     client: &Client,
     room_id: &str,
@@ -569,10 +600,11 @@ fn room_member_display_label(member: &RoomMemberSummary) -> &str {
     }
 }
 
+#[cfg(test)]
 fn sorted_room_member_summaries_from_parts(
     members: Vec<(String, Option<String>)>,
 ) -> Vec<RoomMemberSummary> {
-    let mut members = members
+    let members = members
         .into_iter()
         .map(|(user_id, display_name)| RoomMemberSummary {
             user_id,
@@ -581,17 +613,10 @@ fn sorted_room_member_summaries_from_parts(
             can_ban: false,
         })
         .collect::<Vec<_>>();
-
-    members.sort_by(|left, right| {
-        room_member_display_label(left)
-            .to_lowercase()
-            .cmp(&room_member_display_label(right).to_lowercase())
-            .then_with(|| left.user_id.cmp(&right.user_id))
-    });
-
-    members
+    room_members_from_summaries("", members).members
 }
 
+#[cfg(test)]
 fn room_members_from_parts(room_id: &str, members: Vec<(String, Option<String>)>) -> RoomMembers {
     RoomMembers {
         room_id: room_id.to_owned(),
@@ -599,49 +624,114 @@ fn room_members_from_parts(room_id: &str, members: Vec<(String, Option<String>)>
     }
 }
 
-async fn joined_room_members(room: &Room) -> matrix_sdk::Result<RoomMembers> {
-    let members = room.members(RoomMemberships::JOIN).await?;
-    Ok(room_members_from_parts(
-        room.room_id().as_str(),
+fn room_members_from_summaries(room_id: &str, mut members: Vec<RoomMemberSummary>) -> RoomMembers {
+    members.sort_by(|left, right| {
+        room_member_display_label(left)
+            .to_lowercase()
+            .cmp(&room_member_display_label(right).to_lowercase())
+            .then_with(|| left.user_id.cmp(&right.user_id))
+    });
+    RoomMembers {
+        room_id: room_id.to_owned(),
+        members,
+    }
+}
+
+fn moderation_capabilities<T: PartialOrd>(
+    actor_user_id: &UserId,
+    target_user_id: &UserId,
+    actor_can_kick: bool,
+    actor_can_ban: bool,
+    actor_power_level: &T,
+    target_power_level: &T,
+) -> (bool, bool) {
+    let eligible_target = actor_user_id != target_user_id && actor_power_level > target_power_level;
+    (
+        eligible_target && actor_can_kick,
+        eligible_target && actor_can_ban,
+    )
+}
+
+fn room_members_from_matrix_members(
+    room_id: &str,
+    authenticated_user_id: &UserId,
+    members: Vec<matrix_sdk::room::RoomMember>,
+) -> Result<RoomMembers, MatrixCoreError> {
+    let actor = members
+        .iter()
+        .find(|member| member.user_id() == authenticated_user_id)
+        .ok_or_else(|| {
+            MatrixCoreError::new(format!(
+                "authenticated user is not a joined member of room: {room_id}"
+            ))
+        })?;
+    let actor_can_kick = actor.can_kick();
+    let actor_can_ban = actor.can_ban();
+    let actor_power_level = actor.power_level();
+
+    Ok(room_members_from_summaries(
+        room_id,
         members
             .into_iter()
             .map(|member| {
-                (
-                    member.user_id().to_string(),
-                    member.display_name().map(str::to_owned),
-                )
+                let (can_kick, can_ban) = moderation_capabilities(
+                    authenticated_user_id,
+                    member.user_id(),
+                    actor_can_kick,
+                    actor_can_ban,
+                    &actor_power_level,
+                    &member.power_level(),
+                );
+                RoomMemberSummary {
+                    user_id: member.user_id().to_string(),
+                    display_name: member.display_name().map(str::to_owned),
+                    can_kick,
+                    can_ban,
+                }
             })
             .collect(),
     ))
 }
 
-async fn joined_room_members_no_sync(room: &Room) -> matrix_sdk::Result<RoomMembers> {
-    let members = room.members_no_sync(RoomMemberships::JOIN).await?;
-    Ok(room_members_from_parts(
-        room.room_id().as_str(),
-        members
-            .into_iter()
-            .map(|member| {
-                (
-                    member.user_id().to_string(),
-                    member.display_name().map(str::to_owned),
-                )
-            })
-            .collect(),
-    ))
+async fn joined_room_members(
+    authenticated_user_id: &UserId,
+    room: &Room,
+) -> Result<RoomMembers, MatrixCoreError> {
+    let members = room.members(RoomMemberships::JOIN).await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to read joined Matrix room members: {err}"))
+    })?;
+    room_members_from_matrix_members(room.room_id().as_str(), authenticated_user_id, members)
 }
 
-pub(crate) async fn summarize_joined_room_members(client: &Client) -> Vec<RoomMembers> {
+async fn joined_room_members_no_sync(
+    authenticated_user_id: &UserId,
+    room: &Room,
+) -> Result<RoomMembers, MatrixCoreError> {
+    let members = room
+        .members_no_sync(RoomMemberships::JOIN)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read cached joined Matrix room members: {err}"
+            ))
+        })?;
+    room_members_from_matrix_members(room.room_id().as_str(), authenticated_user_id, members)
+}
+
+pub(crate) async fn summarize_joined_room_members(
+    client: &Client,
+) -> Result<Vec<RoomMembers>, MatrixCoreError> {
+    let authenticated_user_id = client.user_id().ok_or_else(|| {
+        MatrixCoreError::new("cannot summarize joined room members without an authenticated user")
+    })?;
     let joined_rooms = client.joined_rooms();
     let mut room_members = Vec::with_capacity(joined_rooms.len());
 
     for room in joined_rooms {
-        if let Ok(members) = joined_room_members(&room).await {
-            room_members.push(members);
-        }
+        room_members.push(joined_room_members(authenticated_user_id, &room).await?);
     }
 
-    room_members
+    Ok(room_members)
 }
 
 pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons) -> bool {
@@ -1047,8 +1137,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     });
 
     let member_events = events.clone();
+    let member_authenticated_user_id = client.user_id().map(ToOwned::to_owned);
     client.add_event_handler(move |event: SyncRoomMemberEvent, room: Room| {
         let events = member_events.clone();
+        let authenticated_user_id = member_authenticated_user_id.clone();
         async move {
             if let SyncRoomMemberEvent::Original(event) = event {
                 emit_event(
@@ -1060,7 +1152,10 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
                 );
             }
 
-            if let Ok(snapshot) = joined_room_members_no_sync(&room).await {
+            if let Some(authenticated_user_id) = authenticated_user_id
+                && let Ok(snapshot) =
+                    joined_room_members_no_sync(&authenticated_user_id, &room).await
+            {
                 emit_event(&events, Event::RoomMembers(snapshot));
             }
         }
@@ -2919,9 +3014,10 @@ mod tests {
         map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, message_presentation_and_body_from_serialized_event,
-        outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
-        read_file_bytes, room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
+        moderation_capabilities, outgoing_events_from_local_echo_event, owned_event_id_from_str,
+        reaction_event_content, read_file_bytes, room_activity_from_sync_member,
+        room_activity_from_sync_message, room_activity_from_sync_topic,
+        room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
@@ -2933,6 +3029,43 @@ mod tests {
         verification_flow_id_from_to_device, verification_request_from_to_device,
         verification_requested_state_event,
     };
+
+    #[test]
+    fn moderation_capabilities_require_independent_sdk_permissions_and_lower_target_power() {
+        let actor = <&matrix_sdk::ruma::UserId>::try_from("@actor:example.org")
+            .expect("valid actor user id");
+        let lower = <&matrix_sdk::ruma::UserId>::try_from("@lower:example.org")
+            .expect("valid lower user id");
+        let equal = <&matrix_sdk::ruma::UserId>::try_from("@equal:example.org")
+            .expect("valid equal user id");
+        let higher = <&matrix_sdk::ruma::UserId>::try_from("@higher:example.org")
+            .expect("valid higher user id");
+
+        assert_eq!(
+            moderation_capabilities(actor, lower, true, false, &50, &0),
+            (true, false)
+        );
+        assert_eq!(
+            moderation_capabilities(actor, lower, false, true, &50, &0),
+            (false, true)
+        );
+        assert_eq!(
+            moderation_capabilities(actor, lower, false, false, &50, &0),
+            (false, false)
+        );
+        assert_eq!(
+            moderation_capabilities(actor, actor, true, true, &50, &50),
+            (false, false)
+        );
+        assert_eq!(
+            moderation_capabilities(actor, equal, true, true, &50, &50),
+            (false, false)
+        );
+        assert_eq!(
+            moderation_capabilities(actor, higher, true, true, &50, &100),
+            (false, false)
+        );
+    }
 
     #[test]
     fn room_history_backfill_maps_unable_to_decrypt_event() {

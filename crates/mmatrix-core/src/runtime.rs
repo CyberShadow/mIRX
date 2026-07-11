@@ -10,13 +10,13 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
-    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, Command, CoreConfig, CoreErrorEvent,
-    CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
-    E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest, LeaveRoomRequest,
-    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RestoreSessionRequest, RoomMembers, RoomMembership, RoomReadState,
-    RoomSummary, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    VerificationFlowId,
+    AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
+    CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
+    E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest, KickRoomMemberRequest,
+    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomMembers,
+    RoomMembership, RoomReadState, RoomSummary, SendReactionRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -200,7 +200,8 @@ async fn handle_command(
             handle_create_direct_room(event_tx, state, request).await
         }
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
-        Command::KickRoomMember(_) | Command::BanRoomMember(_) => false,
+        Command::KickRoomMember(request) => handle_kick_room_member(event_tx, state, request).await,
+        Command::BanRoomMember(request) => handle_ban_room_member(event_tx, state, request).await,
         Command::RejectRoomInvite(request) => {
             handle_reject_room_invite(event_tx, state, request).await
         }
@@ -292,12 +293,15 @@ async fn handle_login(
         .map(|_| matrix::summarize_joined_room_read_states(&client));
     emit_event(event_tx, Event::LoggedIn { session });
     match rooms {
-        Ok(rooms) => emit_initial_synced_rooms_members_and_read_states(
-            event_tx,
-            rooms,
-            room_members.expect("room members exist after successful sync"),
-            room_read_states.expect("read states exist after successful sync"),
-        ),
+        Ok(rooms) => match room_members.expect("room members exist after successful sync") {
+            Ok(room_members) => emit_initial_synced_rooms_members_and_read_states(
+                event_tx,
+                rooms,
+                room_members,
+                room_read_states.expect("read states exist after successful sync"),
+            ),
+            Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
+        },
         Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
     }
     let room_read_state_update_task =
@@ -378,12 +382,15 @@ async fn handle_restore_session(
         .map(|_| matrix::summarize_joined_room_read_states(&client));
     emit_event(event_tx, Event::RestoredSession);
     match rooms {
-        Ok(rooms) => emit_initial_synced_rooms_members_and_read_states(
-            event_tx,
-            rooms,
-            room_members.expect("room members exist after successful sync"),
-            room_read_states.expect("read states exist after successful sync"),
-        ),
+        Ok(rooms) => match room_members.expect("room members exist after successful sync") {
+            Ok(room_members) => emit_initial_synced_rooms_members_and_read_states(
+                event_tx,
+                rooms,
+                room_members,
+                room_read_states.expect("read states exist after successful sync"),
+            ),
+            Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
+        },
         Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
     }
     let room_read_state_update_task =
@@ -542,6 +549,58 @@ async fn handle_leave_room(
 
     if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
         emit_matrix_error(event_tx, Operation::LeaveRoom, err);
+    }
+
+    false
+}
+
+async fn handle_kick_room_member(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: KickRoomMemberRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::KickRoomMember,
+            "kick room member requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::kick_room_member(client, &request).await {
+        emit_matrix_error(event_tx, Operation::KickRoomMember, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::KickRoomMember, err);
+    }
+
+    false
+}
+
+async fn handle_ban_room_member(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: BanRoomMemberRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::BanRoomMember,
+            "ban room member requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::ban_room_member(client, &request).await {
+        emit_matrix_error(event_tx, Operation::BanRoomMember, err);
+        return false;
+    }
+
+    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
+        emit_matrix_error(event_tx, Operation::BanRoomMember, err);
     }
 
     false
