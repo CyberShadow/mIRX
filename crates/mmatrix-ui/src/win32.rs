@@ -4367,10 +4367,14 @@ unsafe fn capture_room_history_backfill_anchor(
     let view = state.views.get(&state.active_view)?;
     let timeline = room_content_timeline(view.content);
     let timeline_state = timeline_state_ref(timeline);
-    let source_row_index = timeline_source_row_index_for_top_line(
+    let visible_source_row_index = timeline_source_row_index_for_top_line(
         timeline,
         &timeline_state.source_rows,
         timeline_state.top_line,
+    )?;
+    let source_row_index = timeline_history_backfill_anchor_row_index(
+        &timeline_state.source_rows,
+        visible_source_row_index,
     )?;
     Some(TimelineBackfillAnchor {
         room_id: room_id.to_owned(),
@@ -4378,6 +4382,20 @@ unsafe fn capture_room_history_backfill_anchor(
         source_row_index,
         source_row_count: timeline_state.source_rows.len(),
     })
+}
+
+fn timeline_history_backfill_anchor_row_index(
+    rows: &[TimelineRow],
+    visible_source_row_index: usize,
+) -> Option<usize> {
+    let visible_row = rows.get(visible_source_row_index)?;
+    if visible_row.event_id.is_some() {
+        return Some(visible_source_row_index);
+    }
+    rows.iter()
+        .enumerate()
+        .skip(visible_source_row_index)
+        .find_map(|(index, row)| row.event_id.is_some().then_some(index))
 }
 
 unsafe fn restore_room_history_backfill_anchor(hwnd: HWND, anchor: TimelineBackfillAnchor) {
@@ -19347,6 +19365,33 @@ mod tests {
         assert_eq!(timeline_top_line_after_content_replaced(2, false, 12, 3), 2);
 
         assert_eq!(timeline_top_line_after_content_replaced(8, false, 10, 5), 5);
+    }
+
+    #[test]
+    fn history_backfill_anchor_skips_room_context_for_the_first_visible_event() {
+        let rows = vec![
+            TimelineRow::full_width(TimelineRowKind::Header, "Room: Beta".to_owned()),
+            TimelineRow::log(
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                },
+                "[22:13] @bob:example: current row".to_owned(),
+                "[22:13]".to_owned(),
+                "@bob:example:".to_owned(),
+                "current row".to_owned(),
+            )
+            .with_event_id(Some("$current")),
+        ];
+
+        assert_eq!(
+            timeline_history_backfill_anchor_row_index(&rows, 0),
+            Some(1)
+        );
+        assert_eq!(
+            timeline_history_backfill_anchor_row_index(&rows, 1),
+            Some(1)
+        );
     }
 
     #[test]
