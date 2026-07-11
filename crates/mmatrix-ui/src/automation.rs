@@ -2621,7 +2621,7 @@ mod tests {
             Some(CommandKind::QueryUserViaRoomMenu)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_QUERY_USER_VIA_ROOM_MENU + 1),
+            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU + 1),
             None
         );
     }
