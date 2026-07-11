@@ -165,6 +165,8 @@ const MENU_ID_MESSAGE_REDACT: usize = 40015;
 const MENU_ID_MESSAGE_SAVE_ATTACHMENT: usize = 40016;
 const MENU_ID_MESSAGE_EDIT: usize = 40018;
 const MENU_ID_MESSAGE_REACT: usize = 40019;
+const MENU_ID_ROOM_JOIN: usize = 40020;
+const MENU_ID_ROOM_QUERY: usize = 40021;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -2402,13 +2404,9 @@ struct SubmittedSetupE2eeRecovery {
     wait_for_backups_to_upload: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FindForm {
-    query: String,
-}
-
 struct FindDialogState {
-    result: Arc<Mutex<Option<FindForm>>>,
+    result: Arc<Mutex<Option<String>>>,
+    label: String,
     query_label: HWND,
     query_edit: HWND,
     ok_button: HWND,
@@ -5129,9 +5127,8 @@ unsafe extern "system" fn find_dialog_window_proc(
                     *state
                         .result
                         .lock()
-                        .expect("find dialog result mutex poisoned") = Some(FindForm {
-                        query: read_window_text(state.query_edit),
-                    });
+                        .expect("find dialog result mutex poisoned") =
+                        Some(read_window_text(state.query_edit));
                     DestroyWindow(hwnd);
                     0
                 }
@@ -5285,6 +5282,8 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     if room_menu.is_null() {
         return Err(last_os_error("CreatePopupMenu"));
     }
+    append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_JOIN, "Join Room...")?;
+    append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_QUERY, "Query User...")?;
     append_menu_text(
         room_menu,
         MF_STRING,
@@ -5730,6 +5729,14 @@ unsafe fn menu_command_result(
     let command_id = wparam & 0xffff;
     let (title, result) = match command_id {
         MENU_ID_FIND => ("Find", begin_find_dialog(hwnd).map(|_| Some(()))),
+        MENU_ID_ROOM_JOIN => (
+            "Room",
+            show_join_room_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
+        MENU_ID_ROOM_QUERY => (
+            "Room",
+            show_query_user_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+        ),
         MENU_ID_ROOM_ACCEPT_INVITE => (
             "Room",
             submit_room_menu_action(hwnd, submit_accept_slash_command).map(|_| Some(())),
@@ -6051,6 +6058,22 @@ unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     Ok(true)
 }
 
+unsafe fn show_join_room_menu_dialog(hwnd: HWND) -> Result<bool, String> {
+    let Some(target) = show_single_field_dialog(hwnd, "Join Room", "Room or alias", "")? else {
+        return Ok(false);
+    };
+    submit_join_room_menu_target(hwnd, target)?;
+    Ok(true)
+}
+
+unsafe fn show_query_user_menu_dialog(hwnd: HWND) -> Result<bool, String> {
+    let Some(user_id) = show_single_field_dialog(hwnd, "Query User", "User ID", "")? else {
+        return Ok(false);
+    };
+    submit_query_user_menu_target(hwnd, user_id)?;
+    Ok(true)
+}
+
 unsafe fn show_recover_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     let Some(form) = show_recover_e2ee_dialog(hwnd)? else {
         return Ok(false);
@@ -6080,10 +6103,10 @@ unsafe fn begin_find_dialog(hwnd: HWND) -> Result<(), String> {
         .get(&active_view)
         .map(|find_state| find_state.raw_query.clone())
         .unwrap_or_default();
-    let Some(form) = show_find_dialog(hwnd, &initial_query)? else {
+    let Some(query) = show_single_field_dialog(hwnd, "Find", "Find", &initial_query)? else {
         return Ok(());
     };
-    execute_active_view_find(hwnd, &form.query)?;
+    execute_active_view_find(hwnd, &query)?;
     Ok(())
 }
 
@@ -6335,7 +6358,7 @@ unsafe fn create_find_dialog_controls(hwnd: HWND) -> Result<(), String> {
     state.query_label = create_login_dialog_control(
         hwnd,
         STATIC_CLASS_NAME,
-        "Find",
+        &state.label,
         WS_CHILD | WS_VISIBLE,
         0,
         0,
@@ -6907,11 +6930,17 @@ unsafe fn show_setup_e2ee_dialog(owner: HWND) -> Result<Option<SetupE2eeRecovery
         .clone())
 }
 
-unsafe fn show_find_dialog(owner: HWND, initial_query: &str) -> Result<Option<FindForm>, String> {
+unsafe fn show_single_field_dialog(
+    owner: HWND,
+    title: &str,
+    label: &str,
+    initial_text: &str,
+) -> Result<Option<String>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
     let dialog_state = Box::new(FindDialogState {
         result: Arc::clone(&result),
+        label: label.to_owned(),
         query_label: null_mut(),
         query_edit: null_mut(),
         ok_button: null_mut(),
@@ -6919,7 +6948,7 @@ unsafe fn show_find_dialog(owner: HWND, initial_query: &str) -> Result<Option<Fi
     });
     let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(FIND_DIALOG_CLASS_NAME);
-    let title = wide_null("Find");
+    let title = wide_null(title);
     let dialog = CreateWindowExW(
         0,
         class_name.as_ptr(),
@@ -6936,12 +6965,12 @@ unsafe fn show_find_dialog(owner: HWND, initial_query: &str) -> Result<Option<Fi
     );
     if dialog.is_null() {
         drop(Box::from_raw(dialog_state_ptr));
-        return Err(last_os_error("CreateWindowExW find dialog"));
+        return Err(last_os_error("CreateWindowExW single field dialog"));
     }
 
     if let Some(state) = find_dialog_state(dialog) {
-        set_window_text(state.query_edit, initial_query);
-        let len = initial_query.encode_utf16().count();
+        set_window_text(state.query_edit, initial_text);
+        let len = initial_text.encode_utf16().count();
         SendMessageW(state.query_edit, EM_SETSEL, len, len as LPARAM);
         SetFocus(state.query_edit);
     }
@@ -10050,6 +10079,18 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::JoinRoomViaRoomMenu { id, args } => {
+            submit_join_room_menu_target(hwnd, args.target).map_err(|message| {
+                failure_response(Some(id.clone()), "room_menu_action_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::QueryUserViaRoomMenu { id, args } => {
+            submit_query_user_menu_target(hwnd, args.user_id).map_err(|message| {
+                failure_response(Some(id.clone()), "room_menu_action_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::ReplyToSelectedMessageViaMenu { id } => {
             invoke_menu_command_for_automation(hwnd, MENU_ID_MESSAGE_REPLY).map_err(|message| {
                 failure_response(Some(id.clone()), "selected_message_unavailable", message)
@@ -10397,6 +10438,8 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::AcceptInviteViaRoomMenu { id }
         | ParsedCommand::RejectInviteViaRoomMenu { id }
         | ParsedCommand::PartRoomViaRoomMenu { id }
+        | ParsedCommand::JoinRoomViaRoomMenu { id, .. }
+        | ParsedCommand::QueryUserViaRoomMenu { id, .. }
         | ParsedCommand::ReplyToSelectedMessageViaMenu { id }
         | ParsedCommand::EditSelectedMessageViaMenu { id }
         | ParsedCommand::ReactToSelectedMessageViaMenu { id }
@@ -12602,6 +12645,16 @@ fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<
     Ok(format!("join submitted: {target}"))
 }
 
+unsafe fn submit_join_room_menu_target(hwnd: HWND, target: String) -> Result<(), String> {
+    let target = target.trim().to_owned();
+    if target.is_empty() {
+        return Err("join room target cannot be empty".to_owned());
+    }
+    let status = submit_join_slash_command(state_mut(hwnd), target)?;
+    state_mut(hwnd).model.status = status;
+    refresh_status_bar(hwnd)
+}
+
 fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Result<String, String> {
     let sender = state
         .command_sender
@@ -12615,6 +12668,16 @@ fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Resul
         .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
     state.recorded_commands.push(command);
     Ok(format!("query submitted: {user_id}"))
+}
+
+unsafe fn submit_query_user_menu_target(hwnd: HWND, user_id: String) -> Result<(), String> {
+    let user_id = user_id.trim().to_owned();
+    if user_id.is_empty() {
+        return Err("query user ID cannot be empty".to_owned());
+    }
+    let status = submit_query_slash_command(state_mut(hwnd), user_id)?;
+    state_mut(hwnd).model.status = status;
+    refresh_status_bar(hwnd)
 }
 
 fn submit_accept_slash_command(

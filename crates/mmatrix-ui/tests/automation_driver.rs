@@ -2591,7 +2591,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 23);
+    assert_eq!(version.protocol_version, 24);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -8469,6 +8469,116 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
             .views
             .iter()
             .map(|view| view.identity.clone())
+            .collect::<Vec<_>>()
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_room_menu_join_records_submitted_membership_without_creating_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before = app.dump_ui_state()?;
+    app.join_room_via_room_menu("#ops:example.org")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "join submitted: #ops:example.org");
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Join,
+            target: "#ops:example.org".to_owned(),
+        }]
+    );
+    assert!(
+        model
+            .rooms
+            .iter()
+            .all(|room| room.room_id != "#ops:example.org")
+    );
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, before.mdi.active);
+    assert!(
+        ui_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != room_identity("#ops:example.org"))
+    );
+    assert!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.title != "#ops:example.org")
+    );
+    assert!(!serde_json::to_string(&ui_state.navigation)?.contains("#ops:example.org"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_room_menu_query_records_submitted_direct_room_without_creating_room()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path = mmatrix_ui_exe_path()
+        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let before_rooms = app.list_rooms()?;
+    let before_state = app.dump_ui_state()?;
+    app.query_user_via_room_menu("@alice:example.org")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "query submitted: @alice:example.org");
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(
+        model.submitted_direct_room_commands,
+        vec![SubmittedDirectRoomCommand {
+            user_id: "@alice:example.org".to_owned(),
+        }]
+    );
+    assert_eq!(app.list_rooms()?, before_rooms);
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.rooms, before_state.rooms);
+    assert_eq!(
+        ui_state
+            .mdi
+            .views
+            .iter()
+            .map(|view| &view.identity)
+            .collect::<Vec<_>>(),
+        before_state
+            .mdi
+            .views
+            .iter()
+            .map(|view| &view.identity)
             .collect::<Vec<_>>()
     );
 

@@ -101,6 +101,10 @@ const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
 #[cfg(windows)]
 const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
 #[cfg(windows)]
+const COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU: u32 = 43;
+#[cfg(windows)]
+const COMMAND_ID_QUERY_USER_VIA_ROOM_MENU: u32 = 44;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -1445,6 +1449,14 @@ impl MmatrixApp {
         self.inner.part_room_via_room_menu()
     }
 
+    pub fn join_room_via_room_menu(&self, target: &str) -> Result<(), TestkitError> {
+        self.inner.join_room_via_room_menu(target)
+    }
+
+    pub fn query_user_via_room_menu(&self, user_id: &str) -> Result<(), TestkitError> {
+        self.inner.query_user_via_room_menu(user_id)
+    }
+
     pub fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
         self.inner.reply_to_selected_message_via_menu()
     }
@@ -1752,6 +1764,18 @@ struct SelectTimelineEventArgs<'a> {
 }
 
 #[cfg(windows)]
+#[derive(Serialize)]
+struct JoinRoomViaRoomMenuArgs<'a> {
+    target: &'a str,
+}
+
+#[cfg(windows)]
+#[derive(Serialize)]
+struct QueryUserViaRoomMenuArgs<'a> {
+    user_id: &'a str,
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct RequestEnvelope<'a, T> {
     id: &'a str,
@@ -2036,6 +2060,18 @@ mod imp {
         }
 
         pub(crate) fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn join_room_via_room_menu(&self, _target: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mmatrix-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn query_user_via_room_menu(&self, _user_id: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mmatrix-testkit requires the Windows target",
             ))
@@ -2548,6 +2584,22 @@ mod imp {
                 COMMAND_ID_PART_ROOM_VIA_ROOM_MENU,
                 EmptyArgs {},
                 "PART_ROOM_VIA_ROOM_MENU",
+            )
+        }
+
+        pub(crate) fn join_room_via_room_menu(&self, target: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU,
+                JoinRoomViaRoomMenuArgs { target },
+                "JOIN_ROOM_VIA_ROOM_MENU",
+            )
+        }
+
+        pub(crate) fn query_user_via_room_menu(&self, user_id: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
+                QueryUserViaRoomMenuArgs { user_id },
+                "QUERY_USER_VIA_ROOM_MENU",
             )
         }
 

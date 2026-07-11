@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 23;
+pub(crate) const PROTOCOL_VERSION: u32 = 24;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -58,6 +58,8 @@ pub(crate) const COMMAND_ID_SEND_FILE: u32 = 39;
 pub(crate) const COMMAND_ID_SETUP_E2EE_RECOVERY: u32 = 40;
 pub(crate) const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
 pub(crate) const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
+pub(crate) const COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU: u32 = 43;
+pub(crate) const COMMAND_ID_QUERY_USER_VIA_ROOM_MENU: u32 = 44;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -97,6 +99,8 @@ pub(crate) enum CommandKind {
     AcceptInviteViaRoomMenu,
     RejectInviteViaRoomMenu,
     PartRoomViaRoomMenu,
+    JoinRoomViaRoomMenu,
+    QueryUserViaRoomMenu,
     ReplyToSelectedMessageViaMenu,
     EditSelectedMessageViaMenu,
     ReactToSelectedMessageViaMenu,
@@ -144,6 +148,8 @@ impl CommandKind {
             COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU => Some(Self::AcceptInviteViaRoomMenu),
             COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU => Some(Self::RejectInviteViaRoomMenu),
             COMMAND_ID_PART_ROOM_VIA_ROOM_MENU => Some(Self::PartRoomViaRoomMenu),
+            COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU => Some(Self::JoinRoomViaRoomMenu),
+            COMMAND_ID_QUERY_USER_VIA_ROOM_MENU => Some(Self::QueryUserViaRoomMenu),
             COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU => {
                 Some(Self::ReplyToSelectedMessageViaMenu)
             }
@@ -293,6 +299,14 @@ pub(crate) enum ParsedCommand {
     PartRoomViaRoomMenu {
         id: String,
     },
+    JoinRoomViaRoomMenu {
+        id: String,
+        args: JoinRoomViaRoomMenuArgs,
+    },
+    QueryUserViaRoomMenu {
+        id: String,
+        args: QueryUserViaRoomMenuArgs,
+    },
     ReplyToSelectedMessageViaMenu {
         id: String,
     },
@@ -350,6 +364,8 @@ impl ParsedCommand {
             Self::AcceptInviteViaRoomMenu { .. } => CommandKind::AcceptInviteViaRoomMenu,
             Self::RejectInviteViaRoomMenu { .. } => CommandKind::RejectInviteViaRoomMenu,
             Self::PartRoomViaRoomMenu { .. } => CommandKind::PartRoomViaRoomMenu,
+            Self::JoinRoomViaRoomMenu { .. } => CommandKind::JoinRoomViaRoomMenu,
+            Self::QueryUserViaRoomMenu { .. } => CommandKind::QueryUserViaRoomMenu,
             Self::ReplyToSelectedMessageViaMenu { .. } => {
                 CommandKind::ReplyToSelectedMessageViaMenu
             }
@@ -397,6 +413,18 @@ pub(crate) struct SelectRoomArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectTimelineEventArgs {
     pub(crate) event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JoinRoomViaRoomMenuArgs {
+    pub(crate) target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QueryUserViaRoomMenuArgs {
+    pub(crate) user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1892,6 +1920,14 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::PartRoomViaRoomMenu { id: envelope.id })
         }
+        CommandKind::JoinRoomViaRoomMenu => Ok(ParsedCommand::JoinRoomViaRoomMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<JoinRoomViaRoomMenuArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::QueryUserViaRoomMenu => Ok(ParsedCommand::QueryUserViaRoomMenu {
+            id: envelope.id.clone(),
+            args: parse_args_required::<QueryUserViaRoomMenuArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::ReplyToSelectedMessageViaMenu => {
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::ReplyToSelectedMessageViaMenu { id: envelope.id })
@@ -2274,8 +2310,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_23() {
-        assert_eq!(PROTOCOL_VERSION, 23);
+    fn protocol_version_is_24() {
+        assert_eq!(PROTOCOL_VERSION, 24);
     }
 
     #[test]
@@ -3811,7 +3847,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":23,
+                    "protocol_version":24,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
