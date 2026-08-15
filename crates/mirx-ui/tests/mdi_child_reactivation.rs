@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{
+use mirx_core::{
     Event, RoomActivity, RoomActivityKind, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomSummary,
 };
-use mmatrix_testkit::{LaunchOptions, MmatrixApp, ViewIdentity};
+use mirx_testkit::{LaunchOptions, MirxApp, ViewIdentity};
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use windows_sys::Win32::System::Memory::{FILE_MAP_READ, OpenFileMappingW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -20,9 +20,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, SendMessageW, WM_MDIDESTROY, WM_MDIGETACTIVE,
 };
 
-const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
+const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 const MDI_ID: i32 = 1002;
-const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
+const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn launch_options() -> LaunchOptions {
@@ -33,8 +33,8 @@ fn launch_options() -> LaunchOptions {
     }
 }
 
-fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
+fn mirx_ui_exe_path() -> Result<PathBuf, String> {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_mirx-ui") {
         return Ok(PathBuf::from(path));
     }
 
@@ -45,12 +45,12 @@ fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
             current_exe.display()
         )
     })?;
-    let candidate = profile_dir.join("mmatrix-ui.exe");
+    let candidate = profile_dir.join("mirx-ui.exe");
     if candidate.is_file() {
         Ok(candidate)
     } else {
         Err(format!(
-            "mmatrix-ui.exe was not found; checked CARGO_BIN_EXE_mmatrix-ui and {}",
+            "mirx-ui.exe was not found; checked CARGO_BIN_EXE_mirx-ui and {}",
             candidate.display()
         ))
     }
@@ -61,7 +61,7 @@ fn unique_state_path() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock must be after unix epoch")
         .as_nanos();
-    env::temp_dir().join(format!("mmatrix-ui-mdi-reactivation-{unique}.json"))
+    env::temp_dir().join(format!("mirx-ui-mdi-reactivation-{unique}.json"))
 }
 
 fn fixture_state_path(name: &str) -> PathBuf {
@@ -141,15 +141,15 @@ fn base_events() -> Vec<Event> {
 #[test]
 fn select_room_recreates_room_mdi_child_after_external_destroy()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, launch_options())?;
+    let app = MirxApp::launch_with_options(&exe_path, &args, launch_options())?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let frame = wait_for_frame(Duration::from_secs(5))?;
@@ -180,14 +180,14 @@ fn select_room_recreates_room_mdi_child_after_external_destroy()
 #[test]
 fn select_thread_recreates_thread_mdi_child_after_external_destroy()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [
         OsString::from("--render-state"),
         fixture_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(&exe_path, &args, launch_options())?;
+    let app = MirxApp::launch_with_options(&exe_path, &args, launch_options())?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let thread_view = ViewIdentity::Thread {
@@ -233,7 +233,7 @@ fn wait_for_frame(timeout: Duration) -> Result<HWND, String> {
         thread::sleep(POLL_INTERVAL);
     }
 
-    Err("timed out waiting for automation-enabled mmatrix frame window".to_owned())
+    Err("timed out waiting for automation-enabled mirx frame window".to_owned())
 }
 
 fn wait_for_nonzero_child_count(frame: HWND, timeout: Duration) -> Result<usize, String> {
@@ -311,7 +311,7 @@ fn automation_frame_window() -> Option<HWND> {
         }
 
         let mapping_name = wide_null(&format!(
-            "Local\\mmatrix-ui-automation-response-{pid}-{:x}",
+            "Local\\mirx-ui-automation-response-{pid}-{:x}",
             hwnd as usize
         ));
         let mapping = unsafe { OpenFileMappingW(FILE_MAP_READ, 0, mapping_name.as_ptr()) };

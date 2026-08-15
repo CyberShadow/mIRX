@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use mmatrix_core::{
+use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
@@ -126,16 +126,16 @@ use crate::{
     },
 };
 
-const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
-const MDI_CHILD_CLASS_NAME: &str = "mmatrixWin32MdiChild";
-const ROOM_CONTENT_CLASS_NAME: &str = "mmatrixWin32RoomContent";
-const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
-const LOGIN_DIALOG_CLASS_NAME: &str = "mmatrixWin32LoginDialog";
-const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoverE2eeDialog";
-const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mmatrixWin32SetupE2eeDialog";
-const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mmatrixWin32RecoveryKeyHandoffDialog";
-const FIND_DIALOG_CLASS_NAME: &str = "mmatrixWin32FindDialog";
-const FRAME_TITLE: &str = "mmatrix";
+const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
+const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
+const ROOM_CONTENT_CLASS_NAME: &str = "mirxWin32RoomContent";
+const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
+const LOGIN_DIALOG_CLASS_NAME: &str = "mirxWin32LoginDialog";
+const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
+const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
+const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
+const FIND_DIALOG_CLASS_NAME: &str = "mirxWin32FindDialog";
+const FRAME_TITLE: &str = "mirx";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
     width: 1024,
     height: 768,
@@ -222,15 +222,15 @@ const TIMELINE_IMAGE_MEDIA_SLOT_LINES: usize = 7;
 const TIMELINE_IMAGE_LEFT_INDENT: i32 = 24;
 const TIMELINE_FIND_HIGHLIGHT_COLOR: u32 = 0x00f0f8d8;
 const TIMELINE_SELECTION_COLOR: u32 = 0x00f5e6cc;
-const PROFILE_SUBDIR: &str = "mmatrix\\ui-shell";
+const PROFILE_SUBDIR: &str = "mirx\\ui-shell";
 const SESSION_FILE_NAME: &str = "session.json";
 const SAVED_SESSION_VERSION: u32 = 1;
-const PROTECTED_SESSION_MAGIC: &[u8] = b"mmatrix-ui-session:v1\0";
-const SESSION_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/session/v1";
+const PROTECTED_SESSION_MAGIC: &[u8] = b"mirx-ui-session:v1\0";
+const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";
 const STORE_PASSPHRASE_FILE_NAME: &str = "store-passphrase.dpapi";
-const PROTECTED_STORE_PASSPHRASE_MAGIC: &[u8] = b"mmatrix-ui-store-secret:v1\0";
-const STORE_PASSPHRASE_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/store-passphrase/v1";
-const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mmatrix-ui";
+const PROTECTED_STORE_PASSPHRASE_MAGIC: &[u8] = b"mirx-ui-store-secret:v1\0";
+const STORE_PASSPHRASE_DPAPI_ENTROPY: &[u8] = b"mirx-ui/store-passphrase/v1";
+const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mirx-ui";
 const VK_RETURN_KEY: WPARAM = 13;
 const VK_UP_KEY: WPARAM = 38;
 const VK_DOWN_KEY: WPARAM = 40;
@@ -2845,12 +2845,12 @@ fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<C
         profile_dir,
         store_passphrase,
     })
-    .map_err(|err| format!("failed to start mmatrix-core: {err}"))?;
+    .map_err(|err| format!("failed to start mirx-core: {err}"))?;
 
     let command_sender = handle.command_sender().clone();
     let hwnd_value = hwnd as isize;
     let join_handle = thread::Builder::new()
-        .name("mmatrix-ui-core-bridge".to_owned())
+        .name("mirx-ui-core-bridge".to_owned())
         .spawn(move || bridge_core_events(hwnd_value as HWND, queue, handle))
         .map_err(|err| format!("failed to spawn core bridge thread: {err}"))?;
 
@@ -3084,7 +3084,7 @@ fn save_session(homeserver_url: &str, session: &StoredSession) -> Result<(), Str
         )
     })?;
     let protected =
-        crate::dpapi::protect(&serialized, "mmatrix saved session", SESSION_DPAPI_ENTROPY)
+        crate::dpapi::protect(&serialized, "mirx saved session", SESSION_DPAPI_ENTROPY)
             .map_err(|err| format!("failed to protect saved session {}: {err}", path.display()))?;
     let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
     bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
@@ -3188,7 +3188,7 @@ fn create_store_passphrase(profile_dir: &Path, path: &Path) -> Result<String, St
     let passphrase = hex_string(&crate::dpapi::random_bytes::<32>()?);
     let protected = crate::dpapi::protect(
         passphrase.as_bytes(),
-        "mmatrix store passphrase",
+        "mirx store passphrase",
         STORE_PASSPHRASE_DPAPI_ENTROPY,
     )
     .map_err(|err| {
@@ -9586,7 +9586,7 @@ struct RoomPreviewMediaDispatch {
 }
 
 fn timeline_image_preview_source(
-    message: &mmatrix_core::RoomImageActivity,
+    message: &mirx_core::RoomImageActivity,
 ) -> Option<&RoomMediaSource> {
     if let Some(thumbnail_source) = message
         .info
@@ -9603,7 +9603,7 @@ fn timeline_image_preview_source(
 }
 
 fn timeline_video_preview_source(
-    message: &mmatrix_core::RoomVideoActivity,
+    message: &mirx_core::RoomVideoActivity,
 ) -> Option<&RoomMediaSource> {
     message
         .info
@@ -9977,7 +9977,7 @@ unsafe fn refresh_tree(hwnd: HWND) {
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
-    let root = insert_tree_item(tree, TVI_ROOT, "mmatrix");
+    let root = insert_tree_item(tree, TVI_ROOT, "mirx");
     let status = insert_mapped_tree_item(state, root, "status", ViewId::Status);
 
     let rooms = state.model.rooms.clone();
@@ -10383,7 +10383,7 @@ unsafe fn enable_automation(hwnd: HWND) -> Result<(), String> {
 
 fn automation_response_name(hwnd: HWND) -> String {
     format!(
-        "Local\\mmatrix-ui-automation-response-{}-{:x}",
+        "Local\\mirx-ui-automation-response-{}-{:x}",
         unsafe { GetCurrentProcessId() },
         hwnd as usize
     )
@@ -12152,7 +12152,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
         ));
     }
 
-    println!("{}", mmatrix_core::ui_self_test_line());
+    println!("{}", mirx_core::ui_self_test_line());
     Ok(())
 }
 
@@ -14914,7 +14914,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use mmatrix_core::RoomStateNoticeActivity;
+    use mirx_core::RoomStateNoticeActivity;
 
     use super::*;
 
@@ -14987,7 +14987,7 @@ mod tests {
     ) -> E2eeStatus {
         E2eeStatus {
             recovery,
-            backup: mmatrix_core::E2eeBackupStatus {
+            backup: mirx_core::E2eeBackupStatus {
                 state: backup_state,
                 enabled_locally: backup_enabled_local,
                 exists_on_server: backup_exists_on_server,
@@ -15570,7 +15570,7 @@ mod tests {
             timestamp_ms,
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(
-                mmatrix_core::UnsupportedRoomMessageActivity {
+                mirx_core::UnsupportedRoomMessageActivity {
                     event_id: event_id.to_owned(),
                     sender: sender.to_owned(),
                     msgtype: msgtype.to_owned(),
@@ -15609,11 +15609,11 @@ mod tests {
             activity_id: event_id.to_owned(),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::UnableToDecrypt(mmatrix_core::RoomUnableToDecryptActivity {
+            kind: RoomActivityKind::UnableToDecrypt(mirx_core::RoomUnableToDecryptActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 session_id: Some("SESSIONID".to_owned()),
-                reason: mmatrix_core::RoomUnableToDecryptReason::MissingMegolmSession,
+                reason: mirx_core::RoomUnableToDecryptReason::MissingMegolmSession,
             }),
         }))
     }
@@ -15632,12 +15632,12 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::Image(Box::new(mmatrix_core::RoomImageActivity {
+            kind: RoomActivityKind::Image(Box::new(mirx_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 body: body.to_owned(),
                 filename: filename.map(str::to_owned),
-                source: mmatrix_core::RoomMediaSource::Plain {
+                source: mirx_core::RoomMediaSource::Plain {
                     url: "mxc://example.org/diagram".to_owned(),
                 },
                 info,
@@ -15659,12 +15659,12 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::File(Box::new(mmatrix_core::RoomFileActivity {
+            kind: RoomActivityKind::File(Box::new(mirx_core::RoomFileActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 body: body.to_owned(),
                 filename: filename.map(str::to_owned),
-                source: mmatrix_core::RoomMediaSource::Plain {
+                source: mirx_core::RoomMediaSource::Plain {
                     url: "mxc://example.org/report".to_owned(),
                 },
                 info,
@@ -15686,12 +15686,12 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::Audio(Box::new(mmatrix_core::RoomAudioActivity {
+            kind: RoomActivityKind::Audio(Box::new(mirx_core::RoomAudioActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 body: body.to_owned(),
                 filename: filename.map(str::to_owned),
-                source: mmatrix_core::RoomMediaSource::Plain {
+                source: mirx_core::RoomMediaSource::Plain {
                     url: "mxc://example.org/audio".to_owned(),
                 },
                 info,
@@ -15729,7 +15729,7 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms: 1_710_000_000_000,
             relation: None,
-            kind: RoomActivityKind::Video(Box::new(mmatrix_core::RoomVideoActivity {
+            kind: RoomActivityKind::Video(Box::new(mirx_core::RoomVideoActivity {
                 event_id: event_id.to_owned(),
                 sender: "@alice:example.org".to_owned(),
                 body: "clip.mp4".to_owned(),
@@ -15764,7 +15764,7 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::Image(Box::new(mmatrix_core::RoomImageActivity {
+            kind: RoomActivityKind::Image(Box::new(mirx_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
                 sender: sender.to_owned(),
                 body: body.to_owned(),
@@ -15785,7 +15785,7 @@ mod tests {
     fn encrypted_media_source(url: &str) -> RoomMediaSource {
         RoomMediaSource::Encrypted {
             url: url.to_owned(),
-            key: mmatrix_core::RoomEncryptedFileKey {
+            key: mirx_core::RoomEncryptedFileKey {
                 kty: "oct".to_owned(),
                 key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
                 alg: "A256CTR".to_owned(),
@@ -15793,7 +15793,7 @@ mod tests {
                 ext: true,
             },
             iv: "base64-iv".to_owned(),
-            hashes: mmatrix_core::RoomEncryptedFileHashes {
+            hashes: mirx_core::RoomEncryptedFileHashes {
                 sha256: "base64-sha256".to_owned(),
             },
             v: "v2".to_owned(),
@@ -15856,7 +15856,7 @@ mod tests {
 
     fn protected_saved_session_payload_bytes(payload: &[u8]) -> Vec<u8> {
         let protected =
-            crate::dpapi::protect(payload, "mmatrix saved session test", SESSION_DPAPI_ENTROPY)
+            crate::dpapi::protect(payload, "mirx saved session test", SESSION_DPAPI_ENTROPY)
                 .expect("saved session test payload must protect");
         let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
         bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
@@ -15896,7 +15896,7 @@ mod tests {
                 poisoned.into_inner()
             }
         };
-        let root = unique_test_temp_path("mmatrix-ui-local-app-data");
+        let root = unique_test_temp_path("mirx-ui-local-app-data");
         fs::create_dir_all(&root).expect("test LOCALAPPDATA root must be created");
         let previous = env::var_os("LOCALAPPDATA");
         unsafe {
@@ -16070,12 +16070,12 @@ mod tests {
     }
 
     fn start_test_core() -> CoreHandle {
-        let profile_dir = unique_test_temp_path("mmatrix-ui-win32-tests");
+        let profile_dir = unique_test_temp_path("mirx-ui-win32-tests");
         fs::create_dir_all(&profile_dir).expect("test profile dir must be created");
 
         start(CoreConfig {
             profile_dir,
-            store_passphrase: "mmatrix-ui-win32-tests".to_owned(),
+            store_passphrase: "mirx-ui-win32-tests".to_owned(),
         })
         .expect("test core must start")
     }
@@ -20169,7 +20169,7 @@ mod tests {
                         description: "fire".to_owned(),
                     },
                 ],
-                decimals: mmatrix_core::VerificationDecimals {
+                decimals: mirx_core::VerificationDecimals {
                     first: 1234,
                     second: 5678,
                     third: 9012,
@@ -20225,8 +20225,8 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            Event::E2eeRecoverySucceeded(mmatrix_core::E2eeRecoverySucceeded {
-                operation: mmatrix_core::E2eeRecoveryOperation::Recover,
+            Event::E2eeRecoverySucceeded(mirx_core::E2eeRecoverySucceeded {
+                operation: mirx_core::E2eeRecoveryOperation::Recover,
             }),
         )
         .unwrap();
@@ -20241,7 +20241,7 @@ mod tests {
 
         apply_core_event(
             &mut state,
-            Event::E2eeRecoverySetupSucceeded(mmatrix_core::E2eeRecoverySetupSucceeded {
+            Event::E2eeRecoverySetupSucceeded(mirx_core::E2eeRecoverySetupSucceeded {
                 recovery_key: recovery_key.to_owned(),
             }),
         )
@@ -21363,7 +21363,7 @@ mod tests {
                 symbol: "🐶".to_owned(),
                 description: "dog".to_owned(),
             }],
-            decimals: mmatrix_core::VerificationDecimals {
+            decimals: mirx_core::VerificationDecimals {
                 first: 1234,
                 second: 5678,
                 third: 9012,
@@ -25897,7 +25897,7 @@ mod tests {
                     symbol: "🐶".to_owned(),
                     description: "dog".to_owned(),
                 }],
-                decimals: mmatrix_core::VerificationDecimals {
+                decimals: mirx_core::VerificationDecimals {
                     first: 1234,
                     second: 5678,
                     third: 9012,
@@ -26145,7 +26145,7 @@ mod tests {
                     symbol: "🐶".to_owned(),
                     description: "dog".to_owned(),
                 }],
-                decimals: mmatrix_core::VerificationDecimals {
+                decimals: mirx_core::VerificationDecimals {
                     first: 1234,
                     second: 5678,
                     third: 9012,

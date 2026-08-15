@@ -3,10 +3,10 @@
 use std::process::{Command, Output};
 
 fn run_ui(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_mmatrix-ui"))
+    Command::new(env!("CARGO_BIN_EXE_mirx-ui"))
         .args(args)
         .output()
-        .expect("run mmatrix-ui")
+        .expect("run mirx-ui")
 }
 
 #[test]
@@ -16,7 +16,7 @@ fn no_args_runs_non_windows_stub() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
-        "mmatrix-ui non-windows stub\n"
+        "mirx-ui non-windows stub\n"
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
 }
@@ -28,7 +28,7 @@ fn automation_flag_runs_non_windows_stub() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
-        "mmatrix-ui non-windows stub\n"
+        "mirx-ui non-windows stub\n"
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
 }
@@ -40,7 +40,7 @@ fn render_state_runs_non_windows_stub() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
-        "mmatrix-ui non-windows stub\n"
+        "mirx-ui non-windows stub\n"
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
 }
@@ -52,7 +52,7 @@ fn frame_size_runs_non_windows_stub() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
-        "mmatrix-ui non-windows stub\n"
+        "mirx-ui non-windows stub\n"
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
 }
@@ -64,7 +64,7 @@ fn self_test_prints_core_self_test_line() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
-        "mmatrix-ui self-test ok\n"
+        "mirx-ui self-test ok\n"
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
 }
@@ -76,7 +76,7 @@ fn auto_close_runs_non_windows_stub() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
-        "mmatrix-ui auto-close stub\n"
+        "mirx-ui auto-close stub\n"
     );
     assert_eq!(String::from_utf8(output.stderr).expect("stderr utf-8"), "");
 }
@@ -89,8 +89,8 @@ fn help_prints_extended_usage() {
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout utf-8"),
         "\
-usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT]
-       mmatrix-ui [--self-test|--auto-close|--help]
+usage: mirx-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT]
+       mirx-ui [--self-test|--auto-close|--help]
   --automation                enable automation control surface
   --render-state <file.json>  load render-state events at startup
   --frame-size WIDTHxHEIGHT   create the frame at an explicit launch size
@@ -110,7 +110,7 @@ fn invalid_arguments_exit_with_usage_error() {
     assert_eq!(String::from_utf8(output.stdout).expect("stdout utf-8"), "");
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr utf-8"),
-        "usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]\n"
+        "usage: mirx-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]\n"
     );
 }
 
@@ -122,6 +122,6 @@ fn invalid_frame_size_exits_with_usage_error() {
     assert_eq!(String::from_utf8(output.stdout).expect("stdout utf-8"), "");
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr utf-8"),
-        "usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]\n"
+        "usage: mirx-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]\n"
     );
 }

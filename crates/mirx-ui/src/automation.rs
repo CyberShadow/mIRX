@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use mmatrix_core::{
+use mirx_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMembership, RoomMessageActivity,
@@ -1426,7 +1426,7 @@ pub(crate) struct DumpRoomUnableToDecryptActivity {
     pub(crate) event_id: String,
     pub(crate) sender: String,
     pub(crate) session_id: Option<String>,
-    pub(crate) reason: mmatrix_core::RoomUnableToDecryptReason,
+    pub(crate) reason: mirx_core::RoomUnableToDecryptReason,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2258,7 +2258,7 @@ pub(crate) fn parse_command_request(
 }
 
 fn default_device_display_name() -> String {
-    "mmatrix-ui".to_owned()
+    "mirx-ui".to_owned()
 }
 
 fn parse_request_envelope(request_json: &[u8]) -> Result<RawRequestEnvelope, FailureEnvelope> {
@@ -2421,7 +2421,7 @@ fn parse_verification_action_args(
 
 #[cfg(test)]
 mod tests {
-    use mmatrix_core::{
+    use mirx_core::{
         CoreErrorEvent, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
@@ -2931,7 +2931,7 @@ mod tests {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: None,
                                 sender: "@alice:example".to_owned(),
-                                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
+                                presentation: mirx_core::RoomMessagePresentationKind::Text,
                                 body: "hello".to_owned(),
                                 send_state: RoomMessageSendState::Sent,
                             }),
@@ -3237,7 +3237,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_SELECT_NAVIGATION_PATH,
-                br#"{"id":"select-nav","args":{"path":[{"text":"mmatrix","same_text_index":0},{"text":"rooms: 4","same_text_index":0},{"text":"Work","same_text_index":0},{"text":"Shared","same_text_index":0}]}}"#,
+                br#"{"id":"select-nav","args":{"path":[{"text":"mirx","same_text_index":0},{"text":"rooms: 4","same_text_index":0},{"text":"Work","same_text_index":0},{"text":"Shared","same_text_index":0}]}}"#,
             )
             .unwrap(),
             ParsedCommand::SelectNavigationPath {
@@ -3245,7 +3245,7 @@ mod tests {
                 args: SelectNavigationPathArgs {
                     path: vec![
                         NavigationPathSegment {
-                            text: "mmatrix".to_owned(),
+                            text: "mirx".to_owned(),
                             same_text_index: 0,
                         },
                         NavigationPathSegment {
@@ -3283,12 +3283,12 @@ mod tests {
             ParsedCommand::AppendSyntheticEvents {
                 id: "append".to_owned(),
                 args: LoadEventsArgs {
-                    events: vec![Event::RoomActivityUpdate(mmatrix_core::RoomActivityUpdate {
+                    events: vec![Event::RoomActivityUpdate(mirx_core::RoomActivityUpdate {
                         room_id: "!room:example".to_owned(),
-                        target: mmatrix_core::RoomActivityUpdateTarget::Transaction {
+                        target: mirx_core::RoomActivityUpdateTarget::Transaction {
                             transaction_id: "txn-1".to_owned(),
                         },
-                        kind: mmatrix_core::RoomActivityUpdateKind::MessageSent {
+                        kind: mirx_core::RoomActivityUpdateKind::MessageSent {
                             event_id: "$event:example".to_owned(),
                         },
                     })],
@@ -3442,7 +3442,7 @@ mod tests {
     #[test]
     fn ui_state_handles_active_find_null_and_populated() {
         let without_find = serde_json::from_value::<UiState>(json!({
-            "navigation":{"text":"mmatrix","children":[]},
+            "navigation":{"text":"mirx","children":[]},
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
@@ -3453,7 +3453,7 @@ mod tests {
         assert_eq!(without_find.active_find, None);
 
         let with_find = serde_json::from_value::<UiState>(json!({
-            "navigation":{"text":"mmatrix","children":[]},
+            "navigation":{"text":"mirx","children":[]},
             "mdi":{"active":{"kind":"room","room_id":"!room:example"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
@@ -3767,7 +3767,7 @@ mod tests {
     fn select_navigation_path_rejects_unknown_fields() {
         let error = parse_command_request(
             COMMAND_ID_SELECT_NAVIGATION_PATH,
-            br#"{"id":"select-nav","args":{"path":[{"text":"mmatrix","same_text_index":0}],"unexpected":true}}"#,
+            br#"{"id":"select-nav","args":{"path":[{"text":"mirx","same_text_index":0}],"unexpected":true}}"#,
         )
         .unwrap_err();
         let value = serde_json::to_value(error).unwrap();
@@ -3796,7 +3796,7 @@ mod tests {
                     homeserver_url: "https://matrix.example".to_owned(),
                     username: "@alice:example".to_owned(),
                     password: "secret".to_owned(),
-                    device_display_name: "mmatrix-ui".to_owned(),
+                    device_display_name: "mirx-ui".to_owned(),
                 },
             }
         );
@@ -4334,7 +4334,7 @@ mod tests {
                 SelectedNavigationPathResponse {
                     path: vec![
                         NavigationPathSegment {
-                            text: "mmatrix".to_owned(),
+                            text: "mirx".to_owned(),
                             same_text_index: 0,
                         },
                         NavigationPathSegment {
@@ -4354,7 +4354,7 @@ mod tests {
                 "ok":true,
                 "json":{
                     "path":[
-                        {"text":"mmatrix","same_text_index":0},
+                        {"text":"mirx","same_text_index":0},
                         {"text":"rooms: 4","same_text_index":0},
                         {"text":"Work","same_text_index":0}
                     ]
@@ -4609,7 +4609,7 @@ mod tests {
                 "ui",
                 UiState {
                     navigation: NavigationNode {
-                        text: "mmatrix".to_owned(),
+                        text: "mirx".to_owned(),
                         has_activity: false,
                         children: vec![
                             NavigationNode {
@@ -4741,7 +4741,7 @@ mod tests {
                 "ok":true,
                 "json":{
                     "navigation":{
-                        "text":"mmatrix",
+                        "text":"mirx",
                         "has_activity":false,
                         "children":[
                             {"text":"status","has_activity":false,"children":[]},
@@ -5641,7 +5641,7 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<super::UiState>(json!({
-                "navigation":{"text":"mmatrix","children":[]},
+                "navigation":{"text":"mirx","children":[]},
                 "mdi":{"active":{"kind":"status"},"views":[]},
                 "status_bar":{"text":"ready"},
                 "switchbar":{"items":[]},
@@ -5652,7 +5652,7 @@ mod tests {
         );
         assert!(
             serde_json::from_value::<super::UiState>(json!({
-                "navigation":{"text":"mmatrix","children":[]},
+                "navigation":{"text":"mirx","children":[]},
                 "mdi":{"active":{"kind":"status"},"views":[]},
                 "status_bar":{"text":"ready"},
                 "switchbar":{"items":[]}
@@ -5718,7 +5718,7 @@ mod tests {
                 event_id: Some("$plain:example".to_owned()),
                 transaction_id: None,
                 sender: "@plain:example".to_owned(),
-                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
+                presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "plain".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),
@@ -5754,7 +5754,7 @@ mod tests {
                 event_id: Some("$event:example".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
                 sender: "@alice:example".to_owned(),
-                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
+                presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Sent,
             }),

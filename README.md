@@ -1,14 +1,14 @@
-# mmatrix
+# mirx
 
-`mmatrix` is a Windows-only native Win32 Matrix client in Rust. The current prototype includes the typed `mmatrix-core` facade, the Win32 UI shell, Nix-backed Linux-to-Windows GNU cross-build tooling, Wine smoke coverage, and a DLL import gate for the release artifact.
+`mirx` is a Windows-only native Win32 Matrix client in Rust. The current prototype includes the typed `mirx-core` facade, the Win32 UI shell, Nix-backed Linux-to-Windows GNU cross-build tooling, Wine smoke coverage, and a DLL import gate for the release artifact.
 
 ## Status
 
 - Vertical-slice prototype scaffold is in place.
-- `mmatrix-core` owns the Matrix SDK runtime boundary and has offline tests plus env-gated live Matrix coverage.
-- Matrix SDK timeline, state, and send-queue inputs enter `mmatrix-core`, which normalizes them into typed room activity/state events that Win32 stores and renders.
+- `mirx-core` owns the Matrix SDK runtime boundary and has offline tests plus env-gated live Matrix coverage.
+- Matrix SDK timeline, state, and send-queue inputs enter `mirx-core`, which normalizes them into typed room activity/state events that Win32 stores and renders.
 - Reactions, media, read-state, typing, threads, and verification slices extend that typed boundary instead of adding separate UI-only paths.
-- `mmatrix-ui` is a native Win32 shell with deterministic Wine automation, focused snapshot coverage, and a live login/session-restore/sync/rooms/send slice through `mmatrix-core`.
+- `mirx-ui` is a native Win32 shell with deterministic Wine automation, focused snapshot coverage, and a live login/session-restore/sync/rooms/send slice through `mirx-core`.
 - CI is intended to run the full local check sequence through the Nix devshell.
 
 ## Local Commands
@@ -34,35 +34,35 @@ Wine/Xvfb automation and screenshot diffs are required local gates for the Win32
 
 Live Matrix checks are opt-in and use:
 
-- `MMATRIX_HS`
-- `MMATRIX_USER`
-- `MMATRIX_PASS`
-- optional `MMATRIX_ROOM`
+- `MIRX_HS`
+- `MIRX_USER`
+- `MIRX_PASS`
+- optional `MIRX_ROOM`
 
-Missing or empty `MMATRIX_HS`, `MMATRIX_USER`, or `MMATRIX_PASS` makes the live Matrix tests return early without network access.
+Missing or empty `MIRX_HS`, `MIRX_USER`, or `MIRX_PASS` makes the live Matrix tests return early without network access.
 
 Supported live checks:
 
 ```sh
-MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... MMATRIX_ROOM=... \
-  nix develop -c cargo test -p mmatrix-core --test live_matrix
+MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
+  nix develop -c cargo test -p mirx-core --test live_matrix
 
-MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... \
-  nix develop -c cargo test -p mmatrix-core --test live_matrix
+MIRX_HS=... MIRX_USER=... MIRX_PASS=... \
+  nix develop -c cargo test -p mirx-core --test live_matrix
 
-MMATRIX_HS=... MMATRIX_USER=... MMATRIX_PASS=... MMATRIX_ROOM=... \
-  nix develop -c cargo test --target x86_64-pc-windows-gnu -p mmatrix-ui --test automation_driver live_matrix_ui_session
+MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
+  nix develop -c cargo test --target x86_64-pc-windows-gnu -p mirx-ui --test automation_driver live_matrix_ui_session
 ```
 
-`MMATRIX_ROOM` is optional for the existing login, restore, sync, and logout coverage. It is required for send coverage and for the fully-read marker verification in `live_matrix`. `MMATRIX_ROOM` must be a room the account has already joined; the live test creates the event-backed message itself before issuing `MarkRoomRead`.
+`MIRX_ROOM` is optional for the existing login, restore, sync, and logout coverage. It is required for send coverage and for the fully-read marker verification in `live_matrix`. `MIRX_ROOM` must be a room the account has already joined; the live test creates the event-backed message itself before issuing `MarkRoomRead`.
 
-The UI session file still lives at `%LOCALAPPDATA%\mmatrix\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mmatrix\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
+The UI session file still lives at `%LOCALAPPDATA%\mirx\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mirx\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
 
 Find is UI-scoped. Status and Thread Find search only loaded text, while Room Find searches loaded text first and can page older room history through backfill. `/find <text>`, `Edit > Find...`, and `Ctrl+F` all invoke the same behavior; Find does not use Matrix server-side search.
 
 ## Release Measurement
 
-Measured artifact: `target/x86_64-pc-windows-gnu/release/mmatrix-ui.exe`
+Measured artifact: `target/x86_64-pc-windows-gnu/release/mirx-ui.exe`
 
 - Size: `13754880` bytes (`14MiB`)
 - Target/runtime note: this is the Windows GNU release binary, with the current linked `matrix-sdk` E2EE stack and bundled SQLite stack included in the executable build.

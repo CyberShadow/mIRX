@@ -12,17 +12,17 @@ cleanup() {
 }
 
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
-  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-dll-gate.XXXXXX")
+  tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mirx-dll-gate.XXXXXX")
   trap cleanup EXIT
   export CARGO_TARGET_DIR="$tmpdir/cargo-target"
 fi
 
-exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"}
+exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mirx-ui.exe"}
 
 cd "$root_dir"
 
 if [[ $# -eq 0 ]] && [[ ! -f "$exe_path" ]]; then
-  cargo build --release --package mmatrix-ui --target x86_64-pc-windows-gnu
+  cargo build --release --package mirx-ui --target x86_64-pc-windows-gnu
 fi
 
 declare -a allowlist=(

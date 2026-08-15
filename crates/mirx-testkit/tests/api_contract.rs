@@ -4,7 +4,7 @@ use std::time::Duration;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use mmatrix_core::{
+use mirx_core::{
     BackfillRoomHistoryRequest as CoreBackfillRoomHistoryRequest, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, Event as CoreEvent,
     FetchRoomMediaRequest as CoreFetchRoomMediaRequest, RoomActivity as CoreRoomActivity,
@@ -16,7 +16,7 @@ use mmatrix_core::{
     RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind,
     RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
 };
-use mmatrix_testkit::{
+use mirx_testkit::{
     BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
     FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions,
     LoginArgs, MdiState, MdiView, MemberMenuState, MemberModerationAction, MembershipCommandAction,
@@ -126,7 +126,7 @@ fn submitted_member_moderation_command_has_a_strict_json_contract() {
 }
 
 #[cfg(not(windows))]
-use mmatrix_testkit::MmatrixApp;
+use mirx_testkit::MirxApp;
 
 fn stored_session() -> StoredSession {
     StoredSession {
@@ -177,8 +177,8 @@ fn sample_e2ee_status() -> E2eeStatus {
     }
 }
 
-fn sample_room_encrypted_file_key() -> mmatrix_testkit::RoomEncryptedFileKey {
-    mmatrix_testkit::RoomEncryptedFileKey {
+fn sample_room_encrypted_file_key() -> mirx_testkit::RoomEncryptedFileKey {
+    mirx_testkit::RoomEncryptedFileKey {
         kty: "oct".to_owned(),
         key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
         alg: "A256CTR".to_owned(),
@@ -187,8 +187,8 @@ fn sample_room_encrypted_file_key() -> mmatrix_testkit::RoomEncryptedFileKey {
     }
 }
 
-fn sample_room_encrypted_file_hashes() -> mmatrix_testkit::RoomEncryptedFileHashes {
-    mmatrix_testkit::RoomEncryptedFileHashes {
+fn sample_room_encrypted_file_hashes() -> mirx_testkit::RoomEncryptedFileHashes {
+    mirx_testkit::RoomEncryptedFileHashes {
         sha256: "base64-sha256".to_owned(),
     }
 }
@@ -295,7 +295,7 @@ fn sample_core_room_history_activity() -> CoreRoomActivity {
         activity_id: "event:$message:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_000,
         relation: None,
-        kind: CoreRoomActivityKind::Redacted(mmatrix_core::RoomRedactedActivity {
+        kind: CoreRoomActivityKind::Redacted(mirx_core::RoomRedactedActivity {
             event_id: "$message:example.org".to_owned(),
         }),
     }
@@ -382,7 +382,7 @@ fn frame_size_parse_arg_rejects_malformed_values() {
 fn launch_options_support_explicit_frame_size() {
     let options = LaunchOptions {
         startup_timeout: Duration::from_secs(1),
-        local_app_data: Some(PathBuf::from("/var/tmp/mmatrix-testkit")),
+        local_app_data: Some(PathBuf::from("/var/tmp/mirx-testkit")),
         frame_size: Some(FrameSize {
             width: 640,
             height: 768,
@@ -432,19 +432,19 @@ fn error_display_formats_each_public_variant() {
 
 #[test]
 fn menu_state_models_round_trip_and_reject_unknown_fields() {
-    let room = mmatrix_testkit::RoomMenuState {
+    let room = mirx_testkit::RoomMenuState {
         accept_invite_enabled: true,
         reject_invite_enabled: false,
         part_room_enabled: false,
     };
     assert_eq!(
-        serde_json::from_value::<mmatrix_testkit::RoomMenuState>(
+        serde_json::from_value::<mirx_testkit::RoomMenuState>(
             serde_json::to_value(&room).expect("serialize room menu state"),
         )
         .expect("deserialize room menu state"),
         room
     );
-    let message = mmatrix_testkit::MessageMenuState {
+    let message = mirx_testkit::MessageMenuState {
         reply_enabled: true,
         edit_enabled: true,
         react_enabled: true,
@@ -453,7 +453,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         selected_event_id: Some("$event:example".to_owned()),
     };
     assert_eq!(
-        serde_json::from_value::<mmatrix_testkit::MessageMenuState>(
+        serde_json::from_value::<mirx_testkit::MessageMenuState>(
             serde_json::to_value(&message).expect("serialize message menu state"),
         )
         .expect("deserialize message menu state"),
@@ -473,7 +473,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
     );
 
     assert!(
-        serde_json::from_value::<mmatrix_testkit::RoomMenuState>(serde_json::json!({
+        serde_json::from_value::<mirx_testkit::RoomMenuState>(serde_json::json!({
             "accept_invite_enabled": true,
             "reject_invite_enabled": false,
             "part_room_enabled": false,
@@ -482,7 +482,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         .is_err()
     );
     assert!(
-        serde_json::from_value::<mmatrix_testkit::MessageMenuState>(serde_json::json!({
+        serde_json::from_value::<mirx_testkit::MessageMenuState>(serde_json::json!({
             "reply_enabled": true,
             "redact_enabled": true,
             "selected_event_id": "$event:example",
@@ -500,7 +500,7 @@ fn data_models_round_trip_through_json() {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
         rooms: vec![
-            mmatrix_testkit::Room {
+            mirx_testkit::Room {
                 room_id: "!space:example".to_owned(),
                 display_name: "Space".to_owned(),
                 topic: None,
@@ -523,7 +523,7 @@ fn data_models_round_trip_through_json() {
                     },
                 ],
             },
-            mmatrix_testkit::Room {
+            mirx_testkit::Room {
                 room_id: "!alpha:example".to_owned(),
                 display_name: "Alpha".to_owned(),
                 topic: None,
@@ -544,7 +544,7 @@ fn data_models_round_trip_through_json() {
                 ],
                 space_children: vec![],
             },
-            mmatrix_testkit::Room {
+            mirx_testkit::Room {
                 room_id: "!beta:example".to_owned(),
                 display_name: "Beta".to_owned(),
                 topic: None,
@@ -556,7 +556,7 @@ fn data_models_round_trip_through_json() {
                 tags: Vec::new(),
                 space_children: vec![],
             },
-            mmatrix_testkit::Room {
+            mirx_testkit::Room {
                 room_id: "!lobby:example".to_owned(),
                 display_name: "Lobby".to_owned(),
                 topic: None,
@@ -630,7 +630,7 @@ fn data_models_round_trip_through_json() {
         homeserver_url: "https://matrix.example".to_owned(),
         username: "@alice:example".to_owned(),
         password: "secret".to_owned(),
-        device_display_name: "mmatrix-ui".to_owned(),
+        device_display_name: "mirx-ui".to_owned(),
     };
     let restore = RestoreSessionArgs {
         homeserver_url: "https://matrix.example".to_owned(),
@@ -638,7 +638,7 @@ fn data_models_round_trip_through_json() {
     };
     let ui_state = UiState {
         navigation: NavigationNode {
-            text: "mmatrix".to_owned(),
+            text: "mirx".to_owned(),
             has_activity: false,
             children: vec![
                 NavigationNode {
@@ -764,7 +764,7 @@ fn data_models_round_trip_through_json() {
         }],
     };
     let navigation_path = vec![
-        NavigationPathSegment::first("mmatrix"),
+        NavigationPathSegment::first("mirx"),
         NavigationPathSegment {
             text: "Same".to_owned(),
             same_text_index: 1,
@@ -878,7 +878,7 @@ fn data_models_round_trip_through_json() {
             .expect("deserialize ui state value"),
         serde_json::json!({
             "navigation": {
-                "text": "mmatrix",
+                "text": "mirx",
                 "has_activity": false,
                 "children": [
                     {
@@ -1037,7 +1037,7 @@ fn data_models_round_trip_through_json() {
 
 #[test]
 fn room_summary_metadata_serializes_to_expected_json_shape() {
-    let room = mmatrix_testkit::Room {
+    let room = mirx_testkit::Room {
         room_id: "!alpha:example".to_owned(),
         display_name: "Alpha".to_owned(),
         topic: None,
@@ -2093,7 +2093,7 @@ fn room_activity_redacted_round_trips_through_json() {
             activity_id: "event:$redacted:example.org".to_owned(),
             timestamp_ms: 1_710_000_060_000,
             relation: None,
-            kind: CoreRoomActivityKind::Redacted(mmatrix_core::RoomRedactedActivity {
+            kind: CoreRoomActivityKind::Redacted(mirx_core::RoomRedactedActivity {
                 event_id: "$redacted:example.org".to_owned(),
             }),
         })
@@ -2108,7 +2108,7 @@ fn room_activity_redacted_round_trips_through_json() {
             activity_id: "event:$redacted:example.org".to_owned(),
             timestamp_ms: 1_710_000_060_000,
             relation: None,
-            kind: CoreRoomActivityKind::Redacted(mmatrix_core::RoomRedactedActivity {
+            kind: CoreRoomActivityKind::Redacted(mirx_core::RoomRedactedActivity {
                 event_id: "$redacted:example.org".to_owned(),
             }),
         }
@@ -2619,7 +2619,7 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
                 replacement_event_id: "$edit:example.org".to_owned(),
                 sender: "@alice:example.org".to_owned(),
                 timestamp_ms: 1_700_000_001_000,
-                presentation: mmatrix_core::RoomMessagePresentationKind::Text,
+                presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "edited body".to_owned(),
             },
         }
@@ -3117,7 +3117,7 @@ fn encrypted_fetch_room_image_media_request_round_trips_through_json() {
             event_id: "$image:example".to_owned(),
             source: CoreRoomMediaSource::Encrypted {
                 url: "mxc://example.org/encrypted-image".to_owned(),
-                key: mmatrix_core::RoomEncryptedFileKey {
+                key: mirx_core::RoomEncryptedFileKey {
                     kty: "oct".to_owned(),
                     key_ops: vec!["encrypt".to_owned(), "decrypt".to_owned()],
                     alg: "A256CTR".to_owned(),
@@ -3125,7 +3125,7 @@ fn encrypted_fetch_room_image_media_request_round_trips_through_json() {
                     ext: true,
                 },
                 iv: "base64-iv".to_owned(),
-                hashes: mmatrix_core::RoomEncryptedFileHashes {
+                hashes: mirx_core::RoomEncryptedFileHashes {
                     sha256: "base64-sha256".to_owned(),
                 },
                 v: "v2".to_owned(),
@@ -5057,7 +5057,7 @@ fn data_models_reject_unknown_fields() {
         .is_err()
     );
     assert!(
-        serde_json::from_str::<mmatrix_testkit::Room>(
+        serde_json::from_str::<mirx_testkit::Room>(
             r#"{
             "room_id":"!room:example",
             "display_name":"Room",
@@ -5348,7 +5348,7 @@ fn data_models_reject_unknown_fields() {
             "homeserver_url":"https://matrix.example",
             "username":"@alice:example",
             "password":"secret",
-            "device_display_name":"mmatrix-ui",
+            "device_display_name":"mirx-ui",
             "unexpected":true
         }"#
         )
@@ -5372,7 +5372,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<UiState>(
             r#"{
-            "navigation":{"text":"mmatrix","children":[]},
+            "navigation":{"text":"mirx","children":[]},
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
@@ -5386,7 +5386,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<UiState>(
             r#"{
-            "navigation":{"text":"mmatrix","children":[]},
+            "navigation":{"text":"mirx","children":[]},
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
@@ -5433,7 +5433,7 @@ fn data_models_reject_unknown_fields() {
     assert!(
         serde_json::from_str::<NavigationNode>(
             r#"{
-            "text":"mmatrix",
+            "text":"mirx",
             "has_activity":false,
             "children":[],
             "unexpected":true
@@ -5864,7 +5864,7 @@ fn room_state_notice_content_rejects_impossible_tagged_combinations() {
 fn switchbar_helpers_find_items_and_active_item() {
     let ui_state = UiState {
         navigation: NavigationNode {
-            text: "mmatrix".to_owned(),
+            text: "mirx".to_owned(),
             has_activity: false,
             children: vec![],
         },
@@ -5919,7 +5919,7 @@ fn navigation_node_defaults_missing_activity_to_false() {
     assert_eq!(
         serde_json::from_str::<NavigationNode>(
             r#"{
-            "text":"mmatrix",
+            "text":"mirx",
             "children":[
                 {
                     "text":"status",
@@ -5930,7 +5930,7 @@ fn navigation_node_defaults_missing_activity_to_false() {
         )
         .expect("deserialize navigation node without has_activity"),
         NavigationNode {
-            text: "mmatrix".to_owned(),
+            text: "mirx".to_owned(),
             has_activity: false,
             children: vec![NavigationNode {
                 text: "status".to_owned(),
@@ -5944,7 +5944,7 @@ fn navigation_node_defaults_missing_activity_to_false() {
 #[test]
 fn navigation_node_path_helpers_match_unique_paths() {
     let navigation = NavigationNode {
-        text: "mmatrix".to_owned(),
+        text: "mirx".to_owned(),
         has_activity: false,
         children: vec![NavigationNode {
             text: "rooms: 1".to_owned(),
@@ -5963,13 +5963,13 @@ fn navigation_node_path_helpers_match_unique_paths() {
 
     assert_eq!(
         navigation
-            .find_by_exact_text_path(&["mmatrix", "rooms: 1", "Alpha [query: @alice:example]"])
+            .find_by_exact_text_path(&["mirx", "rooms: 1", "Alpha [query: @alice:example]"])
             .map(|node| node.text.as_str()),
         Some("Alpha [query: @alice:example]")
     );
     assert_eq!(
         navigation
-            .find_by_substring_path(&["mmatrix", "rooms", "Alpha [query", "thread"])
+            .find_by_substring_path(&["mirx", "rooms", "Alpha [query", "thread"])
             .map(|node| node.text.as_str()),
         Some("thread root")
     );
@@ -5978,7 +5978,7 @@ fn navigation_node_path_helpers_match_unique_paths() {
 #[test]
 fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
     let navigation = NavigationNode {
-        text: "mmatrix".to_owned(),
+        text: "mirx".to_owned(),
         has_activity: false,
         children: vec![
             NavigationNode {
@@ -6004,7 +6004,7 @@ fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
 
     assert!(
         navigation
-            .find_by_substring_path(&["mmatrix", "Alpha"])
+            .find_by_substring_path(&["mirx", "Alpha"])
             .is_none()
     );
 }
@@ -6012,7 +6012,7 @@ fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
 #[test]
 fn navigation_node_exact_text_path_returns_none_for_ambiguous_matches() {
     let navigation = NavigationNode {
-        text: "mmatrix".to_owned(),
+        text: "mirx".to_owned(),
         has_activity: false,
         children: vec![NavigationNode {
             text: "rooms: 1".to_owned(),
@@ -6034,7 +6034,7 @@ fn navigation_node_exact_text_path_returns_none_for_ambiguous_matches() {
 
     assert!(
         navigation
-            .find_by_exact_text_path(&["mmatrix", "rooms: 1", "Alpha"])
+            .find_by_exact_text_path(&["mirx", "rooms: 1", "Alpha"])
             .is_none()
     );
 }
@@ -6083,7 +6083,7 @@ fn login_args_defaults_device_display_name_when_omitted() {
             homeserver_url: "https://matrix.example".to_owned(),
             username: "@alice:example".to_owned(),
             password: "secret".to_owned(),
-            device_display_name: "mmatrix-ui".to_owned(),
+            device_display_name: "mirx-ui".to_owned(),
         }
     );
 }
@@ -6237,58 +6237,58 @@ fn verification_action_args_reject_unknown_fields() {
 #[cfg(not(windows))]
 #[test]
 fn non_windows_platform_reports_unsupported_driver() {
-    let error = MmatrixApp::find(Duration::from_millis(1)).expect_err("find must fail off Windows");
+    let error = MirxApp::find(Duration::from_millis(1)).expect_err("find must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
-    let error = MmatrixApp::find_by_pid(7, Duration::from_millis(1))
+    let error = MirxApp::find_by_pid(7, Duration::from_millis(1))
         .expect_err("find_by_pid must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
-    let launch_error = MmatrixApp::launch("mmatrix-ui.exe", &[OsString::from("--automation")])
+    let launch_error = MirxApp::launch("mirx-ui.exe", &[OsString::from("--automation")])
         .expect_err("launch must fail off Windows");
     assert_eq!(
         launch_error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
-    let launch_with_options_error = MmatrixApp::launch_with_options(
-        "mmatrix-ui.exe",
+    let launch_with_options_error = MirxApp::launch_with_options(
+        "mirx-ui.exe",
         &[OsString::from("--automation")],
         LaunchOptions {
             startup_timeout: Duration::from_secs(1),
-            local_app_data: Some(PathBuf::from("/var/tmp/mmatrix-testkit")),
+            local_app_data: Some(PathBuf::from("/var/tmp/mirx-testkit")),
             frame_size: None,
         },
     )
     .expect_err("launch_with_options must fail off Windows");
     assert_eq!(
         launch_with_options_error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
-    let app = MmatrixApp::find(Duration::from_millis(1)).expect_err("find must fail off Windows");
+    let app = MirxApp::find(Duration::from_millis(1)).expect_err("find must fail off Windows");
     assert_eq!(
         app.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 }
 
 #[cfg(not(windows))]
 #[test]
 fn non_windows_platform_reports_unsupported_for_new_public_methods() {
-    let app: MmatrixApp = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+    let app: MirxApp = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
 
     let unsupported = |result: Result<(), TestkitError>| {
         let error = result.expect_err("method must fail off Windows");
         assert_eq!(
             error.to_string(),
-            "mmatrix-testkit requires the Windows target"
+            "mirx-testkit requires the Windows target"
         );
     };
 
@@ -6331,14 +6331,14 @@ fn non_windows_platform_reports_unsupported_for_new_public_methods() {
 #[cfg(not(windows))]
 #[test]
 fn non_windows_new_methods_report_unsupported_driver() {
-    let app: MmatrixApp = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
+    let app: MirxApp = unsafe { std::mem::MaybeUninit::zeroed().assume_init() };
 
     let error = app
         .dump_ui_state()
         .expect_err("dump_ui_state must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     for result in [
@@ -6348,7 +6348,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
         let error = result.expect_err("menu state dump must fail off Windows");
         assert_eq!(
             error.to_string(),
-            "mmatrix-testkit requires the Windows target"
+            "mirx-testkit requires the Windows target"
         );
     }
 
@@ -6357,7 +6357,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
         .expect_err("select_view must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
@@ -6365,7 +6365,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
         .expect_err("compose_text must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
@@ -6373,7 +6373,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
         .expect_err("select_status_view must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
@@ -6381,23 +6381,23 @@ fn non_windows_new_methods_report_unsupported_driver() {
         .expect_err("find_active_view must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
-        .select_navigation_path(&[NavigationPathSegment::first("mmatrix")])
+        .select_navigation_path(&[NavigationPathSegment::first("mirx")])
         .expect_err("select_navigation_path must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
-        .select_navigation_labels(&["mmatrix", "status"])
+        .select_navigation_labels(&["mirx", "status"])
         .expect_err("select_navigation_labels must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
@@ -6405,7 +6405,7 @@ fn non_windows_new_methods_report_unsupported_driver() {
         .expect_err("selected_navigation_path must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 
     let error = app
@@ -6413,6 +6413,6 @@ fn non_windows_new_methods_report_unsupported_driver() {
         .expect_err("send_text_target must fail off Windows");
     assert_eq!(
         error.to_string(),
-        "mmatrix-testkit requires the Windows target"
+        "mirx-testkit requires the Windows target"
     );
 }

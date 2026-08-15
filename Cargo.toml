@@ -1,8 +1,8 @@
 [workspace]
 members = [
-    "crates/mmatrix-core",
-    "crates/mmatrix-testkit",
-    "crates/mmatrix-ui",
+    "crates/mirx-core",
+    "crates/mirx-testkit",
+    "crates/mirx-ui",
 ]
 resolver = "2"
 

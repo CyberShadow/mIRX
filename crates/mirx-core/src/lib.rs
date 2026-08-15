@@ -2,7 +2,7 @@ mod api;
 mod matrix;
 mod runtime;
 
-pub const APP_NAME: &str = "mmatrix";
+pub const APP_NAME: &str = "mirx";
 pub const FOUNDATION_PHASE: &str = "bootstrap";
 
 pub use api::{
@@ -45,7 +45,7 @@ pub fn workspace_info() -> WorkspaceInfo {
 }
 
 pub fn ui_self_test_line() -> &'static str {
-    "mmatrix-ui self-test ok"
+    "mirx-ui self-test ok"
 }
 
 #[cfg(test)]
@@ -62,6 +62,6 @@ mod tests {
 
     #[test]
     fn ui_self_test_line_is_stable() {
-        assert_eq!(ui_self_test_line(), "mmatrix-ui self-test ok");
+        assert_eq!(ui_self_test_line(), "mirx-ui self-test ok");
     }
 }

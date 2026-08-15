@@ -1,4 +1,4 @@
-# mmatrix — Vision
+# mirx — Vision
 
 > mIRC, but Matrix instead of IRC.
 
@@ -63,7 +63,7 @@ from scratch.
 - All Matrix/crypto state lives behind an internal **app-service facade**, so SDK
   API churn is contained and the core stays UI-agnostic (and testable, and
   portable later).
-- Matrix SDK timeline, state, and send-queue inputs first enter `mmatrix-core`,
+- Matrix SDK timeline, state, and send-queue inputs first enter `mirx-core`,
   which normalizes them into typed room activity/state events before Win32 stores
   and renders them.
 - Reactions, media, read-state, typing, threads, and verification slices extend
@@ -78,7 +78,7 @@ controllers that activate/maximize the MDI children. Maximizing a child makes it
 fill the client area — that's what produces the "tabbed full-window" feel without
 real tabs.
 
-mmatrix replicates this exactly:
+mirx replicates this exactly:
 
 - **Frame window** — menu, status bar, layout owner.
 - **Treebar** (`SysTreeView32`) — hierarchy: **space → room → thread**. Rooms sort
@@ -167,7 +167,7 @@ Windows. Validated layered approach:
 
 The current vertical slice already covers login, saved-session restore, room
 sync, room listing, typed room activity/state rendering, send, and logout
-through the `mmatrix-core` boundary, with deterministic offline fixtures plus
+through the `mirx-core` boundary, with deterministic offline fixtures plus
 env-gated live automation coverage. The Win32 shell, room/thread activation,
 read-state persistence, token refresh persistence, and session restore path are
 already in place; remaining work is richer UX on top of those slices.
@@ -204,7 +204,7 @@ recovery, key backup) · secure credential storage · token refresh persistence.
 | Packaging | Single static `.exe`, system DLLs only; ZIP if ever needed. |
 | Secret storage | SDK encrypted store plus DPAPI-protected session and store-passphrase persistence. |
 | Min Windows | Windows 10+. |
-| Name | `mmatrix`. |
+| Name | `mirx`. |
 | Dev loop | Cross-compile `windows-gnu` on Linux + Wine; MSVC on a real-Windows lane. |
 
 ## Immediate next step

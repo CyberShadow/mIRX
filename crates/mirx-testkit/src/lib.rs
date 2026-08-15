@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mmatrix_core::{E2eeStatus, RoomMembership};
+use mirx_core::{E2eeStatus, RoomMembership};
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[cfg(windows)]
-const FRAME_CLASS_NAME: &str = "mmatrixWin32Frame";
+const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 #[cfg(windows)]
-const TIMELINE_CLASS_NAME: &str = "mmatrixWin32Timeline";
+const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
 #[cfg(windows)]
 const COMMAND_ID_PING: u32 = 1;
 #[cfg(windows)]
@@ -131,7 +131,7 @@ const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size
 const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
-const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MMATRIX_TESTKIT_CAPTURE_DIR_WIN";
+const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MIRX_TESTKIT_CAPTURE_DIR_WIN";
 #[cfg(windows)]
 const SCREENSHOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(windows)]
@@ -308,7 +308,7 @@ impl fmt::Debug for SetupE2eeRecoveryArgs {
 }
 
 fn default_device_display_name() -> String {
-    "mmatrix-ui".to_owned()
+    "mirx-ui".to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -1432,11 +1432,11 @@ impl From<serde_json::Error> for TestkitError {
 }
 
 #[derive(Debug)]
-pub struct MmatrixApp {
+pub struct MirxApp {
     inner: imp::AppHandle,
 }
 
-impl MmatrixApp {
+impl MirxApp {
     pub fn find(timeout: Duration) -> Result<Self, TestkitError> {
         imp::AppHandle::find(timeout).map(|inner| Self { inner })
     }
@@ -1700,7 +1700,7 @@ impl MmatrixApp {
             homeserver_url: homeserver_url.to_owned(),
             username: username.to_owned(),
             password: password.to_owned(),
-            device_display_name: device_display_name.unwrap_or("mmatrix-ui").to_owned(),
+            device_display_name: device_display_name.unwrap_or("mirx-ui").to_owned(),
         })
     }
 
@@ -2139,13 +2139,13 @@ mod imp {
     impl AppHandle {
         pub(crate) fn find(_timeout: Duration) -> Result<Self, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn find_by_pid(_pid: u32, _timeout: Duration) -> Result<Self, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2155,19 +2155,19 @@ mod imp {
             _options: LaunchOptions,
         ) -> Result<Self, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn ping(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn get_version(&self) -> Result<ProtocolVersion, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2177,19 +2177,19 @@ mod imp {
 
         pub(crate) fn wait_idle(&self, _timeout: Duration) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn dump_model(&self) -> Result<Model, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn dump_ui_state(&self) -> Result<UiState, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2197,40 +2197,40 @@ mod imp {
             &self,
         ) -> Result<VerificationMenuState, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn dump_room_menu_state(&self) -> Result<RoomMenuState, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn dump_message_menu_state(&self) -> Result<MessageMenuState, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn dump_member_menu_state(&self) -> Result<MemberMenuState, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn select_member(&self, _user_id: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn query_selected_member_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn mention_selected_member_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn open_member_context_menu(
@@ -2239,7 +2239,7 @@ mod imp {
             _command: ContextMenuCommand,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn open_selected_member_context_menu(
@@ -2247,73 +2247,73 @@ mod imp {
             _command: ContextMenuCommand,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn select_timeline_event(&self, _event_id: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn accept_invite_via_room_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn reject_invite_via_room_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn join_room_via_room_menu(&self, _target: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn query_user_via_room_menu(&self, _user_id: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn edit_selected_message_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn react_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn redact_selected_message_via_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn save_attachment_via_message_menu(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2323,7 +2323,7 @@ mod imp {
             _command: ContextMenuCommand,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn open_selected_navigation_context_menu(
@@ -2331,7 +2331,7 @@ mod imp {
             _command: ContextMenuCommand,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn open_timeline_context_menu(
@@ -2340,7 +2340,7 @@ mod imp {
             _command: ContextMenuCommand,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
         pub(crate) fn open_selected_timeline_context_menu(
@@ -2348,7 +2348,7 @@ mod imp {
             _command: ContextMenuCommand,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2357,25 +2357,25 @@ mod imp {
             _room_id: Option<&str>,
         ) -> Result<Vec<RoomActivity>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn list_rooms(&self) -> Result<Vec<Room>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn select_room(&self, _room_id: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn select_view(&self, _view: ViewIdentity) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2384,13 +2384,13 @@ mod imp {
             _path: &[NavigationPathSegment],
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn select_navigation_labels(&self, _path: &[&str]) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2398,13 +2398,13 @@ mod imp {
             &self,
         ) -> Result<Vec<NavigationPathSegment>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2413,13 +2413,13 @@ mod imp {
             _query: &str,
         ) -> Result<FindActiveViewResult, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2429,7 +2429,7 @@ mod imp {
             _body: &str,
         ) -> Result<String, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2441,31 +2441,31 @@ mod imp {
             _content_type: Option<&str>,
         ) -> Result<String, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn compose_text(&self) -> Result<String, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn set_compose_text(&self, _text: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn send_compose_key(&self, _key: ComposeKey) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn login(&self, _args: LoginArgs) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2474,31 +2474,31 @@ mod imp {
             _args: RestoreSessionArgs,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn restore_saved_session(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn start_sync(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn logout(&self) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn recover_e2ee(&self, _args: RecoverE2eeArgs) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2507,7 +2507,7 @@ mod imp {
             _args: SetupE2eeRecoveryArgs,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2516,7 +2516,7 @@ mod imp {
             _args: VerificationActionArgs,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2525,7 +2525,7 @@ mod imp {
             _args: VerificationActionArgs,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2534,7 +2534,7 @@ mod imp {
             _args: VerificationActionArgs,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2543,19 +2543,19 @@ mod imp {
             _args: VerificationActionArgs,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn load_events(&self, _events_json: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn load_events_from_file(&self, _path: &Path) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2564,7 +2564,7 @@ mod imp {
             _events_json: &str,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
@@ -2575,13 +2575,13 @@ mod imp {
             _timeout: Duration,
         ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
 
         pub(crate) fn screenshot(&self, _path: &Path) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
-                "mmatrix-testkit requires the Windows target",
+                "mirx-testkit requires the Windows target",
             ))
         }
     }
@@ -2723,7 +2723,7 @@ mod imp {
 
                 if let Some(status) = child.try_wait()? {
                     return Err(TestkitError::Launch(format!(
-                        "mmatrix-ui exited before automation was ready with status {status}"
+                        "mirx-ui exited before automation was ready with status {status}"
                     )));
                 }
 
@@ -2734,9 +2734,9 @@ mod imp {
             let _ = child.wait();
             Err(TestkitError::Timeout(match last_error {
                 Some(error) => {
-                    format!("timed out waiting for launched mmatrix-ui automation window: {error}")
+                    format!("timed out waiting for launched mirx-ui automation window: {error}")
                 }
-                None => "timed out waiting for launched mmatrix-ui automation window".to_owned(),
+                None => "timed out waiting for launched mirx-ui automation window".to_owned(),
             }))
         }
 
@@ -3660,8 +3660,8 @@ mod imp {
 
         if search.hwnd.is_null() || search.mapping.is_null() {
             return Err(TestkitError::Transport(match pid_filter {
-                Some(pid) => format!("no automation-enabled mmatrix window found for pid {pid}"),
-                None => "no automation-enabled mmatrix window found".to_owned(),
+                Some(pid) => format!("no automation-enabled mirx window found for pid {pid}"),
+                None => "no automation-enabled mirx window found".to_owned(),
             }));
         }
 
@@ -3733,7 +3733,7 @@ mod imp {
 
     fn response_mapping_name(pid: u32, hwnd: HWND) -> String {
         format!(
-            "Local\\mmatrix-ui-automation-response-{pid}-{:x}",
+            "Local\\mirx-ui-automation-response-{pid}-{:x}",
             hwnd as usize
         )
     }

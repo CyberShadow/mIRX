@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mmatrix_core::{
+use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
@@ -684,7 +684,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
             homeserver_url: "https://example.invalid".to_owned(),
             username: "user".to_owned(),
             password: "password".to_owned(),
-            device_display_name: "mmatrix runtime test".to_owned(),
+            device_display_name: "mirx runtime test".to_owned(),
         }))
         .expect("send login");
 

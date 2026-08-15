@@ -102,8 +102,8 @@ start_xvfb_explicit() {
 }
 
 ensure_xvfb() {
-  if [[ -n "${MMATRIX_WINE_DISPLAY:-}" ]]; then
-    start_xvfb_explicit "$MMATRIX_WINE_DISPLAY"
+  if [[ -n "${MIRX_WINE_DISPLAY:-}" ]]; then
+    start_xvfb_explicit "$MIRX_WINE_DISPLAY"
   else
     start_xvfb_auto
   fi
@@ -124,8 +124,8 @@ ensure_wineprefix() {
 resolve_binaries() {
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$tmpdir/cargo-target}"
   target_dir="$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/debug"
-  ui_exe="$target_dir/mmatrix-ui.exe"
-  driver_exe="$target_dir/mmatrix-snapshot-driver.exe"
+  ui_exe="$target_dir/mirx-ui.exe"
+  driver_exe="$target_dir/mirx-snapshot-driver.exe"
 }
 
 unix_to_wine_path() {
@@ -155,9 +155,9 @@ cleanup() {
 }
 
 ensure_binaries() {
-  cargo clean --target x86_64-pc-windows-gnu -p mmatrix-ui -p mmatrix-testkit
-  cargo build --target x86_64-pc-windows-gnu -p mmatrix-ui
-  cargo build --target x86_64-pc-windows-gnu -p mmatrix-testkit --bin mmatrix-snapshot-driver
+  cargo clean --target x86_64-pc-windows-gnu -p mirx-ui -p mirx-testkit
+  cargo build --target x86_64-pc-windows-gnu -p mirx-ui
+  cargo build --target x86_64-pc-windows-gnu -p mirx-testkit --bin mirx-snapshot-driver
 }
 
 is_default_snapshot_case() {
@@ -2459,7 +2459,7 @@ main() {
 
   [[ -d "$states_dir" ]] || die "missing states directory: $states_dir"
 
-  tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mmatrix-ui-snapshot.XXXXXX")
+  tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mirx-ui-snapshot.XXXXXX")
   generated_dir="$tmpdir/generated-ui-snapshots"
   diff_dir="$tmpdir/ui-snapshot-diffs"
   keep_tmpdir=0

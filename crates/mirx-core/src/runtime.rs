@@ -70,7 +70,7 @@ pub struct SendCommandError;
 
 impl Display for SendCommandError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_str("mmatrix-core command channel is closed")
+        f.write_str("mirx-core command channel is closed")
     }
 }
 
@@ -86,11 +86,11 @@ pub enum StartError {
 impl Display for StartError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ThreadSpawn(err) => write!(f, "failed to spawn mmatrix-core thread: {err}"),
+            Self::ThreadSpawn(err) => write!(f, "failed to spawn mirx-core thread: {err}"),
             Self::RuntimeInitialization(message) => {
-                write!(f, "failed to initialize mmatrix-core runtime: {message}")
+                write!(f, "failed to initialize mirx-core runtime: {message}")
             }
-            Self::WorkerStopped => f.write_str("mmatrix-core worker stopped during startup"),
+            Self::WorkerStopped => f.write_str("mirx-core worker stopped during startup"),
         }
     }
 }
@@ -125,7 +125,7 @@ pub fn start(config: CoreConfig) -> Result<CoreHandle, StartError> {
     let (startup_tx, startup_rx) = mpsc::channel();
 
     let worker = thread::Builder::new()
-        .name("mmatrix-core".to_owned())
+        .name("mirx-core".to_owned())
         .spawn(move || {
             let runtime = match Builder::new_current_thread().enable_all().build() {
                 Ok(runtime) => runtime,
@@ -1338,7 +1338,7 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut state = ready_state(client);
         let config = CoreConfig {
-            profile_dir: std::env::temp_dir().join("mmatrix-core-runtime-test"),
+            profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         assert!(!handle_command(command, &config, &event_tx, &mut state).await);
@@ -1430,7 +1430,7 @@ mod tests {
         let (event_tx, event_rx) = mpsc::channel::<Event>();
         let mut state = ready_state(client);
         let config = CoreConfig {
-            profile_dir: std::env::temp_dir().join("mmatrix-core-runtime-test"),
+            profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
             store_passphrase: "test-store-passphrase".to_owned(),
         };
         assert!(!handle_command(command, &config, &event_tx, &mut state).await);
@@ -1737,7 +1737,7 @@ mod tests {
             let (command_tx, command_rx) = unbounded_channel();
             let (event_tx, event_rx) = mpsc::channel::<Event>();
             let config = CoreConfig {
-                profile_dir: std::env::temp_dir().join("mmatrix-core-runtime-test"),
+                profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
                 store_passphrase: "test-store-passphrase".to_owned(),
             };
 

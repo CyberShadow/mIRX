@@ -29,14 +29,14 @@ ensure_wineprefix() {
 
 cd "$root_dir"
 
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mmatrix-wine-smoke.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/mirx-wine-smoke.XXXXXX")
 trap cleanup EXIT
 
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
   export CARGO_TARGET_DIR="$tmpdir/cargo-target"
 fi
 
-exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mmatrix-ui.exe"}
+exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mirx-ui.exe"}
 
 ensure_wineprefix
 

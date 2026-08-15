@@ -1,6 +1,6 @@
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("mmatrix-snapshot-driver requires the Windows target");
+    eprintln!("mirx-snapshot-driver requires the Windows target");
     std::process::exit(1);
 }
 
@@ -8,8 +8,8 @@ fn main() {
 mod cli {
     use std::time::Duration;
 
-    use mmatrix_core::RoomMembership;
-    use mmatrix_testkit::ViewIdentity;
+    use mirx_core::RoomMembership;
+    use mirx_testkit::ViewIdentity;
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
     const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
@@ -475,7 +475,7 @@ mod cli {
 
     pub(crate) fn usage() -> String {
         [
-            "usage: mmatrix-snapshot-driver [options]",
+            "usage: mirx-snapshot-driver [options]",
             "  --find-timeout-ms <ms>",
             "  --wait-idle-ms <ms>",
             "  --select-view <identity> (repeatable)",
@@ -712,8 +712,8 @@ mod cli {
             RoomUnreadExpectation, ViewExpectation, format_view_identity, parse_args,
             parse_view_expectation, parse_view_identity_arg, usage,
         };
-        use mmatrix_core::RoomMembership;
-        use mmatrix_testkit::ViewIdentity;
+        use mirx_core::RoomMembership;
+        use mirx_testkit::ViewIdentity;
         use std::time::Duration;
 
         #[test]
@@ -1463,9 +1463,9 @@ mod cli {
 
 #[cfg(any(windows, test))]
 fn find_navigation_node_by_path_or_label<'a>(
-    root: &'a mmatrix_testkit::NavigationNode,
+    root: &'a mirx_testkit::NavigationNode,
     path_or_label: &str,
-) -> Option<&'a mmatrix_testkit::NavigationNode> {
+) -> Option<&'a mirx_testkit::NavigationNode> {
     let path = path_or_label
         .split('/')
         .filter(|segment| !segment.is_empty())
@@ -1484,9 +1484,9 @@ fn find_navigation_node_by_path_or_label<'a>(
 
 #[cfg(any(windows, test))]
 fn find_unique_navigation_substring_match<'a>(
-    node: &'a mmatrix_testkit::NavigationNode,
+    node: &'a mirx_testkit::NavigationNode,
     substring: &str,
-) -> Option<&'a mmatrix_testkit::NavigationNode> {
+) -> Option<&'a mirx_testkit::NavigationNode> {
     let mut matches = Vec::new();
     collect_navigation_substring_matches(node, substring, &mut matches);
     if matches.len() == 1 {
@@ -1498,9 +1498,9 @@ fn find_unique_navigation_substring_match<'a>(
 
 #[cfg(any(windows, test))]
 fn collect_navigation_substring_matches<'a>(
-    node: &'a mmatrix_testkit::NavigationNode,
+    node: &'a mirx_testkit::NavigationNode,
     substring: &str,
-    matches: &mut Vec<&'a mmatrix_testkit::NavigationNode>,
+    matches: &mut Vec<&'a mirx_testkit::NavigationNode>,
 ) {
     if node.text.contains(substring) {
         matches.push(node);
@@ -1512,10 +1512,10 @@ fn collect_navigation_substring_matches<'a>(
 
 #[cfg(any(windows, test))]
 fn find_unique_navigation_path_match<'a, F>(
-    root: &'a mmatrix_testkit::NavigationNode,
+    root: &'a mirx_testkit::NavigationNode,
     path: &[&str],
     segment_matches: F,
-) -> Option<&'a mmatrix_testkit::NavigationNode>
+) -> Option<&'a mirx_testkit::NavigationNode>
 where
     F: Copy + Fn(&str, &str) -> bool,
 {
@@ -1530,10 +1530,10 @@ where
 
 #[cfg(any(windows, test))]
 fn collect_navigation_path_matches<'a, F>(
-    node: &'a mmatrix_testkit::NavigationNode,
+    node: &'a mirx_testkit::NavigationNode,
     path: &[&str],
     segment_matches: F,
-    matches: &mut Vec<&'a mmatrix_testkit::NavigationNode>,
+    matches: &mut Vec<&'a mirx_testkit::NavigationNode>,
 ) where
     F: Copy + Fn(&str, &str) -> bool,
 {
@@ -1556,9 +1556,9 @@ fn collect_navigation_path_matches<'a, F>(
 
 #[cfg(any(windows, test))]
 fn assert_room_membership(
-    rooms: &[mmatrix_testkit::Room],
+    rooms: &[mirx_testkit::Room],
     room_id: &str,
-    expected_membership: mmatrix_core::RoomMembership,
+    expected_membership: mirx_core::RoomMembership,
 ) -> Result<(), String> {
     let room = rooms
         .iter()
@@ -1575,7 +1575,7 @@ fn assert_room_membership(
 }
 
 #[cfg(any(windows, test))]
-fn assert_no_room(rooms: &[mmatrix_testkit::Room], room_id: &str) -> Result<(), String> {
+fn assert_no_room(rooms: &[mirx_testkit::Room], room_id: &str) -> Result<(), String> {
     if rooms.iter().any(|room| room.room_id == room_id) {
         return Err(format!(
             "room absence assertion failed: unexpected room {room_id}"
@@ -1585,17 +1585,17 @@ fn assert_no_room(rooms: &[mmatrix_testkit::Room], room_id: &str) -> Result<(), 
 }
 
 #[cfg(any(windows, test))]
-fn format_room_membership(membership: &mmatrix_core::RoomMembership) -> &'static str {
+fn format_room_membership(membership: &mirx_core::RoomMembership) -> &'static str {
     match membership {
-        mmatrix_core::RoomMembership::Join => "join",
-        mmatrix_core::RoomMembership::Invite => "invite",
+        mirx_core::RoomMembership::Join => "join",
+        mirx_core::RoomMembership::Invite => "invite",
     }
 }
 
 #[cfg(test)]
 mod navigation_lookup_tests {
     use super::find_navigation_node_by_path_or_label;
-    use mmatrix_testkit::NavigationNode;
+    use mirx_testkit::NavigationNode;
 
     fn nav(text: &str, has_activity: bool, children: Vec<NavigationNode>) -> NavigationNode {
         NavigationNode {
@@ -1607,7 +1607,7 @@ mod navigation_lookup_tests {
 
     fn sample_navigation() -> NavigationNode {
         nav(
-            "mmatrix",
+            "mirx",
             false,
             vec![
                 nav("status", false, vec![]),
@@ -1648,7 +1648,7 @@ mod navigation_lookup_tests {
     #[test]
     fn navigation_lookup_rejects_ambiguous_bare_label() {
         let navigation = nav(
-            "mmatrix",
+            "mirx",
             false,
             vec![nav("Beta", true, vec![]), nav("Beta thread", true, vec![])],
         );
@@ -1660,8 +1660,8 @@ mod navigation_lookup_tests {
 #[cfg(test)]
 mod room_assertion_tests {
     use super::{assert_no_room, assert_room_membership};
-    use mmatrix_core::RoomMembership;
-    use mmatrix_testkit::Room;
+    use mirx_core::RoomMembership;
+    use mirx_testkit::Room;
 
     fn room(room_id: &str, membership: RoomMembership) -> Room {
         Room {
@@ -1730,8 +1730,8 @@ mod windows_main {
     use std::fs;
     use std::process::ExitCode;
 
-    use mmatrix_testkit::{
-        MdiView, MmatrixApp, NavigationNode, RoomActivity, UiFindHistorySearchState, UiState,
+    use mirx_testkit::{
+        MdiView, MirxApp, NavigationNode, RoomActivity, UiFindHistorySearchState, UiState,
         Verification, VerificationState, ViewIdentity,
     };
 
@@ -1778,8 +1778,8 @@ mod windows_main {
 
     pub(crate) fn run() -> Result<(), String> {
         let config = parse_args(env::args().skip(1))?;
-        let app = MmatrixApp::find(config.find_timeout).map_err(|error| {
-            format!("failed to attach to mmatrix-ui automation window: {error}")
+        let app = MirxApp::find(config.find_timeout).map_err(|error| {
+            format!("failed to attach to mirx-ui automation window: {error}")
         })?;
         app.wait_idle(config.wait_idle)
             .map_err(|error| format!("WAIT_IDLE failed: {error}"))?;
@@ -2438,7 +2438,7 @@ mod windows_main {
     fn find_room_state<'a>(
         ui_state: &'a UiState,
         room_id: &str,
-    ) -> Option<&'a mmatrix_testkit::UiRoomState> {
+    ) -> Option<&'a mirx_testkit::UiRoomState> {
         ui_state.rooms.iter().find(|room| room.room_id == room_id)
     }
 

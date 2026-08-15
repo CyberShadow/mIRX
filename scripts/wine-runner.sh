@@ -107,8 +107,8 @@ ensure_xvfb() {
     return 0
   fi
 
-  if [[ -n "${MMATRIX_WINE_DISPLAY:-}" ]]; then
-    start_xvfb_explicit "$MMATRIX_WINE_DISPLAY"
+  if [[ -n "${MIRX_WINE_DISPLAY:-}" ]]; then
+    start_xvfb_explicit "$MIRX_WINE_DISPLAY"
   else
     start_xvfb_auto
   fi
@@ -122,7 +122,7 @@ ensure_wineprefix() {
 
   if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
     local prefix_lock_name=${WINEPREFIX//\//_}
-    local prefix_lock_file="${TMPDIR:-/var/tmp}/mmatrix-wineprefix-init${prefix_lock_name}.lock"
+    local prefix_lock_file="${TMPDIR:-/var/tmp}/mirx-wineprefix-init${prefix_lock_name}.lock"
     exec 8>"$prefix_lock_file"
     flock 8
     mkdir -p "$WINEPREFIX"
@@ -203,9 +203,9 @@ host_capture_helper() {
 start_host_capture_helper() {
   local capture_dir_unix
   capture_dir_unix=$(mktemp -d "$runner_tmpdir/host-capture.XXXXXX")
-  export MMATRIX_TESTKIT_CAPTURE_DIR_UNIX=$capture_dir_unix
-  export MMATRIX_TESTKIT_CAPTURE_DIR_WIN
-  MMATRIX_TESTKIT_CAPTURE_DIR_WIN=$(unix_to_wine_path "$capture_dir_unix")
+  export MIRX_TESTKIT_CAPTURE_DIR_UNIX=$capture_dir_unix
+  export MIRX_TESTKIT_CAPTURE_DIR_WIN
+  MIRX_TESTKIT_CAPTURE_DIR_WIN=$(unix_to_wine_path "$capture_dir_unix")
 
   host_capture_helper "$capture_dir_unix" >"$runner_tmpdir/host-capture-helper.log" 2>&1 &
   helper_pid=$!
@@ -243,7 +243,7 @@ main() {
   require_command timeout
   require_command flock
 
-  runner_tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mmatrix-wine-runner.${runner_pid}.XXXXXX")
+  runner_tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mirx-wine-runner.${runner_pid}.XXXXXX")
   trap cleanup EXIT
   ensure_xvfb
   ensure_wineprefix

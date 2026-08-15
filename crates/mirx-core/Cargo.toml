@@ -1,5 +1,5 @@
 [package]
-name = "mmatrix-core"
+name = "mirx-core"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

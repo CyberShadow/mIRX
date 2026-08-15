@@ -17,10 +17,10 @@ use non_windows as platform;
 #[cfg(windows)]
 use win32 as platform;
 
-const USAGE: &str = "usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]";
+const USAGE: &str = "usage: mirx-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT] | [--self-test|--auto-close|--help]";
 const HELP: &str = "\
-usage: mmatrix-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT]
-       mmatrix-ui [--self-test|--auto-close|--help]
+usage: mirx-ui [--automation] [--render-state <file.json>] [--frame-size WIDTHxHEIGHT]
+       mirx-ui [--self-test|--auto-close|--help]
   --automation                enable automation control surface
   --render-state <file.json>  load render-state events at startup
   --frame-size WIDTHxHEIGHT   create the frame at an explicit launch size

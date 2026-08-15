@@ -6,11 +6,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{Event, RoomMembership, RoomReadState, RoomSummary, SpaceChildSummary};
-use mmatrix_testkit::{LaunchOptions, MmatrixApp, NavigationPathSegment};
+use mirx_core::{Event, RoomMembership, RoomReadState, RoomSummary, SpaceChildSummary};
+use mirx_testkit::{LaunchOptions, MirxApp, NavigationPathSegment};
 
-fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
+fn mirx_ui_exe_path() -> Result<PathBuf, String> {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_mirx-ui") {
         return Ok(PathBuf::from(path));
     }
 
@@ -21,12 +21,12 @@ fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
             current_exe.display()
         )
     })?;
-    let candidate = profile_dir.join("mmatrix-ui.exe");
+    let candidate = profile_dir.join("mirx-ui.exe");
     if candidate.is_file() {
         Ok(candidate)
     } else {
         Err(format!(
-            "mmatrix-ui.exe was not found; checked CARGO_BIN_EXE_mmatrix-ui and {}",
+            "mirx-ui.exe was not found; checked CARGO_BIN_EXE_mirx-ui and {}",
             candidate.display()
         ))
     }
@@ -37,7 +37,7 @@ fn unique_state_path() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock must be after unix epoch")
         .as_nanos();
-    env::temp_dir().join(format!("mmatrix-ui-verify-duplicate-labels-{unique}.json"))
+    env::temp_dir().join(format!("mirx-ui-verify-duplicate-labels-{unique}.json"))
 }
 
 fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -86,8 +86,8 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
 #[test]
 fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -105,7 +105,7 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(
+    let app = MirxApp::launch_with_options(
         &exe_path,
         &args,
         LaunchOptions {
@@ -121,7 +121,7 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
     assert_eq!(
         path,
         vec![
-            NavigationPathSegment::first("mmatrix"),
+            NavigationPathSegment::first("mirx"),
             NavigationPathSegment::first("rooms: 2"),
             NavigationPathSegment::first("Space"),
             NavigationPathSegment {
@@ -145,8 +145,8 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
 #[test]
 fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -182,7 +182,7 @@ fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
         OsString::from("--render-state"),
         state_path.as_os_str().to_os_string(),
     ];
-    let app = MmatrixApp::launch_with_options(
+    let app = MirxApp::launch_with_options(
         &exe_path,
         &args,
         LaunchOptions {
@@ -198,7 +198,7 @@ fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
     assert_eq!(
         path,
         vec![
-            NavigationPathSegment::first("mmatrix"),
+            NavigationPathSegment::first("mirx"),
             NavigationPathSegment::first("rooms: 2"),
             NavigationPathSegment::first("Space"),
             NavigationPathSegment {

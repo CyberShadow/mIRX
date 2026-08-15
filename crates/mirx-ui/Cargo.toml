@@ -1,20 +1,20 @@
 [package]
-name = "mmatrix-ui"
+name = "mirx-ui"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [[bin]]
-name = "mmatrix-ui"
+name = "mirx-ui"
 path = "src/main.rs"
 
 [dependencies]
-mmatrix-core = { path = "../mmatrix-core" }
+mirx-core = { path = "../mirx-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
-mmatrix-testkit = { path = "../mmatrix-testkit" }
+mirx-testkit = { path = "../mirx-testkit" }
 
 [target.'cfg(windows)'.dependencies]
 tokio = { version = "1", features = ["sync"] }

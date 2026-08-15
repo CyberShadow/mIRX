@@ -16,7 +16,7 @@ use matrix_sdk::{
         },
     },
 };
-use mmatrix_core::{
+use mirx_core::{
     Command, CoreConfig, CoreHandle, CreateDirectRoomRequest, EditMessageRequest, Event,
     FetchRoomMediaRequest, LoginRequest, MarkRoomReadRequest, RedactEventRequest, RoomMediaFormat,
     RoomMediaKind, RoomMediaSource, RoomMessagePresentationKind, RoomSummary, SendFileRequest,
@@ -40,10 +40,10 @@ struct LiveMatrixEnv {
 
 fn live_matrix_env_with_room() -> Option<LiveMatrixEnv> {
     Some(LiveMatrixEnv {
-        homeserver_url: required_env("MMATRIX_HS")?,
-        username: required_env("MMATRIX_USER")?,
-        password: required_env("MMATRIX_PASS")?,
-        room_id: required_env("MMATRIX_ROOM")?,
+        homeserver_url: required_env("MIRX_HS")?,
+        username: required_env("MIRX_USER")?,
+        password: required_env("MIRX_PASS")?,
+        room_id: required_env("MIRX_ROOM")?,
     })
 }
 
@@ -307,7 +307,7 @@ async fn live_fixture_client_from_env_values(
     client
         .matrix_auth()
         .login_username(user, pass)
-        .initial_device_display_name("mmatrix live fixture")
+        .initial_device_display_name("mirx live fixture")
         .send()
         .await?;
     Ok(client)
@@ -315,11 +315,11 @@ async fn live_fixture_client_from_env_values(
 
 async fn live_room_from_env_value(client: &Client, room_id: &str) -> matrix_sdk::Result<Room> {
     let room_id =
-        <&RoomId>::try_from(room_id).expect("MMATRIX_ROOM must be a valid Matrix room id");
+        <&RoomId>::try_from(room_id).expect("MIRX_ROOM must be a valid Matrix room id");
     client.sync_once(SyncSettings::default()).await?;
     Ok(client
         .get_room(room_id)
-        .expect("MMATRIX_ROOM must be visible to the fixture client after sync"))
+        .expect("MIRX_ROOM must be visible to the fixture client after sync"))
 }
 
 async fn live_direct_text_message_event_id(
@@ -437,16 +437,16 @@ fn has_direct_room_for_user(rooms: &[RoomSummary], user_id: &str) -> bool {
 
 #[test]
 fn live_matrix_login_and_shutdown_is_env_gated() {
-    let Some(homeserver_url) = required_env("MMATRIX_HS") else {
+    let Some(homeserver_url) = required_env("MIRX_HS") else {
         return;
     };
-    let Some(username) = required_env("MMATRIX_USER") else {
+    let Some(username) = required_env("MIRX_USER") else {
         return;
     };
-    let Some(password) = required_env("MMATRIX_PASS") else {
+    let Some(password) = required_env("MIRX_PASS") else {
         return;
     };
-    let room_id = required_env("MMATRIX_ROOM");
+    let room_id = required_env("MIRX_ROOM");
 
     let (_temp_dir, handle) = live_start_core();
     live_send_login(
@@ -454,7 +454,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
         homeserver_url,
         username,
         password,
-        "mmatrix live test",
+        "mirx live test",
     );
     wait_for_live_login_and_synced_rooms(&handle);
 
@@ -508,7 +508,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             .recv_timeout(Duration::from_secs(2))
             .expect("duplicate start sync event")
         {
-            Event::Error(err) if err.operation == mmatrix_core::Operation::StartSync => {
+            Event::Error(err) if err.operation == mirx_core::Operation::StartSync => {
                 assert_eq!(err.message, "continuous sync is already running");
                 saw_duplicate_sync_error = true;
                 break;
@@ -539,7 +539,7 @@ fn live_matrix_login_and_shutdown_is_env_gated() {
             .send(Command::SendMessage(SendMessageRequest {
                 room_id,
                 presentation: RoomMessagePresentationKind::Text,
-                body: format!("mmatrix live test {nonce}"),
+                body: format!("mirx live test {nonce}"),
                 thread: None,
                 reply: None,
             }))
@@ -572,7 +572,7 @@ fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
         env.homeserver_url.clone(),
         env.username.clone(),
         env.password.clone(),
-        "mmatrix live read marker test",
+        "mirx live read marker test",
     );
     wait_for_live_login_and_synced_rooms(&handle);
 
@@ -585,11 +585,11 @@ fn live_matrix_mark_room_read_updates_fully_read_marker_is_env_gated() {
         .expect("create fixture client");
     let room = runtime
         .block_on(live_room_from_env_value(&fixture_client, &env.room_id))
-        .expect("resolve MMATRIX_ROOM into a joined room");
+        .expect("resolve MIRX_ROOM into a joined room");
     let event_id = runtime
         .block_on(live_direct_text_message_event_id(
             &room,
-            format!("mmatrix live read marker test {}", live_nonce()),
+            format!("mirx live read marker test {}", live_nonce()),
         ))
         .expect("send fixture direct text message");
 
@@ -627,11 +627,11 @@ fn live_matrix_set_room_topic_refreshes_synced_room_summary_is_env_gated() {
         env.homeserver_url,
         env.username,
         env.password,
-        "mmatrix live topic refresh test",
+        "mirx live topic refresh test",
     );
     wait_for_live_login_and_synced_rooms(&handle);
 
-    let topic = format!("mmatrix live topic refresh {}", live_nonce());
+    let topic = format!("mirx live topic refresh {}", live_nonce());
     handle
         .command_sender()
         .send(Command::SetRoomTopic(SetRoomTopicRequest {
@@ -659,7 +659,7 @@ fn live_matrix_message_actions_round_trip_is_env_gated() {
         env.homeserver_url.clone(),
         env.username.clone(),
         env.password.clone(),
-        "mmatrix live message actions test",
+        "mirx live message actions test",
     );
     wait_for_live_login_and_synced_rooms(&handle);
 
@@ -672,13 +672,13 @@ fn live_matrix_message_actions_round_trip_is_env_gated() {
         .expect("create fixture client");
     let room = runtime
         .block_on(live_room_from_env_value(&fixture_client, &env.room_id))
-        .expect("resolve MMATRIX_ROOM into a joined room");
+        .expect("resolve MIRX_ROOM into a joined room");
     let nonce = live_nonce();
 
     let reaction_target = runtime
         .block_on(live_direct_text_message_event_id(
             &room,
-            format!("mmatrix live reaction target {nonce}"),
+            format!("mirx live reaction target {nonce}"),
         ))
         .expect("send reaction target");
     let reaction_key = "+1".to_owned();
@@ -705,10 +705,10 @@ fn live_matrix_message_actions_round_trip_is_env_gated() {
     let edit_target = runtime
         .block_on(live_direct_text_message_event_id(
             &room,
-            format!("mmatrix live edit target {nonce}"),
+            format!("mirx live edit target {nonce}"),
         ))
         .expect("send edit target");
-    let edited_body = format!("mmatrix live edited body {nonce}");
+    let edited_body = format!("mirx live edited body {nonce}");
     handle
         .command_sender()
         .send(Command::EditMessage(EditMessageRequest {
@@ -734,7 +734,7 @@ fn live_matrix_message_actions_round_trip_is_env_gated() {
     let redaction_target = runtime
         .block_on(live_direct_text_message_event_id(
             &room,
-            format!("mmatrix live redaction target {nonce}"),
+            format!("mirx live redaction target {nonce}"),
         ))
         .expect("send redaction target");
     handle
@@ -774,7 +774,7 @@ fn live_matrix_file_send_and_fetch_media_round_trip_is_env_gated() {
         env.homeserver_url.clone(),
         env.username.clone(),
         env.password.clone(),
-        "mmatrix live file media test",
+        "mirx live file media test",
     );
     wait_for_live_login_and_synced_rooms(&handle);
 
@@ -787,10 +787,10 @@ fn live_matrix_file_send_and_fetch_media_round_trip_is_env_gated() {
         .expect("create fixture client");
     let room = runtime
         .block_on(live_room_from_env_value(&fixture_client, &env.room_id))
-        .expect("resolve MMATRIX_ROOM into a joined room");
+        .expect("resolve MIRX_ROOM into a joined room");
     let nonce = live_nonce();
-    let filename = format!("mmatrix-live-{nonce}.txt");
-    let payload = format!("mmatrix live media test {nonce}\n").into_bytes();
+    let filename = format!("mirx-live-{nonce}.txt");
+    let payload = format!("mirx live media test {nonce}\n").into_bytes();
     let path = temp_dir.path().join(&filename);
     fs::write(&path, &payload).expect("write live test file");
 
@@ -847,27 +847,27 @@ fn live_matrix_file_send_and_fetch_media_round_trip_is_env_gated() {
 #[test]
 fn live_matrix_create_direct_room_metadata_timing_is_env_gated()
 -> Result<(), Box<dyn Error + Send + Sync>> {
-    let Some(homeserver_url) = required_env("MMATRIX_HS") else {
+    let Some(homeserver_url) = required_env("MIRX_HS") else {
         eprintln!(
-            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_HS is not set"
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MIRX_HS is not set"
         );
         return Ok(());
     };
-    let Some(username) = required_env("MMATRIX_USER") else {
+    let Some(username) = required_env("MIRX_USER") else {
         eprintln!(
-            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_USER is not set"
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MIRX_USER is not set"
         );
         return Ok(());
     };
-    let Some(password) = required_env("MMATRIX_PASS") else {
+    let Some(password) = required_env("MIRX_PASS") else {
         eprintln!(
-            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_PASS is not set"
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MIRX_PASS is not set"
         );
         return Ok(());
     };
-    let Some(target) = required_env("MMATRIX_DM_TARGET") else {
+    let Some(target) = required_env("MIRX_DM_TARGET") else {
         eprintln!(
-            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MMATRIX_DM_TARGET is not set"
+            "skipping live_matrix_create_direct_room_metadata_timing_is_env_gated: MIRX_DM_TARGET is not set"
         );
         return Ok(());
     };
@@ -878,7 +878,7 @@ fn live_matrix_create_direct_room_metadata_timing_is_env_gated()
         homeserver_url,
         username,
         password,
-        "mmatrix live direct room test",
+        "mirx live direct room test",
     );
     wait_for_live_login_and_synced_rooms(&handle);
 

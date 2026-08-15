@@ -2208,7 +2208,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mmatrix-core"
+name = "mirx-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -2225,21 +2225,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "mmatrix-testkit"
+name = "mirx-testkit"
 version = "0.1.0"
 dependencies = [
- "mmatrix-core",
+ "mirx-core",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
-name = "mmatrix-ui"
+name = "mirx-ui"
 version = "0.1.0"
 dependencies = [
- "mmatrix-core",
- "mmatrix-testkit",
+ "mirx-core",
+ "mirx-testkit",
  "serde",
  "serde_json",
  "tokio",

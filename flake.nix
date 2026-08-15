@@ -1,5 +1,5 @@
 {
-  description = "mmatrix bootstrap dev shell";
+  description = "mirx bootstrap dev shell";
 
   inputs.nixpkgs.url = "nixpkgs";
 
@@ -33,9 +33,9 @@
         ];
 
         shellHook = ''
-          export MMATRIX_ROOT="$PWD"
-          export RUSTUP_HOME="$MMATRIX_ROOT/.rustup"
-          export CARGO_HOME="$MMATRIX_ROOT/.cargo-home"
+          export MIRX_ROOT="$PWD"
+          export RUSTUP_HOME="$MIRX_ROOT/.rustup"
+          export CARGO_HOME="$MIRX_ROOT/.cargo-home"
           export PATH="$CARGO_HOME/bin:$PATH"
 
           mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"
@@ -48,8 +48,8 @@
           export CXXFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           export WINEDLLOVERRIDES="mscoree,mshtml="
 
-          ln -sfn "$PTHREADS" "$MMATRIX_ROOT/.nix-pthreads"
-          ln -sfn "$MCFGTHREADS" "$MMATRIX_ROOT/.nix-mcfgthreads"
+          ln -sfn "$PTHREADS" "$MIRX_ROOT/.nix-pthreads"
+          ln -sfn "$MCFGTHREADS" "$MIRX_ROOT/.nix-mcfgthreads"
 
           bootstrap_lock="$CARGO_HOME/.bootstrap.lock"
           (

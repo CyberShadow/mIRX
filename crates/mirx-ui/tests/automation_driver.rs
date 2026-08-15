@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mmatrix_core::{
+use mirx_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
     RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
@@ -26,9 +26,9 @@ use mmatrix_core::{
     VerificationEmoji as CoreVerificationEmoji, VerificationState as CoreVerificationState,
     VerificationStateEvent as CoreVerificationStateEvent,
 };
-use mmatrix_testkit::{
+use mirx_testkit::{
     ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
-    LaunchOptions, MdiView, MemberModerationAction, MembershipCommandAction, MmatrixApp, Model,
+    LaunchOptions, MdiView, MemberModerationAction, MembershipCommandAction, MirxApp, Model,
     NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
@@ -64,8 +64,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[path = "../src/dpapi.rs"]
 mod dpapi;
 
-const PROTECTED_SESSION_MAGIC: &[u8] = b"mmatrix-ui-session:v1\0";
-const SESSION_DPAPI_ENTROPY: &[u8] = b"mmatrix-ui/session/v1";
+const PROTECTED_SESSION_MAGIC: &[u8] = b"mirx-ui-session:v1\0";
+const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";
 const CF_UNICODETEXT: u32 = 13;
 const EDIT_ID: i32 = 1003;
 const MDI_ID: i32 = 1002;
@@ -89,8 +89,8 @@ const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_mmatrix-ui") {
+fn mirx_ui_exe_path() -> Result<PathBuf, String> {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_mirx-ui") {
         return Ok(PathBuf::from(path));
     }
 
@@ -102,12 +102,12 @@ fn mmatrix_ui_exe_path() -> Result<PathBuf, String> {
             current_exe.display()
         )
     })?;
-    let candidate = profile_dir.join("mmatrix-ui.exe");
+    let candidate = profile_dir.join("mirx-ui.exe");
     if candidate.is_file() {
         Ok(candidate)
     } else {
         Err(format!(
-            "mmatrix-ui.exe was not found; checked CARGO_BIN_EXE_mmatrix-ui and {}",
+            "mirx-ui.exe was not found; checked CARGO_BIN_EXE_mirx-ui and {}",
             candidate.display()
         ))
     }
@@ -127,20 +127,20 @@ fn unique_temp_path(prefix: &str, extension: Option<&str>) -> PathBuf {
 }
 
 fn unique_state_path() -> PathBuf {
-    unique_temp_path("mmatrix-ui-automation-driver", Some("json"))
+    unique_temp_path("mirx-ui-automation-driver", Some("json"))
 }
 
 fn unique_screenshot_path() -> PathBuf {
-    unique_temp_path("mmatrix-ui-automation-driver", Some("png"))
+    unique_temp_path("mirx-ui-automation-driver", Some("png"))
 }
 
 fn unique_local_app_data_path() -> PathBuf {
-    unique_temp_path("mmatrix-ui-local-app-data", None)
+    unique_temp_path("mirx-ui-local-app-data", None)
 }
 
 fn session_file_path(local_app_data: &Path) -> PathBuf {
     local_app_data
-        .join("mmatrix")
+        .join("mirx")
         .join("ui-shell")
         .join("session.json")
 }
@@ -154,12 +154,12 @@ fn launch_options(local_app_data: Option<PathBuf>) -> LaunchOptions {
 }
 
 struct GuiTestApp {
-    app: MmatrixApp,
+    app: MirxApp,
     _gui_test_guard: MutexGuard<'static, ()>,
 }
 
 impl Deref for GuiTestApp {
-    type Target = MmatrixApp;
+    type Target = MirxApp;
 
     fn deref(&self) -> &Self::Target {
         &self.app
@@ -187,7 +187,7 @@ fn launch_app(
     args: &[OsString],
 ) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
     let guard = lock_gui_test();
-    let app = mmatrix_testkit::MmatrixApp::launch(exe_path, args)?;
+    let app = mirx_testkit::MirxApp::launch(exe_path, args)?;
     Ok(GuiTestApp {
         app,
         _gui_test_guard: guard,
@@ -200,7 +200,7 @@ fn launch_app_with_options(
     options: LaunchOptions,
 ) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
     let guard = lock_gui_test();
-    let app = mmatrix_testkit::MmatrixApp::launch_with_options(exe_path, args, options)?;
+    let app = mirx_testkit::MirxApp::launch_with_options(exe_path, args, options)?;
     Ok(GuiTestApp {
         app,
         _gui_test_guard: guard,
@@ -243,7 +243,7 @@ fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::er
     }))?;
     let protected = dpapi::protect(
         &payload,
-        "mmatrix saved session test",
+        "mirx saved session test",
         SESSION_DPAPI_ENTROPY,
     )?;
     let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
@@ -1330,11 +1330,11 @@ fn topic_event_with_event_id(
         activity_id: format!("state:{event_id}"),
         timestamp_ms,
         relation: None,
-        kind: CoreRoomActivityKind::StateNotice(mmatrix_core::RoomStateNoticeActivity {
+        kind: CoreRoomActivityKind::StateNotice(mirx_core::RoomStateNoticeActivity {
             event_id: event_id.to_owned(),
             sender: sender.to_owned(),
             state_key: String::new(),
-            content: mmatrix_core::RoomStateNoticeContent::Topic {
+            content: mirx_core::RoomStateNoticeContent::Topic {
                 topic: topic.to_owned(),
             },
         }),
@@ -1815,7 +1815,7 @@ fn assert_ui_active_find(
 }
 
 fn activate_switchbar_item_by_command(
-    app: &MmatrixApp,
+    app: &MirxApp,
     identity: &ViewIdentity,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ui_state = app.dump_ui_state()?;
@@ -1839,7 +1839,7 @@ fn activate_switchbar_item_by_command(
 }
 
 fn assert_account_verification_menu_state(
-    app: &MmatrixApp,
+    app: &MirxApp,
     accept: bool,
     cancel: bool,
     confirm: bool,
@@ -1867,7 +1867,7 @@ fn assert_account_verification_menu_state(
 }
 
 fn invoke_account_menu_command(
-    app: &MmatrixApp,
+    app: &MirxApp,
     command_id: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let frame = app.automation_frame_hwnd() as HWND;
@@ -1889,7 +1889,7 @@ unsafe fn recover_e2ee_dialog_hwnd(frame: HWND, class_name_wide: *const u16) -> 
     }
 
     let dialog = unsafe { GetLastActivePopup(frame) };
-    if dialog != frame && unsafe { class_name(dialog) } == "mmatrixWin32RecoverE2eeDialog" {
+    if dialog != frame && unsafe { class_name(dialog) } == "mirxWin32RecoverE2eeDialog" {
         dialog
     } else {
         let thread_id = unsafe { GetWindowThreadProcessId(frame, std::ptr::null_mut()) };
@@ -1906,7 +1906,7 @@ unsafe fn recover_e2ee_dialog_hwnd(frame: HWND, class_name_wide: *const u16) -> 
 }
 
 unsafe extern "system" fn find_recover_e2ee_dialog_window(hwnd: HWND, lparam: isize) -> i32 {
-    if unsafe { class_name(hwnd) } == "mmatrixWin32RecoverE2eeDialog" {
+    if unsafe { class_name(hwnd) } == "mirxWin32RecoverE2eeDialog" {
         unsafe { *(lparam as *mut HWND) = hwnd };
         0
     } else {
@@ -1921,7 +1921,7 @@ unsafe fn recovery_key_handoff_dialog_hwnd(frame: HWND, class_name_wide: *const 
     }
 
     let dialog = unsafe { GetLastActivePopup(frame) };
-    if dialog != frame && unsafe { class_name(dialog) } == "mmatrixWin32RecoveryKeyHandoffDialog" {
+    if dialog != frame && unsafe { class_name(dialog) } == "mirxWin32RecoveryKeyHandoffDialog" {
         dialog
     } else {
         let thread_id = unsafe { GetWindowThreadProcessId(frame, std::ptr::null_mut()) };
@@ -1941,7 +1941,7 @@ unsafe extern "system" fn find_recovery_key_handoff_dialog_window(
     hwnd: HWND,
     lparam: isize,
 ) -> i32 {
-    if unsafe { class_name(hwnd) } == "mmatrixWin32RecoveryKeyHandoffDialog" {
+    if unsafe { class_name(hwnd) } == "mirxWin32RecoveryKeyHandoffDialog" {
         unsafe { *(lparam as *mut HWND) = hwnd };
         0
     } else {
@@ -1949,9 +1949,9 @@ unsafe extern "system" fn find_recovery_key_handoff_dialog_window(
     }
 }
 
-fn acknowledge_recovery_key_handoff(app: &MmatrixApp) -> Result<(), Box<dyn std::error::Error>> {
+fn acknowledge_recovery_key_handoff(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
     let frame = app.automation_frame_hwnd() as HWND;
-    let class_name_wide = wide_null("mmatrixWin32RecoveryKeyHandoffDialog");
+    let class_name_wide = wide_null("mirxWin32RecoveryKeyHandoffDialog");
     let deadline = Instant::now() + Duration::from_secs(5);
     let dialog = loop {
         let dialog = unsafe { recovery_key_handoff_dialog_hwnd(frame, class_name_wide.as_ptr()) };
@@ -1966,7 +1966,7 @@ fn acknowledge_recovery_key_handoff(app: &MmatrixApp) -> Result<(), Box<dyn std:
 
     assert_eq!(
         unsafe { class_name(dialog) },
-        "mmatrixWin32RecoveryKeyHandoffDialog"
+        "mirxWin32RecoveryKeyHandoffDialog"
     );
     assert!(
         !unsafe { GetDlgItem(dialog, RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID) }.is_null(),
@@ -2007,7 +2007,7 @@ fn acknowledge_recovery_key_handoff(app: &MmatrixApp) -> Result<(), Box<dyn std:
 }
 
 fn submit_recover_e2ee_menu_dialog(
-    app: &MmatrixApp,
+    app: &MirxApp,
     secret: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let frame = app.automation_frame_hwnd() as HWND;
@@ -2021,7 +2021,7 @@ fn submit_recover_e2ee_menu_dialog(
         );
     });
 
-    let class_name = wide_null("mmatrixWin32RecoverE2eeDialog");
+    let class_name = wide_null("mirxWin32RecoverE2eeDialog");
     let deadline = Instant::now() + Duration::from_secs(5);
     let dialog = loop {
         let dialog = unsafe { recover_e2ee_dialog_hwnd(frame, class_name.as_ptr()) };
@@ -2069,7 +2069,7 @@ fn submit_recover_e2ee_menu_dialog(
 }
 
 fn submit_setup_e2ee_recovery_menu_dialog(
-    app: &MmatrixApp,
+    app: &MirxApp,
     passphrase: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let frame = app.automation_frame_hwnd() as HWND;
@@ -2083,7 +2083,7 @@ fn submit_setup_e2ee_recovery_menu_dialog(
         );
     });
 
-    let class_name = wide_null("mmatrixWin32SetupE2eeDialog");
+    let class_name = wide_null("mirxWin32SetupE2eeDialog");
     let deadline = Instant::now() + Duration::from_secs(5);
     let dialog = loop {
         let dialog = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
@@ -2125,14 +2125,14 @@ fn submit_setup_e2ee_recovery_menu_dialog(
     Ok(())
 }
 
-unsafe fn mdi_client_hwnd(app: &MmatrixApp) -> HWND {
+unsafe fn mdi_client_hwnd(app: &MirxApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };
     assert!(!mdi_client.is_null(), "MDI client control must exist");
     mdi_client
 }
 
-unsafe fn mdi_child_hwnd_by_title(app: &MmatrixApp, title: &str) -> HWND {
+unsafe fn mdi_child_hwnd_by_title(app: &MirxApp, title: &str) -> HWND {
     let mdi_client = unsafe { mdi_client_hwnd(app) };
     let mut child =
         unsafe { FindWindowExW(mdi_client, 0 as HWND, std::ptr::null(), std::ptr::null()) };
@@ -2146,7 +2146,7 @@ unsafe fn mdi_child_hwnd_by_title(app: &MmatrixApp, title: &str) -> HWND {
 }
 
 fn native_activate_mdi_view(
-    app: &MmatrixApp,
+    app: &MirxApp,
     identity: &ViewIdentity,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let ui_state = app.dump_ui_state()?;
@@ -2161,7 +2161,7 @@ fn native_activate_mdi_view(
 }
 
 fn assert_raw_switchbar_state(
-    app: &MmatrixApp,
+    app: &MirxApp,
     ui_state: &UiState,
     identity: &ViewIdentity,
     checked: bool,
@@ -2196,14 +2196,14 @@ fn assert_raw_switchbar_state(
     );
 }
 
-unsafe fn compose_edit_hwnd(app: &MmatrixApp) -> HWND {
+unsafe fn compose_edit_hwnd(app: &MirxApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
     assert!(!edit.is_null(), "compose edit control must exist");
     edit
 }
 
-unsafe fn focused_hwnd(app: &MmatrixApp) -> HWND {
+unsafe fn focused_hwnd(app: &MirxApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let ui_thread = unsafe { GetWindowThreadProcessId(frame, null_mut()) };
     assert_ne!(ui_thread, 0, "UI thread ID must exist");
@@ -2226,7 +2226,7 @@ unsafe fn focused_hwnd(app: &MmatrixApp) -> HWND {
     focused
 }
 
-fn assert_compose_has_focus(app: &MmatrixApp) {
+fn assert_compose_has_focus(app: &MirxApp) {
     let compose = unsafe { compose_edit_hwnd(app) };
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -2302,8 +2302,8 @@ fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
 #[test]
 fn automation_driver_launches_real_ui_and_reads_event_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -2417,8 +2417,8 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
 #[test]
 fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
@@ -2430,8 +2430,8 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
             "hello",
         ),
         message_failed_update_event("!ops:example", "txn-1", "send failed", true),
-        Event::Error(mmatrix_core::CoreErrorEvent {
-            operation: mmatrix_core::Operation::SendMessage,
+        Event::Error(mirx_core::CoreErrorEvent {
+            operation: mirx_core::Operation::SendMessage,
             message: "send failed".to_owned(),
         }),
     ])?;
@@ -2469,8 +2469,8 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_reconciles_remote_echo_after_message_sent_update()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -2531,8 +2531,8 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
 #[test]
 fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -2579,8 +2579,8 @@ fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting(
 #[test]
 fn automation_driver_can_attach_and_replace_state_via_testkit()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -2590,7 +2590,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
+    let attached = MirxApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
     attached.ping()?;
 
     let version = attached.get_version()?;
@@ -2721,8 +2721,8 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
 #[test]
 fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -2808,8 +2808,8 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
 #[test]
 fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let local_app_data = unique_local_app_data_path();
     let session_path = write_saved_session(&local_app_data)?;
@@ -2847,8 +2847,8 @@ fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
 #[test]
 fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tokens()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let local_app_data = unique_local_app_data_path();
     let session_path = session_file_path(&local_app_data);
@@ -2941,8 +2941,8 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
 #[test]
 fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -2983,8 +2983,8 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
 #[test]
 fn automation_driver_submits_verification_actions_for_current_flow_without_local_state_mutation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3016,11 +3016,11 @@ fn automation_driver_submits_verification_actions_for_current_flow_without_local
             flow_id: "flow-current".to_owned(),
             user_id: "@alice:example".to_owned(),
             state: VerificationState::SasReady {
-                emojis: vec![mmatrix_testkit::VerificationEmoji {
+                emojis: vec![mirx_testkit::VerificationEmoji {
                     symbol: "🐶".to_owned(),
                     description: "dog".to_owned(),
                 }],
-                decimals: mmatrix_testkit::VerificationDecimals {
+                decimals: mirx_testkit::VerificationDecimals {
                     first: 1234,
                     second: 5678,
                     third: 9012,
@@ -3070,8 +3070,8 @@ fn automation_driver_submits_verification_actions_for_current_flow_without_local
 #[test]
 fn automation_driver_submits_verification_action_for_explicit_flow()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3107,8 +3107,8 @@ fn automation_driver_submits_verification_action_for_explicit_flow()
 #[test]
 fn automation_driver_requested_verification_menu_state_and_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3153,8 +3153,8 @@ fn automation_driver_requested_verification_menu_state_and_commands()
 #[test]
 fn automation_driver_sas_ready_verification_menu_state_and_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3215,8 +3215,8 @@ fn automation_driver_sas_ready_verification_menu_state_and_commands()
 #[test]
 fn automation_driver_done_and_cancelled_verification_menu_items_are_disabled()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
 
     let done_args = [
         OsString::from("--render-state"),
@@ -3245,8 +3245,8 @@ fn automation_driver_done_and_cancelled_verification_menu_items_are_disabled()
 #[test]
 fn automation_driver_verification_error_keeps_requested_menu_actions_enabled()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("verification-error.json");
     let args = [
         OsString::from("--render-state"),
@@ -3263,8 +3263,8 @@ fn automation_driver_verification_error_keeps_requested_menu_actions_enabled()
 #[test]
 fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3297,8 +3297,8 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
 #[test]
 fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
@@ -3320,8 +3320,8 @@ fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
 #[test]
 fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secret()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
     let args = [
         OsString::from("--render-state"),
@@ -3362,8 +3362,8 @@ fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secr
 #[test]
 fn automation_driver_setup_e2ee_recovery_menu_dialog_submits_once_and_redacts_passphrase()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
     let args = [
         OsString::from("--render-state"),
@@ -3390,12 +3390,12 @@ fn automation_driver_setup_e2ee_recovery_menu_dialog_submits_once_and_redacts_pa
 #[test]
 fn automation_driver_e2ee_recovery_setup_success_handoff_acknowledges_and_never_persists_key()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let recovery_key = "automation recovery key must not persist";
     let state_path = write_state_file(&[
         Event::Started,
-        Event::E2eeRecoverySetupSucceeded(mmatrix_core::E2eeRecoverySetupSucceeded {
+        Event::E2eeRecoverySetupSucceeded(mirx_core::E2eeRecoverySetupSucceeded {
             recovery_key: recovery_key.to_owned(),
         }),
     ])?;
@@ -3435,8 +3435,8 @@ fn automation_driver_e2ee_recovery_setup_success_handoff_acknowledges_and_never_
 #[test]
 fn automation_driver_slash_setup_e2ee_recovery_submits_once_without_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
     let args = [
         OsString::from("--render-state"),
@@ -3469,8 +3469,8 @@ fn automation_driver_slash_setup_e2ee_recovery_submits_once_without_history()
 
 #[test]
 fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("multi-room.json");
 
     let args = [
@@ -3555,8 +3555,8 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
 
 #[test]
 fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list.json");
 
     let args = [
@@ -3587,8 +3587,8 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
 }
 
 fn launch_member_list_app() -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list.json");
     let app = launch_app(
         &exe_path,
@@ -3856,8 +3856,8 @@ fn automation_driver_member_moderation_status_view_has_no_target()
 #[test]
 fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list-narrow.json");
     assert_eq!(
         fixture_path.file_name().and_then(|name| name.to_str()),
@@ -3924,8 +3924,8 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 #[test]
 fn automation_driver_replaces_room_members_on_append_and_state_reload()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!members:example", "Members", false)]),
@@ -4006,8 +4006,8 @@ fn automation_driver_replaces_room_members_on_append_and_state_reload()
 #[test]
 fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -4036,11 +4036,11 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     let content_hwnd = unsafe { active_mdi_content_hwnd(&app) };
     assert_eq!(
         unsafe { class_name(content_hwnd) },
-        "mmatrixWin32RoomContent"
+        "mirxWin32RoomContent"
     );
     let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
     let member_list_hwnd = unsafe { active_room_member_list_hwnd(&app) };
-    assert_eq!(unsafe { class_name(timeline_hwnd) }, "mmatrixWin32Timeline");
+    assert_eq!(unsafe { class_name(timeline_hwnd) }, "mirxWin32Timeline");
     assert_eq!(unsafe { class_name(member_list_hwnd) }, "ListBox");
     let timeline_style = unsafe { window_style(timeline_hwnd) };
     let timeline_rect = unsafe { client_rect(timeline_hwnd) };
@@ -4185,8 +4185,8 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 #[test]
 fn custom_room_timeline_history_backfill_submits_once_while_loading()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4246,8 +4246,8 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
 #[test]
 fn render_state_room_find_backfill_records_loading_and_matches_older_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("history-backfill-loading.json");
     let args = [
         OsString::from("--render-state"),
@@ -4339,8 +4339,8 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
 #[test]
 fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4407,8 +4407,8 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
         })
     );
     app.append_synthetic_events(&serde_json::to_string(&vec![Event::Error(
-        mmatrix_core::CoreErrorEvent {
-            operation: mmatrix_core::Operation::BackfillRoomHistory,
+        mirx_core::CoreErrorEvent {
+            operation: mirx_core::Operation::BackfillRoomHistory,
             message: "homeserver unavailable".to_owned(),
         },
     )])?)?;
@@ -4477,8 +4477,8 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
 #[test]
 fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4548,8 +4548,8 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
 #[test]
 fn trigger_active_timeline_history_backfill_submits_for_thread_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -4579,8 +4579,8 @@ fn trigger_active_timeline_history_backfill_submits_for_thread_parent_room()
 #[test]
 fn render_state_thread_find_backfill_matches_older_thread_reply()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("find-thread.json");
     let args = [
         OsString::from("--render-state"),
@@ -4645,8 +4645,8 @@ fn render_state_thread_find_backfill_matches_older_thread_reply()
 #[test]
 fn automation_driver_history_backfill_prepends_older_messages_without_disturbing_active_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4694,7 +4694,7 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
         Duration::from_secs(5),
     )?;
 
-    let expected_path = nav_path(&["mmatrix", "rooms: 1", "Beta"]);
+    let expected_path = nav_path(&["mirx", "rooms: 1", "Beta"]);
     assert_eq!(
         app.dump_model()?.selected_room.as_deref(),
         Some("!beta:example")
@@ -4800,7 +4800,7 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     assert_eq!(app.selected_navigation_path()?, expected_path);
     assert_compose_has_focus(&app);
     assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), false);
-    assert_navigation_activity(&ui_state, &["mmatrix", "rooms: 1", "Beta"], false);
+    assert_navigation_activity(&ui_state, &["mirx", "rooms: 1", "Beta"], false);
     assert!(!find_ui_room(&ui_state, "!beta:example").has_activity);
     assert_eq!(
         find_ui_room(&ui_state, "!beta:example").read_target_event_id,
@@ -4819,8 +4819,8 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
 #[test]
 fn custom_room_timeline_gettext_normalizes_multiline_bodies()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -4868,8 +4868,8 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
 #[test]
 fn custom_room_timeline_gettext_preserves_trailing_blank_line()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -4917,8 +4917,8 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
 #[test]
 fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -5040,7 +5040,7 @@ fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
     Ok(())
 }
 
-unsafe fn active_mdi_content_hwnd(app: &MmatrixApp) -> HWND {
+unsafe fn active_mdi_content_hwnd(app: &MirxApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = unsafe { GetDlgItem(frame, MDI_ID) };
     assert!(!mdi_client.is_null(), "MDI client control must exist");
@@ -5051,11 +5051,11 @@ unsafe fn active_mdi_content_hwnd(app: &MmatrixApp) -> HWND {
     content
 }
 
-unsafe fn active_room_timeline_hwnd(app: &MmatrixApp) -> HWND {
-    unsafe { child_window_with_class(active_mdi_content_hwnd(app), "mmatrixWin32Timeline") }
+unsafe fn active_room_timeline_hwnd(app: &MirxApp) -> HWND {
+    unsafe { child_window_with_class(active_mdi_content_hwnd(app), "mirxWin32Timeline") }
 }
 
-unsafe fn active_room_member_list_hwnd(app: &MmatrixApp) -> HWND {
+unsafe fn active_room_member_list_hwnd(app: &MirxApp) -> HWND {
     unsafe { child_window_with_class(active_mdi_content_hwnd(app), "ListBox") }
 }
 
@@ -5139,8 +5139,8 @@ unsafe fn scrollbar_info(hwnd: HWND) -> Option<SCROLLINFO> {
 #[test]
 fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let fixture_path = fixture_state_path("space-hierarchy.json");
@@ -5207,7 +5207,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert_eq!(
         initial_state.navigation,
         nav(
-            "mmatrix",
+            "mirx",
             vec![
                 nav("status", vec![]),
                 nav(
@@ -5327,13 +5327,13 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert_switchbar_activity(&initial_state, &room_identity("!direct:example"), false);
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 4", "Work", "Ops [e2ee]"])
+        nav_path(&["mirx", "rooms: 4", "Work", "Ops [e2ee]"])
     );
 
-    app.select_navigation_labels(&["mmatrix", "rooms: 4", "Work"])?;
+    app.select_navigation_labels(&["mirx", "rooms: 4", "Work"])?;
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 4", "Work"])
+        nav_path(&["mirx", "rooms: 4", "Work"])
     );
     let work_state = app.dump_ui_state()?;
     assert_eq!(work_state.mdi.active, room_identity("!ops:example"));
@@ -5359,11 +5359,11 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         "Direct [query: @alice:example] [e2ee]"
     );
 
-    app.select_navigation_labels(&["mmatrix", "rooms: 4", "Social", "Shared"])?;
+    app.select_navigation_labels(&["mirx", "rooms: 4", "Social", "Shared"])?;
     assert_eq!(
         app.selected_navigation_path()?,
         vec![
-            nav_segment("mmatrix", 0),
+            nav_segment("mirx", 0),
             nav_segment("rooms: 4", 0),
             nav_segment("Social", 0),
             nav_segment("Shared", 0),
@@ -5380,7 +5380,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     app.select_room("!shared:example")?;
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 4", "Work", "Shared"])
+        nav_path(&["mirx", "rooms: 4", "Work", "Shared"])
     );
     let shared_primary_state = app.dump_ui_state()?;
     assert_eq!(
@@ -5407,7 +5407,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         other => panic!("expected send_text unknown_room for space, got {other:?}"),
     }
 
-    app.select_navigation_labels(&["mmatrix", "rooms: 4", "Work", "Ops [e2ee]"])?;
+    app.select_navigation_labels(&["mirx", "rooms: 4", "Work", "Ops [e2ee]"])?;
     assert_eq!(
         app.send_text_target(None, "queued for ops")?,
         "!ops:example"
@@ -5429,8 +5429,8 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
 #[test]
 fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [
         OsString::from("--render-state"),
@@ -5503,11 +5503,11 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
     let initial_state = app.dump_ui_state()?;
     let room_path = navigation_path_by_substrings(
         &initial_state.navigation,
-        &["mmatrix", "rooms: 1", "Work", "Ops"],
+        &["mirx", "rooms: 1", "Work", "Ops"],
     );
     let thread_path = navigation_path_by_substrings(
         &initial_state.navigation,
-        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg"],
+        &["mirx", "rooms: 1", "Work", "Ops", "root msg"],
     );
 
     app.select_navigation_path(&room_path)?;
@@ -5567,8 +5567,8 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_send_text_target_none_uses_active_thread_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -5608,8 +5608,8 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
 #[test]
 fn automation_driver_send_file_target_uses_explicit_joined_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -5629,8 +5629,8 @@ fn automation_driver_send_file_target_uses_explicit_joined_room()
 #[test]
 fn automation_driver_sendfile_slash_rejects_active_thread() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -5649,8 +5649,8 @@ fn automation_driver_sendfile_slash_rejects_active_thread() -> Result<(), Box<dy
 #[test]
 fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivated()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -5717,8 +5717,8 @@ fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivate
 #[test]
 fn automation_driver_applies_receive_side_message_edits_in_place()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let update_path = fixture_update_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
@@ -5810,8 +5810,8 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
 
 #[test]
 fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -5891,8 +5891,8 @@ fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::e
 #[test]
 fn automation_driver_applies_receive_side_reactions_redactions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let update_path = fixture_update_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
@@ -5974,8 +5974,8 @@ fn automation_driver_applies_receive_side_reactions_redactions()
 #[test]
 fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("redactions.json");
     let update_path = fixture_update_path("redactions.json");
     let local_app_data = unique_local_app_data_path();
@@ -6109,7 +6109,7 @@ fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
     let thread_view_identity = thread_identity("!redactions:example", "$redact-thread-root");
     let thread_path = navigation_path_by_substrings(
         &ui_state.navigation,
-        &["mmatrix", "rooms: 1", "Redactions", "Message redacted"],
+        &["mirx", "rooms: 1", "Redactions", "Message redacted"],
     );
     app.select_navigation_path(&thread_path)?;
     assert_eq!(app.selected_navigation_path()?, thread_path);
@@ -6134,8 +6134,8 @@ fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
 #[test]
 fn automation_driver_thread_root_message_edit_updates_thread_titles()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let update_path = fixture_update_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
@@ -6181,7 +6181,7 @@ fn automation_driver_thread_root_message_edit_updates_thread_titles()
 
     let expected_path = navigation_path_by_substrings(
         &updated_state.navigation,
-        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg edited"],
+        &["mirx", "rooms: 1", "Work", "Ops", "root msg edited"],
     );
     assert_eq!(app.selected_navigation_path()?, expected_path);
 
@@ -6193,8 +6193,8 @@ fn automation_driver_thread_root_message_edit_updates_thread_titles()
 #[test]
 fn automation_driver_rejects_invalid_append_message_edit_update_without_exiting()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -6271,8 +6271,8 @@ fn automation_driver_rejects_invalid_append_message_edit_update_without_exiting(
 #[test]
 fn automation_driver_thread_me_submission_preserves_active_thread_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -6309,8 +6309,8 @@ fn automation_driver_thread_me_submission_preserves_active_thread_view()
 #[test]
 fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -6339,8 +6339,8 @@ fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
 #[test]
 fn automation_driver_loads_checked_in_event_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -6350,7 +6350,7 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
     let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
+    let attached = MirxApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
     let fixture_path = fixture_state_path("verification-error.json");
     attached.load_events_from_file(&fixture_path)?;
     attached.wait_idle(Duration::from_secs(5))?;
@@ -6459,8 +6459,8 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
 #[test]
 fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -6470,7 +6470,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
     let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
+    let attached = MirxApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
     let fixture_path = fixture_state_path("mixed-room-activity.json");
     attached.load_events_from_file(&fixture_path)?;
     attached.wait_idle(Duration::from_secs(5))?;
@@ -6597,8 +6597,8 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
 #[test]
 fn automation_driver_renders_room_typing_only_for_selected_room_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -6662,8 +6662,8 @@ fn automation_driver_renders_room_typing_only_for_selected_room_view()
 #[test]
 fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_list()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -6779,8 +6779,8 @@ fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_lis
 #[test]
 fn automation_driver_clears_room_typing_on_logged_out_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
@@ -6835,8 +6835,8 @@ fn automation_driver_clears_room_typing_on_logged_out_event()
 #[test]
 fn automation_driver_loads_typing_indicator_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -6846,7 +6846,7 @@ fn automation_driver_loads_typing_indicator_fixture_via_file_api()
     let app = launch_app(&exe_path, &args)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let attached = MmatrixApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
+    let attached = MirxApp::find_by_pid(app.pid(), Duration::from_secs(5))?;
     let fixture_path = fixture_state_path("typing-indicator.json");
     attached.load_events_from_file(&fixture_path)?;
     attached.wait_idle(Duration::from_secs(5))?;
@@ -6887,8 +6887,8 @@ fn automation_driver_loads_typing_indicator_fixture_via_file_api()
 #[test]
 fn automation_driver_can_activate_status_view_and_return_to_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("verification-error.json");
 
     let args = [
@@ -6919,8 +6919,8 @@ fn automation_driver_can_activate_status_view_and_return_to_room()
 #[test]
 fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -6931,11 +6931,11 @@ fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
     let initial_state = app.dump_ui_state()?;
     let room_path = navigation_path_by_substrings(
         &initial_state.navigation,
-        &["mmatrix", "rooms: 1", "Work", "Ops"],
+        &["mirx", "rooms: 1", "Work", "Ops"],
     );
     let thread_path = navigation_path_by_substrings(
         &initial_state.navigation,
-        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg"],
+        &["mirx", "rooms: 1", "Work", "Ops", "root msg"],
     );
     let room_view_identity = room_identity("!ops:example");
     let thread_view_identity = thread_identity("!ops:example", "$thread-root");
@@ -6949,7 +6949,7 @@ fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
     assert_active_switchbar_item(&status_state, &ViewIdentity::Status);
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "status"])
+        nav_path(&["mirx", "status"])
     );
     assert_compose_has_focus(&app);
 
@@ -6973,8 +6973,8 @@ fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
 #[test]
 fn automation_driver_activation_returns_keyboard_to_compose()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -6986,7 +6986,7 @@ fn automation_driver_activation_returns_keyboard_to_compose()
 
     let initial_state = app.dump_ui_state()?;
     let alpha_path =
-        navigation_path_by_substrings(&initial_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+        navigation_path_by_substrings(&initial_state.navigation, &["mirx", "rooms: 2", "Alpha"]);
 
     app.select_navigation_path(&alpha_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7018,8 +7018,8 @@ fn automation_driver_activation_returns_keyboard_to_compose()
 #[test]
 fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -7044,8 +7044,8 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
 #[test]
 fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [OsString::from("--automation")];
@@ -7055,12 +7055,12 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     app.wait_idle(Duration::from_secs(5))?;
     let loaded_state = app.dump_ui_state()?;
     let alpha_room_path =
-        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+        navigation_path_by_substrings(&loaded_state.navigation, &["mirx", "rooms: 2", "Alpha"]);
     let beta_room_path =
-        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Beta"]);
+        navigation_path_by_substrings(&loaded_state.navigation, &["mirx", "rooms: 2", "Beta"]);
     let alpha_thread_path = navigation_path_by_substrings(
         &loaded_state.navigation,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
     );
     app.select_navigation_path(&alpha_thread_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7078,15 +7078,15 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     assert_active_switchbar_item(&initial_state, &room_view_identity);
     assert_eq!(app.selected_navigation_path()?, alpha_room_path);
     assert_switchbar_activity(&initial_state, &beta_view_identity, true);
-    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Beta"], true);
     assert_switchbar_activity(&initial_state, &thread_view_identity, true);
     assert_navigation_activity(
         &initial_state,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
         true,
     );
     assert_switchbar_activity(&initial_state, &room_view_identity, false);
-    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], false);
 
     app.select_navigation_path(&alpha_thread_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7097,13 +7097,13 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     assert_switchbar_activity(&thread_state, &thread_view_identity, false);
     assert_navigation_activity(
         &thread_state,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
         false,
     );
     assert_switchbar_activity(&thread_state, &beta_view_identity, true);
-    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Beta"], true);
     assert_switchbar_activity(&thread_state, &room_view_identity, false);
-    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], false);
 
     app.select_navigation_path(&beta_room_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7112,15 +7112,15 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     assert_active_switchbar_item(&beta_state, &beta_view_identity);
     assert_eq!(app.selected_navigation_path()?, beta_room_path);
     assert_switchbar_activity(&beta_state, &beta_view_identity, false);
-    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Beta"], false);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Beta"], false);
     assert_switchbar_activity(&beta_state, &thread_view_identity, false);
     assert_navigation_activity(
         &beta_state,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
         false,
     );
     assert_switchbar_activity(&beta_state, &room_view_identity, false);
-    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], false);
 
     Ok(())
 }
@@ -7128,8 +7128,8 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 #[test]
 fn automation_driver_native_mdi_activation_reconciles_shell_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [OsString::from("--automation")];
@@ -7140,12 +7140,12 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
 
     let loaded_state = app.dump_ui_state()?;
     let alpha_room_path =
-        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+        navigation_path_by_substrings(&loaded_state.navigation, &["mirx", "rooms: 2", "Alpha"]);
     let beta_room_path =
-        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Beta"]);
+        navigation_path_by_substrings(&loaded_state.navigation, &["mirx", "rooms: 2", "Beta"]);
     let alpha_thread_path = navigation_path_by_substrings(
         &loaded_state.navigation,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
     );
 
     app.select_navigation_path(&alpha_thread_path)?;
@@ -7164,15 +7164,15 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     assert_active_switchbar_item(&initial_state, &alpha_room_identity);
     assert_eq!(app.selected_navigation_path()?, alpha_room_path);
     assert_switchbar_activity(&initial_state, &beta_room_identity, true);
-    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Beta"], true);
     assert_switchbar_activity(&initial_state, &alpha_thread_identity, true);
     assert_navigation_activity(
         &initial_state,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
         true,
     );
     assert_switchbar_activity(&initial_state, &alpha_room_identity, false);
-    assert_navigation_activity(&initial_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], false);
     assert_raw_switchbar_state(&app, &initial_state, &alpha_room_identity, true, false);
     assert_raw_switchbar_state(&app, &initial_state, &beta_room_identity, false, true);
     assert_raw_switchbar_state(&app, &initial_state, &alpha_thread_identity, false, true);
@@ -7186,13 +7186,13 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     assert_switchbar_activity(&thread_state, &alpha_thread_identity, false);
     assert_navigation_activity(
         &thread_state,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
         false,
     );
     assert_switchbar_activity(&thread_state, &beta_room_identity, true);
-    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Beta"], true);
+    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Beta"], true);
     assert_switchbar_activity(&thread_state, &alpha_room_identity, false);
-    assert_navigation_activity(&thread_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], false);
     assert_raw_switchbar_state(&app, &thread_state, &alpha_thread_identity, true, false);
     assert_raw_switchbar_state(&app, &thread_state, &beta_room_identity, false, true);
 
@@ -7203,15 +7203,15 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     assert_eq!(app.selected_navigation_path()?, beta_room_path);
     assert_compose_has_focus(&app);
     assert_switchbar_activity(&beta_state, &beta_room_identity, false);
-    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Beta"], false);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Beta"], false);
     assert_switchbar_activity(&beta_state, &alpha_thread_identity, false);
     assert_navigation_activity(
         &beta_state,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
         false,
     );
     assert_switchbar_activity(&beta_state, &alpha_room_identity, false);
-    assert_navigation_activity(&beta_state, &["mmatrix", "rooms: 2", "Alpha"], false);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], false);
     assert_raw_switchbar_state(&app, &beta_state, &beta_room_identity, true, false);
 
     Ok(())
@@ -7220,8 +7220,8 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
 #[test]
 fn automation_driver_render_state_append_records_room_read_target()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [
@@ -7233,10 +7233,10 @@ fn automation_driver_render_state_append_records_room_read_target()
 
     let loaded_state = app.dump_ui_state()?;
     let alpha_room_path =
-        navigation_path_by_substrings(&loaded_state.navigation, &["mmatrix", "rooms: 2", "Alpha"]);
+        navigation_path_by_substrings(&loaded_state.navigation, &["mirx", "rooms: 2", "Alpha"]);
     let alpha_thread_path = navigation_path_by_substrings(
         &loaded_state.navigation,
-        &["mmatrix", "rooms: 2", "Alpha", "alpha root"],
+        &["mirx", "rooms: 2", "Alpha", "alpha root"],
     );
 
     app.select_navigation_path(&alpha_thread_path)?;
@@ -7264,8 +7264,8 @@ fn automation_driver_render_state_append_records_room_read_target()
 #[test]
 fn automation_driver_renders_shell_constrained_layout_fixture()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-constrained-layout.json");
     let frame_size = FrameSize {
         width: 900,
@@ -7351,8 +7351,8 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
 #[test]
 fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("read-state-ingestion.json");
 
     let args = [
@@ -7498,8 +7498,8 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
 #[test]
 fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("read-state-ingestion.json");
     let update_path = fixture_update_path("read-state-cleared.json");
     let mut events: Vec<Event> = serde_json::from_str(&fs::read_to_string(&fixture_path)?)?;
@@ -7546,8 +7546,8 @@ fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
 #[test]
 fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("image-message.json");
 
     let args = [
@@ -7605,8 +7605,8 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
 #[test]
 fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("file-message.json");
 
     let args = [
@@ -7690,8 +7690,8 @@ fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
 #[test]
 fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("audio-message.json");
 
     let args = [
@@ -7776,8 +7776,8 @@ fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
 #[test]
 fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("image-message-loaded.json");
 
     let args = [
@@ -7812,8 +7812,8 @@ fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_med
 #[test]
 fn automation_driver_renders_failed_image_message_fixture_and_exposes_failed_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("image-message-failed.json");
 
     let args = [
@@ -7848,8 +7848,8 @@ fn assert_video_fixture_media_state(
     fixture_name: &str,
     expected_media_state: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path(fixture_name);
     let app = launch_app(
         &exe_path,
@@ -7897,8 +7897,8 @@ fn automation_driver_video_message_failed_exposes_failed_media_state()
 #[test]
 fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_metadata()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("encrypted-image-message.json");
 
     let args = [
@@ -7956,8 +7956,8 @@ fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_met
 #[test]
 fn automation_driver_renders_encrypted_loaded_image_and_exposes_loaded_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("encrypted-image-message-loaded.json");
 
     let args = [
@@ -7992,8 +7992,8 @@ fn automation_driver_renders_encrypted_loaded_image_and_exposes_loaded_media_sta
 #[test]
 fn automation_driver_renders_encrypted_failed_image_and_exposes_failed_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("encrypted-image-message-failed.json");
 
     let args = [
@@ -8027,8 +8027,8 @@ fn automation_driver_renders_encrypted_failed_image_and_exposes_failed_media_sta
 #[test]
 fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("unsupported-message.json");
 
     let args = [
@@ -8118,8 +8118,8 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
 #[test]
 fn automation_driver_compose_history_keys_are_noops_without_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -8162,8 +8162,8 @@ fn automation_driver_compose_history_keys_are_noops_without_history()
 #[test]
 fn automation_driver_compose_history_recalls_accepted_submissions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8204,8 +8204,8 @@ fn automation_driver_compose_history_recalls_accepted_submissions()
 #[test]
 fn automation_driver_compose_history_ignores_rejected_submissions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8231,8 +8231,8 @@ fn automation_driver_compose_history_ignores_rejected_submissions()
 #[test]
 fn automation_driver_compose_history_ignores_empty_submission()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8259,8 +8259,8 @@ fn automation_driver_compose_history_ignores_empty_submission()
 #[test]
 fn automation_driver_setting_text_exits_compose_history_navigation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8296,8 +8296,8 @@ fn automation_driver_setting_text_exits_compose_history_navigation()
 #[test]
 fn automation_driver_typing_exits_compose_history_navigation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8342,8 +8342,8 @@ fn automation_driver_typing_exits_compose_history_navigation()
 #[test]
 fn automation_driver_paste_exits_compose_history_navigation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8389,8 +8389,8 @@ fn automation_driver_paste_exits_compose_history_navigation()
 #[test]
 fn automation_driver_return_compose_key_submits_through_edit_control()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8426,8 +8426,8 @@ fn automation_driver_return_compose_key_submits_through_edit_control()
 #[test]
 fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8453,7 +8453,7 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
     assert!(ui_state.status_bar.text.contains("status window active"));
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "status"])
+        nav_path(&["mirx", "status"])
     );
     assert!(view_contains(
         find_view(&ui_state, &ViewIdentity::Status),
@@ -8471,8 +8471,8 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8508,8 +8508,8 @@ fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_slash_window_switches_by_room_id_and_display_name()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8530,7 +8530,7 @@ fn automation_driver_slash_window_switches_by_room_id_and_display_name()
     assert!(alpha_state.status_bar.text.contains("window active: Alpha"));
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 2", "Alpha"])
+        nav_path(&["mirx", "rooms: 2", "Alpha"])
     );
 
     app.set_compose_text("/window !beta:example")?;
@@ -8549,7 +8549,7 @@ fn automation_driver_slash_window_switches_by_room_id_and_display_name()
     );
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 2", "Beta [e2ee]"])
+        nav_path(&["mirx", "rooms: 2", "Beta [e2ee]"])
     );
 
     drop(app);
@@ -8560,8 +8560,8 @@ fn automation_driver_slash_window_switches_by_room_id_and_display_name()
 #[test]
 fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8625,8 +8625,8 @@ fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
 #[test]
 fn automation_driver_slash_join_records_submitted_membership_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8693,8 +8693,8 @@ fn automation_driver_slash_join_records_submitted_membership_without_creating_ro
 #[test]
 fn automation_driver_slash_query_records_submitted_direct_room_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8750,8 +8750,8 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
 #[test]
 fn automation_driver_room_menu_join_records_submitted_membership_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -8808,8 +8808,8 @@ fn automation_driver_room_menu_join_records_submitted_membership_without_creatin
 #[test]
 fn automation_driver_room_menu_query_records_submitted_direct_room_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -8860,8 +8860,8 @@ fn automation_driver_room_menu_query_records_submitted_direct_room_without_creat
 #[test]
 fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8897,7 +8897,7 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
         "Lobby [invite]"
     );
 
-    app.select_navigation_path(&nav_path(&["mmatrix", "invites: 1", "Lobby [invite]"]))?;
+    app.select_navigation_path(&nav_path(&["mirx", "invites: 1", "Lobby [invite]"]))?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let invite_model = app.dump_model()?;
@@ -8911,7 +8911,7 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
     assert_active_switchbar_item(&invite_state, &room_identity("!invite:example"));
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "invites: 1", "Lobby [invite]"])
+        nav_path(&["mirx", "invites: 1", "Lobby [invite]"])
     );
     assert_eq!(
         find_switchbar_item(&invite_state, &room_identity("!invite:example")).title,
@@ -8940,8 +8940,8 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
 #[test]
 fn automation_driver_invited_room_is_navigable_but_not_sendable()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9023,8 +9023,8 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
 #[test]
 fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-room-list.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -9078,8 +9078,8 @@ fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
 #[test]
 fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-direct-room.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -9142,8 +9142,8 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
 #[test]
 fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joined_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-room-accept.json");
     let update_path = fixture_update_path("invited-room-accept.json");
     let local_app_data = unique_local_app_data_path();
@@ -9195,8 +9195,8 @@ fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joine
 #[test]
 fn automation_driver_invited_room_reject_fixture_update_removes_invite_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-room-reject.json");
     let update_path = fixture_update_path("invited-room-reject.json");
     let local_app_data = unique_local_app_data_path();
@@ -9257,8 +9257,8 @@ fn automation_driver_invited_room_reject_fixture_update_removes_invite_room()
 #[test]
 fn automation_driver_hierarchical_tree_ignores_invited_spaces()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9283,8 +9283,8 @@ fn automation_driver_hierarchical_tree_ignores_invited_spaces()
 #[test]
 fn automation_driver_slash_accept_keeps_invite_until_synced_rooms_join()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9334,7 +9334,7 @@ fn automation_driver_slash_accept_keeps_invite_until_synced_rooms_join()
     assert_active_switchbar_item(&joined_state, &room_identity("!invite:example"));
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 2", "Lobby"])
+        nav_path(&["mirx", "rooms: 2", "Lobby"])
     );
     assert_eq!(
         find_switchbar_item(&joined_state, &room_identity("!invite:example")).title,
@@ -9355,8 +9355,8 @@ fn automation_driver_slash_accept_keeps_invite_until_synced_rooms_join()
 #[test]
 fn automation_driver_slash_reject_keeps_invite_until_synced_rooms_removal()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9405,7 +9405,7 @@ fn automation_driver_slash_reject_keeps_invite_until_synced_rooms_removal()
     assert_active_switchbar_item(&replaced_state, &room_identity("!beta:example"));
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mmatrix", "rooms: 1", "Beta"])
+        nav_path(&["mirx", "rooms: 1", "Beta"])
     );
     assert_navigation_not_contains(&replaced_state.navigation, "Lobby [invite]");
     assert!(
@@ -9431,8 +9431,8 @@ fn automation_driver_slash_reject_keeps_invite_until_synced_rooms_removal()
 #[test]
 fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9538,8 +9538,8 @@ fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
 #[test]
 fn automation_driver_slash_join_part_and_verify_regressions_keep_original_command_types()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9634,8 +9634,8 @@ fn automation_driver_slash_join_part_and_verify_regressions_keep_original_comman
 #[test]
 fn automation_driver_slash_query_opens_existing_direct_room_match()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9700,8 +9700,8 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
 #[test]
 fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9784,8 +9784,8 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
 #[test]
 fn automation_driver_literal_query_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9830,8 +9830,8 @@ fn automation_driver_literal_query_submission_is_sent_as_text()
 #[test]
 fn automation_driver_slash_query_existing_direct_room_activates_room_without_submission()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9890,8 +9890,8 @@ fn automation_driver_slash_query_existing_direct_room_activates_room_without_sub
 #[test]
 fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9961,8 +9961,8 @@ fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
 #[test]
 fn automation_driver_slash_part_active_room_waits_for_synced_rooms_removal()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10041,8 +10041,8 @@ fn automation_driver_slash_part_active_room_waits_for_synced_rooms_removal()
 #[test]
 fn automation_driver_slash_part_from_status_reports_no_room_selected()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10071,8 +10071,8 @@ fn automation_driver_slash_part_from_status_reports_no_room_selected()
 #[test]
 fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10151,8 +10151,8 @@ fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
 #[test]
 fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10239,8 +10239,8 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
 #[test]
 fn automation_driver_renders_synced_topic_without_topic_notice()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
@@ -10281,8 +10281,8 @@ fn automation_driver_renders_synced_topic_without_topic_notice()
 #[test]
 fn automation_driver_slash_react_records_submitted_reaction_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10322,8 +10322,8 @@ fn automation_driver_slash_react_records_submitted_reaction_without_appending_te
 
 #[test]
 fn automation_driver_slash_react_preserves_key_text() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10360,8 +10360,8 @@ fn automation_driver_slash_react_preserves_key_text() -> Result<(), Box<dyn std:
 #[test]
 fn automation_driver_slash_reply_records_submitted_reply_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10402,8 +10402,8 @@ fn automation_driver_slash_reply_records_submitted_reply_without_appending_text(
 #[test]
 fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10446,8 +10446,8 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
 #[test]
 fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10491,8 +10491,8 @@ fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_slash_redact_records_submitted_redaction_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10532,8 +10532,8 @@ fn automation_driver_slash_redact_records_submitted_redaction_without_appending_
 #[test]
 fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10571,8 +10571,8 @@ fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
 #[test]
 fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10614,8 +10614,8 @@ fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_invalid_react_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10657,8 +10657,8 @@ fn automation_driver_invalid_react_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10701,8 +10701,8 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_literal_react_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10750,8 +10750,8 @@ fn automation_driver_literal_react_submission_is_sent_as_text()
 #[test]
 fn automation_driver_literal_edit_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10803,8 +10803,8 @@ fn automation_driver_literal_edit_submission_is_sent_as_text()
 #[test]
 fn automation_driver_literal_reply_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10854,8 +10854,8 @@ fn automation_driver_literal_reply_submission_is_sent_as_text()
 #[test]
 fn automation_driver_slash_react_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10898,8 +10898,8 @@ fn automation_driver_slash_react_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10945,8 +10945,8 @@ fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
 #[test]
 fn automation_driver_slash_edit_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10990,8 +10990,8 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_slash_redact_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11033,8 +11033,8 @@ fn automation_driver_slash_redact_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11085,8 +11085,8 @@ fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
 #[test]
 fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11156,8 +11156,8 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 #[test]
 fn automation_driver_selected_navigation_context_menu_rejects_invite()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -11190,8 +11190,8 @@ fn automation_driver_selected_navigation_context_menu_rejects_invite()
 #[test]
 fn automation_driver_message_menu_actions_prefill_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11276,8 +11276,8 @@ fn automation_driver_message_menu_actions_prefill_selected_event()
 #[test]
 fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prior_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -11305,8 +11305,8 @@ fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prio
 #[test]
 fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -11331,8 +11331,8 @@ fn assert_message_menu_attachment_save(
     filename: &str,
     bytes: Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path(fixture_name);
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11364,7 +11364,7 @@ fn assert_message_menu_attachment_save(
     app.wait_idle(Duration::from_secs(5))?;
 
     let saved_path = local_app_data
-        .join("mmatrix")
+        .join("mirx")
         .join("ui-shell")
         .join("attachments")
         .join("_media_example.org")
@@ -11413,8 +11413,8 @@ fn automation_driver_message_menu_save_video_attachment_writes_file()
 #[test]
 fn automation_driver_message_menu_redact_records_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("redactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11449,8 +11449,8 @@ fn automation_driver_message_menu_redact_records_selected_event()
 #[test]
 fn automation_driver_message_menu_redact_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11483,8 +11483,8 @@ fn automation_driver_message_menu_redact_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_slash_clear_clears_only_active_room_timeline()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11543,8 +11543,8 @@ fn automation_driver_slash_clear_clears_only_active_room_timeline()
 #[test]
 fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11621,8 +11621,8 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
 #[test]
 fn automation_driver_slash_clear_in_status_view_is_a_no_op()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11668,8 +11668,8 @@ fn automation_driver_slash_clear_in_status_view_is_a_no_op()
 #[test]
 fn automation_driver_slash_find_updates_active_room_without_sending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11729,8 +11729,8 @@ fn automation_driver_slash_find_updates_active_room_without_sending_text()
 #[test]
 fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!search:example", "Search", false)]),
@@ -11866,8 +11866,8 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
 #[test]
 fn automation_driver_find_active_thread_timeline_scopes_to_thread()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [
         OsString::from("--render-state"),
@@ -11884,7 +11884,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
     ));
     let thread_path = navigation_path_by_substrings(
         &initial_state.navigation,
-        &["mmatrix", "rooms: 1", "Work", "Ops", "root msg"],
+        &["mirx", "rooms: 1", "Work", "Ops", "root msg"],
     );
     let thread_view_identity = thread_identity("!ops:example", "$thread-root");
     app.select_navigation_path(&thread_path)?;
@@ -11972,8 +11972,8 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
 #[test]
 fn automation_driver_find_active_status_view_matches_status_lines()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[Event::Started, Event::E2eeStatus(sample_e2ee_status())])?;
     let args = [
         OsString::from("--render-state"),
@@ -12035,8 +12035,8 @@ fn automation_driver_find_active_status_view_matches_status_lines()
 #[test]
 fn automation_driver_find_active_view_reports_no_match_without_changing_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let args = [
         OsString::from("--render-state"),
@@ -12106,8 +12106,8 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
 #[test]
 fn automation_driver_find_active_view_empty_query_matches_slash_find_validation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let args = [
         OsString::from("--render-state"),
@@ -12177,8 +12177,8 @@ fn automation_driver_find_active_view_empty_query_matches_slash_find_validation(
 #[test]
 fn automation_driver_find_active_view_preserves_per_view_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -12308,8 +12308,8 @@ fn automation_driver_find_active_view_preserves_per_view_state()
 #[test]
 fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!rebuild:example", "Rebuild", false)]),
@@ -12400,8 +12400,8 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
 
 #[test]
 fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12444,8 +12444,8 @@ fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std
 #[test]
 fn automation_driver_literal_slash_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12489,8 +12489,8 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
 #[test]
 fn automation_driver_me_submission_uses_edit_control_path_and_preserves_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12528,8 +12528,8 @@ fn automation_driver_me_submission_uses_edit_control_path_and_preserves_history(
 #[test]
 fn automation_driver_empty_me_reports_usage_without_sending()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12562,30 +12562,30 @@ fn automation_driver_empty_me_reports_usage_without_sending()
 
 #[test]
 fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(homeserver_url) = env::var("MMATRIX_HS")
+    let Some(homeserver_url) = env::var("MIRX_HS")
         .ok()
         .filter(|value| !value.is_empty())
     else {
         return Ok(());
     };
-    let Some(username) = env::var("MMATRIX_USER")
+    let Some(username) = env::var("MIRX_USER")
         .ok()
         .filter(|value| !value.is_empty())
     else {
         return Ok(());
     };
-    let Some(password) = env::var("MMATRIX_PASS")
+    let Some(password) = env::var("MIRX_PASS")
         .ok()
         .filter(|value| !value.is_empty())
     else {
         return Ok(());
     };
-    let room_id = env::var("MMATRIX_ROOM")
+    let room_id = env::var("MIRX_ROOM")
         .ok()
         .filter(|value| !value.is_empty());
 
-    let exe_path = mmatrix_ui_exe_path()
-        .map_err(|error| format!("failed to locate mmatrix-ui.exe: {error}"))?;
+    let exe_path = mirx_ui_exe_path()
+        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let session_path = session_file_path(&local_app_data);
     let options = launch_options(Some(local_app_data.clone()));
@@ -12608,7 +12608,7 @@ fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(room_id) = room_id.as_deref() {
         let unique_body = format!(
-            "mmatrix ui live {}",
+            "mirx ui live {}",
             SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
         );
         app.select_room(room_id)?;
