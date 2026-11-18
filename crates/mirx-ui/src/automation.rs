@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 25;
+pub(crate) const PROTOCOL_VERSION: u32 = 26;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1062,6 +1062,8 @@ pub(crate) enum ComposeKey {
     Return,
     Up,
     Down,
+    Tab,
+    ShiftTab,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -1075,6 +1077,8 @@ impl<'de> Deserialize<'de> for ComposeKey {
             Return,
             Up,
             Down,
+            Tab,
+            ShiftTab,
         }
 
         #[derive(Deserialize)]
@@ -1094,6 +1098,8 @@ impl<'de> Deserialize<'de> for ComposeKey {
                 Kind::Return => Self::Return,
                 Kind::Up => Self::Up,
                 Kind::Down => Self::Down,
+                Kind::Tab => Self::Tab,
+                Kind::ShiftTab => Self::ShiftTab,
             })
             .map_err(serde::de::Error::custom)
     }
@@ -2603,8 +2609,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_25() {
-        assert_eq!(PROTOCOL_VERSION, 25);
+    fn protocol_version_is_26() {
+        assert_eq!(PROTOCOL_VERSION, 26);
     }
 
     #[test]
@@ -3271,6 +3277,14 @@ mod tests {
             (
                 br#"{"id":"compose-key","args":{"key":{"kind":"down"}}}"#.as_slice(),
                 ComposeKey::Down,
+            ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"tab"}}}"#.as_slice(),
+                ComposeKey::Tab,
+            ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"shift_tab"}}}"#.as_slice(),
+                ComposeKey::ShiftTab,
             ),
         ] {
             assert_eq!(
@@ -4278,7 +4292,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":25,
+                    "protocol_version":26,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

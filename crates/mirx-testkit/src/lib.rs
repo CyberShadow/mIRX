@@ -1353,6 +1353,8 @@ pub enum ComposeKey {
     Return,
     Up,
     Down,
+    Tab,
+    ShiftTab,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -1366,6 +1368,8 @@ impl<'de> Deserialize<'de> for ComposeKey {
             Return,
             Up,
             Down,
+            Tab,
+            ShiftTab,
         }
 
         #[derive(Deserialize)]
@@ -1385,6 +1389,8 @@ impl<'de> Deserialize<'de> for ComposeKey {
                 Kind::Return => Self::Return,
                 Kind::Up => Self::Up,
                 Kind::Down => Self::Down,
+                Kind::Tab => Self::Tab,
+                Kind::ShiftTab => Self::ShiftTab,
             })
             .map_err(serde::de::Error::custom)
     }

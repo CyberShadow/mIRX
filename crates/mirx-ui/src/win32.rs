@@ -60,19 +60,19 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
-    BTNS_CHECK, BTNS_SHOWTEXT, EM_GETSEL, EM_SCROLLCARET, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES,
-    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW,
-    SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
-    TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE,
-    TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTATE_MARKED, TBSTYLE_EX_MIXEDBUTTONS,
-    TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
-    TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW,
-    TVINSERTSTRUCTW_0, TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW,
-    TVN_SELCHANGEDW,
+    BTNS_CHECK, BTNS_SHOWTEXT, EM_GETSEL, EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL, I_IMAGENONE,
+    ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR,
+    SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE,
+    TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE,
+    TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTATE_MARKED,
+    TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD,
+    TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_STATE, TVIF_TEXT,
+    TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND,
+    TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM,
+    TVM_SETITEMW, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetKeyState, SetFocus, VK_CONTROL,
+    EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT,
@@ -126,7 +126,10 @@ use crate::{
     },
 };
 
+mod nick_completion;
 mod timeline_text;
+
+use nick_completion::{NickCompletion, member_mention_text};
 
 use timeline_text::{
     TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line, event_line, member_change_text, message_line,
@@ -239,6 +242,7 @@ const VK_RETURN_KEY: WPARAM = 13;
 const VK_UP_KEY: WPARAM = 38;
 const VK_DOWN_KEY: WPARAM = 40;
 const VK_DELETE_KEY: WPARAM = 46;
+const VK_TAB_KEY: WPARAM = 9;
 const VK_ESCAPE_KEY: WPARAM = 27;
 const VK_F_KEY: WPARAM = b'F' as WPARAM;
 
@@ -2601,6 +2605,8 @@ struct WindowState {
     room_activity: BTreeSet<ViewId>,
     room_activity_read_targets: BTreeMap<ViewId, String>,
     compose_history: ComposeHistory,
+    /// The last Tab completion, for further Tabs to cycle.
+    nick_completion: Option<ComposeNickCompletion>,
     edit_window_proc: WNDPROC,
     model: UiModel,
     decoded_images: BTreeMap<String, GdiplusImage>,
@@ -2610,6 +2616,14 @@ struct WindowState {
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
+}
+
+/// A Tab completion and the view whose members it completed; switching
+/// views ends it, as the compose box is shared by every view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ComposeNickCompletion {
+    view_id: ViewId,
+    completion: NickCompletion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2734,6 +2748,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         room_activity: BTreeSet::new(),
         room_activity_read_targets: BTreeMap::new(),
         compose_history: ComposeHistory::default(),
+        nick_completion: None,
         edit_window_proc: None,
         model: initial_model(),
         decoded_images: BTreeMap::new(),
@@ -4351,14 +4366,78 @@ unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
     refresh_status_bar(hwnd)
 }
 
+/// Inserts the selected member's name at the compose caret, replacing any
+/// selection, followed by a space to type on.
 unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
     let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    let mention = member
-        .display_name
-        .filter(|name| !name.is_empty())
-        .unwrap_or(member.user_id);
-    set_compose_text(hwnd, &format!("{mention} "))?;
-    SetFocus(compose_edit(hwnd)?);
+    let mention = member_mention_text(&member.user_id, member.display_name.as_deref());
+    let edit = compose_edit(hwnd)?;
+    state_mut(hwnd).compose_history.reset_navigation();
+    replace_edit_selection(edit, &format!("{mention} "));
+    SetFocus(edit);
+    Ok(())
+}
+
+/// Replaces the edit control's selection, or inserts at its caret, and
+/// leaves the caret after `text`.
+unsafe fn replace_edit_selection(edit: HWND, text: &str) {
+    let text = wide_null(text);
+    // FALSE: no separate undo step for the replacement.
+    SendMessageW(edit, EM_REPLACESEL, 0, text.as_ptr() as LPARAM);
+}
+
+/// The compose text as UTF-16 and the caret position in it.
+unsafe fn compose_text_and_caret(edit: HWND) -> (Vec<u16>, usize) {
+    let text_len = SendMessageW(edit, WM_GETTEXTLENGTH, 0, 0) as usize;
+    let mut text = vec![0u16; text_len + 1];
+    let copied = SendMessageW(edit, WM_GETTEXT, text.len(), text.as_mut_ptr() as LPARAM) as usize;
+    text.truncate(copied);
+    let mut start = 0u32;
+    let mut end = 0u32;
+    SendMessageW(
+        edit,
+        EM_GETSEL,
+        (&mut start as *mut u32) as WPARAM,
+        (&mut end as *mut u32) as LPARAM,
+    );
+    // The caret is at the selection's end; completing replaces the word
+    // before it, which drops any selection.
+    (text, end as usize)
+}
+
+/// Tab (or Shift+Tab when `reverse`) in the compose box: continues the last
+/// completion while the box still holds what it inserted, else completes
+/// the word before the caret against the active view's members.
+unsafe fn complete_compose_nick(hwnd: HWND, reverse: bool) -> Result<(), String> {
+    let edit = compose_edit(hwnd)?;
+    let (text, caret) = compose_text_and_caret(edit);
+    let state = state_mut(hwnd);
+    let view_id = state.active_view.clone();
+    let edit_op = match state.nick_completion.as_mut() {
+        Some(last) if last.view_id == view_id && last.completion.continues(&text, caret) => {
+            last.completion.advance(reverse)
+        }
+        _ => {
+            let started = NickCompletion::start(&text, caret, active_view_members(state), reverse);
+            let Some((completion, edit_op)) = started else {
+                state.nick_completion = None;
+                return Ok(());
+            };
+            state.nick_completion = Some(ComposeNickCompletion {
+                view_id,
+                completion,
+            });
+            edit_op
+        }
+    };
+    state.compose_history.reset_navigation();
+    SendMessageW(
+        edit,
+        EM_SETSEL,
+        edit_op.replace.start,
+        edit_op.replace.end as LPARAM,
+    );
+    replace_edit_selection(edit, &edit_op.text);
     Ok(())
 }
 
@@ -5832,20 +5911,23 @@ struct MemberMenuActionState {
     selected_label: Option<String>,
 }
 
-unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
-    let state = state_ref(hwnd);
+/// The members of the active view's room, in nick list order; a thread
+/// shares its room's members and the status view has none.
+fn active_view_members(state: &WindowState) -> &[RoomMemberSummary] {
     let room_id = match &state.active_view {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id,
-        ViewId::Status => return Vec::new(),
+        ViewId::Status => return &[],
     };
-    room_member_view_rows(
-        state
-            .model
-            .room_views
-            .get(room_id)
-            .map(|view| view.members.as_slice())
-            .unwrap_or_default(),
-    )
+    state
+        .model
+        .room_views
+        .get(room_id)
+        .map(|view| view.members.as_slice())
+        .unwrap_or_default()
+}
+
+unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
+    room_member_view_rows(active_view_members(state_ref(hwnd)))
 }
 
 unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
@@ -12356,6 +12438,10 @@ unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(), String> {
         ComposeKey::Return => VK_RETURN_KEY,
         ComposeKey::Up => VK_UP_KEY,
         ComposeKey::Down => VK_DOWN_KEY,
+        ComposeKey::Tab => VK_TAB_KEY,
+        // A sent key carries no Shift state, so Shift+Tab goes straight to
+        // the completion the edit box runs for it.
+        ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
     };
     SendMessageW(edit, WM_KEYDOWN, virtual_key, 0);
     Ok(())
@@ -13650,6 +13736,21 @@ unsafe extern "system" fn edit_window_proc(
 
     if message == WM_KEYDOWN && wparam == VK_DOWN_KEY {
         let _ = navigate_compose_history(parent, ComposeHistoryDirection::Next);
+        return 0;
+    }
+
+    if message == WM_KEYDOWN && wparam == VK_TAB_KEY {
+        let reverse = GetKeyState(VK_SHIFT as i32) < 0;
+        if let Err(message) = complete_compose_nick(parent, reverse) {
+            let _ = set_local_command_status(parent, message);
+        }
+        return 0;
+    }
+
+    // TranslateMessage also turns the Tab key into this character. The key
+    // down already completed, so the edit box must not see it: a single-line
+    // edit box rejects it, with a beep on Windows.
+    if message == WM_CHAR && wparam == VK_TAB_KEY {
         return 0;
     }
 
@@ -15840,6 +15941,7 @@ mod tests {
             room_activity: BTreeSet::new(),
             room_activity_read_targets: BTreeMap::new(),
             compose_history: ComposeHistory::default(),
+            nick_completion: None,
             edit_window_proc: None,
             model: initial_model(),
             decoded_images: BTreeMap::new(),

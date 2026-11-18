@@ -6167,6 +6167,8 @@ fn compose_key_round_trips_and_rejects_invalid_shapes() {
         (ComposeKey::Return, r#"{"kind":"return"}"#),
         (ComposeKey::Up, r#"{"kind":"up"}"#),
         (ComposeKey::Down, r#"{"kind":"down"}"#),
+        (ComposeKey::Tab, r#"{"kind":"tab"}"#),
+        (ComposeKey::ShiftTab, r#"{"kind":"shift_tab"}"#),
     ] {
         assert_eq!(
             serde_json::to_string(&key).expect("compose key must serialize"),
@@ -6181,6 +6183,9 @@ fn compose_key_round_trips_and_rejects_invalid_shapes() {
     for json in [
         r#"{"kind":"return","unexpected":true}"#,
         r#"{"kind":"left"}"#,
+        r#"{"kind":"shift-tab"}"#,
+        r#"{"kind":"shiftTab"}"#,
+        r#"{"kind":"tab","shift":true}"#,
         r#"{"unexpected":true}"#,
     ] {
         assert!(

@@ -50,7 +50,7 @@ use windows_sys::Win32::System::DataExchange::{
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
+use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect,
@@ -2653,7 +2653,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 25);
+    assert_eq!(version.protocol_version, 26);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4069,6 +4069,128 @@ fn automation_driver_member_menu_mentions_display_name_or_user_id()
     app.select_member("@ghost:example")?;
     app.mention_selected_member_via_menu()?;
     assert_eq!(app.compose_text()?, "@ghost:example ");
+
+    // The name goes in at the caret; the rest of the line is kept.
+    app.set_compose_text("hi  there")?;
+    unsafe { SendMessageW(compose_edit_hwnd(&app), EM_SETSEL, 3, 3) };
+    app.select_member("@casey:example")?;
+    app.mention_selected_member_via_menu()?;
+    assert_eq!(app.compose_text()?, "hi Casey  there");
+    Ok(())
+}
+
+fn launch_member_ranks_app() -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("member-ranks.json");
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            fixture_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!ranks:example")?;
+    Ok(app)
+}
+
+#[test]
+fn automation_driver_tab_completes_member_nick() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_ranks_app()?;
+
+    app.set_compose_text("hi al")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "hi Alan");
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "hi Alice");
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "hi Alan", "cycling wraps");
+    app.send_compose_key(ComposeKey::ShiftTab)?;
+    assert_eq!(app.compose_text()?, "hi Alice");
+    app.send_compose_key(ComposeKey::ShiftTab)?;
+    assert_eq!(app.compose_text()?, "hi Alan");
+
+    // Typing ends the completion: the next Tab completes the new word
+    // instead of cycling on to Alice.
+    let edit = unsafe { compose_edit_hwnd(&app) };
+    for character in [' ', 'c', 'a'] {
+        unsafe { SendMessageW(edit, WM_CHAR, character as WPARAM, 0) };
+    }
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "hi Alan Casey");
+
+    // The character TranslateMessage makes of the Tab key changes nothing.
+    unsafe { SendMessageW(edit, WM_CHAR, '\t' as WPARAM, 0) };
+    assert_eq!(app.compose_text()?, "hi Alan Casey");
+
+    // Our own nick (Admin) is never offered; unmatched words stay.
+    app.set_compose_text("adm")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "adm");
+    Ok(())
+}
+
+#[test]
+fn automation_driver_tab_completion_at_sign_inserts_user_id()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_ranks_app()?;
+
+    app.set_compose_text("/query @ca")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "/query @casey:example");
+
+    // Members sharing a name complete once by name, apart by user ID.
+    app.set_compose_text("sa")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "Sam");
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "Sam");
+    app.set_compose_text("@sa")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "@sam-one:example");
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "@sam-two:example");
+    Ok(())
+}
+
+#[test]
+fn automation_driver_tab_completion_in_thread_uses_parent_room_members()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_member_list_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        message_event_with_event_id(
+            "!members:example",
+            "$tab-thread-root",
+            "@alice:example",
+            1_700_000_090_000,
+            CoreRoomMessagePresentationKind::Text,
+            "tab thread root",
+        ),
+        message_event_with_event_id_and_relation(
+            "!members:example",
+            "$tab-thread-reply",
+            "@casey:example",
+            1_700_000_120_000,
+            Some(CoreRoomActivityRelation::Thread {
+                thread_root_event_id: "$tab-thread-root".to_owned(),
+                in_reply_to_event_id: Some("$tab-thread-root".to_owned()),
+                is_falling_back: false,
+            }),
+            CoreRoomMessagePresentationKind::Text,
+            "tab thread reply",
+        ),
+    ])?)?;
+    app.select_view(thread_identity("!members:example", "$tab-thread-root"))?;
+    app.set_compose_text("thanks ca")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "thanks Casey");
+
+    // The status view has no members, so Tab leaves the text alone.
+    app.select_view(ViewIdentity::Status)?;
+    app.set_compose_text("ca")?;
+    app.send_compose_key(ComposeKey::Tab)?;
+    assert_eq!(app.compose_text()?, "ca");
     Ok(())
 }
 
