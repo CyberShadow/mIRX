@@ -3066,13 +3066,13 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
     assert_active_switchbar_item(&ui_state, &ViewIdentity::Status);
     let status_view = find_view(&ui_state, &ViewIdentity::Status);
     assert!(status_view.active);
-    assert!(view_contains(status_view, "recovery: incomplete"));
-    assert!(view_contains(status_view, "local backup: enabled"));
-    assert!(view_contains(status_view, "server backup: exists"));
-    assert!(view_contains(status_view, "cross-signing: incomplete"));
     assert!(view_contains(
         status_view,
-        "actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys",
+        "* E2EE: recovery incomplete, local backup enabled, server backup exists, cross-signing incomplete",
+    ));
+    assert!(view_contains(
+        status_view,
+        "* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys",
     ));
     assert!(
         ui_state
@@ -9493,10 +9493,6 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
         app.selected_navigation_path()?,
         nav_path(&["mirx", "status"])
     );
-    assert!(view_contains(
-        find_view(&ui_state, &ViewIdentity::Status),
-        "status window active"
-    ));
 
     app.send_compose_key(ComposeKey::Up)?;
     assert_eq!(app.compose_text()?, "/status");
@@ -12676,7 +12672,7 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
 }
 
 #[test]
-fn automation_driver_slash_clear_in_status_view_is_a_no_op()
+fn automation_driver_slash_clear_in_status_view_empties_the_log()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -12693,7 +12689,12 @@ fn automation_driver_slash_clear_in_status_view_is_a_no_op()
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
-    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert!(view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        "* Synced rooms: "
+    ));
 
     app.set_compose_text("/clear")?;
     app.send_compose_key(ComposeKey::Return)?;
@@ -12702,22 +12703,89 @@ fn automation_driver_slash_clear_in_status_view_is_a_no_op()
 
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert!(ui_state.status_bar.text.contains("cleared window: status"));
     assert!(
-        ui_state
-            .status_bar
-            .text
-            .contains("nothing to clear in status view")
+        find_view(&ui_state, &ViewIdentity::Status)
+            .lines
+            .iter()
+            .all(|line| line.is_empty())
     );
-    assert!(view_contains(
-        find_view(&ui_state, &ViewIdentity::Status),
-        "nothing to clear in status view"
-    ));
     assert_eq!(app.dump_model()?.last_error, None);
 
     app.send_compose_key(ComposeKey::Up)?;
     assert_eq!(app.compose_text()?, "/clear");
 
     drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_status_window_is_a_timestamped_log() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let mut events = base_events();
+    events.push(Event::VerificationRequest(mirx_core::VerificationRequest {
+        flow_id: "flow-status-log".to_owned(),
+        user_id: "@alice:example".to_owned(),
+    }));
+    let state_path = write_state_file(&events)?;
+    let local_app_data = unique_local_app_data_path();
+    let args = [
+        OsString::from("--render-state"),
+        state_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app_with_options(
+        &exe_path,
+        &args,
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/status")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    let status_view = find_view(&ui_state, &ViewIdentity::Status);
+    // Render-state runs on a fixed clock, a minute before the fixtures.
+    assert!(view_contains(
+        status_view,
+        "[22:12] * Synced rooms: 2 joined, 0 invited"
+    ));
+    assert!(view_contains(
+        status_view,
+        "[22:12] * Verification requested by @alice:example (flow flow-status-log)"
+    ));
+
+    let result = app.find_active_view("flow-status-log")?;
+    assert_eq!(result.active, ViewIdentity::Status);
+    assert_eq!(result.match_count, 1);
+    assert_eq!(
+        result.selected_text.as_deref(),
+        Some("[22:12] * Verification requested by @alice:example (flow flow-status-log)")
+    );
+
+    // Status lines are not messages: the message menu has nothing to act on.
+    let menu = app.dump_message_menu_state()?;
+    assert!(!menu.reply_enabled && !menu.edit_enabled && !menu.react_enabled);
+    assert!(!menu.redact_enabled && !menu.save_attachment_enabled);
+    assert!(
+        app.open_selected_timeline_context_menu(ContextMenuCommand::ReplyMessage)
+            .is_err()
+    );
+
+    app.set_compose_text("/e2ee status")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(view_contains(
+        find_view(&app.dump_ui_state()?, &ViewIdentity::Status),
+        "[22:12] * E2EE status not yet known"
+    ));
+
+    drop(app);
+    let _ = fs::remove_file(&state_path);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }

@@ -750,8 +750,7 @@ configure_case_expectations() {
         --expect-verification-text 'state=requested'
       )
       status_view_expect_args=(
-        --expect-status-view 'status: verification requested by @alice:example'
-        --expect-status-view 'flow_id: flow-verify-request'
+        --expect-status-view '[22:12] * Verification requested by @alice:example (flow flow-verify-request)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'find: 1/1 "flow-verify-request"'
@@ -766,6 +765,35 @@ configure_case_expectations() {
       navigation_forbid_args=(
         --expect-no-navigation-text 'flow-verify-request'
       )
+      ;;
+    status-log)
+      expect_active_view='status'
+      select_views=('status')
+      # Tiled, so the Status caption shows.
+      ordered_actions=(arrange:tile_vertical)
+      expect_error='message send failed'
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Logged in as @me:example (device MIRXDEVICE)'
+        --expect-status-view '[22:12] * Syncing with the homeserver'
+        --expect-status-view '[22:12] * Synced rooms: 1 joined, 0 invited'
+        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup not checked, cross-signing complete'
+        --expect-status-view '[22:12] * Error during send text: message send failed'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'fixture-access-token'
+        --expect-no-status-view 'status: '
+      )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'status::Status: @me:example'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='status'
       ;;
     find-no-match)
       expect_selected='!find-miss:example'
@@ -1019,7 +1047,7 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view 'flow-verify-123'
         --expect-status-view 'message send failed'
-        --expect-status-view 'actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
+        --expect-status-view '* Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'error during send text'
@@ -1057,11 +1085,8 @@ configure_case_expectations() {
         --expect-verification-text 'state=requested'
       )
       status_view_expect_args=(
-        --expect-status-view 'status: verification requested by @alice:example'
-        --expect-status-view 'state: requested'
-        --expect-status-view 'flow_id: flow-verify-request'
-        --expect-status-view 'from_user: @alice:example'
-        --expect-status-view 'actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
+        --expect-status-view '[22:12] * Verification requested by @alice:example (flow flow-verify-request)'
+        --expect-status-view '* Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'verification requested by @alice:example'
@@ -1094,13 +1119,10 @@ configure_case_expectations() {
         --expect-verification-text 'decimals=1234-5678-9012'
       )
       status_view_expect_args=(
-        --expect-status-view 'status: verification sas ready with @alice:example'
-        --expect-status-view 'state: sas ready'
-        --expect-status-view 'flow_id: flow-verify-sas-ready'
-        --expect-status-view 'from_user: @alice:example'
-        --expect-status-view 'emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
-        --expect-status-view 'decimals: 1234-5678-9012'
-        --expect-status-view 'actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel'
+        --expect-status-view '[22:12] * Verification with @alice:example: compare the emoji or the numbers'
+        --expect-status-view '* Emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
+        --expect-status-view '* Decimals: 1234-5678-9012'
+        --expect-status-view '* Actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'verification sas ready with @alice:example'
@@ -1127,11 +1149,7 @@ configure_case_expectations() {
         --expect-verification-text 'state=done'
       )
       status_view_expect_args=(
-        --expect-status-view 'status: verification done with @alice:example'
-        --expect-status-view 'state: done'
-        --expect-status-view 'flow_id: flow-verify-done'
-        --expect-status-view 'from_user: @alice:example'
-        --expect-status-view 'result: verified'
+        --expect-status-view '[22:12] * Verification done with @alice:example: verified'
       )
       status_view_forbid_args=(
         --expect-no-status-view '/verify confirm'
@@ -1165,12 +1183,7 @@ configure_case_expectations() {
         --expect-verification-text 'code=m.timeout'
       )
       status_view_expect_args=(
-        --expect-status-view 'status: verification cancelled with @alice:example'
-        --expect-status-view 'state: cancelled'
-        --expect-status-view 'flow_id: flow-verify-cancelled'
-        --expect-status-view 'from_user: @alice:example'
-        --expect-status-view 'reason: timed out waiting for confirmation'
-        --expect-status-view 'code: m.timeout'
+        --expect-status-view '[22:12] * Verification cancelled with @alice:example: timed out waiting for confirmation (m.timeout)'
       )
       status_view_forbid_args=(
         --expect-no-status-view '/verify confirm'
@@ -1196,12 +1209,8 @@ configure_case_expectations() {
     e2ee-recovery-needed)
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view 'e2ee'
-        --expect-status-view 'recovery: incomplete'
-        --expect-status-view 'local backup: disabled'
-        --expect-status-view 'server backup: exists'
-        --expect-status-view 'cross-signing: incomplete'
-        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+        --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete'
+        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1225,12 +1234,8 @@ configure_case_expectations() {
     e2ee-recovery-enabled)
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view 'e2ee'
-        --expect-status-view 'recovery: enabled'
-        --expect-status-view 'local backup: enabled'
-        --expect-status-view 'server backup: exists'
-        --expect-status-view 'cross-signing: complete'
-        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup exists, cross-signing complete'
+        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1255,14 +1260,9 @@ configure_case_expectations() {
       expect_error='recover_e2ee: failed to recover E2EE secrets'
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view 'e2ee'
-        --expect-status-view 'recovery: incomplete'
-        --expect-status-view 'local backup: disabled'
-        --expect-status-view 'server backup: exists'
-        --expect-status-view 'cross-signing: incomplete'
-        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
-        --expect-status-view 'operation: e2ee recovery'
-        --expect-status-view 'failed to recover E2EE secrets: invalid recovery key or passphrase'
+        --expect-status-view '[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete'
+        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+        --expect-status-view '[22:12] * Error during e2ee recovery: failed to recover E2EE secrets: invalid recovery key or passphrase'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1287,12 +1287,8 @@ configure_case_expectations() {
     e2ee-backup-missing)
       expect_active_view='status'
       status_view_expect_args=(
-        --expect-status-view 'e2ee'
-        --expect-status-view 'recovery: enabled'
-        --expect-status-view 'local backup: enabled'
-        --expect-status-view 'server backup: missing'
-        --expect-status-view 'cross-signing: complete'
-        --expect-status-view 'actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
+        --expect-status-view '[22:12] * E2EE: recovery enabled, local backup enabled, server backup missing, cross-signing complete'
+        --expect-status-view '* Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys'
       )
       status_view_forbid_args=(
         --expect-no-status-view 'recovery_secret'
@@ -1513,16 +1509,24 @@ configure_case_expectations() {
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!history:example::History'
       )
+      # The failure is an error line in the inactive Status window.
+      status_view_expect_args=(
+        --expect-status-view '* Error during backfill room history: homeserver unavailable'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'status::message'
+      )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!history:example'
-        --expect-no-switchbar-activity 'status'
       )
       navigation_expect_args=(
         --expect-navigation-text 'History'
       )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'status::message'
+      )
       navigation_no_activity_expect_args=(
         --expect-no-navigation-activity 'History'
-        --expect-no-navigation-activity 'status'
       )
       expect_switchbar_active='room:!history:example'
       ;;

@@ -1,0 +1,51 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null
+      }
+    }
+  },
+  "SyncStarted",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops", "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "E2eeStatus": {
+      "recovery": "enabled",
+      "backup": {
+        "state": "enabled",
+        "enabled_locally": true,
+        "exists_on_server": null
+      },
+      "cross_signing": {
+        "has_master": true,
+        "has_self_signing": true,
+        "has_user_signing": true,
+        "complete": true
+      }
+    }
+  },
+  {
+    "Error": {
+      "operation": "SendMessage",
+      "message": "message send failed"
+    }
+  }
+]

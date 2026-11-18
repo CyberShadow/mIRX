@@ -13,7 +13,7 @@ use std::ptr::{copy_nonoverlapping, null, null_mut};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, mpsc::RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
@@ -61,16 +61,15 @@ use windows_sys::Win32::System::Memory::{
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
-    CDRF_NOTIFYITEMDRAW, EM_GETSEL, EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL, I_IMAGENONE,
-    ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
-    NM_CUSTOMDRAW, NMHDR, NMTBCUSTOMDRAW, NMTVCUSTOMDRAW, SB_SETTEXTW, SBARS_SIZEGRIP,
-    STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
-    TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE,
-    TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT,
-    TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT,
-    TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW,
-    TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
-    TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
+    CDRF_NOTIFYITEMDRAW, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES,
+    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CUSTOMDRAW, NMHDR,
+    NMTBCUSTOMDRAW, NMTVCUSTOMDRAW, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo,
+    TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON,
+    TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
+    TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD,
+    TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT,
+    TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
+    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT,
@@ -80,10 +79,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW,
     DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
-    ES_WANTRETURN, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
-    GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
-    GetMessageW, GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU,
-    HideCaret, IDC_ARROW, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
+    EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx, GWL_STYLE,
+    GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow, GetMessageW,
+    GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret,
+    IDC_ARROW, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
     LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
     LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
     MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
@@ -133,9 +132,11 @@ use crate::{
 
 mod mdi;
 mod nick_completion;
+mod status_log;
 mod timeline_text;
 
 use nick_completion::{NickCompletion, member_mention_text};
+use status_log::{StatusLineKind, StatusLog};
 
 use timeline_text::{
     ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line,
@@ -326,6 +327,10 @@ enum TimelineRowIdentity {
         label: TimelineSyntheticRowLabel,
         logical_text: String,
     },
+    /// A Status log line; identical lines stay distinct.
+    StatusLine {
+        sequence: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -351,6 +356,10 @@ impl TimelineRowIdentity {
         Self::ActivityReactionSummary {
             activity_id: activity_id.to_owned(),
         }
+    }
+
+    fn status_line(sequence: u64) -> Self {
+        Self::StatusLine { sequence }
     }
 
     fn synthetic(label: TimelineSyntheticRowLabel, logical_text: &str) -> Self {
@@ -432,6 +441,7 @@ enum TimelineRowKind {
     Event,
     /// mIRC's navy info lines.
     Info,
+    Error,
     Typing,
     ReactionSummary,
     Message {
@@ -526,25 +536,13 @@ impl Default for TimelineState {
     }
 }
 
+/// A timeline row matching a find query. Every view draws a timeline, so
+/// every match is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TimelineFindMatch {
+struct FindMatch {
     row_identity: TimelineRowIdentity,
     source_row_index: usize,
     logical_text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct StatusFindMatch {
-    line_index: usize,
-    utf16_start: usize,
-    utf16_end: usize,
-    line_text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum FindMatch {
-    Timeline(TimelineFindMatch),
-    Status(StatusFindMatch),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -611,6 +609,8 @@ struct UiModel {
     /// The signed-in account, known from the login result or the session
     /// being restored.
     own_user_id: Option<String>,
+    /// Kept across logouts, as mIRC keeps Status text across disconnects.
+    status_log: StatusLog,
     lifecycle_state: LifecycleState,
     rooms: Vec<RoomSummary>,
     room_read_states: BTreeMap<String, RoomReadState>,
@@ -2661,6 +2661,7 @@ struct WindowState {
     inert_command_receiver: Option<UnboundedReceiver<Command>>,
     automation: Option<AutomationState>,
     render_state_mode: bool,
+    clock: UiClock,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
@@ -2689,6 +2690,29 @@ struct WindowState {
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
+}
+
+/// Where Status lines get their arrival time. Render-state snapshots must not
+/// depend on when they run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiClock {
+    System,
+    Fixed(u64),
+}
+
+/// 2023-11-14 22:12 UTC, a minute before the fixtures' first event.
+const RENDER_STATE_CLOCK_MS: u64 = 1_699_999_920_000;
+
+impl UiClock {
+    fn now_ms(self) -> u64 {
+        match self {
+            Self::System => SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock must be after the unix epoch")
+                .as_millis() as u64,
+            Self::Fixed(timestamp_ms) => timestamp_ms,
+        }
+    }
 }
 
 /// A Tab completion and the view whose members it completed; switching
@@ -2804,6 +2828,11 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         inert_command_receiver: None,
         automation: None,
         render_state_mode,
+        clock: if render_state_mode {
+            UiClock::Fixed(RENDER_STATE_CLOCK_MS)
+        } else {
+            UiClock::System
+        },
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         last_idle_probe_generation: None,
@@ -5086,6 +5115,7 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
         TimelineRowKind::Event => MIRC_GREEN,
         TimelineRowKind::Info => MIRC_NAVY,
+        TimelineRowKind::Error => MIRC_RED,
         TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
         TimelineRowKind::ReactionSummary => rgb(0x6B, 0x6B, 0x6B),
         TimelineRowKind::Message {
@@ -6627,7 +6657,7 @@ unsafe fn invoke_timeline_context_menu_for_automation(
         .get(&active_view)
         .ok_or_else(|| "message context menu target is unavailable".to_owned())?
         .content;
-    let timeline = room_content_timeline(content);
+    let timeline = view_timeline(&active_view, content);
     let lparam = match event_id {
         Some(event_id) => timeline_event_context_lparam_for_automation(timeline, event_id)?,
         None => -1,
@@ -7889,6 +7919,11 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             } else if !state.synthetic_load_in_progress {
                 return Err("received LoggedIn event without a pending homeserver URL".to_owned());
             }
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::logged_in(&session.user_id, &session.device_id),
+            );
             state.model.own_user_id = Some(session.user_id);
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
@@ -7901,10 +7936,25 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             save_session(homeserver_url, &session)?;
         }
         Event::RestoredSession => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::SESSION_RESTORED.to_owned(),
+            );
             state.model.status = "restored saved session".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
         }
         Event::SyncedRooms(rooms) => {
+            // The core re-sends the room list on every change; only the
+            // first one after connecting is news.
+            if state.model.lifecycle_state != LifecycleState::Ready {
+                let invited = rooms.iter().filter(|room| is_invited_room(room)).count();
+                log_status(
+                    state,
+                    StatusLineKind::Info,
+                    status_log::synced(rooms.len() - invited, invited),
+                );
+            }
             state.model.status = format!("synced {} room(s)", rooms.len());
             state.model.lifecycle_state = LifecycleState::Ready;
             if state
@@ -7953,25 +8003,33 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
         Event::E2eeStatus(status) => {
+            for line in status_log::e2ee_status(&status) {
+                log_status(state, StatusLineKind::Info, line);
+            }
             state.model.last_e2ee_status = Some(status);
             state.model.status = "e2ee status updated".to_owned();
         }
         Event::E2eeRecoverySucceeded(_) => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::E2EE_RECOVERY_COMPLETE.to_owned(),
+            );
             state.model.status = "e2ee recovery complete".to_owned();
         }
         Event::E2eeRecoverySetupSucceeded(_) => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::E2EE_RECOVERY_SET_UP.to_owned(),
+            );
             state.model.last_e2ee_recovery_setup_result = true;
             state.model.status = "e2ee recovery setup complete".to_owned();
         }
         Event::VerificationRequest(request) => {
-            let event = verification_state_event_from_request(request);
-            state.model.status = verification_status_message(&event);
-            state.model.last_verification = Some(event);
+            apply_verification_event(state, verification_state_event_from_request(request));
         }
-        Event::VerificationState(event) => {
-            state.model.status = verification_status_message(&event);
-            state.model.last_verification = Some(event);
-        }
+        Event::VerificationState(event) => apply_verification_event(state, event),
         Event::LoggedOut => {
             delete_saved_session()?;
             state.pending_login_homeserver_url = None;
@@ -7992,12 +8050,23 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.room_activity_read_targets.clear();
             state.find_states.clear();
             state.decoded_images.clear();
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::LOGGED_OUT.to_owned(),
+            );
         }
         Event::Stopped => {
+            log_status(state, StatusLineKind::Info, status_log::STOPPED.to_owned());
             state.model.status = "core stopped".to_owned();
             state.model.lifecycle_state = LifecycleState::Stopped;
         }
         Event::SyncStarted => {
+            log_status(
+                state,
+                StatusLineKind::Info,
+                status_log::SYNC_STARTED.to_owned(),
+            );
             state.model.status = "continuous sync started".to_owned();
             state.model.lifecycle_state = LifecycleState::Syncing;
         }
@@ -8005,6 +8074,11 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             if error.operation == Operation::BackfillRoomHistory {
                 apply_backfill_room_history_error(state, error.message.clone());
             }
+            log_status(
+                state,
+                StatusLineKind::Error,
+                status_log::error(operation_name(error.operation), &error.message),
+            );
             if !preserves_submission_status(&state.model.status, error.operation) {
                 state.model.status = format!("error during {}", operation_name(error.operation));
             }
@@ -8013,6 +8087,30 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         }
     }
     Ok(false)
+}
+
+fn apply_verification_event(state: &mut WindowState, event: VerificationStateEvent) {
+    for line in status_log::verification(&event) {
+        log_status(state, StatusLineKind::Info, line);
+    }
+    state.model.status = verification_status_message(&event);
+    state.model.last_verification = Some(event);
+}
+
+/// Appends a line to the Status window, colouring its switchbar button when
+/// it is not the active window, as any window's new lines do.
+fn log_status(state: &mut WindowState, kind: StatusLineKind, text: String) {
+    state
+        .model
+        .status_log
+        .push(state.clock.now_ms(), kind, text);
+    if state.active_view != ViewId::Status {
+        let level = match kind {
+            StatusLineKind::Info => ViewActivityLevel::Event,
+            StatusLineKind::Error => ViewActivityLevel::Message,
+        };
+        raise_view_activity(state, ViewId::Status, level);
+    }
 }
 
 fn preserves_submission_status(status: &str, operation: Operation) -> bool {
@@ -8507,72 +8605,20 @@ fn format_timestamp_hhmm_utc(timestamp_ms: u64) -> String {
     format!("{hours:02}:{minutes:02}")
 }
 
-fn render_status_lines(model: &UiModel) -> Vec<String> {
-    let mut lines = vec![format!("status: {}", model.status)];
-
-    if let Some(event) = &model.last_verification {
-        lines.push(String::new());
-        lines.push("verification".to_owned());
-        lines.push(format!("state: {}", verification_state_label(&event.state)));
-        lines.push(format!("flow_id: {}", event.flow_id));
-        lines.push(format!("from_user: {}", event.user_id));
-        match &event.state {
-            VerificationState::SasReady { emojis, decimals } => {
-                lines.push(format!("emoji: {}", format_verification_emojis(emojis)));
-                lines.push(format!(
-                    "decimals: {}-{}-{}",
-                    decimals.first, decimals.second, decimals.third
-                ));
-            }
-            VerificationState::Done => {
-                lines.push("result: verified".to_owned());
-            }
-            VerificationState::Cancelled { reason, code, .. } => {
-                lines.push(format!("reason: {reason}"));
-                lines.push(format!("code: {code}"));
-            }
-            VerificationState::Requested
-            | VerificationState::Accepted
-            | VerificationState::Ready
-            | VerificationState::Confirmed => {}
-        }
-        if let Some(actions) = verification_actions_text(Some(event)) {
-            lines.push(format!("actions: {actions}"));
-        }
-    }
-
-    if let Some(status) = &model.last_e2ee_status {
-        lines.push(String::new());
-        lines.push("e2ee".to_owned());
-        lines.push(format!(
-            "recovery: {}",
-            e2ee_recovery_state_label(status.recovery)
-        ));
-        lines.push(format!(
-            "local backup: {}",
-            e2ee_local_backup_label(&status.backup)
-        ));
-        lines.push(format!(
-            "server backup: {}",
-            e2ee_server_backup_label(status.backup.exists_on_server)
-        ));
-        lines.push(format!(
-            "cross-signing: {}",
-            e2ee_cross_signing_label(status.cross_signing.as_ref())
-        ));
-        lines.push(
-            "actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys".to_owned(),
-        );
-    }
-
-    if let Some(error) = &model.last_error {
-        lines.push(String::new());
-        lines.push("error".to_owned());
-        lines.push(format!("operation: {}", operation_name(error.operation)));
-        lines.push(format!("message: {}", error.message));
-    }
-
-    lines
+fn build_status_timeline_rows(status_log: &StatusLog) -> Vec<TimelineRow> {
+    status_log
+        .lines()
+        .iter()
+        .map(|line| {
+            let kind = match line.kind {
+                StatusLineKind::Info => TimelineRowKind::Info,
+                StatusLineKind::Error => TimelineRowKind::Error,
+            };
+            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(line.timestamp_ms));
+            TimelineRow::log(kind, event_line(&timestamp, &line.text))
+                .with_identity(TimelineRowIdentity::status_line(line.sequence))
+        })
+        .collect()
 }
 
 fn frame_status_text(state: &WindowState) -> String {
@@ -8676,94 +8722,34 @@ fn ascii_case_insensitive_contains(haystack: &str, folded_query: &str) -> bool {
     ascii_case_insensitive_match_range(haystack, folded_query).is_some()
 }
 
-fn ascii_case_insensitive_utf16_range(
-    haystack: &str,
-    folded_query: &str,
-) -> Option<(usize, usize)> {
-    let (start, end) = ascii_case_insensitive_match_range(haystack, folded_query)?;
-    let utf16_start = haystack[..start].encode_utf16().count();
-    let utf16_end = utf16_start + haystack[start..end].encode_utf16().count();
-    Some((utf16_start, utf16_end))
-}
-
 fn compute_timeline_find_matches(rows: &[TimelineRow], folded_query: &str) -> Vec<FindMatch> {
     rows.iter()
         .enumerate()
         .filter(|(_, row)| ascii_case_insensitive_contains(&row.logical_text, folded_query))
-        .map(|(source_row_index, row)| {
-            FindMatch::Timeline(TimelineFindMatch {
-                row_identity: row.identity.clone(),
-                source_row_index,
-                logical_text: row.logical_text.clone(),
-            })
+        .map(|(source_row_index, row)| FindMatch {
+            row_identity: row.identity.clone(),
+            source_row_index,
+            logical_text: row.logical_text.clone(),
         })
         .collect()
-}
-
-fn compute_status_find_matches(lines: &[String], folded_query: &str) -> Vec<FindMatch> {
-    let mut matches = Vec::new();
-    let mut document_utf16_offset = 0usize;
-    for (line_index, line_text) in lines.iter().enumerate() {
-        if let Some((utf16_start, utf16_end)) =
-            ascii_case_insensitive_utf16_range(line_text, folded_query)
-        {
-            matches.push(FindMatch::Status(StatusFindMatch {
-                line_index,
-                utf16_start: document_utf16_offset + utf16_start,
-                utf16_end: document_utf16_offset + utf16_end,
-                line_text: line_text.clone(),
-            }));
-        }
-        document_utf16_offset += line_text.encode_utf16().count();
-        if line_index + 1 < lines.len() {
-            document_utf16_offset += "\r\n".encode_utf16().count();
-        }
-    }
-    matches
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FindSelectionStart {
-    TimelineSourceRow(usize),
-    StatusUtf16(usize),
 }
 
 enum FindSelectionMode<'a> {
     Execute {
         folded_query: &'a str,
         previous_state: Option<&'a ViewFindState>,
-        start: FindSelectionStart,
+        /// The first source row in view: find searches down from there.
+        start_source_row_index: usize,
     },
     Recompute {
         previous_state: &'a ViewFindState,
     },
 }
 
-fn find_match_start(match_item: &FindMatch) -> FindSelectionStart {
-    match match_item {
-        FindMatch::Timeline(item) => FindSelectionStart::TimelineSourceRow(item.source_row_index),
-        FindMatch::Status(item) => FindSelectionStart::StatusUtf16(item.utf16_start),
-    }
-}
-
 fn preserved_find_match_index(matches: &[FindMatch], previous_match: &FindMatch) -> Option<usize> {
-    match previous_match {
-        FindMatch::Timeline(previous) => matches.iter().position(|match_item| {
-            matches!(
-                match_item,
-                FindMatch::Timeline(candidate) if candidate.row_identity == previous.row_identity
-            )
-        }),
-        FindMatch::Status(previous) => matches.iter().position(|match_item| {
-            matches!(
-                match_item,
-                FindMatch::Status(candidate)
-                    if candidate.line_text == previous.line_text
-                        && candidate.utf16_start == previous.utf16_start
-                        && candidate.utf16_end == previous.utf16_end
-            )
-        }),
-    }
+    matches
+        .iter()
+        .position(|candidate| candidate.row_identity == previous_match.row_identity)
 }
 
 fn choose_find_match(matches: &[FindMatch], mode: FindSelectionMode<'_>) -> Option<usize> {
@@ -8775,7 +8761,7 @@ fn choose_find_match(matches: &[FindMatch], mode: FindSelectionMode<'_>) -> Opti
         FindSelectionMode::Execute {
             folded_query,
             previous_state,
-            start,
+            start_source_row_index,
         } => {
             if let Some(previous_state) = previous_state
                 && previous_state.folded_query == folded_query
@@ -8787,17 +8773,7 @@ fn choose_find_match(matches: &[FindMatch], mode: FindSelectionMode<'_>) -> Opti
 
             matches
                 .iter()
-                .position(|match_item| match (find_match_start(match_item), start) {
-                    (
-                        FindSelectionStart::TimelineSourceRow(candidate),
-                        FindSelectionStart::TimelineSourceRow(start),
-                    ) => candidate >= start,
-                    (
-                        FindSelectionStart::StatusUtf16(candidate),
-                        FindSelectionStart::StatusUtf16(start),
-                    ) => candidate >= start,
-                    _ => false,
-                })
+                .position(|match_item| match_item.source_row_index >= start_source_row_index)
                 .or(Some(0))
         }
         FindSelectionMode::Recompute { previous_state } => previous_state
@@ -8840,10 +8816,7 @@ fn find_feedback(
 }
 
 fn find_match_selected_text(match_item: &FindMatch) -> String {
-    match match_item {
-        FindMatch::Timeline(item) => item.logical_text.clone(),
-        FindMatch::Status(item) => item.line_text.clone(),
-    }
+    match_item.logical_text.clone()
 }
 
 fn build_view_find_state(
@@ -8962,28 +8935,12 @@ unsafe fn handle_invalid_find_query(
         .unwrap_or_else(|| active_view_find_outcome_without_state(&active_view, query)))
 }
 
-enum ViewFindContent<'a> {
-    Timeline(&'a [TimelineRow]),
-    Status(&'a [String]),
-}
-
-fn recompute_find_for_view(
-    state: &mut WindowState,
-    view_id: &ViewId,
-    content: ViewFindContent<'_>,
-) {
+fn recompute_find_for_view(state: &mut WindowState, view_id: &ViewId, rows: &[TimelineRow]) {
     let Some(previous_state) = state.find_states.get(view_id).cloned() else {
         return;
     };
 
-    let matches = match content {
-        ViewFindContent::Timeline(rows) => {
-            compute_timeline_find_matches(rows, &previous_state.folded_query)
-        }
-        ViewFindContent::Status(lines) => {
-            compute_status_find_matches(lines, &previous_state.folded_query)
-        }
-    };
+    let matches = compute_timeline_find_matches(rows, &previous_state.folded_query);
     let selected_match_index = choose_find_match(
         &matches,
         FindSelectionMode::Recompute {
@@ -9006,19 +8963,6 @@ fn recompute_find_for_view(
     state.find_states.insert(view_id.clone(), next_state);
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-unsafe fn status_edit_selection_start(hwnd: HWND) -> usize {
-    let mut start = 0u32;
-    let mut end = 0u32;
-    SendMessageW(
-        hwnd,
-        EM_GETSEL,
-        (&mut start as *mut u32) as WPARAM,
-        (&mut end as *mut u32) as LPARAM,
-    );
-    start.min(end) as usize
-}
-
 unsafe fn clear_find_projection_for_timeline(hwnd: HWND) {
     if timeline_state_ref(hwnd)
         .selected_find_source_row_index
@@ -9038,14 +8982,13 @@ unsafe fn apply_find_to_active_view(hwnd: HWND, view_id: &ViewId) -> Result<(), 
         .get(view_id)
         .ok_or_else(|| "view state was not tracked".to_owned())?;
 
+    let timeline = view_timeline(view_id, view.content);
     if active_view != *view_id {
-        if matches!(view_id, ViewId::Room(_) | ViewId::Thread { .. }) {
-            clear_find_projection_for_timeline(room_content_timeline(view.content));
-        }
+        clear_find_projection_for_timeline(timeline);
         return Ok(());
     }
 
-    let selected_match = state_ref(hwnd)
+    let selected_source_row_index = state_ref(hwnd)
         .find_states
         .get(view_id)
         .and_then(|find_state| {
@@ -9053,40 +8996,10 @@ unsafe fn apply_find_to_active_view(hwnd: HWND, view_id: &ViewId) -> Result<(), 
                 .selected_match_index
                 .and_then(|index| find_state.matches.get(index))
         })
-        .cloned();
-
-    match view_id {
-        ViewId::Status => {
-            let edit = view.content;
-            match selected_match {
-                Some(FindMatch::Status(item)) => {
-                    SendMessageW(edit, EM_SETSEL, item.utf16_start, item.utf16_end as LPARAM);
-                }
-                Some(FindMatch::Timeline(_)) => {
-                    unreachable!("status views must only store status matches")
-                }
-                None => {
-                    SendMessageW(edit, EM_SETSEL, 0, 0);
-                }
-            }
-        }
-        ViewId::Room(_) | ViewId::Thread { .. } => {
-            let timeline = room_content_timeline(view.content);
-            let selected_source_row_index = match selected_match {
-                Some(FindMatch::Timeline(item)) => Some(item.source_row_index),
-                Some(FindMatch::Status(_)) => {
-                    unreachable!("timeline views must only store timeline matches")
-                }
-                None => None,
-            };
-            if timeline_state_ref(timeline).selected_find_source_row_index
-                != selected_source_row_index
-            {
-                timeline_state_mut(timeline).selected_find_source_row_index =
-                    selected_source_row_index;
-                InvalidateRect(timeline, null(), 1);
-            }
-        }
+        .map(|item| item.source_row_index);
+    if timeline_state_ref(timeline).selected_find_source_row_index != selected_source_row_index {
+        timeline_state_mut(timeline).selected_find_source_row_index = selected_source_row_index;
+        InvalidateRect(timeline, null(), 1);
     }
 
     Ok(())
@@ -9172,52 +9085,36 @@ unsafe fn execute_active_view_find(
     let previous_state = state_ref(hwnd).find_states.get(&active_view).cloned();
     let folded_query = fold_find_query(query);
 
+    let (matches, selected_match_index) = {
+        let view = state_ref(hwnd)
+            .views
+            .get(&active_view)
+            .ok_or_else(|| "view state was not tracked".to_owned())?;
+        let timeline = view_timeline(&active_view, view.content);
+        let timeline_state = timeline_state_ref(timeline);
+        let start_source_row_index = timeline_source_row_index_for_top_line(
+            timeline,
+            &timeline_state.source_rows,
+            timeline_state.top_line,
+        )
+        .unwrap_or(0);
+        let matches = compute_timeline_find_matches(&timeline_state.source_rows, &folded_query);
+        let selected_match_index = choose_find_match(
+            &matches,
+            FindSelectionMode::Execute {
+                folded_query: &folded_query,
+                previous_state: previous_state.as_ref(),
+                start_source_row_index,
+            },
+        );
+        (matches, selected_match_index)
+    };
+    // Only rooms have older history to search.
     let next_state = match &active_view {
         ViewId::Status => {
-            let view = state_ref(hwnd)
-                .views
-                .get(&active_view)
-                .ok_or_else(|| "view state was not tracked".to_owned())?;
-            let lines = render_status_lines(&state_ref(hwnd).model);
-            let matches = compute_status_find_matches(&lines, &folded_query);
-            let selection_start =
-                FindSelectionStart::StatusUtf16(status_edit_selection_start(view.content));
-            let selected_match_index = choose_find_match(
-                &matches,
-                FindSelectionMode::Execute {
-                    folded_query: &folded_query,
-                    previous_state: previous_state.as_ref(),
-                    start: selection_start,
-                },
-            );
             build_view_find_state(query, &folded_query, matches, selected_match_index)
         }
         ViewId::Room(_) | ViewId::Thread { .. } => {
-            let (matches, selected_match_index) = {
-                let view = state_ref(hwnd)
-                    .views
-                    .get(&active_view)
-                    .ok_or_else(|| "view state was not tracked".to_owned())?;
-                let timeline = room_content_timeline(view.content);
-                let timeline_state = timeline_state_ref(timeline);
-                let start_source_row_index = timeline_source_row_index_for_top_line(
-                    timeline,
-                    &timeline_state.source_rows,
-                    timeline_state.top_line,
-                )
-                .unwrap_or(0);
-                let matches =
-                    compute_timeline_find_matches(&timeline_state.source_rows, &folded_query);
-                let selected_match_index = choose_find_match(
-                    &matches,
-                    FindSelectionMode::Execute {
-                        folded_query: &folded_query,
-                        previous_state: previous_state.as_ref(),
-                        start: FindSelectionStart::TimelineSourceRow(start_source_row_index),
-                    },
-                );
-                (matches, selected_match_index)
-            };
             build_timeline_find_state_and_maybe_submit_history_backfill(
                 state_mut(hwnd),
                 &active_view,
@@ -9238,25 +9135,14 @@ unsafe fn execute_active_view_find(
         && let Some(selected_match_index) = find_state.selected_match_index
         && let Some(selected_match) = find_state.matches.get(selected_match_index)
     {
-        match selected_match {
-            FindMatch::Timeline(item) => {
-                let view = state_ref(hwnd)
-                    .views
-                    .get(&active_view)
-                    .ok_or_else(|| "view state was not tracked".to_owned())?;
-                scroll_timeline_to_source_row_index(
-                    room_content_timeline(view.content),
-                    item.source_row_index,
-                );
-            }
-            FindMatch::Status(_) => {
-                let view = state_ref(hwnd)
-                    .views
-                    .get(&active_view)
-                    .ok_or_else(|| "view state was not tracked".to_owned())?;
-                SendMessageW(view.content, EM_SCROLLCARET, 0, 0);
-            }
-        }
+        let view = state_ref(hwnd)
+            .views
+            .get(&active_view)
+            .ok_or_else(|| "view state was not tracked".to_owned())?;
+        scroll_timeline_to_source_row_index(
+            view_timeline(&active_view, view.content),
+            selected_match.source_row_index,
+        );
     }
 
     refresh_status_bar(hwnd)?;
@@ -9688,16 +9574,11 @@ unsafe fn mdi_window_placement(mdi_client: HWND, child: HWND) -> MdiWindowPlacem
 /// lays them out.
 unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
+    // Status is a message window like any other, drawn by the same timeline.
     let (class_name, style, ex_style) = match view_id {
         ViewId::Status => (
-            EDIT_CLASS_NAME,
-            WS_CHILD
-                | WS_VISIBLE
-                | ES_MULTILINE as u32
-                | ES_READONLY as u32
-                | ES_AUTOVSCROLL as u32
-                | ES_WANTRETURN as u32
-                | WS_VSCROLL,
+            TIMELINE_CLASS_NAME,
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL,
             WS_EX_CLIENTEDGE,
         ),
         ViewId::Room(_) | ViewId::Thread { .. } => {
@@ -9795,6 +9676,15 @@ unsafe fn mdi_child_edit(child: HWND) -> HWND {
 
 unsafe fn room_content_timeline(content: HWND) -> HWND {
     room_content_state_ref(content).timeline
+}
+
+/// A view's timeline: the Status content is one, a room or thread content
+/// holds one beside its nick list.
+unsafe fn view_timeline(view_id: &ViewId, content: HWND) -> HWND {
+    match view_id {
+        ViewId::Status => content,
+        ViewId::Room(_) | ViewId::Thread { .. } => room_content_timeline(content),
+    }
 }
 
 unsafe fn room_content_member_list(content: HWND) -> HWND {
@@ -10062,18 +9952,11 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
     match view_id {
         ViewId::Status => {
-            let lines = {
-                let state = state_ref(hwnd);
-                render_status_lines(&state.model)
-            };
-            let text = render_view_text(&lines);
-            set_edit_text(content, &text);
-            recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Status(&lines));
-            if state_ref(hwnd).find_states.contains_key(view_id)
-                && state_ref(hwnd).active_view == *view_id
-            {
-                apply_find_to_active_view(hwnd, view_id)?;
-            }
+            let rows = build_status_timeline_rows(&state_ref(hwnd).model.status_log);
+            set_timeline_rows(content, &rows);
+            recompute_find_for_view(state_mut(hwnd), view_id, &rows);
+            apply_find_to_active_view(hwnd, view_id)?;
+            InvalidateRect(content, null(), 1);
         }
         ViewId::Room(room_id) => {
             let (rows, member_rows, image_requests) = {
@@ -10109,7 +9992,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
-            recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Timeline(&rows));
+            recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;
             } else {
@@ -10145,7 +10028,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows);
-            recompute_find_for_view(state_mut(hwnd), view_id, ViewFindContent::Timeline(&rows));
+            recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;
             } else {
@@ -10171,7 +10054,6 @@ unsafe fn apply_view_activation_state(
     view_id: &ViewId,
     preferred_tree_item: Option<isize>,
 ) -> Result<AppliedActivation, String> {
-    let mut cleared_view_activity = false;
     let rebuild_switchbar_after_activation = !state_ref(hwnd).switchbar_views.contains(view_id);
     let child = match view_id {
         ViewId::Status => {
@@ -10179,26 +10061,18 @@ unsafe fn apply_view_activation_state(
             ensure_status_view(hwnd)?
         }
         ViewId::Room(room_id) => {
-            {
-                let state = state_mut(hwnd);
-                select_room(state, room_id)?;
-                cleared_view_activity = handle_room_activation(state, room_id)?;
-            }
+            select_room(state_mut(hwnd), room_id)?;
             ensure_room_view(hwnd, room_id)?
         }
         ViewId::Thread {
             room_id,
             thread_root_event_id,
         } => {
-            {
-                let state = state_mut(hwnd);
-                select_room(state, room_id)?;
-                cleared_view_activity =
-                    handle_thread_activation(state, room_id, thread_root_event_id)?;
-            }
+            select_room(state_mut(hwnd), room_id)?;
             ensure_thread_view(hwnd, room_id, thread_root_event_id)?
         }
     };
+    let cleared_view_activity = handle_view_activation(state_mut(hwnd), view_id)?;
 
     {
         let state = state_mut(hwnd);
@@ -12022,15 +11896,10 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                 title: read_window_text(view.child),
                 active: identity == active,
                 placement: mdi_window_placement(state_ref(hwnd).controls.mdi_client, view.child),
-                lines: match &view_id {
-                    ViewId::Status => split_rendered_lines(&read_window_text(view.content)),
-                    ViewId::Room(_) => {
-                        split_rendered_lines(&read_window_text(room_content_timeline(view.content)))
-                    }
-                    ViewId::Thread { .. } => {
-                        split_rendered_lines(&read_window_text(room_content_timeline(view.content)))
-                    }
-                },
+                lines: split_rendered_lines(&read_window_text(view_timeline(
+                    &view_id,
+                    view.content,
+                ))),
                 members: match &view_id {
                     ViewId::Status => Vec::new(),
                     ViewId::Room(room_id) => room_by_id(&state_ref(hwnd).model.rooms, room_id)
@@ -12543,16 +12412,13 @@ unsafe fn continue_timeline_find_history_search_after_refresh(
             })
             .cloned()
             .expect("matched timeline find state must retain a selected match");
-        let FindMatch::Timeline(item) = selected_match else {
-            unreachable!("timeline views must only store timeline matches");
-        };
         let view = state_ref(hwnd)
             .views
             .get(view_id)
             .expect("timeline view must remain tracked after refresh");
         scroll_timeline_to_source_row_index(
             room_content_timeline(view.content),
-            item.source_row_index,
+            selected_match.source_row_index,
         );
     }
     refresh_status_bar(hwnd)
@@ -13441,11 +13307,21 @@ unsafe fn execute_local_slash_command(
                 set_local_command_status(hwnd, "nothing to clear in thread view".to_owned())
             }
             ViewId::Status => {
-                set_local_command_status(hwnd, "nothing to clear in status view".to_owned())
+                state_mut(hwnd).model.status_log.clear();
+                refresh_view_content(hwnd, &ViewId::Status)?;
+                set_local_command_status(hwnd, "cleared window: status".to_owned())
             }
         },
         LocalSlashCommand::E2ee(command) => match command {
             E2eeSlashCommand::ShowStatus => {
+                let state = state_mut(hwnd);
+                let lines = match &state.model.last_e2ee_status {
+                    Some(status) => status_log::e2ee_status(status),
+                    None => vec![status_log::E2EE_STATUS_UNKNOWN.to_owned()],
+                };
+                for line in lines {
+                    log_status(state, StatusLineKind::Info, line);
+                }
                 activate_view(hwnd, &ViewId::Status, None)?;
                 set_local_command_status(hwnd, "e2ee status shown".to_owned())
             }
@@ -13930,6 +13806,7 @@ fn submit_login(
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let connecting = status_log::connecting(&homeserver_url, &username);
     sender
         .send(Command::Login(LoginRequest {
             homeserver_url: homeserver_url.clone(),
@@ -13938,6 +13815,8 @@ fn submit_login(
             device_display_name,
         }))
         .map_err(|err| format!("failed to enqueue login command: {err}"))?;
+
+    log_status(state, StatusLineKind::Info, connecting);
 
     state.pending_login_homeserver_url = Some(homeserver_url);
     state.model.status = "logging in".to_owned();
@@ -13975,6 +13854,11 @@ fn submit_restore_session(
         }))
         .map_err(|err| format!("failed to enqueue restore session command: {err}"))?;
 
+    log_status(
+        state,
+        StatusLineKind::Info,
+        status_log::restoring(&homeserver_url, &user_id),
+    );
     state.model.own_user_id = Some(user_id);
     state.pending_login_homeserver_url = None;
     state.current_session_homeserver_url = Some(homeserver_url);
@@ -14934,24 +14818,6 @@ fn handle_view_activation(state: &mut WindowState, view_id: &ViewId) -> Result<b
     Ok(cleared_view_activity)
 }
 
-fn handle_room_activation(state: &mut WindowState, room_id: &str) -> Result<bool, String> {
-    handle_view_activation(state, &ViewId::Room(room_id.to_owned()))
-}
-
-fn handle_thread_activation(
-    state: &mut WindowState,
-    room_id: &str,
-    thread_root_event_id: &str,
-) -> Result<bool, String> {
-    handle_view_activation(
-        state,
-        &ViewId::Thread {
-            room_id: room_id.to_owned(),
-            thread_root_event_id: thread_root_event_id.to_owned(),
-        },
-    )
-}
-
 fn submit_accept_verification_flow(
     state: &mut WindowState,
     flow: VerificationFlowId,
@@ -15264,7 +15130,6 @@ mod tests {
     use std::fs;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use mirx_core::{RoomMemberChange, RoomMemberRank, RoomStateNoticeActivity};
 
@@ -16307,6 +16172,7 @@ mod tests {
             inert_command_receiver: None,
             automation: None,
             render_state_mode: false,
+            clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
             exit_code: Arc::new(AtomicI32::new(0)),
             event_generation: 0,
             last_idle_probe_generation: None,
@@ -20606,8 +20472,12 @@ mod tests {
         assert_eq!(state.model.status, "offline");
     }
 
+    fn status_log_lines(state: &WindowState) -> Vec<String> {
+        project_timeline_rows(&build_status_timeline_rows(&state.model.status_log))
+    }
+
     #[test]
-    fn verification_request_event_stores_requested_state_and_renders_actions() {
+    fn verification_request_event_stores_requested_state_and_logs_actions() {
         let mut state = test_state();
 
         apply_core_event(
@@ -20627,59 +20497,73 @@ mod tests {
                 state: VerificationState::Requested,
             })
         );
-
-        let status_text = render_view_text(&render_status_lines(&state.model));
-        assert!(status_text.contains("state: requested"));
-        assert!(status_text.contains("flow_id: flow-verify-123"));
-        assert!(status_text.contains("from_user: @alice:example"));
-        assert!(status_text.contains(
-            "actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
-        ));
+        assert_eq!(
+            status_log_lines(&state),
+            vec![
+                "[22:12] * Verification requested by @alice:example (flow flow-verify-123)"
+                    .to_owned(),
+                "[22:12] * Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
+                    .to_owned(),
+            ]
+        );
     }
-
     #[test]
-    fn verification_sas_ready_renders_emoji_decimals_and_error_details() {
+    fn verification_sas_ready_and_errors_are_logged_to_status() {
         let mut state = test_state();
-        state.model.status = "verification sas ready with @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::SasReady {
-                emojis: vec![
-                    VerificationEmoji {
-                        symbol: "🐶".to_owned(),
-                        description: "dog".to_owned(),
+        apply_core_event(
+            &mut state,
+            Event::VerificationState(VerificationStateEvent {
+                flow_id: "flow-verify-123".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                state: VerificationState::SasReady {
+                    emojis: vec![
+                        VerificationEmoji {
+                            symbol: "🐶".to_owned(),
+                            description: "dog".to_owned(),
+                        },
+                        VerificationEmoji {
+                            symbol: "🔥".to_owned(),
+                            description: "fire".to_owned(),
+                        },
+                    ],
+                    decimals: mirx_core::VerificationDecimals {
+                        first: 1234,
+                        second: 5678,
+                        third: 9012,
                     },
-                    VerificationEmoji {
-                        symbol: "🔥".to_owned(),
-                        description: "fire".to_owned(),
-                    },
-                ],
-                decimals: mirx_core::VerificationDecimals {
-                    first: 1234,
-                    second: 5678,
-                    third: 9012,
                 },
-            },
-        });
-        state.model.last_error = Some(CoreErrorEvent {
-            operation: Operation::SendMessage,
-            message: "message send failed".to_owned(),
-        });
+            }),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::SendMessage,
+                message: "message send failed".to_owned(),
+            }),
+        )
+        .unwrap();
 
-        let status_text = render_view_text(&render_status_lines(&state.model));
-        assert!(status_text.contains("state: sas ready"));
-        assert!(status_text.contains("emoji: 🐶 dog | 🔥 fire"));
-        assert!(status_text.contains("decimals: 1234-5678-9012"));
-        assert!(status_text.contains(
-            "actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
-        ));
-        assert!(status_text.contains("operation: send text"));
-        assert!(status_text.contains("message: message send failed"));
+        let rows = build_status_timeline_rows(&state.model.status_log);
+        assert_eq!(
+            project_timeline_rows(&rows),
+            vec![
+                "[22:12] * Verification with @alice:example: compare the emoji or the numbers"
+                    .to_owned(),
+                "[22:12] * Emoji: 🐶 dog | 🔥 fire".to_owned(),
+                "[22:12] * Decimals: 1234-5678-9012".to_owned(),
+                "[22:12] * Actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
+                    .to_owned(),
+                "[22:12] * Error during send text: message send failed".to_owned(),
+            ]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            [vec![TimelineRowKind::Info; 4], vec![TimelineRowKind::Error],].concat()
+        );
     }
-
     #[test]
-    fn e2ee_status_event_updates_model_and_renders_status_section() {
+    fn e2ee_status_event_updates_model_and_logs_status() {
         let mut state = test_state();
         let status = e2ee_status(
             E2eeRecoveryState::Incomplete,
@@ -20693,18 +20577,16 @@ mod tests {
 
         assert_eq!(state.model.last_e2ee_status, Some(status));
         assert_eq!(state.model.status, "e2ee status updated");
-
-        let status_text = render_view_text(&render_status_lines(&state.model));
-        assert!(status_text.contains("e2ee"));
-        assert!(status_text.contains("recovery: incomplete"));
-        assert!(status_text.contains("local backup: disabled"));
-        assert!(status_text.contains("server backup: exists"));
-        assert!(status_text.contains("cross-signing: incomplete"));
-        assert!(status_text.contains(
-            "actions: /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
-        ));
+        assert_eq!(
+            status_log_lines(&state),
+            vec![
+                "[22:12] * E2EE: recovery incomplete, local backup disabled, server backup exists, cross-signing incomplete"
+                    .to_owned(),
+                "[22:12] * Use /e2ee refresh to check server backup, /e2ee setup to enable recovery, /e2ee recover to restore keys"
+                    .to_owned(),
+            ]
+        );
     }
-
     #[test]
     fn e2ee_recovery_succeeded_event_sets_status_message() {
         let mut state = test_state();
@@ -20733,10 +20615,16 @@ mod tests {
         )
         .unwrap();
 
-        let status_text = render_view_text(&render_status_lines(&state.model));
+        let status_lines = status_log_lines(&state);
         assert_eq!(state.model.status, "e2ee recovery setup complete");
         assert!(!state.model.status.contains(recovery_key));
-        assert!(!status_text.contains(recovery_key));
+        assert_eq!(
+            status_lines,
+            vec![
+                "[22:12] * E2EE recovery set up; the recovery key was shown in a dialog".to_owned()
+            ]
+        );
+        assert!(!status_lines.iter().any(|line| line.contains(recovery_key)));
         assert!(!format!("{:?}", dump_model_from_state(&state)).contains(recovery_key));
         assert!(
             !state
@@ -20846,42 +20734,52 @@ mod tests {
     }
 
     #[test]
-    fn ascii_find_utf16_range_counts_non_ascii_prefix_units() {
-        assert_eq!(
-            ascii_case_insensitive_utf16_range("🙂 Test λ", &fold_find_query("test")),
-            Some((3, 7))
+    fn status_find_matches_keep_identical_lines_distinct() {
+        let mut log = StatusLog::default();
+        log.push(
+            0,
+            StatusLineKind::Info,
+            "Synced rooms: 1 joined, 0 invited".to_owned(),
         );
-    }
+        log.push(
+            0,
+            StatusLineKind::Info,
+            "E2EE status not yet known".to_owned(),
+        );
+        log.push(
+            0,
+            StatusLineKind::Info,
+            "E2EE status not yet known".to_owned(),
+        );
+        let rows = build_status_timeline_rows(&log);
 
-    #[test]
-    fn status_find_matches_use_absolute_utf16_offsets_in_multiline_buffer() {
-        let lines = vec![
-            "alpha".to_owned(),
-            "🙂 Test λ".to_owned(),
-            "omega".to_owned(),
-        ];
-
-        let matches = compute_status_find_matches(&lines, &fold_find_query("test"));
+        let matches = compute_timeline_find_matches(&rows, &fold_find_query("e2ee"));
         assert_eq!(
             matches,
-            vec![FindMatch::Status(StatusFindMatch {
-                line_index: 1,
-                utf16_start: 10,
-                utf16_end: 14,
-                line_text: "🙂 Test λ".to_owned(),
-            })]
+            vec![
+                FindMatch {
+                    row_identity: TimelineRowIdentity::status_line(1),
+                    source_row_index: 1,
+                    logical_text: "[00:00] * E2EE status not yet known".to_owned(),
+                },
+                FindMatch {
+                    row_identity: TimelineRowIdentity::status_line(2),
+                    source_row_index: 2,
+                    logical_text: "[00:00] * E2EE status not yet known".to_owned(),
+                },
+            ]
         );
     }
-
     #[test]
-    fn status_find_selection_uses_document_wide_caret_offsets() {
-        let lines = vec![
-            "alpha".to_owned(),
-            "beta".to_owned(),
-            "needle".to_owned(),
-            "needle again".to_owned(),
-        ];
-        let matches = compute_status_find_matches(&lines, &fold_find_query("needle"));
+    fn find_selection_starts_at_the_first_row_in_view() {
+        let mut log = StatusLog::default();
+        for text in ["alpha", "beta", "needle", "needle again"] {
+            log.push(0, StatusLineKind::Info, text.to_owned());
+        }
+        let matches = compute_timeline_find_matches(
+            &build_status_timeline_rows(&log),
+            &fold_find_query("needle"),
+        );
 
         assert_eq!(
             choose_find_match(
@@ -20889,7 +20787,7 @@ mod tests {
                 FindSelectionMode::Execute {
                     folded_query: "needle",
                     previous_state: None,
-                    start: FindSelectionStart::StatusUtf16(13),
+                    start_source_row_index: 1,
                 },
             ),
             Some(0)
@@ -20900,13 +20798,12 @@ mod tests {
                 FindSelectionMode::Execute {
                     folded_query: "needle",
                     previous_state: None,
-                    start: FindSelectionStart::StatusUtf16(20),
+                    start_source_row_index: 3,
                 },
             ),
             Some(1)
         );
     }
-
     #[test]
     fn timeline_find_matches_are_per_logical_row() {
         let rows = vec![
@@ -20927,22 +20824,22 @@ mod tests {
         assert_eq!(
             matches,
             vec![
-                FindMatch::Timeline(TimelineFindMatch {
+                FindMatch {
                     row_identity: TimelineRowIdentity::synthetic(
                         TimelineSyntheticRowLabel::Plain,
                         "alpha needle needle",
                     ),
                     source_row_index: 0,
                     logical_text: "alpha needle needle".to_owned(),
-                }),
-                FindMatch::Timeline(TimelineFindMatch {
+                },
+                FindMatch {
                     row_identity: TimelineRowIdentity::synthetic(
                         TimelineSyntheticRowLabel::Plain,
                         "beta needle",
                     ),
                     source_row_index: 1,
                     logical_text: "beta needle".to_owned(),
-                }),
+                },
             ]
         );
     }
@@ -20950,16 +20847,16 @@ mod tests {
     #[test]
     fn repeated_find_query_advances_and_wraps() {
         let matches = vec![
-            FindMatch::Timeline(TimelineFindMatch {
+            FindMatch {
                 row_identity: TimelineRowIdentity::activity_primary("activity-1"),
                 source_row_index: 1,
                 logical_text: "first needle".to_owned(),
-            }),
-            FindMatch::Timeline(TimelineFindMatch {
+            },
+            FindMatch {
                 row_identity: TimelineRowIdentity::activity_primary("activity-2"),
                 source_row_index: 4,
                 logical_text: "second needle".to_owned(),
-            }),
+            },
         ];
         let previous_state = build_view_find_state(
             "needle",
@@ -20974,7 +20871,7 @@ mod tests {
                 FindSelectionMode::Execute {
                     folded_query: "needle",
                     previous_state: Some(&previous_state),
-                    start: FindSelectionStart::TimelineSourceRow(0),
+                    start_source_row_index: 0,
                 },
             ),
             Some(0)
@@ -20988,36 +20885,36 @@ mod tests {
             "needle",
             &fold_find_query("needle"),
             vec![
-                FindMatch::Timeline(TimelineFindMatch {
+                FindMatch {
                     row_identity: TimelineRowIdentity::activity_primary("activity-1"),
                     source_row_index: 0,
                     logical_text: "first needle".to_owned(),
-                }),
-                FindMatch::Timeline(TimelineFindMatch {
+                },
+                FindMatch {
                     row_identity: TimelineRowIdentity::activity_primary("activity-2"),
                     source_row_index: 1,
                     logical_text: "second needle".to_owned(),
-                }),
+                },
             ],
             Some(1),
         );
         let reordered_matches = vec![
-            FindMatch::Timeline(TimelineFindMatch {
+            FindMatch {
                 row_identity: TimelineRowIdentity::activity_primary("activity-2"),
                 source_row_index: 0,
                 logical_text: "second needle".to_owned(),
-            }),
-            FindMatch::Timeline(TimelineFindMatch {
+            },
+            FindMatch {
                 row_identity: TimelineRowIdentity::activity_primary("activity-1"),
                 source_row_index: 1,
                 logical_text: "first needle".to_owned(),
-            }),
+            },
         ];
-        let missing_selected_row_matches = vec![FindMatch::Timeline(TimelineFindMatch {
+        let missing_selected_row_matches = vec![FindMatch {
             row_identity: TimelineRowIdentity::activity_primary("activity-1"),
             source_row_index: 0,
             logical_text: "first needle".to_owned(),
-        })];
+        }];
 
         assert_eq!(
             choose_find_match(
@@ -21062,11 +20959,11 @@ mod tests {
     fn room_find_local_match_stays_local_without_history_backfill() {
         let (mut state, handle) = test_state_with_command_sender();
         state.model.rooms = vec![room("!room:example", "Room", false)];
-        let matches = vec![FindMatch::Timeline(TimelineFindMatch {
+        let matches = vec![FindMatch {
             row_identity: TimelineRowIdentity::activity_primary("activity-1"),
             source_row_index: 0,
             logical_text: "needle".to_owned(),
-        })];
+        }];
 
         let find_state = build_timeline_find_state_and_maybe_submit_history_backfill(
             &mut state,
@@ -21312,7 +21209,7 @@ mod tests {
                 )),
         ];
 
-        recompute_find_for_view(&mut state, &view_id, ViewFindContent::Timeline(&rows));
+        recompute_find_for_view(&mut state, &view_id, &rows);
 
         let find_state = state.find_states.get(&view_id).unwrap();
         assert_eq!(find_state.history_search, RoomFindHistorySearch::LocalOnly);
@@ -21385,11 +21282,11 @@ mod tests {
             &thread_view_id("!room:example", "$thread-root"),
             "needle",
             "needle",
-            vec![FindMatch::Timeline(TimelineFindMatch {
+            vec![FindMatch {
                 row_identity: TimelineRowIdentity::activity_primary("activity-1"),
                 source_row_index: 0,
                 logical_text: "needle".to_owned(),
-            })],
+            }],
             Some(0),
         )
         .unwrap();
@@ -21421,7 +21318,7 @@ mod tests {
                 )),
         ];
 
-        recompute_find_for_view(&mut state, &view_id, ViewFindContent::Timeline(&rows));
+        recompute_find_for_view(&mut state, &view_id, &rows);
 
         assert!(
             continue_timeline_find_history_search_after_refresh_state(&mut state, &view_id)
@@ -21547,10 +21444,7 @@ mod tests {
             Some(false),
             Some(true),
         );
-        let mut missing_state = test_state();
-        missing_state.model.last_e2ee_status = Some(missing.clone());
-        let missing_text = render_view_text(&render_status_lines(&missing_state.model));
-        assert!(missing_text.contains("server backup: missing"));
+        assert!(status_log::e2ee_status(&missing)[0].contains("server backup missing"));
         assert_eq!(
             e2ee_backup_health_summary(&missing),
             "backup missing on server"
@@ -21563,10 +21457,7 @@ mod tests {
             None,
             Some(true),
         );
-        let mut unknown_state = test_state();
-        unknown_state.model.last_e2ee_status = Some(unknown.clone());
-        let unknown_text = render_view_text(&render_status_lines(&unknown_state.model));
-        assert!(unknown_text.contains("server backup: not checked"));
+        assert!(status_log::e2ee_status(&unknown)[0].contains("server backup not checked"));
         assert_eq!(
             e2ee_backup_health_summary(&unknown),
             "server backup not checked"
@@ -21796,44 +21687,47 @@ mod tests {
     }
 
     #[test]
-    fn verification_done_renders_terminal_text_without_actions() {
+    fn verification_done_logs_terminal_text_without_actions() {
         let mut state = test_state();
-        state.model.status = "verification done with @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Done,
-        });
+        apply_core_event(
+            &mut state,
+            Event::VerificationState(VerificationStateEvent {
+                flow_id: "flow-verify-123".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                state: VerificationState::Done,
+            }),
+        )
+        .unwrap();
 
-        let status_text = render_view_text(&render_status_lines(&state.model));
-        assert!(status_text.contains("state: done"));
-        assert!(status_text.contains("result: verified"));
-        assert!(!status_text.contains("/verify confirm"));
-        assert!(!status_text.contains("/verify reject"));
-        assert!(!status_text.contains("/verify cancel"));
+        assert_eq!(
+            status_log_lines(&state),
+            vec!["[22:12] * Verification done with @alice:example: verified".to_owned()]
+        );
     }
-
     #[test]
-    fn verification_cancelled_renders_reason_code_without_actions() {
+    fn verification_cancelled_logs_reason_code_without_actions() {
         let mut state = test_state();
-        state.model.status = "verification cancelled with @alice:example".to_owned();
-        state.model.last_verification = Some(VerificationStateEvent {
-            flow_id: "flow-verify-123".to_owned(),
-            user_id: "@alice:example".to_owned(),
-            state: VerificationState::Cancelled {
-                reason: "timed out".to_owned(),
-                code: "m.timeout".to_owned(),
-                cancelled_by_us: false,
-            },
-        });
+        apply_core_event(
+            &mut state,
+            Event::VerificationState(VerificationStateEvent {
+                flow_id: "flow-verify-123".to_owned(),
+                user_id: "@alice:example".to_owned(),
+                state: VerificationState::Cancelled {
+                    reason: "timed out".to_owned(),
+                    code: "m.timeout".to_owned(),
+                    cancelled_by_us: false,
+                },
+            }),
+        )
+        .unwrap();
 
-        let status_text = render_view_text(&render_status_lines(&state.model));
-        assert!(status_text.contains("state: cancelled"));
-        assert!(status_text.contains("reason: timed out"));
-        assert!(status_text.contains("code: m.timeout"));
-        assert!(!status_text.contains("/verify confirm"));
-        assert!(!status_text.contains("/verify reject"));
-        assert!(!status_text.contains("/verify cancel"));
+        assert_eq!(
+            status_log_lines(&state),
+            vec![
+                "[22:12] * Verification cancelled with @alice:example: timed out (m.timeout)"
+                    .to_owned()
+            ]
+        );
     }
 
     fn test_verification_state_event(state: VerificationState) -> VerificationStateEvent {
@@ -23193,7 +23087,7 @@ mod tests {
             Some(&ViewActivityLevel::Highlight)
         );
 
-        handle_room_activation(&mut state, "!room:example").unwrap();
+        handle_view_activation(&mut state, &room_view_id("!room:example")).unwrap();
         assert!(state.room_activity.is_empty());
     }
 
@@ -24562,7 +24456,7 @@ mod tests {
             .insert(room_view_id("!room:example"), "$event:example".to_owned());
 
         assert_eq!(
-            handle_room_activation(&mut state, "!room:example"),
+            handle_view_activation(&mut state, &room_view_id("!room:example")),
             Ok(true)
         );
         assert!(
@@ -24601,7 +24495,7 @@ mod tests {
             .insert(room_view_id("!room:example"), "$event:example".to_owned());
 
         assert_eq!(
-            handle_room_activation(&mut state, "!room:example"),
+            handle_view_activation(&mut state, &room_view_id("!room:example")),
             Ok(false)
         );
         assert!(
@@ -24634,7 +24528,7 @@ mod tests {
             .insert(room_view_id("!room:example"), ViewActivityLevel::Message);
 
         assert_eq!(
-            handle_room_activation(&mut state, "!room:example"),
+            handle_view_activation(&mut state, &room_view_id("!room:example")),
             Ok(true)
         );
         assert!(
@@ -24671,7 +24565,7 @@ mod tests {
         );
 
         assert_eq!(
-            handle_thread_activation(&mut state, "!room:example", "$thread-root"),
+            handle_view_activation(&mut state, &thread_view_id("!room:example", "$thread-root")),
             Ok(true)
         );
         assert!(
@@ -24719,7 +24613,7 @@ mod tests {
         );
 
         assert_eq!(
-            handle_room_activation(&mut state, "!room:example"),
+            handle_view_activation(&mut state, &room_view_id("!room:example")),
             Ok(true)
         );
         assert!(
@@ -27458,6 +27352,73 @@ mod tests {
             apply_core_event(&mut state, Event::Stopped).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Stopped);
         });
+    }
+
+    #[test]
+    fn connection_events_are_logged_to_status_and_survive_logout() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state.synthetic_load_in_progress = true;
+
+            apply_core_event(&mut state, Event::Started).unwrap();
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                },
+            )
+            .unwrap();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            let rooms = vec![
+                room("!room:example", "Room", false),
+                invited_room("!invite:example", "Invite"),
+            ];
+            apply_core_event(&mut state, Event::SyncedRooms(rooms.clone())).unwrap();
+            // The core re-sends the room list on every change.
+            apply_core_event(&mut state, Event::SyncedRooms(rooms)).unwrap();
+            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+            apply_core_event(&mut state, Event::Stopped).unwrap();
+
+            assert_eq!(state.model.own_user_id, None);
+            assert_eq!(
+                status_log_lines(&state),
+                vec![
+                    "[22:12] * Logged in as @alice:example (device DEVICE)".to_owned(),
+                    "[22:12] * Syncing with the homeserver".to_owned(),
+                    "[22:12] * Synced rooms: 1 joined, 1 invited".to_owned(),
+                    "[22:12] * Logged out".to_owned(),
+                    "[22:12] * Disconnected".to_owned(),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn status_lines_mark_an_inactive_status_window() {
+        let mut state = test_state();
+        apply_core_event(&mut state, Event::SyncStarted).unwrap();
+        assert_eq!(state.room_activity.get(&ViewId::Status), None);
+
+        state.active_view = room_view_id("!room:example");
+        apply_core_event(&mut state, Event::SyncStarted).unwrap();
+        assert_eq!(
+            state.room_activity.get(&ViewId::Status),
+            Some(&ViewActivityLevel::Event)
+        );
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::SendMessage,
+                message: "message send failed".to_owned(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            state.room_activity.get(&ViewId::Status),
+            Some(&ViewActivityLevel::Message)
+        );
+        let rows = build_status_timeline_rows(&state.model.status_log);
+        assert_eq!(rows.last().unwrap().kind, TimelineRowKind::Error);
     }
 
     #[test]
