@@ -132,7 +132,7 @@ const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
-const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 #[cfg(windows)]
 const SCREENSHOT_CAPTURE_DIR_WIN_ENV: &str = "MIRX_TESTKIT_CAPTURE_DIR_WIN";

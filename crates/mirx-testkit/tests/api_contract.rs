@@ -340,7 +340,7 @@ fn launch_options_default_has_expected_timeout() {
     assert_eq!(
         LaunchOptions::default(),
         LaunchOptions {
-            startup_timeout: Duration::from_secs(10),
+            startup_timeout: Duration::from_secs(20),
             local_app_data: None,
             frame_size: None,
         }
