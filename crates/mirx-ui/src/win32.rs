@@ -88,7 +88,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
     MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
     SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
-    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE,
+    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
     SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
     ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
     TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
@@ -228,9 +228,6 @@ const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
 const SWITCHBAR_HEIGHT: i32 = 28;
-const ROOM_MEMBER_LIST_WIDTH: i32 = 180;
-const ROOM_MEMBER_LIST_GAP: i32 = 4;
-const ROOM_TIMELINE_MIN_WIDTH: i32 = 240;
 const TIMELINE_ROW_HEIGHT: i32 = 20;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
@@ -3967,28 +3964,17 @@ unsafe fn layout_room_content(hwnd: HWND) {
     let state = &*state_ptr;
     let mut rect = RECT::default();
     GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
-    let show_members =
-        width >= ROOM_TIMELINE_MIN_WIDTH + ROOM_MEMBER_LIST_GAP + ROOM_MEMBER_LIST_WIDTH;
-
-    if show_members {
-        let timeline_width = width - ROOM_MEMBER_LIST_WIDTH - ROOM_MEMBER_LIST_GAP;
-        MoveWindow(state.timeline, 0, 0, timeline_width, height, 1);
-        MoveWindow(
-            state.members,
-            timeline_width + ROOM_MEMBER_LIST_GAP,
-            0,
-            ROOM_MEMBER_LIST_WIDTH,
-            height,
-            1,
-        );
-        ShowWindow(state.members, SW_SHOW);
-    } else {
-        MoveWindow(state.timeline, 0, 0, width, height, 1);
-        MoveWindow(state.members, 0, 0, 0, 0, 1);
-        ShowWindow(state.members, SW_HIDE);
-    }
+    let layout = mdi::room_content_layout(rect.right - rect.left);
+    MoveWindow(state.timeline, 0, 0, layout.timeline_width, height, 1);
+    MoveWindow(
+        state.members,
+        layout.members_x,
+        0,
+        layout.members_width,
+        height,
+        1,
+    );
 }
 
 unsafe fn timeline_state_ptr(hwnd: HWND) -> *mut TimelineState {

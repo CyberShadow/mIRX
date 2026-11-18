@@ -57,10 +57,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect,
     GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN, PostMessageW,
-    SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR,
-    WM_CLOSE, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
-    WM_VSCROLL, WS_VSCROLL,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN,
+    PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW,
+    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE,
+    WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -4746,6 +4746,15 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
         members_view,
         "[22:15] <Sam (@sam-one:example)> shared names show the user ID"
     ));
+
+    // mIRC keeps the nick list in a narrow channel window and shrinks the
+    // text area beside it.
+    let timeline_rect = unsafe { client_rect(active_room_timeline_hwnd(&app)) };
+    let member_list = unsafe { active_room_member_list_hwnd(&app) };
+    let member_list_rect = unsafe { client_rect(member_list) };
+    assert!(unsafe { IsWindowVisible(member_list) } != 0);
+    assert!(timeline_rect.right > 0);
+    assert!(member_list_rect.right > 0);
 
     Ok(())
 }

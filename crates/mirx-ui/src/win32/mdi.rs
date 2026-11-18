@@ -37,6 +37,30 @@ pub(super) fn child_layout(client_width: i32, client_height: i32, edit_height: i
     }
 }
 
+const MEMBER_LIST_WIDTH: i32 = 180;
+const MEMBER_LIST_GAP: i32 = 4;
+
+/// How a channel window's content splits between the text area and the nick
+/// list, in the content's client coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RoomContentLayout {
+    pub(super) timeline_width: i32,
+    pub(super) members_x: i32,
+    pub(super) members_width: i32,
+}
+
+/// mIRC always keeps the nick list in a channel window and shrinks the text
+/// area; in a narrow window the list takes at most a third.
+pub(super) fn room_content_layout(width: i32) -> RoomContentLayout {
+    let members_width = MEMBER_LIST_WIDTH.min(width / 3);
+    let members_x = width - members_width;
+    RoomContentLayout {
+        timeline_width: (members_x - MEMBER_LIST_GAP).max(0),
+        members_x,
+        members_width,
+    }
+}
+
 /// A room window's caption: its label, then `: topic` as in mIRC's
 /// `#chan [+modes]: topic`. mIRC omits the suffix when there is no topic, and
 /// a caption is a single line.
@@ -67,6 +91,35 @@ pub(super) fn status_caption(own_user_id: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_content_layout_keeps_the_nick_list_at_every_width() {
+        assert_eq!(
+            room_content_layout(800),
+            RoomContentLayout {
+                timeline_width: 616,
+                members_x: 620,
+                members_width: 180,
+            }
+        );
+        // A tiled window: the list shrinks to a third.
+        assert_eq!(
+            room_content_layout(250),
+            RoomContentLayout {
+                timeline_width: 163,
+                members_x: 167,
+                members_width: 83,
+            }
+        );
+        assert_eq!(
+            room_content_layout(0),
+            RoomContentLayout {
+                timeline_width: 0,
+                members_x: 0,
+                members_width: 0,
+            }
+        );
+    }
 
     #[test]
     fn status_caption_names_the_signed_in_account() {
