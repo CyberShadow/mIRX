@@ -57,6 +57,13 @@ mod cli {
         pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
         pub(crate) expect_room_unreads: Vec<RoomUnreadExpectation>,
         pub(crate) expect_mdi_placements: Vec<MdiPlacementExpectation>,
+        pub(crate) expect_mdi_titles: Vec<MdiTitleExpectation>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct MdiTitleExpectation {
+        pub(crate) identity: ViewIdentity,
+        pub(crate) title: String,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,6 +536,14 @@ mod cli {
                         .expect_mdi_placements
                         .push(parse_mdi_placement_expectation(&value)?);
                 }
+                "--expect-mdi-title" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-mdi-title".to_owned())?;
+                    config
+                        .expect_mdi_titles
+                        .push(parse_mdi_title_expectation(&value)?);
+                }
                 "--help" => {
                     return Err(usage());
                 }
@@ -588,6 +603,7 @@ mod cli {
             "  --expect-navigation-activity <path-or-label>::<event|message|highlight>",
             "  --expect-no-navigation-activity <path-or-label>",
             "  --expect-mdi-placement <identity>::<state>",
+            "  --expect-mdi-title <identity>::<caption>",
         ]
         .join("\n")
     }
@@ -614,6 +630,21 @@ mod cli {
             ));
         }
         Err(invalid())
+    }
+
+    /// Identities contain no `::`, so the caption is everything after the
+    /// first one.
+    pub(crate) fn parse_mdi_title_expectation(value: &str) -> Result<MdiTitleExpectation, String> {
+        let (identity, title) = value.split_once("::").ok_or_else(|| {
+            format!(
+                "invalid --expect-mdi-title value {value:?}; expected <identity>::<caption>\n{}",
+                usage()
+            )
+        })?;
+        Ok(MdiTitleExpectation {
+            identity: parse_view_identity_arg("--expect-mdi-title", identity)?,
+            title: title.to_owned(),
+        })
     }
 
     pub(crate) fn parse_mdi_placement_expectation(
@@ -806,7 +837,7 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            Action, MdiPlacementExpectation, NavigationActivityExpectation,
+            Action, MdiPlacementExpectation, MdiTitleExpectation, NavigationActivityExpectation,
             RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
             RoomUnreadExpectation, SwitchbarActivityExpectation, ViewExpectation,
             format_view_identity, parse_args, parse_view_expectation, parse_view_identity_arg,
@@ -827,6 +858,7 @@ mod cli {
                 "--action <find:<query>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)"
             ));
             assert!(usage().contains("--expect-mdi-placement <identity>::<state>"));
+            assert!(usage().contains("--expect-mdi-title <identity>::<caption>"));
             assert!(
                 usage()
                     .contains("--expect-active-find-history <local_only|loading|exhausted|failed>")
@@ -1013,6 +1045,8 @@ mod cli {
                     "window-state:room:!lobby:example=minimized",
                     "--expect-mdi-placement",
                     "thread:!room:example|$root::normal",
+                    "--expect-mdi-title",
+                    "room:!ops:example::Ops [e2ee]: a::b",
                 ]
                 .into_iter()
                 .map(str::to_owned),
@@ -1042,6 +1076,15 @@ mod cli {
                     state: MdiWindowState::Normal,
                 }]
             );
+            assert_eq!(
+                config.expect_mdi_titles,
+                vec![MdiTitleExpectation {
+                    identity: ViewIdentity::Room {
+                        room_id: "!ops:example".to_owned()
+                    },
+                    title: "Ops [e2ee]: a::b".to_owned(),
+                }]
+            );
         }
 
         #[test]
@@ -1052,6 +1095,8 @@ mod cli {
                 ["--action", "window-state:status"],
                 ["--expect-mdi-placement", "status::hidden"],
                 ["--expect-mdi-placement", "status"],
+                ["--expect-mdi-title", "status"],
+                ["--expect-mdi-title", "nowhere::Status"],
             ] {
                 assert!(
                     parse_args(args.into_iter().map(str::to_owned)).is_err(),
@@ -1948,6 +1993,7 @@ mod windows_main {
                 || !self.expect_room_read_targets.is_empty()
                 || !self.expect_room_unreads.is_empty()
                 || !self.expect_mdi_placements.is_empty()
+                || !self.expect_mdi_titles.is_empty()
                 || self.expect_active_find_history.is_some()
                 || self.expect_active_find_selected_text.is_some()
         }
@@ -2393,6 +2439,33 @@ mod windows_main {
                     ));
                 }
                 println!("PASS switchbar excludes {}", format_view_identity(identity));
+            }
+
+            for expected in &config.expect_mdi_titles {
+                let view = ui_state
+                    .mdi
+                    .views
+                    .iter()
+                    .find(|view| view.identity == expected.identity)
+                    .ok_or_else(|| {
+                        format!(
+                            "MDI title assertion failed: missing view {}",
+                            format_view_identity(&expected.identity)
+                        )
+                    })?;
+                if view.title != expected.title {
+                    return Err(format!(
+                        "MDI title assertion failed: {} is {:?}, expected {:?}",
+                        format_view_identity(&expected.identity),
+                        view.title,
+                        expected.title
+                    ));
+                }
+                println!(
+                    "PASS MDI {} title {:?}",
+                    format_view_identity(&expected.identity),
+                    expected.title
+                );
             }
 
             for expected in &config.expect_mdi_placements {

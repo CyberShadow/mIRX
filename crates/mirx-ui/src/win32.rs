@@ -3598,7 +3598,8 @@ unsafe extern "system" fn window_proc(
         WM_NCCREATE => {
             let create = &*(lparam as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-            1
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CREATE => match create_controls(hwnd) {
             Ok(()) => {
@@ -5265,14 +5266,15 @@ fn scaled_thumbnail_dimensions(
 unsafe extern "system" fn login_dialog_window_proc(
     hwnd: HWND,
     message: u32,
-    _wparam: WPARAM,
+    wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
             let create = &*(lparam as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-            1
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CREATE => match create_login_dialog_controls(hwnd) {
             Ok(()) => 0,
@@ -5282,7 +5284,7 @@ unsafe extern "system" fn login_dialog_window_proc(
             }
         },
         WM_COMMAND => {
-            let command_id = _wparam & 0xffff;
+            let command_id = wparam & 0xffff;
             match command_id {
                 LOGIN_DIALOG_OK_ID => {
                     let Some(state) = login_dialog_state(hwnd) else {
@@ -5305,7 +5307,7 @@ unsafe extern "system" fn login_dialog_window_proc(
                     DestroyWindow(hwnd);
                     0
                 }
-                _ => DefWindowProcW(hwnd, message, _wparam, lparam),
+                _ => DefWindowProcW(hwnd, message, wparam, lparam),
             }
         }
         WM_CLOSE => {
@@ -5324,7 +5326,7 @@ unsafe extern "system" fn login_dialog_window_proc(
             }
             0
         }
-        _ => DefWindowProcW(hwnd, message, _wparam, lparam),
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
     }
 }
 
@@ -5338,7 +5340,8 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
         WM_NCCREATE => {
             let create = &*(lparam as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-            1
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CREATE => match create_recover_e2ee_dialog_controls(hwnd) {
             Ok(()) => 0,
@@ -5411,7 +5414,8 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
         WM_NCCREATE => {
             let create = &*(lparam as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-            1
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CREATE => match create_setup_e2ee_dialog_controls(hwnd) {
             Ok(()) => 0,
@@ -5479,7 +5483,8 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
         WM_NCCREATE => {
             let create = &*(lparam as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-            1
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CREATE => match create_recovery_key_handoff_dialog_controls(hwnd) {
             Ok(()) => 0,
@@ -5525,7 +5530,8 @@ unsafe extern "system" fn find_dialog_window_proc(
         WM_NCCREATE => {
             let create = &*(lparam as *const CREATESTRUCTW);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-            1
+            // Sets the window text from the CreateWindowExW title.
+            DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_CREATE => match create_find_dialog_controls(hwnd) {
             Ok(()) => 0,
@@ -9387,7 +9393,23 @@ fn space_tree_label(space: &RoomSummary) -> String {
     space.display_name.clone()
 }
 
-fn view_title(model: &UiModel, view_id: &ViewId) -> String {
+/// The MDI window caption: the short title, with the topic for rooms.
+fn view_caption(model: &UiModel, view_id: &ViewId) -> String {
+    let title = view_short_title(model, view_id);
+    match view_id {
+        ViewId::Room(room_id) => mdi::room_caption(
+            &title,
+            model
+                .room_views
+                .get(room_id)
+                .and_then(|room_view| room_view.topic.as_deref()),
+        ),
+        ViewId::Status | ViewId::Thread { .. } => title,
+    }
+}
+
+/// The short title the switchbar and treebar show.
+fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
     if let Some((room_id, thread_root_event_id)) = view_id.thread_key() {
         return format!(
             "Thread: {}",
@@ -9415,7 +9437,7 @@ fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
                 .expect("room switchbar button must target an existing room");
             room_navigation_label(&state.model, room)
         }
-        ViewId::Status | ViewId::Thread { .. } => view_title(&state.model, view_id),
+        ViewId::Status | ViewId::Thread { .. } => view_short_title(&state.model, view_id),
     }
 }
 
@@ -9794,7 +9816,7 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
         return Ok(view.child);
     }
 
-    let title = view_title(&state_ref(hwnd).model, &view_id);
+    let title = view_caption(&state_ref(hwnd).model, &view_id);
     let child = create_mdi_child(hwnd, &title, &view_id)?;
     let view = MdiViewState {
         child,
@@ -9993,7 +10015,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             .views
             .get(view_id)
             .ok_or_else(|| "view state was not tracked".to_owned())?;
-        let title = view_title(&state.model, view_id);
+        let title = view_caption(&state.model, view_id);
         (view.child, view.content, title)
     };
 
@@ -22717,7 +22739,7 @@ mod tests {
         );
 
         assert_eq!(
-            view_title(&state.model, &room_view_id("!room:example")),
+            view_short_title(&state.model, &room_view_id("!room:example")),
             "Room [query: @alice:example] [e2ee]"
         );
         assert_eq!(
@@ -22729,6 +22751,63 @@ mod tests {
             "Thread: root msg"
         );
         assert_eq!(switchbar_button_text(&state, &ViewId::Status), "Status");
+    }
+
+    #[test]
+    fn view_caption_adds_the_room_topic_to_the_short_title() {
+        let mut state = test_state();
+        let mut direct_room = room("!room:example", "Room", true);
+        direct_room.is_direct = true;
+        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+        let mut invited_room = room("!invite:example", "Invite", false);
+        invited_room.membership = RoomMembership::Invite;
+        state.model.rooms = vec![
+            direct_room,
+            invited_room,
+            room("!plain:example", "Plain", false),
+        ];
+        for (room_id, topic) in [
+            ("!room:example", "pairing\nnotes"),
+            ("!invite:example", "come join"),
+        ] {
+            state.model.room_views.insert(
+                room_id.to_owned(),
+                RoomViewModel {
+                    topic: Some(topic.to_owned()),
+                    threads: BTreeMap::from([(
+                        "$thread-root".to_owned(),
+                        ThreadViewModel {
+                            label: "root msg".to_owned(),
+                        },
+                    )]),
+                    ..RoomViewModel::default()
+                },
+            );
+        }
+
+        assert_eq!(
+            view_caption(&state.model, &room_view_id("!room:example")),
+            "Room [query: @alice:example] [e2ee]: pairing notes"
+        );
+        assert_eq!(
+            view_caption(&state.model, &room_view_id("!invite:example")),
+            format!(
+                "{}: come join",
+                view_short_title(&state.model, &room_view_id("!invite:example"))
+            )
+        );
+        assert_eq!(
+            view_caption(&state.model, &room_view_id("!plain:example")),
+            "Plain"
+        );
+        assert_eq!(view_caption(&state.model, &ViewId::Status), "Status");
+        assert_eq!(
+            view_caption(
+                &state.model,
+                &thread_view_id("!room:example", "$thread-root")
+            ),
+            "Thread: root msg"
+        );
     }
 
     #[test]

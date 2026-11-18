@@ -206,6 +206,7 @@ configure_case_expectations() {
   expect_switchbar_active=
   verification_text_expect_args=()
   mdi_placement_expect_args=()
+  mdi_title_expect_args=()
 
   case "$case_name" in
     mdi-tiled|mdi-cascaded|mdi-minimized)
@@ -222,6 +223,11 @@ configure_case_expectations() {
       )
       switchbar_activity_expect_args=(
         --expect-switchbar-activity 'room:!ops:example::message'
+      )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'status::Status'
+        --expect-mdi-title 'room:!lobby:example::Lobby: welcome to the lobby'
+        --expect-mdi-title 'room:!ops:example::Ops [e2ee]: incident review'
       )
       case "$case_name" in
         mdi-tiled)
@@ -266,6 +272,9 @@ configure_case_expectations() {
         --expect-room-view '!topic:example::Room: Topic Room (!topic:example)'
         --expect-room-view '!topic:example::Topic: incident review'
       )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'room:!topic:example::Topic Room: incident review'
+      )
     ;;
 
     multi-room)
@@ -289,6 +298,9 @@ configure_case_expectations() {
         --expect-room-view "!ops:example::[22:13] * Alice changes topic to 'incident review'"
         --expect-room-view '!ops:example::[22:14] * Joins: Carol (@carol:example)'
         --expect-room-view '!ops:example::[22:15] <Alice> ops topic: incident review'
+      )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'room:!ops:example::Ops [e2ee]: incident review'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !random:example'
@@ -2494,6 +2506,7 @@ run_case() {
     "${navigation_activity_expect_args[@]}"
     "${navigation_no_activity_expect_args[@]}"
     "${mdi_placement_expect_args[@]}"
+    "${mdi_title_expect_args[@]}"
   )
 
   if [[ -n "${expect_selected:-}" ]]; then

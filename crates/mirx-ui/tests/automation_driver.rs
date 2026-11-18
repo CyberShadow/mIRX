@@ -3923,6 +3923,57 @@ fn status_window_cannot_be_closed() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn room_caption_shows_topic_and_frame_title_follows() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("room-topic.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let topic_room = room_identity("!topic:example");
+    let frame = app.automation_frame_hwnd() as HWND;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        find_view(&ui_state, &topic_room).title,
+        "Topic Room: incident review"
+    );
+    assert_eq!(
+        view_placement(&ui_state, &topic_room).state,
+        MdiWindowState::Maximized
+    );
+    // MDI shows the maximized window's caption in the frame title.
+    assert_eq!(
+        unsafe { read_window_text(frame) },
+        "mirx - [Topic Room: incident review]"
+    );
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![topic_event_with_event_id(
+        "!topic:example",
+        "$topic-2",
+        "@alice:example",
+        1_700_000_000_000,
+        "deploy window",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        find_view(&app.dump_ui_state()?, &topic_room).title,
+        "Topic Room: deploy window"
+    );
+    assert_eq!(
+        unsafe { read_window_text(frame) },
+        "mirx - [Topic Room: deploy window]"
+    );
+
+    app.arrange_windows(MdiArrangement::Cascade)?;
+    assert_eq!(unsafe { read_window_text(frame) }, "mirx");
+    Ok(())
+}
+
+#[test]
 fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;

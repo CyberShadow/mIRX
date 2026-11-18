@@ -37,9 +37,49 @@ pub(super) fn child_layout(client_width: i32, client_height: i32, edit_height: i
     }
 }
 
+/// A room window's caption: its label, then `: topic` as in mIRC's
+/// `#chan [+modes]: topic`. mIRC omits the suffix when there is no topic, and
+/// a caption is a single line.
+pub(super) fn room_caption(label: &str, topic: Option<&str>) -> String {
+    let topic = topic
+        .unwrap_or_default()
+        .split(['\r', '\n'])
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if topic.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label}: {topic}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn room_caption_appends_the_topic() {
+        assert_eq!(
+            room_caption("Ops [e2ee]", Some("incident review")),
+            "Ops [e2ee]: incident review"
+        );
+    }
+
+    #[test]
+    fn room_caption_omits_a_missing_or_cleared_topic() {
+        assert_eq!(room_caption("Ops", None), "Ops");
+        assert_eq!(room_caption("Ops", Some("")), "Ops");
+        assert_eq!(room_caption("Ops", Some("\n")), "Ops");
+    }
+
+    #[test]
+    fn room_caption_flattens_a_multiline_topic() {
+        assert_eq!(
+            room_caption("Ops", Some("incident review\r\nsee the doc\nthanks")),
+            "Ops: incident review see the doc thanks"
+        );
+    }
 
     #[test]
     fn child_layout_puts_the_editbox_under_the_content() {
