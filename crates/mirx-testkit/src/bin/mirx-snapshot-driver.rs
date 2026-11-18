@@ -9,7 +9,7 @@ mod cli {
     use std::time::Duration;
 
     use mirx_core::RoomMembership;
-    use mirx_testkit::{ViewActivityLevel, ViewIdentity};
+    use mirx_testkit::{MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity};
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
     const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
@@ -56,12 +56,27 @@ mod cli {
         pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
         pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
         pub(crate) expect_room_unreads: Vec<RoomUnreadExpectation>,
+        pub(crate) expect_mdi_placements: Vec<MdiPlacementExpectation>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct MdiPlacementExpectation {
+        pub(crate) identity: ViewIdentity,
+        pub(crate) state: MdiWindowState,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) enum Action {
         Find(String),
         Append(String),
+        Arrange(MdiArrangement),
+        WindowState(ViewIdentity, MdiWindowState),
+    }
+
+    /// Parses a protocol enum from its wire name, so the CLI names cannot
+    /// drift from the protocol's.
+    fn parse_wire_name<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
+        serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
     }
 
     pub(crate) struct RoomActivityExpectation {
@@ -506,6 +521,14 @@ mod cli {
                             "missing value for --expect-no-navigation-activity".to_owned()
                         })?);
                 }
+                "--expect-mdi-placement" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-mdi-placement".to_owned())?;
+                    config
+                        .expect_mdi_placements
+                        .push(parse_mdi_placement_expectation(&value)?);
+                }
                 "--help" => {
                     return Err(usage());
                 }
@@ -527,7 +550,9 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|append:<path>> (repeatable)",
+            "  --action <find:<query>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)",
+            "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
+            "  <state> is maximized, normal, or minimized",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
             "  --expect-active-find-selected-text <substring>",
             "  --expect-selected <room_id>",
@@ -562,6 +587,7 @@ mod cli {
             "  --expect-no-navigation-text <substring>",
             "  --expect-navigation-activity <path-or-label>::<event|message|highlight>",
             "  --expect-no-navigation-activity <path-or-label>",
+            "  --expect-mdi-placement <identity>::<state>",
         ]
         .join("\n")
     }
@@ -573,10 +599,37 @@ mod cli {
         if let Some(path) = value.strip_prefix("append:") {
             return Ok(Action::Append(path.to_owned()));
         }
-        Err(format!(
-            "invalid --action value {value:?}; expected find:<query> or append:<path>\n{}",
-            usage()
-        ))
+        let invalid = || format!("invalid --action value {value:?}\n{}", usage());
+        if let Some(arrangement) = value.strip_prefix("arrange:") {
+            return parse_wire_name(arrangement)
+                .map(Action::Arrange)
+                .ok_or_else(invalid);
+        }
+        if let Some(target) = value.strip_prefix("window-state:") {
+            let (identity, state) = target.rsplit_once('=').ok_or_else(invalid)?;
+            let state = parse_wire_name(state).ok_or_else(invalid)?;
+            return Ok(Action::WindowState(
+                parse_view_identity_arg("--action", identity)?,
+                state,
+            ));
+        }
+        Err(invalid())
+    }
+
+    pub(crate) fn parse_mdi_placement_expectation(
+        value: &str,
+    ) -> Result<MdiPlacementExpectation, String> {
+        let invalid = || {
+            format!(
+                "invalid --expect-mdi-placement value {value:?}; expected <identity>::<state>\n{}",
+                usage()
+            )
+        };
+        let (identity, state) = value.rsplit_once("::").ok_or_else(invalid)?;
+        Ok(MdiPlacementExpectation {
+            identity: parse_view_identity_arg("--expect-mdi-placement", identity)?,
+            state: parse_wire_name(state).ok_or_else(invalid)?,
+        })
     }
 
     pub(crate) fn parse_view_identity_arg(
@@ -753,13 +806,14 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            Action, NavigationActivityExpectation, RoomMembershipExpectation,
-            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation,
-            SwitchbarActivityExpectation, ViewExpectation, format_view_identity, parse_args,
-            parse_view_expectation, parse_view_identity_arg, usage,
+            Action, MdiPlacementExpectation, NavigationActivityExpectation,
+            RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
+            RoomUnreadExpectation, SwitchbarActivityExpectation, ViewExpectation,
+            format_view_identity, parse_args, parse_view_expectation, parse_view_identity_arg,
+            usage,
         };
         use mirx_core::RoomMembership;
-        use mirx_testkit::{ViewActivityLevel, ViewIdentity};
+        use mirx_testkit::{MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity};
         use std::time::Duration;
 
         #[test]
@@ -769,7 +823,10 @@ mod cli {
             ));
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
-            assert!(usage().contains("--action <find:<query>|append:<path>> (repeatable)"));
+            assert!(usage().contains(
+                "--action <find:<query>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)"
+            ));
+            assert!(usage().contains("--expect-mdi-placement <identity>::<state>"));
             assert!(
                 usage()
                     .contains("--expect-active-find-history <local_only|loading|exhausted|failed>")
@@ -942,6 +999,65 @@ mod cli {
                     Action::Append("C:\\snapshots\\backfill.json".to_owned()),
                 ]
             );
+        }
+
+        #[test]
+        fn parse_args_accepts_window_actions_and_placement_expectations() {
+            let config = parse_args(
+                [
+                    "--action",
+                    "arrange:tile_vertical",
+                    "--action",
+                    "arrange:arrange_icons",
+                    "--action",
+                    "window-state:room:!lobby:example=minimized",
+                    "--expect-mdi-placement",
+                    "thread:!room:example|$root::normal",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+
+            assert_eq!(
+                config.actions,
+                vec![
+                    Action::Arrange(MdiArrangement::TileVertical),
+                    Action::Arrange(MdiArrangement::ArrangeIcons),
+                    Action::WindowState(
+                        ViewIdentity::Room {
+                            room_id: "!lobby:example".to_owned()
+                        },
+                        MdiWindowState::Minimized
+                    ),
+                ]
+            );
+            assert_eq!(
+                config.expect_mdi_placements,
+                vec![MdiPlacementExpectation {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!room:example".to_owned(),
+                        thread_root_event_id: "$root".to_owned(),
+                    },
+                    state: MdiWindowState::Normal,
+                }]
+            );
+        }
+
+        #[test]
+        fn parse_args_rejects_unknown_window_actions_and_states() {
+            for args in [
+                ["--action", "arrange:tile"],
+                ["--action", "window-state:status=hidden"],
+                ["--action", "window-state:status"],
+                ["--expect-mdi-placement", "status::hidden"],
+                ["--expect-mdi-placement", "status"],
+            ] {
+                assert!(
+                    parse_args(args.into_iter().map(str::to_owned)).is_err(),
+                    "{args:?} must be rejected"
+                );
+            }
         }
 
         #[test]
@@ -1831,6 +1947,7 @@ mod windows_main {
                 || !self.expect_room_tags.is_empty()
                 || !self.expect_room_read_targets.is_empty()
                 || !self.expect_room_unreads.is_empty()
+                || !self.expect_mdi_placements.is_empty()
                 || self.expect_active_find_history.is_some()
                 || self.expect_active_find_selected_text.is_some()
         }
@@ -1917,6 +2034,21 @@ mod windows_main {
                         .map_err(|error| format!("APPEND_SYNTHETIC_EVENTS failed: {error}"))?;
                     app.wait_idle(config.wait_idle).map_err(|error| {
                         format!("WAIT_IDLE after APPEND_SYNTHETIC_EVENTS failed: {error}")
+                    })?;
+                }
+                Action::Arrange(arrangement) => {
+                    app.arrange_windows(*arrangement).map_err(|error| {
+                        format!("ARRANGE_WINDOWS_VIA_WINDOW_MENU failed: {error}")
+                    })?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after ARRANGE_WINDOWS_VIA_WINDOW_MENU failed: {error}")
+                    })?;
+                }
+                Action::WindowState(identity, state) => {
+                    app.set_view_window_state(identity.clone(), *state)
+                        .map_err(|error| format!("SET_VIEW_WINDOW_STATE failed: {error}"))?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after SET_VIEW_WINDOW_STATE failed: {error}")
                     })?;
                 }
             }
@@ -2261,6 +2393,33 @@ mod windows_main {
                     ));
                 }
                 println!("PASS switchbar excludes {}", format_view_identity(identity));
+            }
+
+            for expected in &config.expect_mdi_placements {
+                let view = ui_state
+                    .mdi
+                    .views
+                    .iter()
+                    .find(|view| view.identity == expected.identity)
+                    .ok_or_else(|| {
+                        format!(
+                            "MDI placement assertion failed: missing view {}",
+                            format_view_identity(&expected.identity)
+                        )
+                    })?;
+                if view.placement.state != expected.state {
+                    return Err(format!(
+                        "MDI placement assertion failed: {} is {:?}, expected {:?}",
+                        format_view_identity(&expected.identity),
+                        view.placement.state,
+                        expected.state
+                    ));
+                }
+                println!(
+                    "PASS MDI {} is {:?}",
+                    format_view_identity(&expected.identity),
+                    expected.state
+                );
             }
 
             if let Some(expected_identity) = config.expect_switchbar_active.as_ref() {

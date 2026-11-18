@@ -43,8 +43,8 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_WINDOW, ClientToScreen, CreateSolidBrush, DT_NOPREFIX, DT_SINGLELINE,
     DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GetDC, GetTextExtentPoint32W, HBRUSH,
-    InvalidateRect, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT, TextOutW,
+    InvalidateRect, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject,
+    SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -82,22 +82,24 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
     ES_WANTRETURN, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
     GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
-    GetMessageW, GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, HMENU, HideCaret,
-    IDC_ARROW, IsChild, IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
-    LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW,
-    MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
-    SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
-    SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY,
-    WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
-    WM_SETFOCUS, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GetMessageW, GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU,
+    HideCaret, IDC_ARROW, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
+    LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
+    LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
+    MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
+    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
+    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE,
+    SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
+    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY,
+    WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETTEXT, WM_SIZE, WM_TIMER,
+    WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -116,11 +118,11 @@ use crate::{
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
         DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        ParsedCommand, PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse,
-        SelectViewResponse, SelectedNavigationPathResponse, SendTextResponse, StatusBarState,
-        SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
-        UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs,
+        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
+        NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
+        RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState,
+        UiFindState, UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs,
         ViewActivityLevel, ViewIdentity, WaitIdleResponse, dump_error_from_core,
         dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
@@ -191,6 +193,10 @@ const MENU_ID_MEMBER_QUERY: usize = 40022;
 const MENU_ID_MEMBER_MENTION: usize = 40023;
 const MENU_ID_MEMBER_KICK: usize = 40024;
 const MENU_ID_MEMBER_BAN: usize = 40025;
+const MENU_ID_WINDOW_CASCADE: usize = 40026;
+const MENU_ID_WINDOW_TILE_HORIZONTAL: usize = 40027;
+const MENU_ID_WINDOW_TILE_VERTICAL: usize = 40028;
+const MENU_ID_WINDOW_ARRANGE_ICONS: usize = 40029;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -3754,6 +3760,15 @@ unsafe extern "system" fn mdi_child_window_proc(
             }
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
+        WM_CLOSE
+            if state_ref(frame_window_for(hwnd))
+                .hwnd_views
+                .get(&(hwnd as isize))
+                == Some(&ViewId::Status) =>
+        {
+            // The Status window cannot be closed, as in mIRC.
+            0
+        }
         WM_NCDESTROY => {
             unregister_destroyed_view(hwnd);
             DefMDIChildProcW(hwnd, message, wparam, lparam)
@@ -5618,6 +5633,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     )?;
 
     let mut mdi_client: CLIENTCREATESTRUCT = zeroed();
+    // No MDI window list in the Window menu: the switchbar is the window
+    // list, as in mIRC.
     mdi_client.hWindowMenu = null_mut();
     mdi_client.idFirstChild = 50000;
     state.controls.mdi_client = create_child_window(
@@ -5786,6 +5803,20 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     )?;
     append_menu_text(account_menu, MF_STRING, MENU_ID_LOGOUT, "Logout")?;
 
+    let window_menu = CreatePopupMenu();
+    if window_menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    for arrangement in [
+        MdiArrangement::Cascade,
+        MdiArrangement::TileHorizontal,
+        MdiArrangement::TileVertical,
+        MdiArrangement::ArrangeIcons,
+    ] {
+        let (command_id, label) = window_menu_item(arrangement);
+        append_menu_text(window_menu, MF_STRING, command_id, label)?;
+    }
+
     let frame_menu = CreateMenu();
     if frame_menu.is_null() {
         return Err(last_os_error("CreateMenu"));
@@ -5794,6 +5825,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     append_menu_text(frame_menu, MF_POPUP, room_menu as usize, "Room")?;
     append_menu_text(frame_menu, MF_POPUP, message_menu as usize, "Message")?;
     append_menu_text(frame_menu, MF_POPUP, account_menu as usize, "Account")?;
+    append_menu_text(frame_menu, MF_POPUP, window_menu as usize, "Window")?;
 
     if SetMenu(hwnd, frame_menu) == 0 {
         return Err(last_os_error("SetMenu"));
@@ -5807,6 +5839,28 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         return Err(last_os_error("DrawMenuBar"));
     }
     Ok(())
+}
+
+fn window_menu_item(arrangement: MdiArrangement) -> (usize, &'static str) {
+    match arrangement {
+        MdiArrangement::Cascade => (MENU_ID_WINDOW_CASCADE, "Cascade"),
+        MdiArrangement::TileHorizontal => (MENU_ID_WINDOW_TILE_HORIZONTAL, "Tile Horizontal"),
+        MdiArrangement::TileVertical => (MENU_ID_WINDOW_TILE_VERTICAL, "Tile Vertical"),
+        MdiArrangement::ArrangeIcons => (MENU_ID_WINDOW_ARRANGE_ICONS, "Arrange Icons"),
+    }
+}
+
+/// Arranges the MDI windows. MDI itself restores a maximized window before
+/// cascading or tiling.
+unsafe fn arrange_mdi_windows(hwnd: HWND, arrangement: MdiArrangement) {
+    let mdi_client = state_ref(hwnd).controls.mdi_client;
+    let (message, wparam) = match arrangement {
+        MdiArrangement::Cascade => (WM_MDICASCADE, 0),
+        MdiArrangement::TileHorizontal => (WM_MDITILE, MDITILE_HORIZONTAL as WPARAM),
+        MdiArrangement::TileVertical => (WM_MDITILE, MDITILE_VERTICAL as WPARAM),
+        MdiArrangement::ArrangeIcons => (WM_MDIICONARRANGE, 0),
+    };
+    SendMessageW(mdi_client, message, wparam, 0);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6243,6 +6297,14 @@ unsafe fn select_timeline_event_for_automation(hwnd: HWND, event_id: &str) -> Re
     Ok(())
 }
 
+unsafe fn window_menu_command(
+    hwnd: HWND,
+    arrangement: MdiArrangement,
+) -> (&'static str, Result<Option<()>, String>) {
+    arrange_mdi_windows(hwnd, arrangement);
+    ("Window", Ok(Some(())))
+}
+
 unsafe fn menu_command_result(
     hwnd: HWND,
     wparam: WPARAM,
@@ -6250,6 +6312,10 @@ unsafe fn menu_command_result(
     let command_id = wparam & 0xffff;
     let (title, result) = match command_id {
         MENU_ID_FIND => ("Find", begin_find_dialog(hwnd).map(|_| Some(()))),
+        MENU_ID_WINDOW_CASCADE => window_menu_command(hwnd, MdiArrangement::Cascade),
+        MENU_ID_WINDOW_TILE_HORIZONTAL => window_menu_command(hwnd, MdiArrangement::TileHorizontal),
+        MENU_ID_WINDOW_TILE_VERTICAL => window_menu_command(hwnd, MdiArrangement::TileVertical),
+        MENU_ID_WINDOW_ARRANGE_ICONS => window_menu_command(hwnd, MdiArrangement::ArrangeIcons),
         MENU_ID_ROOM_JOIN => (
             "Room",
             show_join_room_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -9468,7 +9534,13 @@ unsafe fn create_mdi_child(
         y: CW_USEDEFAULT,
         cx: CW_USEDEFAULT,
         cy: CW_USEDEFAULT,
-        style: WS_CHILD | WS_VISIBLE,
+        style: WS_CHILD
+            | WS_VISIBLE
+            | if new_child_should_maximize(mdi_client) {
+                WS_MAXIMIZE
+            } else {
+                0
+            },
         lParam: create_state_ptr as isize,
     };
     let child = SendMessageW(
@@ -9483,6 +9555,72 @@ unsafe fn create_mdi_child(
     }
 
     Ok(child)
+}
+
+/// The first window opens maximized, and later ones follow the active
+/// window, as on Windows. Wine's MDI restores the active maximized window
+/// instead of maximizing the new one unless the new one asks for it.
+unsafe fn new_child_should_maximize(mdi_client: HWND) -> bool {
+    let mut active_maximized = 0;
+    let active = SendMessageW(
+        mdi_client,
+        WM_MDIGETACTIVE,
+        0,
+        &mut active_maximized as *mut i32 as LPARAM,
+    );
+    active == 0 || active_maximized != 0
+}
+
+/// Shows a view's window maximized, normal or minimized.
+unsafe fn set_view_window_state(
+    hwnd: HWND,
+    view_id: &ViewId,
+    window_state: MdiWindowState,
+) -> Result<(), String> {
+    let state = state_ref(hwnd);
+    let child = state
+        .views
+        .get(view_id)
+        .ok_or_else(|| format!("view has no window: {view_id:?}"))?
+        .child;
+    let mdi_client = state.controls.mdi_client;
+    match window_state {
+        MdiWindowState::Maximized => {
+            SendMessageW(mdi_client, WM_MDIMAXIMIZE, child as WPARAM, 0);
+        }
+        MdiWindowState::Normal => {
+            SendMessageW(mdi_client, WM_MDIRESTORE, child as WPARAM, 0);
+        }
+        MdiWindowState::Minimized => {
+            ShowWindow(child, SW_MINIMIZE);
+        }
+    }
+    Ok(())
+}
+
+unsafe fn mdi_window_placement(mdi_client: HWND, child: HWND) -> MdiWindowPlacement {
+    let state = if IsZoomed(child) != 0 {
+        MdiWindowState::Maximized
+    } else if IsIconic(child) != 0 {
+        MdiWindowState::Minimized
+    } else {
+        MdiWindowState::Normal
+    };
+    let mut rect = RECT::default();
+    GetWindowRect(child, &mut rect);
+    MapWindowPoints(
+        null_mut(),
+        mdi_client,
+        (&mut rect as *mut RECT).cast::<POINT>(),
+        2,
+    );
+    MdiWindowPlacement {
+        state,
+        x: rect.left,
+        y: rect.top,
+        width: rect.right - rect.left,
+        height: rect.bottom - rect.top,
+    }
 }
 
 /// Creates the child's content window for its view and its editbox, and
@@ -9536,8 +9674,8 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
     subclass_compose_edit(frame_window_for(child), edit)?;
 
     if matches!(view_id, ViewId::Status) {
-        // As in mIRC, the Status window cannot be closed, so there is always
-        // a window to activate when another one closes.
+        // As in mIRC, the Status window cannot be closed (see WM_CLOSE), so
+        // there is always a window to activate when another one closes.
         if EnableMenuItem(GetSystemMenu(child, 0), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED) == -1 {
             return Err(last_os_error("EnableMenuItem Status SC_CLOSE"));
         }
@@ -10043,7 +10181,11 @@ unsafe fn activate_view(
 
     let mdi_client = state_ref(hwnd).controls.mdi_client;
     SendMessageW(mdi_client, WM_MDIACTIVATE, applied.child as WPARAM, 0);
-    SendMessageW(mdi_client, WM_MDIMAXIMIZE, applied.child as WPARAM, 0);
+    // Activating a minimized window must show it, as in mIRC. MDI itself
+    // keeps a maximized window's successor maximized.
+    if IsIconic(applied.child) != 0 {
+        SendMessageW(mdi_client, WM_MDIRESTORE, applied.child as WPARAM, 0);
+    }
     finish_view_activation_chrome(hwnd, &applied)?;
     Ok(())
 }
@@ -10885,6 +11027,18 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 },
             )
         }
+        ParsedCommand::ArrangeWindowsViaWindowMenu { id, args } => {
+            let (command_id, _) = window_menu_item(args.arrangement);
+            invoke_menu_command_for_automation(hwnd, command_id).map_err(|message| {
+                failure_response(Some(id.clone()), "window_menu_failed", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::SetViewWindowState { id, args } => {
+            set_view_window_state(hwnd, &view_id_from_identity(&args.view), args.state)
+                .map_err(|message| failure_response(Some(id.clone()), "unknown_view", message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::SelectView { id, args } => {
             let requested_view = view_id_from_identity(&args.view);
             activate_view(hwnd, &requested_view, None)
@@ -11156,6 +11310,8 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::MentionSelectedMemberViaMenu { id }
         | ParsedCommand::OpenMemberContextMenu { id, .. }
         | ParsedCommand::OpenSelectedMemberContextMenu { id, .. }
+        | ParsedCommand::ArrangeWindowsViaWindowMenu { id, .. }
+        | ParsedCommand::SetViewWindowState { id, .. }
         | ParsedCommand::AcceptInviteViaRoomMenu { id }
         | ParsedCommand::RejectInviteViaRoomMenu { id }
         | ParsedCommand::PartRoomViaRoomMenu { id }
@@ -11804,6 +11960,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
             Ok(MdiView {
                 title: read_window_text(view.child),
                 active: identity == active,
+                placement: mdi_window_placement(state_ref(hwnd).controls.mdi_client, view.child),
                 lines: match &view_id {
                     ViewId::Status => split_rendered_lines(&read_window_text(view.content)),
                     ViewId::Room(_) => {

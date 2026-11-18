@@ -125,6 +125,10 @@ const COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU: u32 = 53;
 #[cfg(windows)]
 const COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU: u32 = 54;
 #[cfg(windows)]
+const COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU: u32 = 55;
+#[cfg(windows)]
+const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -1426,8 +1430,38 @@ pub struct MdiView {
     pub identity: ViewIdentity,
     pub title: String,
     pub active: bool,
+    pub placement: MdiWindowPlacement,
     pub lines: Vec<String>,
     pub members: Vec<RoomMemberView>,
+}
+
+/// An MDI window's state and its rectangle in MDI client coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MdiWindowPlacement {
+    pub state: MdiWindowState,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MdiWindowState {
+    Maximized,
+    Normal,
+    Minimized,
+}
+
+/// The Window menu's arrangements of the MDI windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MdiArrangement {
+    Cascade,
+    TileHorizontal,
+    TileVertical,
+    ArrangeIcons,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1681,6 +1715,19 @@ impl MirxApp {
 
     pub fn select_view(&self, view: ViewIdentity) -> Result<(), TestkitError> {
         self.inner.select_view(view)
+    }
+
+    /// Picks the arrangement from the Window menu.
+    pub fn arrange_windows(&self, arrangement: MdiArrangement) -> Result<(), TestkitError> {
+        self.inner.arrange_windows(arrangement)
+    }
+
+    pub fn set_view_window_state(
+        &self,
+        view: ViewIdentity,
+        state: MdiWindowState,
+    ) -> Result<(), TestkitError> {
+        self.inner.set_view_window_state(view, state)
     }
 
     pub fn select_navigation_path(
@@ -1980,6 +2027,19 @@ struct OpenSelectedTimelineContextMenuArgs {
     command: ContextMenuCommand,
 }
 
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct ArrangeWindowsArgs {
+    arrangement: MdiArrangement,
+}
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct SetViewWindowStateArgs {
+    view: ViewIdentity,
+    state: MdiWindowState,
+}
 #[cfg(windows)]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -2439,6 +2499,25 @@ mod imp {
         }
 
         pub(crate) fn select_view(&self, _view: ViewIdentity) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn arrange_windows(
+            &self,
+            _arrangement: MdiArrangement,
+        ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn set_view_window_state(
+            &self,
+            _view: ViewIdentity,
+            _state: MdiWindowState,
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
             ))
@@ -3086,6 +3165,29 @@ mod imp {
                     response.selected_room, room_id
                 )))
             }
+        }
+
+        pub(crate) fn arrange_windows(
+            &self,
+            arrangement: MdiArrangement,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
+                ArrangeWindowsArgs { arrangement },
+                "ARRANGE_WINDOWS_VIA_WINDOW_MENU",
+            )
+        }
+
+        pub(crate) fn set_view_window_state(
+            &self,
+            view: ViewIdentity,
+            state: MdiWindowState,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_SET_VIEW_WINDOW_STATE,
+                SetViewWindowStateArgs { view, state },
+                "SET_VIEW_WINDOW_STATE",
+            )
         }
 
         pub(crate) fn select_view(&self, view: ViewIdentity) -> Result<(), TestkitError> {

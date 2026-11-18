@@ -28,21 +28,22 @@ use mirx_core::{
 };
 use mirx_testkit::{
     ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
-    LaunchOptions, MdiView, MemberModerationAction, MembershipCommandAction, MirxApp, Model,
-    NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
-    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState,
+    MemberModerationAction, MembershipCommandAction, MirxApp, Model, NavigationNode,
+    NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMediaState,
+    RoomMediaSource, RoomMemberChange, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
+    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
+    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -58,7 +59,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IsWindow, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN, PostMessageW,
     SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR,
-    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
+    WM_CLOSE, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
     WM_VSCROLL, WS_VSCROLL,
 };
 
@@ -2684,7 +2685,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 28);
+    assert_eq!(version.protocol_version, 29);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3745,6 +3746,179 @@ fn slash_command_switching_windows_clears_the_submitting_editbox()
     assert_eq!(app.compose_text()?, "status draft");
     app.select_view(room_identity("!ops:example"))?;
     assert_eq!(app.compose_text()?, "");
+    Ok(())
+}
+
+fn view_placement(ui_state: &UiState, identity: &ViewIdentity) -> MdiWindowPlacement {
+    find_view(ui_state, identity).placement.clone()
+}
+
+fn rects_overlap(a: &MdiWindowPlacement, b: &MdiWindowPlacement) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+#[test]
+fn window_menu_tile_vertical_restores_and_tiles_children() -> Result<(), Box<dyn std::error::Error>>
+{
+    let app = launch_multi_room_fixture()?;
+    let active_before = app.dump_ui_state()?.mdi.active;
+    app.arrange_windows(MdiArrangement::TileVertical)?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, active_before);
+    let client = unsafe { client_rect(mdi_client_hwnd(&app)) };
+    let placements = ui_state
+        .mdi
+        .views
+        .iter()
+        .map(|view| view.placement.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(placements.len(), 4);
+    for (index, placement) in placements.iter().enumerate() {
+        assert_eq!(placement.state, MdiWindowState::Normal);
+        assert!(placement.x >= 0 && placement.y >= 0);
+        assert!(placement.x + placement.width <= client.right);
+        assert!(placement.y + placement.height <= client.bottom);
+        for other in &placements[index + 1..] {
+            assert!(
+                !rects_overlap(placement, other),
+                "tiled windows overlap: {placement:?} {other:?}"
+            );
+        }
+    }
+    let covered = placements
+        .iter()
+        .map(|placement| placement.width * placement.height)
+        .sum::<i32>();
+    // MDI divides the client area by integer division.
+    assert!(covered * 100 >= client.right * client.bottom * 98);
+    Ok(())
+}
+
+#[test]
+fn window_menu_cascade_offsets_children() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    app.arrange_windows(MdiArrangement::Cascade)?;
+
+    let ui_state = app.dump_ui_state()?;
+    let mut placements = ui_state
+        .mdi
+        .views
+        .iter()
+        .map(|view| view.placement.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        placements
+            .iter()
+            .all(|placement| placement.state == MdiWindowState::Normal)
+    );
+    placements.sort_by_key(|placement| placement.x);
+    for pair in placements.windows(2) {
+        assert!(
+            pair[1].x > pair[0].x && pair[1].y > pair[0].y,
+            "cascaded windows must step down and right: {pair:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn activating_minimized_view_restores_it() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    let lobby = room_identity("!lobby:example");
+    app.arrange_windows(MdiArrangement::TileVertical)?;
+    app.set_view_window_state(lobby.clone(), MdiWindowState::Minimized)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        view_placement(&app.dump_ui_state()?, &lobby).state,
+        MdiWindowState::Minimized
+    );
+
+    app.select_view(lobby.clone())?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, lobby);
+    assert_eq!(
+        view_placement(&ui_state, &lobby).state,
+        MdiWindowState::Normal
+    );
+    Ok(())
+}
+
+#[test]
+fn maximized_state_carries_across_activation() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    let ops = room_identity("!ops:example");
+    let lobby = room_identity("!lobby:example");
+    let random = room_identity("!random:example");
+    assert_eq!(
+        view_placement(&app.dump_ui_state()?, &ops).state,
+        MdiWindowState::Maximized
+    );
+
+    app.select_view(lobby.clone())?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        view_placement(&ui_state, &lobby).state,
+        MdiWindowState::Maximized
+    );
+    assert_eq!(
+        view_placement(&ui_state, &ops).state,
+        MdiWindowState::Normal
+    );
+
+    app.arrange_windows(MdiArrangement::TileVertical)?;
+    app.select_view(random.clone())?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, random);
+    assert!(
+        ui_state
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.placement.state == MdiWindowState::Normal)
+    );
+    Ok(())
+}
+
+#[test]
+fn closing_active_child_activates_next_view() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    let ops = room_identity("!ops:example");
+    app.arrange_windows(MdiArrangement::TileVertical)?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, ops);
+
+    let title = find_view(&app.dump_ui_state()?, &ops).title.clone();
+    let child = unsafe { mdi_child_hwnd_by_title(&app, &title) };
+    unsafe {
+        SendMessageW(child, WM_CLOSE, 0, 0);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(unsafe { IsWindow(child) }, 0);
+
+    // MDI activated the next window before destroying the closed one. (Every
+    // joined room has a window, so the next sync reopens Ops' window.)
+    let ui_state = app.dump_ui_state()?;
+    assert_ne!(ui_state.mdi.active, ops);
+    assert_eq!(ui_state.switchbar.items.len(), ui_state.mdi.views.len());
+    assert_compose_has_focus(&app);
+    Ok(())
+}
+
+#[test]
+fn status_window_cannot_be_closed() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    app.select_view(ViewIdentity::Status)?;
+    let title = find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
+        .title
+        .clone();
+    let child = unsafe { mdi_child_hwnd_by_title(&app, &title) };
+    unsafe {
+        SendMessageW(child, WM_CLOSE, 0, 0);
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert_eq!(unsafe { IsWindow(child) }, 1);
     Ok(())
 }
 

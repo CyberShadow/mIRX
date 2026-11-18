@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 28;
+pub(crate) const PROTOCOL_VERSION: u32 = 29;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -70,6 +70,8 @@ pub(crate) const COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU: u32 = 51;
 pub(crate) const COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU: u32 = 52;
 pub(crate) const COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU: u32 = 53;
 pub(crate) const COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU: u32 = 54;
+pub(crate) const COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU: u32 = 55;
+pub(crate) const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -127,6 +129,8 @@ pub(crate) enum CommandKind {
     MentionSelectedMemberViaMenu,
     OpenMemberContextMenu,
     OpenSelectedMemberContextMenu,
+    ArrangeWindowsViaWindowMenu,
+    SetViewWindowState,
 }
 
 impl CommandKind {
@@ -196,6 +200,8 @@ impl CommandKind {
             COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU => {
                 Some(Self::OpenSelectedMemberContextMenu)
             }
+            COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU => Some(Self::ArrangeWindowsViaWindowMenu),
+            COMMAND_ID_SET_VIEW_WINDOW_STATE => Some(Self::SetViewWindowState),
             _ => None,
         }
     }
@@ -263,6 +269,8 @@ pub(crate) enum ParsedCommand {
     Logout {
         id: String,
     },
+    /// The compose commands act on the active window's editbox, like mIRC's
+    /// `/editbox -a`.
     DumpComposeText {
         id: String,
     },
@@ -395,6 +403,14 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: OpenSelectedMemberContextMenuArgs,
     },
+    ArrangeWindowsViaWindowMenu {
+        id: String,
+        args: ArrangeWindowsArgs,
+    },
+    SetViewWindowState {
+        id: String,
+        args: SetViewWindowStateArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -464,6 +480,8 @@ impl ParsedCommand {
             Self::OpenSelectedMemberContextMenu { .. } => {
                 CommandKind::OpenSelectedMemberContextMenu
             }
+            Self::ArrangeWindowsViaWindowMenu { .. } => CommandKind::ArrangeWindowsViaWindowMenu,
+            Self::SetViewWindowState { .. } => CommandKind::SetViewWindowState,
         }
     }
 }
@@ -607,6 +625,37 @@ pub(crate) struct OpenMemberContextMenuArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct OpenSelectedMemberContextMenuArgs {
     pub(crate) command: ContextMenuCommand,
+}
+
+/// The Window menu's arrangements of the MDI windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MdiArrangement {
+    Cascade,
+    TileHorizontal,
+    TileVertical,
+    ArrangeIcons,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArrangeWindowsArgs {
+    pub(crate) arrangement: MdiArrangement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MdiWindowState {
+    Maximized,
+    Normal,
+    Minimized,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetViewWindowStateArgs {
+    pub(crate) view: ViewIdentity,
+    pub(crate) state: MdiWindowState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1136,8 +1185,20 @@ pub(crate) struct MdiView {
     pub(crate) identity: ViewIdentity,
     pub(crate) title: String,
     pub(crate) active: bool,
+    pub(crate) placement: MdiWindowPlacement,
     pub(crate) lines: Vec<String>,
     pub(crate) members: Vec<RoomMemberView>,
+}
+
+/// An MDI window's state and its rectangle in MDI client coordinates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MdiWindowPlacement {
+    pub(crate) state: MdiWindowState,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2247,6 +2308,16 @@ pub(crate) fn parse_command_request(
                 )?,
             })
         }
+        CommandKind::ArrangeWindowsViaWindowMenu => {
+            Ok(ParsedCommand::ArrangeWindowsViaWindowMenu {
+                id: envelope.id.clone(),
+                args: parse_args_required::<ArrangeWindowsArgs>(&envelope.id, envelope.args)?,
+            })
+        }
+        CommandKind::SetViewWindowState => Ok(ParsedCommand::SetViewWindowState {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SetViewWindowStateArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -2496,8 +2567,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AcceptedResponse, COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, COMMAND_ID_ACCEPT_VERIFICATION,
-        COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_CANCEL_VERIFICATION,
+        AcceptedResponse, ArrangeWindowsArgs, COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU,
+        COMMAND_ID_ACCEPT_VERIFICATION, COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
+        COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU, COMMAND_ID_CANCEL_VERIFICATION,
         COMMAND_ID_CONFIRM_VERIFICATION_SAS, COMMAND_ID_DUMP_COMPOSE_TEXT,
         COMMAND_ID_DUMP_MEMBER_MENU_STATE, COMMAND_ID_DUMP_MESSAGE_MENU_STATE,
         COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
@@ -2520,31 +2592,32 @@ mod tests {
         COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
         COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
         COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
-        ComposeKey, ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult,
-        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
-        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
-        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
-        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
-        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
-        DumpRoomMessageSendState, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
-        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
-        DumpRoomVideoActivity, DumpRoomVideoInfo, DumpSubmittedEditCommand,
-        DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
-        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsArgs, LoginArgs, MdiState, MdiView, NavigationNode, NavigationPathSegment,
-        NoArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
-        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
-        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel,
-        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
-        success_response,
+        COMMAND_ID_SET_VIEW_WINDOW_STATE, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
+        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, ContextMenuCommand,
+        DumpE2eeRecoverySetupResult, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
+        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
+        DumpUnsupportedRoomMessageActivity, FindActiveViewArgs, FindActiveViewResponse,
+        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs,
+        MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode,
+        NavigationPathSegment, NoArgs, OpenMemberContextMenuArgs,
+        OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse,
+        RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView, SelectMemberArgs,
+        SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
+        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
+        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs,
+        SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
+        UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
+        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2625,8 +2698,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_28() {
-        assert_eq!(PROTOCOL_VERSION, 28);
+    fn protocol_version_is_29() {
+        assert_eq!(PROTOCOL_VERSION, 29);
     }
 
     #[test]
@@ -2832,7 +2905,15 @@ mod tests {
             Some(CommandKind::QueryUserViaRoomMenu)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU + 1),
+            CommandKind::from_id(COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU),
+            Some(CommandKind::ArrangeWindowsViaWindowMenu)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SET_VIEW_WINDOW_STATE),
+            Some(CommandKind::SetViewWindowState)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SET_VIEW_WINDOW_STATE + 1),
             None
         );
     }
@@ -3172,6 +3253,70 @@ mod tests {
             .unwrap(),
             ParsedCommand::MentionSelectedMemberViaMenu { .. }
         ));
+        for (arrangement, expected) in [
+            ("cascade", MdiArrangement::Cascade),
+            ("tile_horizontal", MdiArrangement::TileHorizontal),
+            ("tile_vertical", MdiArrangement::TileVertical),
+            ("arrange_icons", MdiArrangement::ArrangeIcons),
+        ] {
+            assert_eq!(
+                parse_command_request(
+                    COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
+                    format!(r#"{{"id":"arrange","args":{{"arrangement":"{arrangement}"}}}}"#)
+                        .as_bytes()
+                )
+                .unwrap(),
+                ParsedCommand::ArrangeWindowsViaWindowMenu {
+                    id: "arrange".to_owned(),
+                    args: ArrangeWindowsArgs {
+                        arrangement: expected
+                    }
+                }
+            );
+        }
+        for (state, expected) in [
+            ("maximized", MdiWindowState::Maximized),
+            ("normal", MdiWindowState::Normal),
+            ("minimized", MdiWindowState::Minimized),
+        ] {
+            assert_eq!(
+                parse_command_request(
+                    COMMAND_ID_SET_VIEW_WINDOW_STATE,
+                    format!(
+                        r#"{{"id":"state","args":{{"view":{{"kind":"status"}},"state":"{state}"}}}}"#
+                    )
+                    .as_bytes()
+                )
+                .unwrap(),
+                ParsedCommand::SetViewWindowState {
+                    id: "state".to_owned(),
+                    args: SetViewWindowStateArgs {
+                        view: ViewIdentity::Status,
+                        state: expected
+                    }
+                }
+            );
+        }
+        for (command_id, request) in [
+            (
+                COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
+                br#"{"id":"arrange","args":{"arrangement":"tile"}}"#.as_slice(),
+            ),
+            (
+                COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
+                br#"{"id":"arrange","args":{}}"#.as_slice(),
+            ),
+            (
+                COMMAND_ID_SET_VIEW_WINDOW_STATE,
+                br#"{"id":"state","args":{"view":{"kind":"status"},"state":"hidden"}}"#.as_slice(),
+            ),
+        ] {
+            let error = parse_command_request(command_id, request).unwrap_err();
+            assert!(
+                error.err.message.starts_with("invalid command args"),
+                "unexpected error {error:?}"
+            );
+        }
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
@@ -4113,6 +4258,13 @@ mod tests {
             },
             title: "Thread".to_owned(),
             active: true,
+            placement: MdiWindowPlacement {
+                state: MdiWindowState::Normal,
+                x: 0,
+                y: 0,
+                width: 320,
+                height: 200,
+            },
             lines: vec!["reply".to_owned()],
             members: Vec::new(),
         };
@@ -4124,6 +4276,7 @@ mod tests {
             },
             "title": "Thread",
             "active": true,
+            "placement": {"state": "normal", "x": 0, "y": 0, "width": 320, "height": 200},
             "lines": ["reply"],
             "members": [],
         });
@@ -4202,6 +4355,7 @@ mod tests {
                 },
                 "title": "Thread",
                 "active": true,
+                "placement": {"state": "normal", "x": 0, "y": 0, "width": 320, "height": 200},
                 "lines": [],
                 "members": [],
             }))
@@ -4309,7 +4463,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":28,
+                    "protocol_version":29,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4721,6 +4875,13 @@ mod tests {
                                 identity: ViewIdentity::Status,
                                 title: "Status".to_owned(),
                                 active: false,
+                                placement: MdiWindowPlacement {
+                                    state: MdiWindowState::Minimized,
+                                    x: 0,
+                                    y: 0,
+                                    width: 320,
+                                    height: 200,
+                                },
                                 lines: vec!["status: synced".to_owned()],
                                 members: Vec::new(),
                             },
@@ -4730,6 +4891,13 @@ mod tests {
                                 },
                                 title: "Room".to_owned(),
                                 active: true,
+                                placement: MdiWindowPlacement {
+                                    state: MdiWindowState::Maximized,
+                                    x: 0,
+                                    y: 0,
+                                    width: 320,
+                                    height: 200,
+                                },
                                 lines: vec!["hello".to_owned()],
                                 members: vec![RoomMemberView {
                                     user_id: "@alice:example".to_owned(),
@@ -4747,6 +4915,13 @@ mod tests {
                                 },
                                 title: "Thread".to_owned(),
                                 active: false,
+                                placement: MdiWindowPlacement {
+                                    state: MdiWindowState::Normal,
+                                    x: 0,
+                                    y: 0,
+                                    width: 320,
+                                    height: 200,
+                                },
                                 lines: vec!["reply".to_owned()],
                                 members: Vec::new(),
                             },
@@ -4840,6 +5015,7 @@ mod tests {
                                 "identity":{"kind":"status"},
                                 "title":"Status",
                                 "active":false,
+                                "placement":{"state":"minimized","x":0,"y":0,"width":320,"height":200},
                                 "lines":["status: synced"],
                                 "members":[]
                             },
@@ -4847,6 +5023,7 @@ mod tests {
                                 "identity":{"kind":"room","room_id":"!room:example"},
                                 "title":"Room",
                                 "active":true,
+                                "placement":{"state":"maximized","x":0,"y":0,"width":320,"height":200},
                                 "lines":["hello"],
                                 "members":[
                                     {
@@ -4863,6 +5040,7 @@ mod tests {
                                 "identity":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"},
                                 "title":"Thread",
                                 "active":false,
+                                "placement":{"state":"normal","x":0,"y":0,"width":320,"height":200},
                                 "lines":["reply"],
                                 "members":[]
                             }

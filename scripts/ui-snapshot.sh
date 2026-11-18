@@ -205,8 +205,57 @@ configure_case_expectations() {
   case_frame_size=
   expect_switchbar_active=
   verification_text_expect_args=()
+  mdi_placement_expect_args=()
 
   case "$case_name" in
+    mdi-tiled|mdi-cascaded|mdi-minimized)
+      expect_selected='!lobby:example'
+      expect_active_view='room:!lobby:example'
+      expect_switchbar_active='room:!lobby:example'
+      room_view_expect_args=(
+        --expect-room-view '!lobby:example::<Bob> coffee is ready'
+        --expect-room-view '!ops:example::<Bob> rollback plan is in the doc'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!lobby:example::Carol'
+        --expect-room-member '!ops:example::Alice'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!ops:example::message'
+      )
+      case "$case_name" in
+        mdi-tiled)
+          ordered_actions=(arrange:tile_vertical)
+          mdi_placement_expect_args=(
+            --expect-mdi-placement 'status::normal'
+            --expect-mdi-placement 'room:!lobby:example::normal'
+            --expect-mdi-placement 'room:!ops:example::normal'
+          )
+          ;;
+        mdi-cascaded)
+          ordered_actions=(arrange:cascade)
+          mdi_placement_expect_args=(
+            --expect-mdi-placement 'status::normal'
+            --expect-mdi-placement 'room:!lobby:example::normal'
+            --expect-mdi-placement 'room:!ops:example::normal'
+          )
+          ;;
+        mdi-minimized)
+          # Tiling again leaves the bottom row of the MDI client to icons.
+          ordered_actions=(
+            arrange:tile_vertical
+            'window-state:room:!ops:example=minimized'
+            arrange:tile_vertical
+          )
+          mdi_placement_expect_args=(
+            --expect-mdi-placement 'status::normal'
+            --expect-mdi-placement 'room:!lobby:example::normal'
+            --expect-mdi-placement 'room:!ops:example::minimized'
+          )
+          ;;
+      esac
+      ;;
+
     room-topic)
       expect_selected='!topic:example'
       expect_active_view='room:!topic:example'
@@ -2444,6 +2493,7 @@ run_case() {
     "${navigation_forbid_args[@]}"
     "${navigation_activity_expect_args[@]}"
     "${navigation_no_activity_expect_args[@]}"
+    "${mdi_placement_expect_args[@]}"
   )
 
   if [[ -n "${expect_selected:-}" ]]; then

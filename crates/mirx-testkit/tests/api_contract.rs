@@ -19,25 +19,26 @@ use mirx_core::{
 use mirx_testkit::{
     BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
     FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions,
-    LoginArgs, MdiState, MdiView, MemberMenuState, MemberModerationAction, MembershipCommandAction,
-    Model, NavigationNode, NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs,
-    RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMemberView, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity,
-    RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendFileArgs,
-    SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
-    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiFindHistorySearchState, UiFindState,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
+    MemberMenuState, MemberModerationAction, MembershipCommandAction, Model, NavigationNode,
+    NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo,
+    RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind, RoomImageMediaState, RoomMediaSource,
+    RoomMemberChange, RoomMemberView, RoomMessageActivity, RoomMessageActivityLine,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomPowerLevelUserChange,
+    RoomPowerLevelValueChange, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
+    RoomVideoActivity, RoomVideoInfo, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild,
+    StatusBarState, StoredSession, SubmittedDirectRoomCommand, SubmittedHistoryCommand,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
+    TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -669,6 +670,13 @@ fn data_models_round_trip_through_json() {
                     identity: ViewIdentity::Status,
                     title: "Status".to_owned(),
                     active: false,
+                    placement: MdiWindowPlacement {
+                        state: MdiWindowState::Minimized,
+                        x: 0,
+                        y: 0,
+                        width: 320,
+                        height: 200,
+                    },
                     lines: vec!["status: synced".to_owned()],
                     members: Vec::new(),
                 },
@@ -678,6 +686,13 @@ fn data_models_round_trip_through_json() {
                     },
                     title: "Room".to_owned(),
                     active: true,
+                    placement: MdiWindowPlacement {
+                        state: MdiWindowState::Maximized,
+                        x: 0,
+                        y: 0,
+                        width: 320,
+                        height: 200,
+                    },
                     lines: vec!["hello".to_owned()],
                     members: vec![RoomMemberView {
                         user_id: "@alice:example".to_owned(),
@@ -695,6 +710,13 @@ fn data_models_round_trip_through_json() {
                     },
                     title: "Thread".to_owned(),
                     active: false,
+                    placement: MdiWindowPlacement {
+                        state: MdiWindowState::Normal,
+                        x: 0,
+                        y: 0,
+                        width: 320,
+                        height: 200,
+                    },
                     lines: vec!["reply".to_owned()],
                     members: Vec::new(),
                 },
@@ -915,6 +937,7 @@ fn data_models_round_trip_through_json() {
                         },
                         "title": "Status",
                         "active": false,
+                        "placement": {"state": "minimized", "x": 0, "y": 0, "width": 320, "height": 200},
                         "lines": ["status: synced"],
                         "members": [],
                     },
@@ -925,6 +948,7 @@ fn data_models_round_trip_through_json() {
                         },
                         "title": "Room",
                         "active": true,
+                        "placement": {"state": "maximized", "x": 0, "y": 0, "width": 320, "height": 200},
                         "lines": ["hello"],
                         "members": [
                             {
@@ -945,6 +969,7 @@ fn data_models_round_trip_through_json() {
                         },
                         "title": "Thread",
                         "active": false,
+                        "placement": {"state": "normal", "x": 0, "y": 0, "width": 320, "height": 200},
                         "lines": ["reply"],
                         "members": [],
                     }
@@ -5603,6 +5628,7 @@ fn data_models_reject_unknown_fields() {
             "identity":{"kind":"status"},
             "title":"Status",
             "active":true,
+            "placement":{"state":"minimized","x":0,"y":0,"width":320,"height":200},
             "lines":[],
             "members":[],
             "unexpected":true
@@ -6594,4 +6620,40 @@ fn non_windows_new_methods_report_unsupported_driver() {
         error.to_string(),
         "mirx-testkit requires the Windows target"
     );
+}
+
+#[test]
+fn mdi_arrangement_and_window_state_round_trip_and_reject_unknown_values() {
+    for (arrangement, text) in [
+        (MdiArrangement::Cascade, "cascade"),
+        (MdiArrangement::TileHorizontal, "tile_horizontal"),
+        (MdiArrangement::TileVertical, "tile_vertical"),
+        (MdiArrangement::ArrangeIcons, "arrange_icons"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(arrangement).unwrap(),
+            serde_json::json!(text)
+        );
+        assert_eq!(
+            serde_json::from_value::<MdiArrangement>(serde_json::json!(text)).unwrap(),
+            arrangement
+        );
+    }
+    assert!(serde_json::from_value::<MdiArrangement>(serde_json::json!("tile")).is_err());
+
+    for (state, text) in [
+        (MdiWindowState::Maximized, "maximized"),
+        (MdiWindowState::Normal, "normal"),
+        (MdiWindowState::Minimized, "minimized"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(state).unwrap(),
+            serde_json::json!(text)
+        );
+        assert_eq!(
+            serde_json::from_value::<MdiWindowState>(serde_json::json!(text)).unwrap(),
+            state
+        );
+    }
+    assert!(serde_json::from_value::<MdiWindowState>(serde_json::json!("hidden")).is_err());
 }
