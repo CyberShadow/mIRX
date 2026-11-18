@@ -23283,6 +23283,12 @@ mod tests {
     #[test]
     fn synced_rooms_prunes_stale_room_activity() {
         let mut state = test_state();
+        // Thread activity stays tracked only while the thread is projected.
+        apply_core_event(
+            &mut state,
+            thread_timeline("!keep:example", "$thread-1", "$thread-root", "thread reply"),
+        )
+        .unwrap();
         state.room_activity.insert(room_view_id("!keep:example"));
         state.room_activity.insert(room_view_id("!stale:example"));
         state
@@ -23311,6 +23317,12 @@ mod tests {
     #[test]
     fn synced_rooms_prune_room_activity_read_targets() {
         let mut state = test_state();
+        // Thread activity stays tracked only while the thread is projected.
+        apply_core_event(
+            &mut state,
+            thread_timeline("!keep:example", "$thread-1", "$thread-root", "thread reply"),
+        )
+        .unwrap();
         state.room_activity.insert(room_view_id("!keep:example"));
         state.room_activity.insert(room_view_id("!stale:example"));
         state
@@ -24807,6 +24819,7 @@ mod tests {
     #[test]
     fn submit_part_slash_command_from_active_room_records_typed_leave_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         let status = submit_part_slash_command(&mut state, None).unwrap();
@@ -25045,6 +25058,7 @@ mod tests {
     #[test]
     fn submit_react_slash_command_from_active_room_records_typed_request_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         let status =
@@ -25257,6 +25271,7 @@ mod tests {
     #[test]
     fn submit_edit_slash_command_from_active_room_records_typed_request_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         let status = submit_edit_slash_command(
@@ -25332,6 +25347,7 @@ mod tests {
     #[test]
     fn submit_edit_slash_command_requires_available_command_sender() {
         let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         assert_eq!(
@@ -25348,6 +25364,7 @@ mod tests {
     #[test]
     fn submit_redact_slash_command_from_active_room_records_typed_request_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         let status =
@@ -25395,6 +25412,7 @@ mod tests {
     #[test]
     fn submit_unreact_slash_command_from_active_room_records_typed_request_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         let status =
@@ -25461,6 +25479,7 @@ mod tests {
     #[test]
     fn submit_topic_slash_command_from_active_room_records_typed_request_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
         let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
