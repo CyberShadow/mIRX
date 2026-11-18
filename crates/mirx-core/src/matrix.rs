@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -32,7 +33,8 @@ use matrix_sdk::{
         RoomId, RoomOrAliasId, UInt, UserId,
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
-            AnyMessageLikeEventContent, SyncStateEvent, ToDeviceEvent,
+            AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, SyncStateEvent,
+            ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
@@ -41,10 +43,7 @@ use matrix_sdk::{
             relation::{Annotation, Reply, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
-                member::{
-                    MembershipChange, MembershipState, OriginalSyncRoomMemberEvent,
-                    SyncRoomMemberEvent,
-                },
+                member::{MembershipChange, MembershipState, OriginalSyncRoomMemberEvent},
                 message::{
                     AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
                     Relation as MessageContentRelation, Relation as MessageRelation,
@@ -52,10 +51,10 @@ use matrix_sdk::{
                 },
                 power_levels::{
                     OriginalSyncRoomPowerLevelsEvent, PossiblyRedactedRoomPowerLevelsEventContent,
-                    RoomPowerLevelsEventContent, SyncRoomPowerLevelsEvent, UserPowerLevel,
+                    RoomPowerLevelsEventContent, UserPowerLevel,
                 },
                 redaction::OriginalSyncRoomRedactionEvent,
-                topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
+                topic::OriginalSyncRoomTopicEvent,
             },
             space::child::{SpaceChildEventContent, SpaceChildOrd},
             tag::{TagEvent, TagEventContent, Tags},
@@ -65,6 +64,7 @@ use matrix_sdk::{
     },
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
+    sync::{JoinedRoomUpdate, State, SyncResponse},
 };
 use matrix_sdk_base::{
     RoomInfoNotableUpdateReasons, RoomState, deserialized_responses::DisplayName,
@@ -72,6 +72,7 @@ use matrix_sdk_base::{
 };
 use matrix_sdk_crypto::CrossSigningStatus;
 use mime::Mime;
+use serde::Deserialize;
 use tokio::task::JoinHandle;
 
 use crate::api::{
@@ -203,6 +204,8 @@ pub(crate) async fn login(
 pub(crate) async fn initial_room_sync(
     client: &Client,
 ) -> Result<Vec<RoomSummary>, MatrixCoreError> {
+    // No `emit_member_snapshots_after_sync`: the runtime emits every joined
+    // room's member snapshot right after this, with the room list.
     client
         .sync_once(SyncSettings::default())
         .await
@@ -1309,87 +1312,22 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         }
     });
 
-    let topic_events = events.clone();
+    // Timeline-only: the SDK also dispatches `SyncStateEvent` handlers for
+    // the sync `state` section, which is the room's existing state, not
+    // something that happened. Member snapshots follow each sync response
+    // instead, see `emit_member_snapshots_after_sync`.
+    let state_notice_events = events.clone();
     client.add_event_handler(
-        move |event: SyncRoomTopicEvent, room: Room, actions: Vec<Action>| {
-            let events = topic_events.clone();
+        move |event: AnySyncTimelineEvent, room: Room, actions: Vec<Action>| {
+            let events = state_notice_events.clone();
             async move {
-                if let SyncRoomTopicEvent::Original(event) = event {
-                    let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
-                    match room_user_profile(&room, &event.sender).await {
-                        Ok(sender) => emit_event(
-                            &events,
-                            Event::RoomActivity(Box::new(room_activity_from_sync_topic(
-                                room.room_id().as_str(),
-                                &event,
-                                sender,
-                                highlight,
-                            ))),
-                        ),
-                        Err(err) => emit_sync_error(&events, err),
+                match room_activity_from_timeline_state_event(&room, &event, &actions).await {
+                    Ok(Some(activity)) => {
+                        emit_event(&events, Event::RoomActivity(Box::new(activity)))
                     }
+                    Ok(None) => {}
+                    Err(err) => emit_sync_error(&events, err),
                 }
-            }
-        },
-    );
-
-    let member_events = events.clone();
-    let member_client = client.clone();
-    client.add_event_handler(
-        move |event: SyncRoomMemberEvent, room: Room, actions: Vec<Action>| {
-            let events = member_events.clone();
-            let client = member_client.clone();
-            async move {
-                if let SyncRoomMemberEvent::Original(event) = event {
-                    let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
-                    match room_activity_from_member_event(
-                        &room,
-                        &event,
-                        &mut SenderProfileCache::new(&room),
-                        highlight,
-                    )
-                    .await
-                    {
-                        Ok(Some(activity)) => {
-                            emit_event(&events, Event::RoomActivity(Box::new(activity)))
-                        }
-                        Ok(None) => {}
-                        Err(err) => emit_sync_error(&events, err),
-                    }
-                }
-
-                emit_joined_room_members_after_state_change(&client, &room, &events).await;
-            }
-        },
-    );
-
-    let power_level_events = events.clone();
-    let power_level_client = client.clone();
-    client.add_event_handler(
-        move |event: SyncRoomPowerLevelsEvent, room: Room, actions: Vec<Action>| {
-            let events = power_level_events.clone();
-            let client = power_level_client.clone();
-            async move {
-                if let SyncRoomPowerLevelsEvent::Original(event) = event {
-                    let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
-                    match room_activity_from_power_levels_event(
-                        &room,
-                        &event,
-                        &mut SenderProfileCache::new(&room),
-                        highlight,
-                    )
-                    .await
-                    {
-                        Ok(Some(activity)) => {
-                            emit_event(&events, Event::RoomActivity(Box::new(activity)))
-                        }
-                        Ok(None) => {}
-                        Err(err) => emit_sync_error(&events, err),
-                    }
-                }
-
-                // Levels decide every member's rank and our moderation rights.
-                emit_joined_room_members_after_state_change(&client, &room, &events).await;
             }
         },
     );
@@ -1773,6 +1711,41 @@ fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, 
     }
 }
 
+/// The timeline line for a state event in a sync timeline: a topic, member
+/// or power-level change. Every other timeline event has its own handler or
+/// no line.
+async fn room_activity_from_timeline_state_event(
+    room: &Room,
+    event: &AnySyncTimelineEvent,
+    actions: &[Action],
+) -> Result<Option<RoomActivity>, MatrixCoreError> {
+    let AnySyncTimelineEvent::State(event) = event else {
+        return Ok(None);
+    };
+    let mut senders = SenderProfileCache::new(room);
+    match event {
+        AnySyncStateEvent::RoomTopic(SyncStateEvent::Original(event)) => {
+            let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
+            let sender = senders.get(&event.sender).await?;
+            Ok(Some(room_activity_from_sync_topic(
+                room.room_id().as_str(),
+                event,
+                sender,
+                highlight,
+            )))
+        }
+        AnySyncStateEvent::RoomMember(SyncStateEvent::Original(event)) => {
+            let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
+            room_activity_from_member_event(room, event, &mut senders, highlight).await
+        }
+        AnySyncStateEvent::RoomPowerLevels(SyncStateEvent::Original(event)) => {
+            let highlight = activity_highlight(room.own_user_id(), &event.sender, actions);
+            room_activity_from_power_levels_event(room, event, &mut senders, highlight).await
+        }
+        _ => Ok(None),
+    }
+}
+
 fn room_activity_from_sync_topic(
     room_id: &str,
     event: &OriginalSyncRoomTopicEvent,
@@ -1904,9 +1877,63 @@ async fn room_activity_from_member_event(
     )))
 }
 
-/// Emits a fresh member snapshot after a state event that can change it.
-/// Only a joined room has one: these handlers also see the event that
-/// removes us from a room.
+/// Whether a joined room's sync update can change its member snapshot: a
+/// membership or power-level event in its state section or timeline. Power
+/// levels decide every member's rank and our moderation rights. Only the
+/// event type is decoded.
+fn joined_room_update_changes_members(update: &JoinedRoomUpdate) -> bool {
+    #[derive(Deserialize)]
+    struct EventType<'a> {
+        #[serde(borrow, rename = "type")]
+        event_type: Cow<'a, str>,
+    }
+    fn changes_members(event_type: &str) -> bool {
+        matches!(event_type, "m.room.member" | "m.room.power_levels")
+    }
+
+    let (State::Before(state) | State::After(state)) = &update.state;
+    state
+        .iter()
+        .map(|raw| raw.deserialize_as_unchecked::<EventType<'_>>())
+        .chain(
+            update
+                .timeline
+                .events
+                .iter()
+                .map(|event| event.raw().deserialize_as_unchecked::<EventType<'_>>()),
+        )
+        .any(|event_type| {
+            changes_members(
+                &event_type
+                    .expect("the SDK decoded the type of every event of a processed sync response")
+                    .event_type,
+            )
+        })
+}
+
+/// Emits one fresh member snapshot for each joined room whose member list
+/// this sync response can have changed. Runs after the SDK has processed the
+/// response and run its event handlers, so timeline lines such as a join
+/// precede the refreshed nicklist.
+async fn emit_member_snapshots_after_sync(
+    client: &Client,
+    response: &SyncResponse,
+    events: &EventSender,
+) {
+    for (room_id, update) in &response.rooms.joined {
+        if !joined_room_update_changes_members(update) {
+            continue;
+        }
+        let room = client
+            .get_room(room_id)
+            .expect("the SDK stores every room of a processed sync response");
+        emit_joined_room_members_after_state_change(client, &room, events).await;
+    }
+}
+
+/// Emits a fresh member snapshot for a room whose state changed. Only a
+/// joined room has one: a room in the response's `joined` section can also
+/// be left later in the same response.
 async fn emit_joined_room_members_after_state_change(
     client: &Client,
     room: &Room,
@@ -2438,7 +2465,14 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
 pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle<()> {
     tokio::task::spawn_local(async move {
         if let Err(err) = client
-            .sync_with_callback(SyncSettings::default(), |_| async { LoopCtrl::Continue })
+            .sync_with_callback(SyncSettings::default(), |response| {
+                let client = client.clone();
+                let events = events.clone();
+                async move {
+                    emit_member_snapshots_after_sync(&client, &response, &events).await;
+                    LoopCtrl::Continue
+                }
+            })
             .await
         {
             emit_event(
@@ -3553,10 +3587,11 @@ mod tests {
         ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
         attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
         backfill_room_history, ban_room_member, cancelled_state,
-        direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
-        joined_room_members, joined_room_members_no_sync, kick_room_member,
-        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_media,
+        insert_pending_outgoing_kind, joined_room_members, joined_room_members_no_sync,
+        joined_room_update_changes_members, kick_room_member, map_cross_signing_status,
+        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
@@ -3694,7 +3729,7 @@ mod tests {
     }
 
     #[test]
-    fn member_handler_registered_before_restore_projects_using_restored_user() {
+    fn member_snapshot_after_restore_projects_using_restored_user() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -3708,7 +3743,7 @@ mod tests {
                 .build()
                 .await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events);
+            register_event_handlers(&client, events.clone());
             restore_session(
                 &client,
                 StoredSession {
@@ -3727,30 +3762,31 @@ mod tests {
                 { "type": "m.room.member", "state_key": "@example:localhost", "sender": "@example:localhost", "event_id": "$actor:localhost", "origin_server_ts": 3u64, "content": { "membership": "join", "displayname": "Actor" } },
                 { "type": "m.room.member", "state_key": "@target:localhost", "sender": "@target:localhost", "event_id": "$target:localhost", "origin_server_ts": 4u64, "content": { "membership": "join", "displayname": "Target" } }
             ]);
-            mock_server
-                .sync_room(
-                    &client,
+            sync_and_refresh_members(
+&mock_server,
+&client,
                     JoinedRoomBuilder::new(room_id().as_ref())
                         .add_state_bulk(raw_sync_state_events(&state_events)),
-                )
-                .await;
+&events,
+)
+.await;
 
-            let mut snapshots = Vec::new();
-            for _ in 0..2 {
-                if let Event::RoomMembers(snapshot) = event_rx
-                    .recv_timeout(Duration::from_secs(2))
-                    .expect("member handler event")
-                {
-                    snapshots.push(snapshot);
-                }
-            }
-            assert_eq!(snapshots.len(), 1);
-            assert!(snapshots[0]
-                .members
-                .iter()
-                .find(|member| member.user_id == "@target:localhost")
-                .expect("target member")
-                .can_kick);
+            let got = drain_events(&event_rx);
+
+            assert!(
+                !got.iter().any(|event| matches!(event, Event::RoomActivity(_))),
+                "the state section is no activity: {got:?}"
+            );
+            let snapshots = member_snapshots(&got);
+            assert_eq!(snapshots.len(), 1, "{got:?}");
+            assert!(
+                snapshots[0]
+                    .members
+                    .iter()
+                    .find(|member| member.user_id == "@target:localhost")
+                    .expect("target member")
+                    .can_kick
+            );
         });
     }
 
@@ -4463,6 +4499,9 @@ mod tests {
     };
     use matrix_sdk_crypto::CrossSigningStatus;
     use matrix_sdk_test::{JoinedRoomBuilder, ruma_response_from_json};
+
+    use crate::runtime::EventSender;
+    use matrix_sdk::sync::{JoinedRoomUpdate, State, Timeline};
 
     fn room_id() -> OwnedRoomId {
         OwnedRoomId::try_from("!room:example.org").expect("valid room id")
@@ -7023,6 +7062,293 @@ mod tests {
         std::iter::from_fn(|| event_rx.recv_timeout(Duration::from_millis(500)).ok()).collect()
     }
 
+    /// Syncs one joined room and then does what the continuous sync does
+    /// after each response.
+    async fn sync_and_refresh_members(
+        server: &MatrixMockServer,
+        client: &Client,
+        room: JoinedRoomBuilder,
+        events: &EventSender,
+    ) {
+        let _scope = server
+            .mock_sync()
+            .ok(|builder| {
+                builder.add_joined_room(room);
+            })
+            .mount_as_scoped()
+            .await;
+        let response = client.sync_once(Default::default()).await.expect("sync");
+        emit_member_snapshots_after_sync(client, &response, events).await;
+    }
+
+    fn state_activity_ids(events: &[Event]) -> Vec<&str> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RoomActivity(activity) if activity.activity_id.starts_with("state:") => {
+                    Some(activity.activity_id.as_str())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn member_snapshots(events: &[Event]) -> Vec<&RoomMembers> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RoomMembers(snapshot) => Some(snapshot),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn state_section_events_produce_no_room_activity() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events.clone());
+            let state_events = serde_json::json!([
+                { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
+                { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": { "users": { "@example:localhost": 100 } }, "unsigned": { "prev_content": { "users": {} } } },
+                { "type": "m.room.member", "state_key": "@example:localhost", "sender": "@example:localhost", "event_id": "$me:localhost", "origin_server_ts": 3u64, "content": { "membership": "join", "displayname": "Me" } },
+                { "type": "m.room.member", "state_key": "@bob:localhost", "sender": "@bob:localhost", "event_id": "$bob:localhost", "origin_server_ts": 4u64, "content": { "membership": "join", "displayname": "Bob" } },
+                { "type": "m.room.member", "state_key": "@carol:localhost", "sender": "@carol:localhost", "event_id": "$carol:localhost", "origin_server_ts": 5u64, "content": { "membership": "join", "displayname": "Carol" } },
+                { "type": "m.room.topic", "state_key": "", "sender": "@example:localhost", "event_id": "$topic:localhost", "origin_server_ts": 6u64, "content": { "topic": "welcome" } }
+            ]);
+
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&state_events))
+                    .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                        "$bob-msg:localhost",
+                        "@bob:localhost",
+                        "hi",
+                    ))),
+                &events,
+            )
+            .await;
+            let got = drain_events(&event_rx);
+
+            assert_eq!(state_activity_ids(&got), Vec::<&str>::new(), "{got:?}");
+            let activity_ids = got
+                .iter()
+                .filter_map(|event| match event {
+                    Event::RoomActivity(activity) => Some(activity.activity_id.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(activity_ids, vec!["event:$bob-msg:localhost"]);
+            let snapshots = member_snapshots(&got);
+            assert_eq!(snapshots.len(), 1, "{got:?}");
+            assert_eq!(snapshots[0].room_id, room_id().as_str());
+            assert_eq!(snapshots[0].members.len(), 3);
+        });
+    }
+
+    #[test]
+    fn timeline_state_events_still_produce_notices() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events.clone());
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                &events,
+            )
+            .await;
+            drain_events(&event_rx);
+
+            let carol_join = serde_json::json!({
+                "type": "m.room.member",
+                "content": { "membership": "join", "displayname": "Carol" },
+                "event_id": "$carol-join:localhost",
+                "sender": "@carol:localhost",
+                "state_key": "@carol:localhost",
+                "origin_server_ts": 1700000000003u64
+            });
+            let topic = serde_json::json!({
+                "type": "m.room.topic",
+                "content": { "topic": "new topic" },
+                "event_id": "$topic:localhost",
+                "sender": "@example:localhost",
+                "state_key": "",
+                "origin_server_ts": 1700000000004u64
+            });
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_timeline_event(raw_sync_timeline_event(carol_join))
+                    .add_timeline_event(raw_sync_timeline_event(topic))
+                    .add_timeline_event(raw_sync_timeline_event(power_levels_event_json(
+                        "$power:localhost",
+                        serde_json::json!({ "users": { "@bob:localhost": 50 } }),
+                        Some(serde_json::json!({ "users": {} })),
+                    ))),
+                &events,
+            )
+            .await;
+            let got = drain_events(&event_rx);
+
+            assert_eq!(
+                state_activity_ids(&got),
+                vec![
+                    "state:$carol-join:localhost",
+                    "state:$topic:localhost",
+                    "state:$power:localhost",
+                ],
+                "{got:?}"
+            );
+            assert!(
+                got.iter().all(|event| match event {
+                    Event::RoomActivity(activity) => !activity.highlight,
+                    _ => true,
+                }),
+                "{got:?}"
+            );
+            assert_eq!(member_snapshots(&got).len(), 1, "{got:?}");
+            let Some(Event::RoomMembers(snapshot)) = got.last() else {
+                panic!("member snapshot last in {got:?}");
+            };
+            assert!(
+                snapshot
+                    .members
+                    .iter()
+                    .any(|member| member.user_id == "@carol:localhost"),
+                "{snapshot:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn message_only_sync_emits_no_member_snapshot() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events.clone());
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                &events,
+            )
+            .await;
+            drain_events(&event_rx);
+
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref()).add_timeline_event(
+                    raw_sync_timeline_event(text_message_json(
+                        "$bob-msg:localhost",
+                        "@bob:localhost",
+                        "hi",
+                    )),
+                ),
+                &events,
+            )
+            .await;
+            let got = drain_events(&event_rx);
+
+            assert_eq!(member_snapshots(&got), Vec::<&RoomMembers>::new());
+            assert_eq!(
+                room_activity_by_id(&got, "event:$bob-msg:localhost").len(),
+                1,
+                "{got:?}"
+            );
+        });
+    }
+
+    fn joined_room_update(
+        state: &serde_json::Value,
+        timeline: &serde_json::Value,
+    ) -> JoinedRoomUpdate {
+        JoinedRoomUpdate {
+            state: State::Before(raw_sync_state_events(state)),
+            timeline: Timeline {
+                events: timeline
+                    .as_array()
+                    .expect("timeline event array")
+                    .iter()
+                    .map(|event| {
+                        TimelineEvent::from_plaintext(raw_sync_timeline_event(event.clone()))
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn joined_room_update_changes_members_for_a_state_section_member() {
+        let state = serde_json::json!([
+            { "type": "m.room.member", "state_key": "@bob:localhost", "sender": "@bob:localhost", "event_id": "$bob:localhost", "origin_server_ts": 1u64, "content": { "membership": "join" } }
+        ]);
+        assert!(joined_room_update_changes_members(&joined_room_update(
+            &state,
+            &serde_json::json!([])
+        )));
+    }
+
+    #[test]
+    fn joined_room_update_changes_members_for_timeline_power_levels() {
+        let timeline = serde_json::json!([power_levels_event_json(
+            "$power:localhost",
+            serde_json::json!({ "users": { "@bob:localhost": 50 } }),
+            None,
+        )]);
+        assert!(joined_room_update_changes_members(&joined_room_update(
+            &serde_json::json!([]),
+            &timeline
+        )));
+    }
+
+    #[test]
+    fn joined_room_update_changes_members_not_for_topic_and_messages() {
+        let state = serde_json::json!([
+            { "type": "m.room.topic", "state_key": "", "sender": "@bob:localhost", "event_id": "$topic:localhost", "origin_server_ts": 1u64, "content": { "topic": "t" } }
+        ]);
+        let timeline =
+            serde_json::json!([text_message_json("$msg:localhost", "@bob:localhost", "hi")]);
+        assert!(!joined_room_update_changes_members(&joined_room_update(
+            &state, &timeline
+        )));
+    }
+
+    #[test]
+    fn joined_room_update_changes_members_not_for_an_empty_update() {
+        assert!(!joined_room_update_changes_members(
+            &JoinedRoomUpdate::default()
+        ));
+    }
+
     fn room_activity_by_id<'a>(events: &'a [Event], activity_id: &str) -> Vec<&'a RoomActivity> {
         events
             .iter()
@@ -7062,27 +7388,33 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events);
+            register_event_handlers(&client, events.clone());
             let state_events = profile_test_state_events();
 
-            mock_server
-                .sync_room(
-                    &client,
-                    JoinedRoomBuilder::new(room_id().as_ref())
-                        .add_state_bulk(raw_sync_state_events(&state_events))
-                        .add_timeline_event(raw_sync_timeline_event(text_message_json(
-                            "$bob-msg:localhost",
-                            "@bob:localhost",
-                            "hi",
-                        )))
-                        .add_timeline_event(raw_sync_timeline_event(text_message_json(
-                            "$sam-msg:localhost",
-                            "@sam1:localhost",
-                            "hello",
-                        ))),
-                )
-                .await;
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&state_events))
+                    .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                        "$bob-msg:localhost",
+                        "@bob:localhost",
+                        "hi",
+                    )))
+                    .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                        "$sam-msg:localhost",
+                        "@sam1:localhost",
+                        "hello",
+                    ))),
+                &events,
+            )
+            .await;
             let first = drain_events(&event_rx);
+            assert_eq!(
+                state_activity_ids(&first),
+                Vec::<&str>::new(),
+                "the state section is no activity: {first:?}"
+            );
 
             let bob_message = room_activity_by_id(&first, "event:$bob-msg:localhost");
             assert_eq!(bob_message.len(), 1);
@@ -7120,34 +7452,35 @@ mod tests {
 
             let bob_joined = serde_json::json!({ "membership": "join", "displayname": "Bob" });
             let sam_joined = serde_json::json!({ "membership": "join", "displayname": "Sam" });
-            mock_server
-                .sync_room(
-                    &client,
-                    JoinedRoomBuilder::new(room_id().as_ref())
-                        .add_timeline_event(raw_sync_timeline_event(member_change_json(
-                            "$bob-rename:localhost",
-                            "@bob:localhost",
-                            serde_json::json!({ "membership": "join", "displayname": "Robert" }),
-                            bob_joined,
-                        )))
-                        .add_timeline_event(raw_sync_timeline_event(member_change_json(
-                            "$sam-avatar:localhost",
-                            "@sam2:localhost",
-                            serde_json::json!({
-                                "membership": "join",
-                                "displayname": "Sam",
-                                "avatar_url": "mxc://localhost/avatar"
-                            }),
-                            sam_joined.clone(),
-                        )))
-                        .add_timeline_event(raw_sync_timeline_event(member_change_json(
-                            "$sam-noop:localhost",
-                            "@sam1:localhost",
-                            sam_joined.clone(),
-                            sam_joined,
-                        ))),
-                )
-                .await;
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_timeline_event(raw_sync_timeline_event(member_change_json(
+                        "$bob-rename:localhost",
+                        "@bob:localhost",
+                        serde_json::json!({ "membership": "join", "displayname": "Robert" }),
+                        bob_joined,
+                    )))
+                    .add_timeline_event(raw_sync_timeline_event(member_change_json(
+                        "$sam-avatar:localhost",
+                        "@sam2:localhost",
+                        serde_json::json!({
+                            "membership": "join",
+                            "displayname": "Sam",
+                            "avatar_url": "mxc://localhost/avatar"
+                        }),
+                        sam_joined.clone(),
+                    )))
+                    .add_timeline_event(raw_sync_timeline_event(member_change_json(
+                        "$sam-noop:localhost",
+                        "@sam1:localhost",
+                        sam_joined.clone(),
+                        sam_joined,
+                    ))),
+                &events,
+            )
+            .await;
             let second = drain_events(&event_rx);
 
             let rename = room_activity_by_id(&second, "state:$bob-rename:localhost");
@@ -7600,7 +7933,7 @@ mod tests {
             let mock_server = MatrixMockServer::new().await;
             let client = mock_server.client_builder().build().await;
             let (events, event_rx) = mpsc::channel();
-            register_event_handlers(&client, events);
+            register_event_handlers(&client, events.clone());
             let levels = |actor: i64| {
                 serde_json::json!({
                     "kick": 50, "ban": 50, "users_default": 0,
@@ -7617,14 +7950,20 @@ mod tests {
                     None,
                 ));
 
-            mock_server
-                .sync_room(
-                    &client,
-                    JoinedRoomBuilder::new(room_id().as_ref())
-                        .add_state_bulk(raw_sync_state_events(&state_events)),
-                )
-                .await;
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&state_events)),
+                &events,
+            )
+            .await;
             let first = drain_events(&event_rx);
+            assert_eq!(
+                state_activity_ids(&first),
+                Vec::<&str>::new(),
+                "the state section is no activity: {first:?}"
+            );
             assert!(
                 room_activity_by_id(&first, "state:$power0:localhost").is_empty(),
                 "levels without previous content are not a change: {first:?}"
@@ -7634,18 +7973,19 @@ mod tests {
                 Some(&false)
             );
 
-            mock_server
-                .sync_room(
-                    &client,
-                    JoinedRoomBuilder::new(room_id().as_ref()).add_timeline_event(
-                        raw_sync_timeline_event(power_levels_event_json(
-                            "$power1:localhost",
-                            levels(50),
-                            Some(levels(0)),
-                        )),
-                    ),
-                )
-                .await;
+            sync_and_refresh_members(
+                &mock_server,
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref()).add_timeline_event(
+                    raw_sync_timeline_event(power_levels_event_json(
+                        "$power1:localhost",
+                        levels(50),
+                        Some(levels(0)),
+                    )),
+                ),
+                &events,
+            )
+            .await;
             let second = drain_events(&event_rx);
 
             let notice = room_activity_by_id(&second, "state:$power1:localhost");

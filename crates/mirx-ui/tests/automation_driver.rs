@@ -300,11 +300,15 @@ enum MockMessages {
 }
 
 fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
-    spawn_mock_homeserver(MockMessages::Hang)
+    spawn_mock_homeserver(MockMessages::Hang, vec![])
 }
 
+/// Serves `!beta:example` with Alice and Bob in the sync `state` section and
+/// `timeline_events` as its sync timeline. Every `/sync` gets the same body.
+/// The `/members` list also has the members that join in the timeline.
 fn spawn_mock_homeserver(
     messages: MockMessages,
+    timeline_events: Vec<serde_json::Value>,
 ) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
@@ -331,6 +335,15 @@ fn spawn_mock_homeserver(
             "state_key": "@bob:example",
             "type": "m.room.member"
         });
+        let members = [alice_member.clone(), bob_member.clone()]
+            .into_iter()
+            .chain(
+                timeline_events
+                    .iter()
+                    .filter(|event| event["type"] == "m.room.member")
+                    .cloned(),
+            )
+            .collect::<Vec<_>>();
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut request = Vec::new();
@@ -421,7 +434,7 @@ fn spawn_mock_homeserver(
                                         ]
                                     },
                                     "timeline": {
-                                        "events": [],
+                                        "events": timeline_events,
                                         "limited": false,
                                         "prev_batch": "s-current"
                                     },
@@ -521,13 +534,7 @@ fn spawn_mock_homeserver(
             if path.contains("/rooms/%21beta%3Aexample/members")
                 || path.contains("/rooms/!beta:example/members")
             {
-                respond_json(
-                    &mut stream,
-                    200,
-                    &serde_json::json!({
-                        "chunk": [alice_member, bob_member]
-                    }),
-                );
+                respond_json(&mut stream, 200, &serde_json::json!({ "chunk": members }));
                 continue;
             }
 
@@ -4239,6 +4246,83 @@ fn automation_driver_member_list_ranks_members_from_synced_power_levels()
 }
 
 #[test]
+fn automation_driver_initial_sync_state_is_not_logged_as_joins()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    // Alice and Bob are in the sync `state` section: existing state, no
+    // log line. Carol joins in the timeline: something that happened.
+    let server = spawn_mock_homeserver(
+        MockMessages::Hang,
+        vec![
+            serde_json::json!({
+                "content": { "membership": "join", "displayname": "Carol" },
+                "event_id": "$carol-member",
+                "origin_server_ts": 1700000000010u64,
+                "sender": "@carol:example",
+                "state_key": "@carol:example",
+                "type": "m.room.member"
+            }),
+            serde_json::json!({
+                "content": { "msgtype": "m.text", "body": "welcome Carol" },
+                "event_id": "$bob-hello",
+                "origin_server_ts": 1700000000011u64,
+                "sender": "@bob:example",
+                "type": "m.room.message"
+            }),
+        ],
+    )?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "welcome Carol",
+        Duration::from_secs(5),
+    )?;
+
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity("!beta:example"));
+    let lines_containing = |needle: &str| {
+        view.lines
+            .iter()
+            .filter(|line| line.contains(needle))
+            .count()
+    };
+    // The mock serves this timeline to every continuous sync too.
+    assert_eq!(
+        lines_containing("* Joins: Carol (@carol:example)"),
+        1,
+        "{:?}",
+        view.lines
+    );
+    assert_eq!(
+        lines_containing("<Bob> welcome Carol"),
+        1,
+        "{:?}",
+        view.lines
+    );
+    assert_eq!(lines_containing("Joins: Alice"), 0, "{:?}", view.lines);
+    assert_eq!(lines_containing("Joins: Bob"), 0, "{:?}", view.lines);
+    assert_eq!(
+        unsafe { listbox_texts(active_room_member_list_hwnd(&app)) },
+        ["&Alice", "@Bob", "Carol"]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_every_membership_change_in_mirc_format()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -5490,19 +5574,22 @@ fn automation_driver_backfilled_messages_show_the_senders_display_name()
     let local_app_data = unique_local_app_data_path();
     // The sync response makes @alice:example a member named "Alice"; the
     // backfilled message only carries her user ID.
-    let server = spawn_mock_homeserver(MockMessages::Respond(serde_json::json!({
-        "start": "s-current",
-        "chunk": [{
-            "content": {
-                "msgtype": "m.text",
-                "body": "hello from history"
-            },
-            "event_id": "$history-alice",
-            "origin_server_ts": 1_699_999_000_000u64,
-            "sender": "@alice:example",
-            "type": "m.room.message"
-        }]
-    })))?;
+    let server = spawn_mock_homeserver(
+        MockMessages::Respond(serde_json::json!({
+            "start": "s-current",
+            "chunk": [{
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "hello from history"
+                },
+                "event_id": "$history-alice",
+                "origin_server_ts": 1_699_999_000_000u64,
+                "sender": "@alice:example",
+                "type": "m.room.message"
+            }]
+        })),
+        vec![],
+    )?;
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
