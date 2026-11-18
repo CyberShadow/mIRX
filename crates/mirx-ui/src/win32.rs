@@ -608,6 +608,9 @@ impl Default for RoomHistoryBackfillState {
 #[derive(Default)]
 struct UiModel {
     status: String,
+    /// The signed-in account, known from the login result or the session
+    /// being restored.
+    own_user_id: Option<String>,
     lifecycle_state: LifecycleState,
     rooms: Vec<RoomSummary>,
     room_read_states: BTreeMap<String, RoomReadState>,
@@ -7871,6 +7874,14 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             }
         }
         Event::LoggedIn { session } => {
+            if let Some(own_user_id) = &state.model.own_user_id
+                && *own_user_id != session.user_id
+            {
+                return Err(format!(
+                    "received LoggedIn for {} while signed in as {own_user_id}",
+                    session.user_id
+                ));
+            }
             if let Some(homeserver_url) = state.pending_login_homeserver_url.clone() {
                 state.current_session_homeserver_url = Some(homeserver_url.clone());
                 save_session(&homeserver_url, &session)?;
@@ -7878,6 +7889,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             } else if !state.synthetic_load_in_progress {
                 return Err("received LoggedIn event without a pending homeserver URL".to_owned());
             }
+            state.model.own_user_id = Some(session.user_id);
             state.model.status = "authenticated".to_owned();
             state.model.lifecycle_state = LifecycleState::Authenticated;
         }
@@ -7964,6 +7976,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             delete_saved_session()?;
             state.pending_login_homeserver_url = None;
             state.current_session_homeserver_url = None;
+            state.model.own_user_id = None;
             state.model.status = "logged out".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
@@ -9429,7 +9442,8 @@ fn view_caption(model: &UiModel, view_id: &ViewId) -> String {
                 .get(room_id)
                 .and_then(|room_view| room_view.topic.as_deref()),
         ),
-        ViewId::Status | ViewId::Thread { .. } => title,
+        ViewId::Status => mdi::status_caption(model.own_user_id.as_deref()),
+        ViewId::Thread { .. } => title,
     }
 }
 
@@ -13953,6 +13967,7 @@ fn submit_restore_session(
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let user_id = session.user_id.clone();
     sender
         .send(Command::RestoreSession(RestoreSessionRequest {
             homeserver_url: homeserver_url.clone(),
@@ -13960,6 +13975,7 @@ fn submit_restore_session(
         }))
         .map_err(|err| format!("failed to enqueue restore session command: {err}"))?;
 
+    state.model.own_user_id = Some(user_id);
     state.pending_login_homeserver_url = None;
     state.current_session_homeserver_url = Some(homeserver_url);
     state.model.status = "restoring saved session".to_owned();
@@ -22872,6 +22888,11 @@ mod tests {
             "Plain"
         );
         assert_eq!(view_caption(&state.model, &ViewId::Status), "Status");
+        state.model.own_user_id = Some("@me:example".to_owned());
+        assert_eq!(
+            view_caption(&state.model, &ViewId::Status),
+            "Status: @me:example"
+        );
         assert_eq!(
             view_caption(
                 &state.model,
@@ -27382,6 +27403,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
+            assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
             assert_eq!(state.pending_login_homeserver_url, None);
             assert_eq!(
                 state.current_session_homeserver_url,
@@ -27429,6 +27451,7 @@ mod tests {
 
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::LoggedOut);
+            assert_eq!(state.model.own_user_id, None);
             assert_eq!(state.current_session_homeserver_url, None);
             assert!(!session_path.exists());
 
@@ -27450,6 +27473,24 @@ mod tests {
             ),
             Err("received LoggedIn event without a pending homeserver URL".to_owned())
         );
+    }
+
+    #[test]
+    fn logged_in_event_for_another_account_is_rejected() {
+        let mut state = test_state();
+        state.synthetic_load_in_progress = true;
+        state.model.own_user_id = Some("@me:example".to_owned());
+
+        assert_eq!(
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                },
+            ),
+            Err("received LoggedIn for @alice:example while signed in as @me:example".to_owned())
+        );
+        assert_eq!(state.model.own_user_id.as_deref(), Some("@me:example"));
     }
 
     #[test]
@@ -27683,6 +27724,7 @@ mod tests {
             Some("https://matrix.example".to_owned())
         );
         assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
+        assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
 
         assert_eq!(
             submit_login(

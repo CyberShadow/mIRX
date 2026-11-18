@@ -2976,6 +2976,15 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     );
     assert!(!serde_json::to_string(&model)?.contains("secret-token"));
     assert!(!session_path.exists());
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        find_view(&ui_state, &ViewIdentity::Status).title,
+        "Status: @alice:example"
+    );
+    assert_eq!(
+        find_switchbar_item(&ui_state, &ViewIdentity::Status).title,
+        "Status"
+    );
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,

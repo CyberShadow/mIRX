@@ -54,9 +54,28 @@ pub(super) fn room_caption(label: &str, topic: Option<&str>) -> String {
     }
 }
 
+/// The Status window's caption. mIRC shows `Status: nick [+modes] on
+/// Network`; a Matrix user ID names both the account and, by its server part,
+/// the network.
+pub(super) fn status_caption(own_user_id: Option<&str>) -> String {
+    match own_user_id {
+        Some(user_id) => format!("Status: {user_id}"),
+        None => "Status".to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_caption_names_the_signed_in_account() {
+        assert_eq!(status_caption(None), "Status");
+        assert_eq!(
+            status_caption(Some("@me:example.org")),
+            "Status: @me:example.org"
+        );
+    }
 
     #[test]
     fn room_caption_appends_the_topic() {
