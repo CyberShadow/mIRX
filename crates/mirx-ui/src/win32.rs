@@ -81,23 +81,23 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
     ES_WANTRETURN, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
-    GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetForegroundWindow, GetMessageW,
-    GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild, IsWindow,
-    KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT,
-    LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK,
-    MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
-    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
-    SB_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_SHOW,
-    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
-    WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
-    WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIMAXIMIZE,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETTEXT, WM_SIZE, WM_TIMER,
-    WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL,
+    GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
+    GetMessageW, GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, HMENU, HideCaret,
+    IDC_ARROW, IsChild, IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
+    LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW,
+    MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
+    SIF_TRACKPOS, SW_HIDE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
+    SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
+    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICREATE, WM_MDIDESTROY,
+    WM_MDIGETACTIVE, WM_MDIMAXIMIZE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
+    WM_SETFOCUS, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -129,6 +129,7 @@ use crate::{
     },
 };
 
+mod mdi;
 mod nick_completion;
 mod timeline_text;
 
@@ -160,10 +161,11 @@ const STATIC_CLASS_NAME: &str = "STATIC";
 const BUTTON_CLASS_NAME: &str = "BUTTON";
 const TREE_ID: u16 = 1001;
 const MDI_ID: u16 = 1002;
-const EDIT_ID: u16 = 1003;
 const STATUS_BAR_ID: u16 = 1004;
 const SWITCHBAR_ID: u16 = 1005;
 const VIEW_CONTENT_ID: u16 = 2001;
+/// Every MDI child's editbox; a sibling of its `VIEW_CONTENT_ID` window.
+const VIEW_EDIT_ID: u16 = 2002;
 const MENU_ID_LOGIN: usize = 40001;
 const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
 const MENU_ID_START_SYNC: usize = 40003;
@@ -253,7 +255,6 @@ const VK_F_KEY: WPARAM = b'F' as WPARAM;
 struct Controls {
     tree: HWND,
     mdi_client: HWND,
-    edit: HWND,
     status_bar: HWND,
     switchbar: HWND,
     room_menu: HMENU,
@@ -295,6 +296,7 @@ impl ViewId {
 struct MdiViewState {
     child: HWND,
     content: HWND,
+    edit: HWND,
 }
 
 struct MdiChildCreateState {
@@ -3725,11 +3727,8 @@ unsafe extern "system" fn mdi_child_window_proc(
 ) -> LRESULT {
     match message {
         WM_CREATE => {
-            match create_mdi_child_content(hwnd, &mdi_child_create_state(lparam).view_id) {
-                Ok(content) => {
-                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, content as isize);
-                    0
-                }
+            match create_mdi_child_controls(hwnd, &mdi_child_create_state(lparam).view_id) {
+                Ok(()) => 0,
                 Err(message) => {
                     eprintln!("{message}");
                     -1
@@ -3737,20 +3736,15 @@ unsafe extern "system" fn mdi_child_window_proc(
             }
         }
         WM_SIZE => {
-            let content = mdi_child_content(hwnd);
-            if !content.is_null() {
-                let mut rect = RECT::default();
-                GetClientRect(hwnd, &mut rect);
-                MoveWindow(
-                    content,
-                    0,
-                    0,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    1,
-                );
-            }
-            0
+            layout_mdi_child(hwnd);
+            // MDI tracks maximization and the frame title here.
+            DefMDIChildProcW(hwnd, message, wparam, lparam)
+        }
+        WM_SETFOCUS => {
+            // Activating a window puts the caret in its editbox, as in mIRC.
+            let result = DefMDIChildProcW(hwnd, message, wparam, lparam);
+            SetFocus(mdi_child_edit(hwnd));
+            result
         }
         WM_MDIACTIVATE => {
             if lparam as HWND == hwnd
@@ -3762,7 +3756,6 @@ unsafe extern "system" fn mdi_child_window_proc(
         }
         WM_NCDESTROY => {
             unregister_destroyed_view(hwnd);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
         _ => DefMDIChildProcW(hwnd, message, wparam, lparam),
@@ -4442,7 +4435,7 @@ unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
 unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
     let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
     let mention = member_mention_text(&member.user_id, member.display_name.as_deref());
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     state_mut(hwnd).compose_history.reset_navigation();
     replace_edit_selection(edit, &format!("{mention} "));
     SetFocus(edit);
@@ -4480,7 +4473,7 @@ unsafe fn compose_text_and_caret(edit: HWND) -> (Vec<u16>, usize) {
 /// completion while the box still holds what it inserted, else completes
 /// the word before the caret against the active view's members.
 unsafe fn complete_compose_nick(hwnd: HWND, reverse: bool) -> Result<(), String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     let (text, caret) = compose_text_and_caret(edit);
     let state = state_mut(hwnd);
     let view_id = state.active_view.clone();
@@ -5638,30 +5631,6 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         (&mut mdi_client as *mut CLIENTCREATESTRUCT).cast(),
     )?;
 
-    state.controls.edit = create_child_window(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL as u32,
-        WS_EX_CLIENTEDGE,
-        EDIT_ID,
-        instance,
-        null_mut(),
-    )?;
-
-    let previous_proc = SetWindowLongPtrW(
-        state.controls.edit,
-        GWLP_WNDPROC,
-        edit_window_proc as *const () as isize,
-    );
-    if previous_proc == 0 {
-        return Err(last_os_error("SetWindowLongPtrW edit subclass"));
-    }
-    state.edit_window_proc = Some(std::mem::transmute::<
-        isize,
-        unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
-    >(previous_proc));
-
     state.controls.status_bar = CreateWindowExW(
         0,
         STATUSCLASSNAMEW,
@@ -6622,7 +6591,7 @@ unsafe fn prefill_reply_to_selected_message(hwnd: HWND) -> Result<(), String> {
         return Err("no message selected".to_owned());
     };
     set_compose_text(hwnd, &reply_compose_text(&event_id))?;
-    SetFocus(compose_edit(hwnd)?);
+    SetFocus(compose_edit(hwnd));
     Ok(())
 }
 
@@ -6636,7 +6605,7 @@ unsafe fn prefill_edit_selected_message(hwnd: HWND) -> Result<(), String> {
         return Err("no message selected".to_owned());
     };
     set_compose_text(hwnd, &edit_compose_text(&event_id))?;
-    SetFocus(compose_edit(hwnd)?);
+    SetFocus(compose_edit(hwnd));
     Ok(())
 }
 
@@ -6650,7 +6619,7 @@ unsafe fn prefill_react_to_selected_message(hwnd: HWND) -> Result<(), String> {
         return Err("no message selected".to_owned());
     };
     set_compose_text(hwnd, &react_compose_text(&event_id))?;
-    SetFocus(compose_edit(hwnd)?);
+    SetFocus(compose_edit(hwnd));
     Ok(())
 }
 
@@ -7751,7 +7720,6 @@ unsafe fn layout_controls(hwnd: HWND) {
     let state = state_mut(hwnd);
     if state.controls.tree.is_null()
         || state.controls.mdi_client.is_null()
-        || state.controls.edit.is_null()
         || state.controls.status_bar.is_null()
         || state.controls.switchbar.is_null()
     {
@@ -7766,12 +7734,9 @@ unsafe fn layout_controls(hwnd: HWND) {
     let tree_width = TREE_WIDTH.min(width);
     let switchbar_height = SWITCHBAR_HEIGHT.min(height);
     let status_bar_height = STATUS_BAR_HEIGHT.min((height - switchbar_height).max(0));
-    let remaining_height = (height - switchbar_height - status_bar_height).max(0);
-    let edit_height = EDIT_HEIGHT.min(remaining_height);
     let mdi_width = (width - tree_width).max(0);
-    let mdi_height = (height - switchbar_height - edit_height - status_bar_height).max(0);
-    let compose_y = switchbar_height + mdi_height;
-    let status_bar_y = compose_y + edit_height;
+    let mdi_height = (height - switchbar_height - status_bar_height).max(0);
+    let status_bar_y = switchbar_height + mdi_height;
 
     MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
     MoveWindow(
@@ -7790,7 +7755,6 @@ unsafe fn layout_controls(hwnd: HWND) {
         mdi_height,
         1,
     );
-    MoveWindow(state.controls.edit, 0, compose_y, width, edit_height, 1);
     MoveWindow(
         state.controls.status_bar,
         0,
@@ -9521,7 +9485,9 @@ unsafe fn create_mdi_child(
     Ok(child)
 }
 
-unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND, String> {
+/// Creates the child's content window for its view and its editbox, and
+/// lays them out.
+unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
     let (class_name, style, ex_style) = match view_id {
         ViewId::Status => (
@@ -9557,22 +9523,75 @@ unsafe fn create_mdi_child_content(child: HWND, view_id: &ViewId) -> Result<HWND
         return Err(last_os_error("CreateWindowExW MDI child content"));
     }
 
-    let mut rect = RECT::default();
-    GetClientRect(child, &mut rect);
-    MoveWindow(
-        content,
-        0,
-        0,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
-        1,
-    );
+    let edit = create_child_window(
+        child,
+        EDIT_CLASS_NAME,
+        "",
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL as u32,
+        WS_EX_CLIENTEDGE,
+        VIEW_EDIT_ID,
+        instance,
+        null_mut(),
+    )?;
+    subclass_compose_edit(frame_window_for(child), edit)?;
 
-    Ok(content)
+    if matches!(view_id, ViewId::Status) {
+        // As in mIRC, the Status window cannot be closed, so there is always
+        // a window to activate when another one closes.
+        if EnableMenuItem(GetSystemMenu(child, 0), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED) == -1 {
+            return Err(last_os_error("EnableMenuItem Status SC_CLOSE"));
+        }
+    }
+
+    layout_mdi_child(child);
+    Ok(())
 }
 
-unsafe fn mdi_child_content(hwnd: HWND) -> HWND {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as HWND
+/// Every editbox shares the EDIT class procedure, so the procedure the
+/// first subclass replaced is the one every later subclass replaces.
+unsafe fn subclass_compose_edit(frame: HWND, edit: HWND) -> Result<(), String> {
+    let previous_proc =
+        SetWindowLongPtrW(edit, GWLP_WNDPROC, edit_window_proc as *const () as isize);
+    if previous_proc == 0 {
+        return Err(last_os_error("SetWindowLongPtrW edit subclass"));
+    }
+    let previous_proc = std::mem::transmute::<
+        isize,
+        unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT,
+    >(previous_proc);
+    let state = state_mut(frame);
+    match state.edit_window_proc {
+        None => state.edit_window_proc = Some(previous_proc),
+        Some(original) => assert!(
+            std::ptr::fn_addr_eq(original, previous_proc),
+            "every editbox must subclass the same EDIT procedure"
+        ),
+    }
+    Ok(())
+}
+
+unsafe fn layout_mdi_child(child: HWND) {
+    let mut rect = RECT::default();
+    GetClientRect(child, &mut rect);
+    let layout = mdi::child_layout(rect.right - rect.left, rect.bottom - rect.top, EDIT_HEIGHT);
+    for (control, place) in [
+        (mdi_child_content(child), layout.content),
+        (mdi_child_edit(child), layout.edit),
+    ] {
+        MoveWindow(control, place.x, place.y, place.width, place.height, 1);
+    }
+}
+
+unsafe fn mdi_child_content(child: HWND) -> HWND {
+    let content = GetDlgItem(child, VIEW_CONTENT_ID as i32);
+    assert!(!content.is_null(), "MDI child must have its content window");
+    content
+}
+
+unsafe fn mdi_child_edit(child: HWND) -> HWND {
+    let edit = GetDlgItem(child, VIEW_EDIT_ID as i32);
+    assert!(!edit.is_null(), "MDI child must have its editbox");
+    edit
 }
 
 unsafe fn room_content_timeline(content: HWND) -> HWND {
@@ -9617,8 +9636,8 @@ unsafe fn unregister_destroyed_view(child: HWND) {
 
 unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
     IsWindow(view.child) != 0
-        && IsWindow(view.content) != 0
-        && mdi_child_content(view.child) == view.content
+        && GetDlgItem(view.child, VIEW_CONTENT_ID as i32) == view.content
+        && GetDlgItem(view.child, VIEW_EDIT_ID as i32) == view.edit
 }
 
 unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
@@ -9639,14 +9658,15 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
 
     let title = view_title(&state_ref(hwnd).model, &view_id);
     let child = create_mdi_child(hwnd, &title, &view_id)?;
-    let content = mdi_child_content(child);
-    if content.is_null() {
-        return Err("MDI child content control was not created".to_owned());
-    }
+    let view = MdiViewState {
+        child,
+        content: mdi_child_content(child),
+        edit: mdi_child_edit(child),
+    };
 
     let state = state_mut(hwnd);
     state.hwnd_views.insert(child as isize, view_id.clone());
-    state.views.insert(view_id, MdiViewState { child, content });
+    state.views.insert(view_id, view);
     Ok(child)
 }
 
@@ -10010,11 +10030,7 @@ unsafe fn finish_view_activation_chrome(
         refresh_switchbar_state(hwnd)?;
     }
     refresh_status_bar(hwnd)?;
-    let state = state_ref(hwnd);
-    SetFocus(state.controls.edit);
-    if state.render_state_mode {
-        HideCaret(state.controls.edit);
-    }
+    SetFocus(compose_edit(hwnd));
     Ok(())
 }
 
@@ -10891,8 +10907,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         }
         ParsedCommand::SendText { id, args } => {
             let body = args.body;
-            let edit = compose_edit(hwnd)
-                .map_err(|message| failure_response(Some(id.clone()), "send_failed", message))?;
+            let edit = compose_edit(hwnd);
             set_edit_text(edit, &body);
             let room_id =
                 submit_compose_from_control(hwnd, args.room_id.as_deref()).map_err(|message| {
@@ -12014,11 +12029,7 @@ unsafe fn read_automation_response(hwnd: HWND) -> Result<Value, String> {
 }
 
 unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
-    let edit = state_ref(hwnd).controls.edit;
-    if edit.is_null() {
-        return Err("self-test failed: edit control was not created".to_owned());
-    }
-
+    let edit = compose_edit(hwnd);
     let expected_text = "self-test message";
     let expected = wide_null(expected_text);
     SendMessageW(edit, WM_SETTEXT, 0, expected.as_ptr() as LPARAM);
@@ -12491,7 +12502,7 @@ fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
 }
 
 unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     let input = read_window_text(edit);
     if input.is_empty() {
         return Err("message body must not be empty".to_owned());
@@ -12521,28 +12532,30 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
-unsafe fn compose_edit(hwnd: HWND) -> Result<HWND, String> {
-    let edit = state_ref(hwnd).controls.edit;
-    if edit.is_null() {
-        return Err("compose edit control is not available".to_owned());
-    }
-    Ok(edit)
+/// The active window's editbox, which compose input and commands act on.
+unsafe fn compose_edit(hwnd: HWND) -> HWND {
+    let state = state_ref(hwnd);
+    state
+        .views
+        .get(&state.active_view)
+        .expect("the active view must have a window")
+        .edit
 }
 
 unsafe fn dump_compose_text(hwnd: HWND) -> Result<String, String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     Ok(read_window_text(edit))
 }
 
 unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     state_mut(hwnd).compose_history.reset_navigation();
     set_compose_edit_text(edit, text);
     Ok(())
 }
 
 unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(), String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     let virtual_key = match key {
         ComposeKey::Return => VK_RETURN_KEY,
         ComposeKey::Up => VK_UP_KEY,
@@ -12560,7 +12573,7 @@ unsafe fn submit_compose_from_control(
     hwnd: HWND,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     let body = read_window_text(edit);
     let room_id = submit_compose(
         state_mut(hwnd),
@@ -13654,7 +13667,7 @@ unsafe fn navigate_compose_history(
     hwnd: HWND,
     direction: ComposeHistoryDirection,
 ) -> Result<(), String> {
-    let edit = compose_edit(hwnd)?;
+    let edit = compose_edit(hwnd);
     let replacement = match direction {
         ComposeHistoryDirection::Previous => {
             let current_text = read_window_text(edit);
@@ -13826,9 +13839,30 @@ unsafe extern "system" fn edit_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    let parent = GetParent(hwnd);
-    if parent.is_null() {
-        return DefWindowProcW(hwnd, message, wparam, lparam);
+    // The editbox is a child of its MDI child, which is a child of the MDI
+    // client: the state lives on the frame.
+    let parent = frame_window_for(hwnd);
+    let original = state_ref(parent).edit_window_proc;
+
+    if message == WM_SETFOCUS {
+        let result = CallWindowProcW(original, hwnd, message, wparam, lparam);
+        if state_ref(parent).render_state_mode {
+            // Snapshots must not depend on where the blinking caret is.
+            HideCaret(hwnd);
+        }
+        return result;
+    }
+
+    // Keys reach only the focused editbox, and focusing an editbox
+    // activates its window, so it is always the active window's.
+    let is_compose_key = message == WM_KEYDOWN
+        && matches!(wparam, VK_RETURN_KEY | VK_UP_KEY | VK_DOWN_KEY | VK_TAB_KEY);
+    if is_compose_key {
+        assert_eq!(
+            compose_edit(parent),
+            hwnd,
+            "compose keys must arrive at the active window's editbox"
+        );
     }
 
     if message == WM_KEYDOWN && wparam == VK_RETURN_KEY {
@@ -13870,7 +13904,6 @@ unsafe extern "system" fn edit_window_proc(
         state_mut(parent).compose_history.reset_navigation();
     }
 
-    let original = state_ref(parent).edit_window_proc;
     CallWindowProcW(original, hwnd, message, wparam, lparam)
 }
 
@@ -16077,23 +16110,31 @@ mod tests {
         }
     }
 
+    /// Runs `test` on a stand-in frame whose active view is a stand-in MDI
+    /// child holding the compose editbox.
     unsafe fn with_test_compose_window<T>(state: WindowState, test: impl FnOnce(HWND) -> T) -> T {
         init_common_controls().unwrap();
-        let compose = CreateWindowExW(
-            0,
-            wide_null(EDIT_CLASS_NAME).as_ptr(),
-            wide_null("").as_ptr(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            null_mut(),
-            null_mut(),
-            GetModuleHandleW(null()),
-            null_mut(),
-        );
-        assert!(!compose.is_null(), "test compose control must be created");
+        let create = |class_name: &str, style: u32, parent: HWND| {
+            let hwnd = CreateWindowExW(
+                0,
+                wide_null(class_name).as_ptr(),
+                wide_null("").as_ptr(),
+                style,
+                0,
+                0,
+                0,
+                0,
+                parent,
+                null_mut(),
+                GetModuleHandleW(null()),
+                null_mut(),
+            );
+            assert!(!hwnd.is_null(), "test {class_name} control must be created");
+            hwnd
+        };
+        let frame = create(STATIC_CLASS_NAME, 0, null_mut());
+        let child = create(STATIC_CLASS_NAME, WS_CHILD, frame);
+        let compose = create(EDIT_CLASS_NAME, WS_CHILD, child);
 
         let status_bar = CreateWindowExW(
             0,
@@ -16115,12 +16156,23 @@ mod tests {
         );
 
         let state_ptr = Box::into_raw(Box::new(state));
-        SetWindowLongPtrW(compose, GWLP_USERDATA, state_ptr as isize);
-        (*state_ptr).controls.edit = compose;
+        SetWindowLongPtrW(frame, GWLP_USERDATA, state_ptr as isize);
         (*state_ptr).controls.status_bar = status_bar;
+        let active_view = (*state_ptr).active_view.clone();
+        (*state_ptr)
+            .hwnd_views
+            .insert(child as isize, active_view.clone());
+        (*state_ptr).views.insert(
+            active_view,
+            MdiViewState {
+                child,
+                content: null_mut(),
+                edit: compose,
+            },
+        );
 
-        let result = test(compose);
-        DestroyWindow(compose);
+        let result = test(frame);
+        DestroyWindow(frame);
         DestroyWindow(status_bar);
         drop(Box::from_raw(state_ptr));
         result
@@ -16146,13 +16198,11 @@ mod tests {
         );
         assert!(!content.is_null(), "test room content must be created");
         let active_view = state_ref(hwnd).active_view.clone();
-        state_mut(hwnd).views.insert(
-            active_view,
-            MdiViewState {
-                child: hwnd,
-                content,
-            },
-        );
+        state_mut(hwnd)
+            .views
+            .get_mut(&active_view)
+            .expect("the test compose window must track the active view")
+            .content = content;
         set_timeline_rows(
             room_content_timeline(content),
             &[TimelineRow::log(
@@ -16175,6 +16225,7 @@ mod tests {
         MdiViewState {
             child: hwnd_value as HWND,
             content: (hwnd_value + 1) as HWND,
+            edit: (hwnd_value + 2) as HWND,
         }
     }
 

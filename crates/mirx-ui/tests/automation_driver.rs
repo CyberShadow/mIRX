@@ -44,7 +44,8 @@ use mirx_testkit::{
     UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
     VerificationState, ViewActivityLevel, ViewIdentity,
 };
-use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
@@ -76,10 +77,10 @@ mod dpapi;
 const PROTECTED_SESSION_MAGIC: &[u8] = b"mirx-ui-session:v1\0";
 const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";
 const CF_UNICODETEXT: u32 = 13;
-const EDIT_ID: i32 = 1003;
 const MDI_ID: i32 = 1002;
 const SWITCHBAR_ID: i32 = 1005;
 const VIEW_CONTENT_ID: i32 = 2001;
+const VIEW_EDIT_ID: i32 = 2002;
 const WM_TIMELINE_GET_TOP_LINE: u32 = 0x8000 + 100;
 // Intentionally duplicated from production to exercise the real switchbar toolbar command range.
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
@@ -2278,9 +2279,11 @@ fn assert_raw_switchbar_state(
     );
 }
 
+/// The active MDI child's editbox.
 unsafe fn compose_edit_hwnd(app: &MirxApp) -> HWND {
-    let frame = app.automation_frame_hwnd() as HWND;
-    let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
+    let active_child = unsafe { SendMessageW(mdi_client_hwnd(app), WM_MDIGETACTIVE, 0, 0) } as HWND;
+    assert!(!active_child.is_null(), "an MDI child must be active");
+    let edit = unsafe { GetDlgItem(active_child, VIEW_EDIT_ID) };
     assert!(!edit.is_null(), "compose edit control must exist");
     edit
 }
@@ -3644,6 +3647,104 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
         "[22:14] * Joins: Carol (@carol:example)"
     ));
 
+    Ok(())
+}
+
+fn launch_multi_room_fixture() -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("multi-room.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(app)
+}
+
+unsafe fn mdi_children(app: &MirxApp) -> Vec<HWND> {
+    let mdi_client = unsafe { mdi_client_hwnd(app) };
+    let mut children = Vec::new();
+    let mut child =
+        unsafe { FindWindowExW(mdi_client, 0 as HWND, std::ptr::null(), std::ptr::null()) };
+    while !child.is_null() {
+        children.push(child);
+        child = unsafe { FindWindowExW(mdi_client, child, std::ptr::null(), std::ptr::null()) };
+    }
+    children
+}
+
+#[test]
+fn per_window_editbox_keeps_drafts_across_activation() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    let lobby = room_identity("!lobby:example");
+    let ops = room_identity("!ops:example");
+
+    app.select_view(lobby.clone())?;
+    app.set_compose_text("lobby draft")?;
+    app.select_view(ops.clone())?;
+    assert_eq!(app.compose_text()?, "");
+    app.set_compose_text("ops draft")?;
+    app.select_view(lobby)?;
+    assert_eq!(app.compose_text()?, "lobby draft");
+    app.select_view(ops)?;
+    assert_eq!(app.compose_text()?, "ops draft");
+    Ok(())
+}
+
+#[test]
+fn editbox_lives_inside_each_mdi_child() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    let edit_class = wide_null("Edit");
+    let frame_edit =
+        unsafe { FindWindowExW(frame, 0 as HWND, edit_class.as_ptr(), std::ptr::null()) };
+    assert!(
+        frame_edit.is_null(),
+        "the frame must not have its own editbox"
+    );
+
+    let children = unsafe { mdi_children(&app) };
+    // Status, Lobby, Ops and Random.
+    assert_eq!(children.len(), 4);
+    for child in children {
+        let edit = unsafe { GetDlgItem(child, VIEW_EDIT_ID) };
+        assert!(!edit.is_null(), "every MDI child must have an editbox");
+        assert!(unsafe { class_name(edit) }.eq_ignore_ascii_case("Edit"));
+
+        let child_client = unsafe { client_rect(child) };
+        let mut edit_rect = RECT::default();
+        unsafe {
+            GetWindowRect(edit, &mut edit_rect);
+            MapWindowPoints(
+                null_mut(),
+                child,
+                (&mut edit_rect as *mut RECT).cast::<POINT>(),
+                2,
+            );
+        }
+        assert_eq!(edit_rect.bottom, child_client.bottom);
+        assert_eq!(edit_rect.left, child_client.left);
+        assert_eq!(edit_rect.right, child_client.right);
+    }
+    Ok(())
+}
+
+#[test]
+fn slash_command_switching_windows_clears_the_submitting_editbox()
+-> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_multi_room_fixture()?;
+    app.select_view(ViewIdentity::Status)?;
+    app.set_compose_text("status draft")?;
+    app.select_view(room_identity("!ops:example"))?;
+    app.set_compose_text("/status")?;
+    app.send_compose_key(ComposeKey::Return)?;
+
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+    assert_eq!(app.compose_text()?, "status draft");
+    app.select_view(room_identity("!ops:example"))?;
+    assert_eq!(app.compose_text()?, "");
     Ok(())
 }
 
@@ -9025,11 +9126,7 @@ fn automation_driver_typing_exits_compose_history_navigation()
     app.send_compose_key(ComposeKey::Up)?;
     assert_eq!(app.compose_text()?, "second accepted");
 
-    let frame = app.automation_frame_hwnd() as HWND;
-    let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
-    if edit.is_null() {
-        return Err("compose edit control was not found".into());
-    }
+    let edit = unsafe { compose_edit_hwnd(&app) };
     unsafe {
         SendMessageW(edit, WM_CHAR, 'x' as WPARAM, 0);
     }
@@ -9072,10 +9169,7 @@ fn automation_driver_paste_exits_compose_history_navigation()
     assert_eq!(app.compose_text()?, "second accepted");
 
     let frame = app.automation_frame_hwnd() as HWND;
-    let edit = unsafe { GetDlgItem(frame, EDIT_ID) };
-    if edit.is_null() {
-        return Err("compose edit control was not found".into());
-    }
+    let edit = unsafe { compose_edit_hwnd(&app) };
     set_clipboard_text(frame, "x")?;
     unsafe {
         SendMessageW(edit, WM_PASTE, 0, 0);
