@@ -176,7 +176,7 @@ async fn run_worker(
         }
     }
 
-    shutdown_state(&mut state);
+    shutdown_state(&mut state).await;
     emit_event(&event_tx, Event::Stopped);
 }
 
@@ -1035,8 +1035,14 @@ async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool 
     false
 }
 
-fn shutdown_state(state: &mut WorkerState) {
+/// Stops every worker task and waits until each is gone. The tasks own
+/// `Client` clones, and the SDK store closes its connections on the runtime
+/// when the last one drops. A task still queued when `run_worker` returns
+/// would instead be dropped with the `LocalSet`, outside the runtime, where
+/// that panics.
+async fn shutdown_state(state: &mut WorkerState) {
     if let WorkerState::Ready {
+        client: _,
         sync_task,
         session_update_task,
         send_queue_update_task,
@@ -1045,20 +1051,31 @@ fn shutdown_state(state: &mut WorkerState) {
         e2ee_recovery_state_task,
         e2ee_backup_state_task,
         verification_tasks,
-        ..
-    } = state
+    } = std::mem::replace(state, WorkerState::NoClient)
     {
-        abort_sync_task(sync_task);
-        session_update_task.abort();
-        send_queue_update_task.abort();
-        room_list_update_task.abort();
-        room_read_state_update_task.abort();
-        e2ee_recovery_state_task.abort();
-        e2ee_backup_state_task.abort();
-        abort_verification_tasks(verification_tasks);
+        let tasks = sync_task
+            .into_iter()
+            .chain([
+                session_update_task,
+                send_queue_update_task,
+                room_list_update_task,
+                room_read_state_update_task,
+                e2ee_recovery_state_task,
+                e2ee_backup_state_task,
+            ])
+            .chain(verification_tasks.into_values())
+            .collect::<Vec<_>>();
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            if let Err(err) = task.await
+                && err.is_panic()
+            {
+                std::panic::resume_unwind(err.into_panic());
+            }
+        }
     }
-
-    *state = WorkerState::NoClient;
 }
 
 fn abort_sync_task(sync_task: &mut Option<TokioJoinHandle<()>>) {
@@ -1369,7 +1386,7 @@ mod tests {
                 .count(),
             1
         );
-        shutdown_state(&mut state);
+        shutdown_state(&mut state).await;
     }
 
     #[test]
@@ -1460,7 +1477,7 @@ mod tests {
                 .iter()
                 .any(|member| member.user_id().as_str() == "@target:example.org")
         );
-        shutdown_state(&mut state);
+        shutdown_state(&mut state).await;
     }
 
     #[test]
@@ -1692,12 +1709,23 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_state_aborts_verification_watchers() {
+    fn shutdown_state_drops_every_task_inside_the_runtime() {
+        /// Owned by a task like a `Client` clone: dropping it needs the
+        /// runtime, as the SDK store's connection pool does.
+        struct NeedsRuntimeOnDrop(std::rc::Rc<std::cell::Cell<bool>>);
+        impl Drop for NeedsRuntimeOnDrop {
+            fn drop(&mut self) {
+                tokio::runtime::Handle::current();
+                self.0.set(true);
+            }
+        }
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("build tokio runtime");
         let local = tokio::task::LocalSet::new();
+        let dropped = std::rc::Rc::new(std::cell::Cell::new(false));
 
         local.block_on(&runtime, async {
             let client = matrix_sdk::Client::builder()
@@ -1705,7 +1733,11 @@ mod tests {
                 .build()
                 .await
                 .expect("build matrix client");
-            let verification_task = tokio::task::spawn_local(std::future::pending::<()>());
+            let guard = NeedsRuntimeOnDrop(dropped.clone());
+            let verification_task = tokio::task::spawn_local(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await
+            });
             let mut state = WorkerState::Ready {
                 client,
                 sync_task: None,
@@ -1721,11 +1753,12 @@ mod tests {
                 )]),
             };
 
-            shutdown_state(&mut state);
-            tokio::task::yield_now().await;
+            shutdown_state(&mut state).await;
 
             assert!(matches!(state, WorkerState::NoClient));
+            assert!(dropped.get(), "the task is gone when shutdown returns");
         });
+        drop(local);
     }
 
     #[test]
