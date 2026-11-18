@@ -226,7 +226,6 @@ const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
 const EDIT_HEIGHT: i32 = 28;
 const SWITCHBAR_HEIGHT: i32 = 28;
-const STATUS_BAR_HEIGHT: i32 = 22;
 const ROOM_MEMBER_LIST_WIDTH: i32 = 180;
 const ROOM_MEMBER_LIST_GAP: i32 = 4;
 const ROOM_TIMELINE_MIN_WIDTH: i32 = 240;
@@ -7805,10 +7804,17 @@ unsafe fn layout_controls(hwnd: HWND) {
     let height = rect.bottom - rect.top;
     let tree_width = TREE_WIDTH.min(width);
     let switchbar_height = SWITCHBAR_HEIGHT.min(height);
-    let status_bar_height = STATUS_BAR_HEIGHT.min((height - switchbar_height).max(0));
+    // A status bar sizes and places itself at the bottom of its parent, so
+    // the controls above it are laid out against its real height. Sizing it
+    // to a guessed height instead left it overlapping them by a few pixels,
+    // and which one painted last decided the snapshot.
+    SendMessageW(state.controls.status_bar, WM_SIZE, 0, 0);
+    let mut status_bar_rect = RECT::default();
+    GetWindowRect(state.controls.status_bar, &mut status_bar_rect);
+    let status_bar_height =
+        (status_bar_rect.bottom - status_bar_rect.top).min((height - switchbar_height).max(0));
     let mdi_width = (width - tree_width).max(0);
     let mdi_height = (height - switchbar_height - status_bar_height).max(0);
-    let status_bar_y = switchbar_height + mdi_height;
 
     MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
     MoveWindow(
@@ -7825,14 +7831,6 @@ unsafe fn layout_controls(hwnd: HWND) {
         switchbar_height,
         mdi_width,
         mdi_height,
-        1,
-    );
-    MoveWindow(
-        state.controls.status_bar,
-        0,
-        status_bar_y,
-        width,
-        status_bar_height,
         1,
     );
 }
