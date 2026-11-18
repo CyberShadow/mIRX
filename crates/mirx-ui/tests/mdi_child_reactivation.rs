@@ -141,8 +141,8 @@ fn base_events() -> Vec<Event> {
 #[test]
 fn select_room_recreates_room_mdi_child_after_external_destroy()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -180,8 +180,8 @@ fn select_room_recreates_room_mdi_child_after_external_destroy()
 #[test]
 fn select_thread_recreates_thread_mdi_child_after_external_destroy()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [
         OsString::from("--render-state"),

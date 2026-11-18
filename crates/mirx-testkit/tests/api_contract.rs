@@ -6273,10 +6273,7 @@ fn non_windows_platform_reports_unsupported_driver() {
     );
 
     let app = MirxApp::find(Duration::from_millis(1)).expect_err("find must fail off Windows");
-    assert_eq!(
-        app.to_string(),
-        "mirx-testkit requires the Windows target"
-    );
+    assert_eq!(app.to_string(), "mirx-testkit requires the Windows target");
 }
 
 #[cfg(not(windows))]

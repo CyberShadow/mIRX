@@ -86,8 +86,8 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
 #[test]
 fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -145,8 +145,8 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
 #[test]
 fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![

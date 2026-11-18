@@ -1778,9 +1778,8 @@ mod windows_main {
 
     pub(crate) fn run() -> Result<(), String> {
         let config = parse_args(env::args().skip(1))?;
-        let app = MirxApp::find(config.find_timeout).map_err(|error| {
-            format!("failed to attach to mirx-ui automation window: {error}")
-        })?;
+        let app = MirxApp::find(config.find_timeout)
+            .map_err(|error| format!("failed to attach to mirx-ui automation window: {error}"))?;
         app.wait_idle(config.wait_idle)
             .map_err(|error| format!("WAIT_IDLE failed: {error}"))?;
 

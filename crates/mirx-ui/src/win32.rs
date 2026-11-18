@@ -3083,9 +3083,8 @@ fn save_session(homeserver_url: &str, session: &StoredSession) -> Result<(), Str
             path.display()
         )
     })?;
-    let protected =
-        crate::dpapi::protect(&serialized, "mirx saved session", SESSION_DPAPI_ENTROPY)
-            .map_err(|err| format!("failed to protect saved session {}: {err}", path.display()))?;
+    let protected = crate::dpapi::protect(&serialized, "mirx saved session", SESSION_DPAPI_ENTROPY)
+        .map_err(|err| format!("failed to protect saved session {}: {err}", path.display()))?;
     let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
     bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
     bytes.extend_from_slice(&protected);
@@ -15569,14 +15568,12 @@ mod tests {
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
             relation: None,
-            kind: RoomActivityKind::UnsupportedMessage(
-                mirx_core::UnsupportedRoomMessageActivity {
-                    event_id: event_id.to_owned(),
-                    sender: sender.to_owned(),
-                    msgtype: msgtype.to_owned(),
-                    body: body.to_owned(),
-                },
-            ),
+            kind: RoomActivityKind::UnsupportedMessage(mirx_core::UnsupportedRoomMessageActivity {
+                event_id: event_id.to_owned(),
+                sender: sender.to_owned(),
+                msgtype: msgtype.to_owned(),
+                body: body.to_owned(),
+            }),
         }
     }
 

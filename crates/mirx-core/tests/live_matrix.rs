@@ -314,8 +314,7 @@ async fn live_fixture_client_from_env_values(
 }
 
 async fn live_room_from_env_value(client: &Client, room_id: &str) -> matrix_sdk::Result<Room> {
-    let room_id =
-        <&RoomId>::try_from(room_id).expect("MIRX_ROOM must be a valid Matrix room id");
+    let room_id = <&RoomId>::try_from(room_id).expect("MIRX_ROOM must be a valid Matrix room id");
     client.sync_once(SyncSettings::default()).await?;
     Ok(client
         .get_room(room_id)

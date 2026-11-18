@@ -241,11 +241,7 @@ fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::er
             "refresh_token": "refresh-token"
         }
     }))?;
-    let protected = dpapi::protect(
-        &payload,
-        "mirx saved session test",
-        SESSION_DPAPI_ENTROPY,
-    )?;
+    let protected = dpapi::protect(&payload, "mirx saved session test", SESSION_DPAPI_ENTROPY)?;
     let mut bytes = Vec::with_capacity(PROTECTED_SESSION_MAGIC.len() + protected.len());
     bytes.extend_from_slice(PROTECTED_SESSION_MAGIC);
     bytes.extend_from_slice(&protected);
@@ -2302,8 +2298,8 @@ fn set_clipboard_text(owner: HWND, text: &str) -> Result<(), String> {
 #[test]
 fn automation_driver_launches_real_ui_and_reads_event_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -2417,8 +2413,8 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
 #[test]
 fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!ops:example", "Ops", false)]),
@@ -2469,8 +2465,8 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_reconciles_remote_echo_after_message_sent_update()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -2531,8 +2527,8 @@ fn automation_driver_reconciles_remote_echo_after_message_sent_update()
 #[test]
 fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -2579,8 +2575,8 @@ fn automation_driver_rejects_invalid_append_message_sent_update_without_exiting(
 #[test]
 fn automation_driver_can_attach_and_replace_state_via_testkit()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -2721,8 +2717,8 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
 #[test]
 fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -2808,8 +2804,8 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
 #[test]
 fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let local_app_data = unique_local_app_data_path();
     let session_path = write_saved_session(&local_app_data)?;
@@ -2847,8 +2843,8 @@ fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
 #[test]
 fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tokens()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let local_app_data = unique_local_app_data_path();
     let session_path = session_file_path(&local_app_data);
@@ -2941,8 +2937,8 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
 #[test]
 fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -2983,8 +2979,8 @@ fn automation_driver_dumps_typed_e2ee_status_from_synthetic_events()
 #[test]
 fn automation_driver_submits_verification_actions_for_current_flow_without_local_state_mutation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3070,8 +3066,8 @@ fn automation_driver_submits_verification_actions_for_current_flow_without_local
 #[test]
 fn automation_driver_submits_verification_action_for_explicit_flow()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3107,8 +3103,8 @@ fn automation_driver_submits_verification_action_for_explicit_flow()
 #[test]
 fn automation_driver_requested_verification_menu_state_and_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3153,8 +3149,8 @@ fn automation_driver_requested_verification_menu_state_and_commands()
 #[test]
 fn automation_driver_sas_ready_verification_menu_state_and_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3215,8 +3211,8 @@ fn automation_driver_sas_ready_verification_menu_state_and_commands()
 #[test]
 fn automation_driver_done_and_cancelled_verification_menu_items_are_disabled()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
 
     let done_args = [
         OsString::from("--render-state"),
@@ -3245,8 +3241,8 @@ fn automation_driver_done_and_cancelled_verification_menu_items_are_disabled()
 #[test]
 fn automation_driver_verification_error_keeps_requested_menu_actions_enabled()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("verification-error.json");
     let args = [
         OsString::from("--render-state"),
@@ -3263,8 +3259,8 @@ fn automation_driver_verification_error_keeps_requested_menu_actions_enabled()
 #[test]
 fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -3297,8 +3293,8 @@ fn automation_driver_recover_e2ee_before_auth_never_echoes_secret()
 #[test]
 fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
 
@@ -3320,8 +3316,8 @@ fn automation_driver_setup_e2ee_recovery_before_auth_never_echoes_passphrase()
 #[test]
 fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secret()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
     let args = [
         OsString::from("--render-state"),
@@ -3362,8 +3358,8 @@ fn automation_driver_recover_e2ee_menu_dialog_submits_once_and_never_echoes_secr
 #[test]
 fn automation_driver_setup_e2ee_recovery_menu_dialog_submits_once_and_redacts_passphrase()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
     let args = [
         OsString::from("--render-state"),
@@ -3390,8 +3386,8 @@ fn automation_driver_setup_e2ee_recovery_menu_dialog_submits_once_and_redacts_pa
 #[test]
 fn automation_driver_e2ee_recovery_setup_success_handoff_acknowledges_and_never_persists_key()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let recovery_key = "automation recovery key must not persist";
     let state_path = write_state_file(&[
         Event::Started,
@@ -3435,8 +3431,8 @@ fn automation_driver_e2ee_recovery_setup_success_handoff_acknowledges_and_never_
 #[test]
 fn automation_driver_slash_setup_e2ee_recovery_submits_once_without_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
     let args = [
         OsString::from("--render-state"),
@@ -3469,8 +3465,8 @@ fn automation_driver_slash_setup_e2ee_recovery_submits_once_without_history()
 
 #[test]
 fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("multi-room.json");
 
     let args = [
@@ -3555,8 +3551,8 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
 
 #[test]
 fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list.json");
 
     let args = [
@@ -3587,8 +3583,8 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
 }
 
 fn launch_member_list_app() -> Result<GuiTestApp, Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list.json");
     let app = launch_app(
         &exe_path,
@@ -3856,8 +3852,8 @@ fn automation_driver_member_moderation_status_view_has_no_target()
 #[test]
 fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("member-list-narrow.json");
     assert_eq!(
         fixture_path.file_name().and_then(|name| name.to_str()),
@@ -3924,8 +3920,8 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 #[test]
 fn automation_driver_replaces_room_members_on_append_and_state_reload()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!members:example", "Members", false)]),
@@ -4006,8 +4002,8 @@ fn automation_driver_replaces_room_members_on_append_and_state_reload()
 #[test]
 fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -4034,10 +4030,7 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     )?;
 
     let content_hwnd = unsafe { active_mdi_content_hwnd(&app) };
-    assert_eq!(
-        unsafe { class_name(content_hwnd) },
-        "mirxWin32RoomContent"
-    );
+    assert_eq!(unsafe { class_name(content_hwnd) }, "mirxWin32RoomContent");
     let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
     let member_list_hwnd = unsafe { active_room_member_list_hwnd(&app) };
     assert_eq!(unsafe { class_name(timeline_hwnd) }, "mirxWin32Timeline");
@@ -4185,8 +4178,8 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 #[test]
 fn custom_room_timeline_history_backfill_submits_once_while_loading()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4246,8 +4239,8 @@ fn custom_room_timeline_history_backfill_submits_once_while_loading()
 #[test]
 fn render_state_room_find_backfill_records_loading_and_matches_older_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("history-backfill-loading.json");
     let args = [
         OsString::from("--render-state"),
@@ -4339,8 +4332,8 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
 #[test]
 fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4477,8 +4470,8 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
 #[test]
 fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4548,8 +4541,8 @@ fn custom_room_timeline_history_backfill_exhausted_is_visible_and_blocks_retry()
 #[test]
 fn trigger_active_timeline_history_backfill_submits_for_thread_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -4579,8 +4572,8 @@ fn trigger_active_timeline_history_backfill_submits_for_thread_parent_room()
 #[test]
 fn render_state_thread_find_backfill_matches_older_thread_reply()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("find-thread.json");
     let args = [
         OsString::from("--render-state"),
@@ -4645,8 +4638,8 @@ fn render_state_thread_find_backfill_matches_older_thread_reply()
 #[test]
 fn automation_driver_history_backfill_prepends_older_messages_without_disturbing_active_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let server = spawn_mock_backfill_homeserver()?;
     let options = launch_options(Some(local_app_data.clone()));
@@ -4819,8 +4812,8 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
 #[test]
 fn custom_room_timeline_gettext_normalizes_multiline_bodies()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -4868,8 +4861,8 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
 #[test]
 fn custom_room_timeline_gettext_preserves_trailing_blank_line()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -4917,8 +4910,8 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
 #[test]
 fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -5139,8 +5132,8 @@ unsafe fn scrollbar_info(hwnd: HWND) -> Option<SCROLLINFO> {
 #[test]
 fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let fixture_path = fixture_state_path("space-hierarchy.json");
@@ -5429,8 +5422,8 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
 #[test]
 fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [
         OsString::from("--render-state"),
@@ -5567,8 +5560,8 @@ fn automation_driver_navigates_thread_hierarchy_fixture() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_send_text_target_none_uses_active_thread_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -5608,8 +5601,8 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
 #[test]
 fn automation_driver_send_file_target_uses_explicit_joined_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -5629,8 +5622,8 @@ fn automation_driver_send_file_target_uses_explicit_joined_room()
 #[test]
 fn automation_driver_sendfile_slash_rejects_active_thread() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let app = launch_app(&exe_path, &[OsString::from("--automation")])?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
@@ -5649,8 +5642,8 @@ fn automation_driver_sendfile_slash_rejects_active_thread() -> Result<(), Box<dy
 #[test]
 fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivated()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -5717,8 +5710,8 @@ fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivate
 #[test]
 fn automation_driver_applies_receive_side_message_edits_in_place()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let update_path = fixture_update_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
@@ -5810,8 +5803,8 @@ fn automation_driver_applies_receive_side_message_edits_in_place()
 
 #[test]
 fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -5891,8 +5884,8 @@ fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::e
 #[test]
 fn automation_driver_applies_receive_side_reactions_redactions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let update_path = fixture_update_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
@@ -5974,8 +5967,8 @@ fn automation_driver_applies_receive_side_reactions_redactions()
 #[test]
 fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("redactions.json");
     let update_path = fixture_update_path("redactions.json");
     let local_app_data = unique_local_app_data_path();
@@ -6134,8 +6127,8 @@ fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
 #[test]
 fn automation_driver_thread_root_message_edit_updates_thread_titles()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let update_path = fixture_update_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
@@ -6193,8 +6186,8 @@ fn automation_driver_thread_root_message_edit_updates_thread_titles()
 #[test]
 fn automation_driver_rejects_invalid_append_message_edit_update_without_exiting()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("message-edits.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -6271,8 +6264,8 @@ fn automation_driver_rejects_invalid_append_message_edit_update_without_exiting(
 #[test]
 fn automation_driver_thread_me_submission_preserves_active_thread_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -6309,8 +6302,8 @@ fn automation_driver_thread_me_submission_preserves_active_thread_view()
 #[test]
 fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -6339,8 +6332,8 @@ fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
 #[test]
 fn automation_driver_loads_checked_in_event_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -6459,8 +6452,8 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
 #[test]
 fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -6597,8 +6590,8 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
 #[test]
 fn automation_driver_renders_room_typing_only_for_selected_room_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -6662,8 +6655,8 @@ fn automation_driver_renders_room_typing_only_for_selected_room_view()
 #[test]
 fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_list()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -6779,8 +6772,8 @@ fn automation_driver_clears_room_typing_for_replacement_state_and_empty_user_lis
 #[test]
 fn automation_driver_clears_room_typing_on_logged_out_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!alpha:example", "Alpha", false)]),
@@ -6835,8 +6828,8 @@ fn automation_driver_clears_room_typing_on_logged_out_event()
 #[test]
 fn automation_driver_loads_typing_indicator_fixture_via_file_api()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -6887,8 +6880,8 @@ fn automation_driver_loads_typing_indicator_fixture_via_file_api()
 #[test]
 fn automation_driver_can_activate_status_view_and_return_to_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("verification-error.json");
 
     let args = [
@@ -6919,8 +6912,8 @@ fn automation_driver_can_activate_status_view_and_return_to_room()
 #[test]
 fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [OsString::from("--automation")];
     let app = launch_app(&exe_path, &args)?;
@@ -6973,8 +6966,8 @@ fn automation_driver_switchbar_command_activates_mdi_tree_and_focus()
 #[test]
 fn automation_driver_activation_returns_keyboard_to_compose()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -7018,8 +7011,8 @@ fn automation_driver_activation_returns_keyboard_to_compose()
 #[test]
 fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -7044,8 +7037,8 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
 #[test]
 fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [OsString::from("--automation")];
@@ -7128,8 +7121,8 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 #[test]
 fn automation_driver_native_mdi_activation_reconciles_shell_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [OsString::from("--automation")];
@@ -7220,8 +7213,8 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
 #[test]
 fn automation_driver_render_state_append_records_room_read_target()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-activity.json");
     let update_path = fixture_update_path("shell-activity.json");
     let args = [
@@ -7264,8 +7257,8 @@ fn automation_driver_render_state_append_records_room_read_target()
 #[test]
 fn automation_driver_renders_shell_constrained_layout_fixture()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("shell-constrained-layout.json");
     let frame_size = FrameSize {
         width: 900,
@@ -7351,8 +7344,8 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
 #[test]
 fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("read-state-ingestion.json");
 
     let args = [
@@ -7498,8 +7491,8 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
 #[test]
 fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("read-state-ingestion.json");
     let update_path = fixture_update_path("read-state-cleared.json");
     let mut events: Vec<Event> = serde_json::from_str(&fs::read_to_string(&fixture_path)?)?;
@@ -7546,8 +7539,8 @@ fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
 #[test]
 fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("image-message.json");
 
     let args = [
@@ -7605,8 +7598,8 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
 #[test]
 fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("file-message.json");
 
     let args = [
@@ -7690,8 +7683,8 @@ fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
 #[test]
 fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("audio-message.json");
 
     let args = [
@@ -7776,8 +7769,8 @@ fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
 #[test]
 fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("image-message-loaded.json");
 
     let args = [
@@ -7812,8 +7805,8 @@ fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_med
 #[test]
 fn automation_driver_renders_failed_image_message_fixture_and_exposes_failed_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("image-message-failed.json");
 
     let args = [
@@ -7848,8 +7841,8 @@ fn assert_video_fixture_media_state(
     fixture_name: &str,
     expected_media_state: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path(fixture_name);
     let app = launch_app(
         &exe_path,
@@ -7897,8 +7890,8 @@ fn automation_driver_video_message_failed_exposes_failed_media_state()
 #[test]
 fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_metadata()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("encrypted-image-message.json");
 
     let args = [
@@ -7956,8 +7949,8 @@ fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_met
 #[test]
 fn automation_driver_renders_encrypted_loaded_image_and_exposes_loaded_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("encrypted-image-message-loaded.json");
 
     let args = [
@@ -7992,8 +7985,8 @@ fn automation_driver_renders_encrypted_loaded_image_and_exposes_loaded_media_sta
 #[test]
 fn automation_driver_renders_encrypted_failed_image_and_exposes_failed_media_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("encrypted-image-message-failed.json");
 
     let args = [
@@ -8027,8 +8020,8 @@ fn automation_driver_renders_encrypted_failed_image_and_exposes_failed_media_sta
 #[test]
 fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("unsupported-message.json");
 
     let args = [
@@ -8118,8 +8111,8 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
 #[test]
 fn automation_driver_compose_history_keys_are_noops_without_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
 
     let args = [
@@ -8162,8 +8155,8 @@ fn automation_driver_compose_history_keys_are_noops_without_history()
 #[test]
 fn automation_driver_compose_history_recalls_accepted_submissions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8204,8 +8197,8 @@ fn automation_driver_compose_history_recalls_accepted_submissions()
 #[test]
 fn automation_driver_compose_history_ignores_rejected_submissions()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8231,8 +8224,8 @@ fn automation_driver_compose_history_ignores_rejected_submissions()
 #[test]
 fn automation_driver_compose_history_ignores_empty_submission()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8259,8 +8252,8 @@ fn automation_driver_compose_history_ignores_empty_submission()
 #[test]
 fn automation_driver_setting_text_exits_compose_history_navigation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8296,8 +8289,8 @@ fn automation_driver_setting_text_exits_compose_history_navigation()
 #[test]
 fn automation_driver_typing_exits_compose_history_navigation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8342,8 +8335,8 @@ fn automation_driver_typing_exits_compose_history_navigation()
 #[test]
 fn automation_driver_paste_exits_compose_history_navigation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8389,8 +8382,8 @@ fn automation_driver_paste_exits_compose_history_navigation()
 #[test]
 fn automation_driver_return_compose_key_submits_through_edit_control()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8426,8 +8419,8 @@ fn automation_driver_return_compose_key_submits_through_edit_control()
 #[test]
 fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8471,8 +8464,8 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn std::error::Error>>
 {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8508,8 +8501,8 @@ fn automation_driver_send_text_keeps_literal_slash_body() -> Result<(), Box<dyn 
 #[test]
 fn automation_driver_slash_window_switches_by_room_id_and_display_name()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8560,8 +8553,8 @@ fn automation_driver_slash_window_switches_by_room_id_and_display_name()
 #[test]
 fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8625,8 +8618,8 @@ fn automation_driver_slash_window_reports_unknown_and_ambiguous_targets()
 #[test]
 fn automation_driver_slash_join_records_submitted_membership_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8693,8 +8686,8 @@ fn automation_driver_slash_join_records_submitted_membership_without_creating_ro
 #[test]
 fn automation_driver_slash_query_records_submitted_direct_room_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8750,8 +8743,8 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
 #[test]
 fn automation_driver_room_menu_join_records_submitted_membership_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -8808,8 +8801,8 @@ fn automation_driver_room_menu_join_records_submitted_membership_without_creatin
 #[test]
 fn automation_driver_room_menu_query_records_submitted_direct_room_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -8860,8 +8853,8 @@ fn automation_driver_room_menu_query_records_submitted_direct_room_without_creat
 #[test]
 fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -8940,8 +8933,8 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
 #[test]
 fn automation_driver_invited_room_is_navigable_but_not_sendable()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9023,8 +9016,8 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
 #[test]
 fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-room-list.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -9078,8 +9071,8 @@ fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
 #[test]
 fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-direct-room.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -9142,8 +9135,8 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
 #[test]
 fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joined_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-room-accept.json");
     let update_path = fixture_update_path("invited-room-accept.json");
     let local_app_data = unique_local_app_data_path();
@@ -9195,8 +9188,8 @@ fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joine
 #[test]
 fn automation_driver_invited_room_reject_fixture_update_removes_invite_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("invited-room-reject.json");
     let update_path = fixture_update_path("invited-room-reject.json");
     let local_app_data = unique_local_app_data_path();
@@ -9257,8 +9250,8 @@ fn automation_driver_invited_room_reject_fixture_update_removes_invite_room()
 #[test]
 fn automation_driver_hierarchical_tree_ignores_invited_spaces()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9283,8 +9276,8 @@ fn automation_driver_hierarchical_tree_ignores_invited_spaces()
 #[test]
 fn automation_driver_slash_accept_keeps_invite_until_synced_rooms_join()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9355,8 +9348,8 @@ fn automation_driver_slash_accept_keeps_invite_until_synced_rooms_join()
 #[test]
 fn automation_driver_slash_reject_keeps_invite_until_synced_rooms_removal()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9431,8 +9424,8 @@ fn automation_driver_slash_reject_keeps_invite_until_synced_rooms_removal()
 #[test]
 fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9538,8 +9531,8 @@ fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
 #[test]
 fn automation_driver_slash_join_part_and_verify_regressions_keep_original_command_types()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9634,8 +9627,8 @@ fn automation_driver_slash_join_part_and_verify_regressions_keep_original_comman
 #[test]
 fn automation_driver_slash_query_opens_existing_direct_room_match()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9700,8 +9693,8 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
 #[test]
 fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9784,8 +9777,8 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
 #[test]
 fn automation_driver_literal_query_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9830,8 +9823,8 @@ fn automation_driver_literal_query_submission_is_sent_as_text()
 #[test]
 fn automation_driver_slash_query_existing_direct_room_activates_room_without_submission()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9890,8 +9883,8 @@ fn automation_driver_slash_query_existing_direct_room_activates_room_without_sub
 #[test]
 fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -9961,8 +9954,8 @@ fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
 #[test]
 fn automation_driver_slash_part_active_room_waits_for_synced_rooms_removal()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10041,8 +10034,8 @@ fn automation_driver_slash_part_active_room_waits_for_synced_rooms_removal()
 #[test]
 fn automation_driver_slash_part_from_status_reports_no_room_selected()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10071,8 +10064,8 @@ fn automation_driver_slash_part_from_status_reports_no_room_selected()
 #[test]
 fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10151,8 +10144,8 @@ fn automation_driver_slash_part_thread_targets_parent_and_removes_stale_thread()
 #[test]
 fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -10239,8 +10232,8 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
 #[test]
 fn automation_driver_renders_synced_topic_without_topic_notice()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
@@ -10281,8 +10274,8 @@ fn automation_driver_renders_synced_topic_without_topic_notice()
 #[test]
 fn automation_driver_slash_react_records_submitted_reaction_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10322,8 +10315,8 @@ fn automation_driver_slash_react_records_submitted_reaction_without_appending_te
 
 #[test]
 fn automation_driver_slash_react_preserves_key_text() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10360,8 +10353,8 @@ fn automation_driver_slash_react_preserves_key_text() -> Result<(), Box<dyn std:
 #[test]
 fn automation_driver_slash_reply_records_submitted_reply_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10402,8 +10395,8 @@ fn automation_driver_slash_reply_records_submitted_reply_without_appending_text(
 #[test]
 fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10446,8 +10439,8 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
 #[test]
 fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10491,8 +10484,8 @@ fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_slash_redact_records_submitted_redaction_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10532,8 +10525,8 @@ fn automation_driver_slash_redact_records_submitted_redaction_without_appending_
 #[test]
 fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10571,8 +10564,8 @@ fn automation_driver_slash_unreact_records_submitted_reaction_redaction()
 #[test]
 fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10614,8 +10607,8 @@ fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_invalid_react_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10657,8 +10650,8 @@ fn automation_driver_invalid_react_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10701,8 +10694,8 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
 #[test]
 fn automation_driver_literal_react_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10750,8 +10743,8 @@ fn automation_driver_literal_react_submission_is_sent_as_text()
 #[test]
 fn automation_driver_literal_edit_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10803,8 +10796,8 @@ fn automation_driver_literal_edit_submission_is_sent_as_text()
 #[test]
 fn automation_driver_literal_reply_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10854,8 +10847,8 @@ fn automation_driver_literal_reply_submission_is_sent_as_text()
 #[test]
 fn automation_driver_slash_react_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10898,8 +10891,8 @@ fn automation_driver_slash_react_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10945,8 +10938,8 @@ fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
 #[test]
 fn automation_driver_slash_edit_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -10990,8 +10983,8 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_slash_redact_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11033,8 +11026,8 @@ fn automation_driver_slash_redact_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11085,8 +11078,8 @@ fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
 #[test]
 fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11156,8 +11149,8 @@ fn automation_driver_room_menu_part_waits_for_synced_rooms_removal()
 #[test]
 fn automation_driver_selected_navigation_context_menu_rejects_invite()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -11190,8 +11183,8 @@ fn automation_driver_selected_navigation_context_menu_rejects_invite()
 #[test]
 fn automation_driver_message_menu_actions_prefill_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11276,8 +11269,8 @@ fn automation_driver_message_menu_actions_prefill_selected_event()
 #[test]
 fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prior_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -11305,8 +11298,8 @@ fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prio
 #[test]
 fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let app = launch_app_with_options(
         &exe_path,
@@ -11331,8 +11324,8 @@ fn assert_message_menu_attachment_save(
     filename: &str,
     bytes: Vec<u8>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path(fixture_name);
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11413,8 +11406,8 @@ fn automation_driver_message_menu_save_video_attachment_writes_file()
 #[test]
 fn automation_driver_message_menu_redact_records_selected_event()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("redactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11449,8 +11442,8 @@ fn automation_driver_message_menu_redact_records_selected_event()
 #[test]
 fn automation_driver_message_menu_redact_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
@@ -11483,8 +11476,8 @@ fn automation_driver_message_menu_redact_from_thread_targets_parent_room()
 #[test]
 fn automation_driver_slash_clear_clears_only_active_room_timeline()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11543,8 +11536,8 @@ fn automation_driver_slash_clear_clears_only_active_room_timeline()
 #[test]
 fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11621,8 +11614,8 @@ fn automation_driver_slash_clear_preserves_pending_row_for_later_sent_update()
 #[test]
 fn automation_driver_slash_clear_in_status_view_is_a_no_op()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11668,8 +11661,8 @@ fn automation_driver_slash_clear_in_status_view_is_a_no_op()
 #[test]
 fn automation_driver_slash_find_updates_active_room_without_sending_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -11729,8 +11722,8 @@ fn automation_driver_slash_find_updates_active_room_without_sending_text()
 #[test]
 fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!search:example", "Search", false)]),
@@ -11866,8 +11859,8 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
 #[test]
 fn automation_driver_find_active_thread_timeline_scopes_to_thread()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let fixture_path = fixture_state_path("thread-hierarchy.json");
     let args = [
         OsString::from("--render-state"),
@@ -11972,8 +11965,8 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
 #[test]
 fn automation_driver_find_active_status_view_matches_status_lines()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[Event::Started, Event::E2eeStatus(sample_e2ee_status())])?;
     let args = [
         OsString::from("--render-state"),
@@ -12035,8 +12028,8 @@ fn automation_driver_find_active_status_view_matches_status_lines()
 #[test]
 fn automation_driver_find_active_view_reports_no_match_without_changing_view()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let args = [
         OsString::from("--render-state"),
@@ -12106,8 +12099,8 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
 #[test]
 fn automation_driver_find_active_view_empty_query_matches_slash_find_validation()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let args = [
         OsString::from("--render-state"),
@@ -12177,8 +12170,8 @@ fn automation_driver_find_active_view_empty_query_matches_slash_find_validation(
 #[test]
 fn automation_driver_find_active_view_preserves_per_view_state()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![
@@ -12308,8 +12301,8 @@ fn automation_driver_find_active_view_preserves_per_view_state()
 #[test]
 fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&[
         Event::Started,
         Event::SyncedRooms(vec![room_summary("!rebuild:example", "Rebuild", false)]),
@@ -12400,8 +12393,8 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
 
 #[test]
 fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12444,8 +12437,8 @@ fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std
 #[test]
 fn automation_driver_literal_slash_submission_is_sent_as_text()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12489,8 +12482,8 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
 #[test]
 fn automation_driver_me_submission_uses_edit_control_path_and_preserves_history()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12528,8 +12521,8 @@ fn automation_driver_me_submission_uses_edit_control_path_and_preserves_history(
 #[test]
 fn automation_driver_empty_me_reports_usage_without_sending()
 -> Result<(), Box<dyn std::error::Error>> {
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
@@ -12562,30 +12555,19 @@ fn automation_driver_empty_me_reports_usage_without_sending()
 
 #[test]
 fn live_matrix_ui_session() -> Result<(), Box<dyn std::error::Error>> {
-    let Some(homeserver_url) = env::var("MIRX_HS")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(homeserver_url) = env::var("MIRX_HS").ok().filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    let Some(username) = env::var("MIRX_USER")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(username) = env::var("MIRX_USER").ok().filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    let Some(password) = env::var("MIRX_PASS")
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(password) = env::var("MIRX_PASS").ok().filter(|value| !value.is_empty()) else {
         return Ok(());
     };
-    let room_id = env::var("MIRX_ROOM")
-        .ok()
-        .filter(|value| !value.is_empty());
+    let room_id = env::var("MIRX_ROOM").ok().filter(|value| !value.is_empty());
 
-    let exe_path = mirx_ui_exe_path()
-        .map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let local_app_data = unique_local_app_data_path();
     let session_path = session_file_path(&local_app_data);
     let options = launch_options(Some(local_app_data.clone()));
