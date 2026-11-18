@@ -3,7 +3,6 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,11 +12,10 @@ use mirx_core::{
     RoomMessagePresentationKind, RoomMessageSendState, RoomSummary,
 };
 use mirx_testkit::{LaunchOptions, MirxApp, ViewIdentity};
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
-use windows_sys::Win32::System::Memory::{FILE_MAP_READ, OpenFileMappingW};
+use windows_sys::Win32::Foundation::{HWND, WPARAM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GW_CHILD, GW_HWNDNEXT, GetClassNameW, GetDlgItem, GetWindow,
-    GetWindowThreadProcessId, SendMessageW, WM_MDIDESTROY, WM_MDIGETACTIVE,
+    GW_CHILD, GW_HWNDNEXT, GetClassNameW, GetDlgItem, GetWindow, SendMessageW, WM_MDIDESTROY,
+    WM_MDIGETACTIVE,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -28,7 +26,6 @@ fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
     }
 }
 
-const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 const MDI_ID: i32 = 1002;
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -161,7 +158,7 @@ fn select_room_recreates_room_mdi_child_after_external_destroy()
     let app = MirxApp::launch_with_options(&exe_path, &args, launch_options())?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let frame = wait_for_frame(Duration::from_secs(5))?;
+    let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = wait_for_mdi_client(frame, Duration::from_secs(5))?;
     let baseline_count = wait_for_nonzero_child_count(frame, Duration::from_secs(5))?;
     let beta_child = unsafe { SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND };
@@ -206,7 +203,7 @@ fn select_thread_recreates_thread_mdi_child_after_external_destroy()
     app.select_view(thread_view)?;
     app.wait_idle(Duration::from_secs(5))?;
 
-    let frame = wait_for_frame(Duration::from_secs(5))?;
+    let frame = app.automation_frame_hwnd() as HWND;
     let mdi_client = wait_for_mdi_client(frame, Duration::from_secs(5))?;
     let baseline_count = wait_for_nonzero_child_count(frame, Duration::from_secs(5))?;
     let thread_child = unsafe { SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND };
@@ -231,18 +228,6 @@ fn select_thread_recreates_thread_mdi_child_after_external_destroy()
     wait_for_child_count(frame, baseline_count, Duration::from_secs(5))?;
 
     Ok(())
-}
-
-fn wait_for_frame(timeout: Duration) -> Result<HWND, String> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Some(frame) = automation_frame_window() {
-            return Ok(frame);
-        }
-        thread::sleep(POLL_INTERVAL);
-    }
-
-    Err("timed out waiting for automation-enabled mirx frame window".to_owned())
 }
 
 fn wait_for_nonzero_child_count(frame: HWND, timeout: Duration) -> Result<usize, String> {
@@ -293,48 +278,6 @@ fn wait_for_child_count(
     ))
 }
 
-fn frame_windows() -> Vec<HWND> {
-    unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> i32 {
-        let windows = unsafe { &mut *(lparam as *mut Vec<HWND>) };
-        if class_name(hwnd).as_deref() == Some(FRAME_CLASS_NAME) {
-            windows.push(hwnd);
-        }
-        1
-    }
-
-    let mut windows = Vec::new();
-    unsafe {
-        EnumWindows(Some(callback), (&mut windows as *mut Vec<HWND>) as LPARAM);
-    }
-    windows
-}
-
-fn automation_frame_window() -> Option<HWND> {
-    frame_windows().into_iter().find(|&hwnd| {
-        let mut pid = 0;
-        unsafe {
-            GetWindowThreadProcessId(hwnd, &mut pid);
-        }
-        if pid == 0 {
-            return false;
-        }
-
-        let mapping_name = wide_null(&format!(
-            "Local\\mirx-ui-automation-response-{pid}-{:x}",
-            hwnd as usize
-        ));
-        let mapping = unsafe { OpenFileMappingW(FILE_MAP_READ, 0, mapping_name.as_ptr()) };
-        if mapping.is_null() {
-            return false;
-        }
-
-        unsafe {
-            CloseHandle(mapping);
-        }
-        true
-    })
-}
-
 fn mdi_client(frame: HWND) -> Option<HWND> {
     let hwnd = unsafe { GetDlgItem(frame, MDI_ID) };
     (!hwnd.is_null()).then_some(hwnd)
@@ -364,11 +307,4 @@ fn class_name(hwnd: HWND) -> Option<String> {
         return None;
     }
     Some(String::from_utf16_lossy(&buffer[..len as usize]))
-}
-
-fn wide_null(text: &str) -> Vec<u16> {
-    std::ffi::OsStr::new(text)
-        .encode_wide()
-        .chain([0])
-        .collect()
 }
