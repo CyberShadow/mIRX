@@ -4962,6 +4962,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
     let selection_brush = CreateSolidBrush(TIMELINE_SELECTION_COLOR);
 
     let state = timeline_state_ref(hwnd);
+    let selected_event_id = selected_timeline_event_id(state_ref(frame_window_for(hwnd)));
     let visible_rows = timeline_visible_rows(hwnd);
     for (row, line) in state
         .paint_lines
@@ -4972,8 +4973,10 @@ unsafe fn paint_timeline(hwnd: HWND) {
     {
         let line_y = state.vertical_padding + row as i32 * state.line_height;
         if line.source_row_index.is_some_and(|index| {
-            state.source_rows[index].event_id.as_deref()
-                == selected_timeline_event_id(state_ref(frame_window_for(hwnd)))
+            timeline_row_is_selected(
+                state.source_rows[index].event_id.as_deref(),
+                selected_event_id,
+            )
         }) {
             let rect = RECT {
                 left: 0,
@@ -5955,6 +5958,13 @@ fn selected_timeline_media_attachment(state: &WindowState) -> Option<SelectedMed
         filename,
         source,
     })
+}
+
+/// A row is selected only when there is a selection and the row is that
+/// event. Rows without an event id (opening lines, typing, backfill status)
+/// are never selected, even when nothing is selected.
+fn timeline_row_is_selected(row_event_id: Option<&str>, selected_event_id: Option<&str>) -> bool {
+    selected_event_id.is_some_and(|selected| row_event_id == Some(selected))
 }
 
 fn selected_timeline_event_id(state: &WindowState) -> Option<&str> {
@@ -15233,6 +15243,15 @@ mod tests {
             display_name: None,
             display_name_ambiguous: false,
         }
+    }
+
+    #[test]
+    fn timeline_row_is_selected_requires_a_selection() {
+        assert!(!timeline_row_is_selected(None, None));
+        assert!(!timeline_row_is_selected(Some("$a"), None));
+        assert!(!timeline_row_is_selected(None, Some("$a")));
+        assert!(!timeline_row_is_selected(Some("$b"), Some("$a")));
+        assert!(timeline_row_is_selected(Some("$a"), Some("$a")));
     }
 
     static LOCAL_APP_DATA_LOCK: StdMutex<()> = StdMutex::new(());
