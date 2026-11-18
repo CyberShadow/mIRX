@@ -237,9 +237,9 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
         --expect-room-view '!ops:example::Topic: incident review'
-        --expect-room-view "!ops:example::[22:13] * @alice:example changes topic to 'incident review'"
-        --expect-room-view '!ops:example::[22:14] * Joins: carol (@carol:example)'
-        --expect-room-view '!ops:example::[22:15] <@alice:example> ops topic: incident review'
+        --expect-room-view "!ops:example::[22:13] * Alice changes topic to 'incident review'"
+        --expect-room-view '!ops:example::[22:14] * Joins: Carol (@carol:example)'
+        --expect-room-view '!ops:example::[22:15] <Alice> ops topic: incident review'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !random:example'
@@ -1271,14 +1271,14 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!mixed:example::Room: Mixed [e2ee] (!mixed:example)'
         --expect-room-view '!mixed:example::Topic: mixed room topic'
-        --expect-room-view '!mixed:example::[22:13] <@alice:example> synced hello'
-        --expect-room-view "!mixed:example::[22:14] * @alice:example changes topic to 'mixed room topic'"
-        --expect-room-view '!mixed:example::[22:15] * Joins: bob (@bob:example)'
+        --expect-room-view '!mixed:example::[22:13] <Alice> synced hello'
+        --expect-room-view "!mixed:example::[22:14] * Alice changes topic to 'mixed room topic'"
+        --expect-room-view '!mixed:example::[22:15] * Joins: Bob (@bob:example)'
         --expect-room-view '!mixed:example::[22:16] * Parts: @carol:example'
-        --expect-room-view '!mixed:example::[22:17] -@system:example- server maintenance'
-        --expect-room-view '!mixed:example::[22:18] * @alice:example waves hello'
-        --expect-room-view '!mixed:example::[22:17] * @alice:example pending local echo (sending)'
-        --expect-room-view '!mixed:example::[22:18] * @alice:example failed local echo (failed)'
+        --expect-room-view '!mixed:example::[22:17] -Server- server maintenance'
+        --expect-room-view '!mixed:example::[22:18] * Alice waves hello'
+        --expect-room-view '!mixed:example::[22:17] * Alice pending local echo (sending)'
+        --expect-room-view '!mixed:example::[22:18] * Alice failed local echo (failed)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1329,15 +1329,15 @@ configure_case_expectations() {
         --expect-room-view '!dense:example::Room: Dense (!dense:example)'
         --expect-room-view '!dense:example::Topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view '!dense:example::[22:13] <@dense.sender.with.a.very.long.mxid:example.org> dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::[22:14] -@system:example- dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::[22:15] * @alice:example dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view "!dense:example::[22:16] * @alice:example changes topic to 'dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'"
+        --expect-room-view '!dense:example::[22:14] -Server- dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:15] * Alice dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view "!dense:example::[22:16] * Alice changes topic to 'dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'"
         --expect-room-view '!dense:example::[22:17] * Joins: Dense Member Alpha Beta Gamma Delta (@dense-member:example)'
         --expect-room-view '!dense:example::[22:17] * Parts: @dense-leaver:example'
-        --expect-room-view '!dense:example::[22:18] * @alice:example sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
-        --expect-room-view '!dense:example::[22:18] * @alice:example sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
-        --expect-room-view '!dense:example::[22:19] <@alice:example> dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
-        --expect-room-view '!dense:example::[22:20] <@alice:example> dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
+        --expect-room-view '!dense:example::[22:18] * Alice sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
+        --expect-room-view '!dense:example::[22:18] * Alice sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
+        --expect-room-view '!dense:example::[22:19] <Alice> dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
+        --expect-room-view '!dense:example::[22:20] <Alice> dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
         --expect-room-view '!dense:example::[22:21] * @alice:example sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
         --expect-room-view '!dense:example::[22:22] <@bob:example> dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view '!dense:example::[22:23] <@carol:example> dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
@@ -1507,7 +1507,9 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!members:example::Room: Members (!members:example)'
-        --expect-room-view '!members:example::member list context line'
+        --expect-room-view '!members:example::[22:13] <Alice> member list context line'
+        --expect-room-view '!members:example::[22:14] <Casey> timeline stays visible beside the list'
+        --expect-room-view '!members:example::[22:15] <Sam (@sam-one:example)> shared names show the user ID'
       )
       room_member_expect_args=(
         --expect-room-member '!members:example::Alice'
@@ -1536,7 +1538,9 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!members:example::Room: Members (!members:example)'
-        --expect-room-view '!members:example::member list context line'
+        --expect-room-view '!members:example::[22:13] <Alice> member list context line'
+        --expect-room-view '!members:example::[22:14] <Casey> timeline stays visible beside the list'
+        --expect-room-view '!members:example::[22:15] <Sam (@sam-one:example)> shared names show the user ID'
       )
       room_member_expect_args=(
         --expect-room-member '!members:example::Alice'
@@ -1778,6 +1782,42 @@ configure_case_expectations() {
         --expect-no-navigation-activity 'Active Focus'
       )
       expect_switchbar_active='room:!active:example'
+      ;;
+    membership-changes)
+      expect_selected='!membership:example'
+      expect_active_view='room:!membership:example'
+      room_expect_args=(
+        --expect-room '!membership:example'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!membership:example::kicked_and_banned'
+        --expect-room-activity '!membership:example::display_name_changed'
+        --expect-room-activity '!membership:example::flooding'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!membership:example::Room: Membership (!membership:example)'
+        --expect-room-view '!membership:example::[22:13] * Joins: Carol (@carol:example)'
+        --expect-room-view '!membership:example::[22:14] * Parts: @dave:example'
+        --expect-room-view '!membership:example::[22:15] * Eve was kicked by Op (flooding)'
+        --expect-room-view '!membership:example::[22:16] * Frank was banned by Op (spam)'
+        --expect-room-view '!membership:example::[22:17] * Grace was banned by Op'
+        --expect-room-view '!membership:example::[22:18] * Op removed ban on Frank'
+        --expect-room-view '!membership:example::[22:19] * Op invites Heidi'
+        --expect-room-view '!membership:example::[22:20] * Joins: Heidi (@heidi:example)'
+        --expect-room-view '!membership:example::[22:21] * Ivan declined the invitation'
+        --expect-room-view '!membership:example::[22:22] * Op revoked the invitation for Judy'
+        --expect-room-view '!membership:example::[22:23] * Mallory knocks (let me in)'
+        --expect-room-view '!membership:example::[22:24] * Op accepted knock from Mallory'
+        --expect-room-view '!membership:example::[22:25] * Niaj withdrew knock'
+        --expect-room-view '!membership:example::[22:26] * Op denied knock from Olivia'
+        --expect-room-view '!membership:example::[22:27] * Carol is now known as Caz'
+        --expect-room-view '!membership:example::[22:28] * Sam (@sam:example) changed avatar'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!membership:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!membership:example'
       ;;
     typing-indicator)
       expect_selected='!typing:example'

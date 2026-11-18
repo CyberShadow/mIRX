@@ -43,7 +43,7 @@
         "type": "message",
         "event_id": "$dense-notice-1",
         "transaction_id": null,
-        "sender": { "user_id": "@system:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@system:example", "display_name": "Server", "display_name_ambiguous": false },
         "presentation": "notice",
         "body": "dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "send_state": {
@@ -62,7 +62,7 @@
         "type": "message",
         "event_id": "$dense-emote-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "send_state": {
@@ -80,7 +80,7 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$dense-topic-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "content": {
           "type": "topic",
           "topic": "dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
@@ -97,7 +97,7 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$dense-member-1",
-        "sender": { "user_id": "@dense-member:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@dense-member:example", "display_name": "Dense Member Alpha Beta Gamma Delta", "display_name_ambiguous": false },
         "content": {
           "type": "member",
           "change": { "type": "joined" },
@@ -135,7 +135,7 @@
       "kind": {
         "type": "audio",
         "event_id": "$dense-audio-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "body": "voice-note.ogg",
         "filename": "voice-note.ogg",
         "source": {
@@ -159,7 +159,7 @@
       "kind": {
         "type": "unsupported_message",
         "event_id": "$dense-unsupported-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "msgtype": "com.example.custom",
         "body": "dense custom payload alpha beta gamma delta epsilon zeta"
       },
@@ -175,7 +175,7 @@
         "type": "message",
         "event_id": null,
         "transaction_id": "dense-pending-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "send_state": {
@@ -194,7 +194,7 @@
         "type": "message",
         "event_id": null,
         "transaction_id": "dense-failed-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "send_state": {
@@ -226,7 +226,7 @@
       "kind": {
         "type": "image",
         "event_id": "$dense-image-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "body": "dense-diagram-alpha-beta-gamma-delta.png",
         "filename": "dense-diagram-alpha-beta-gamma-delta.png",
         "source": {
@@ -253,7 +253,7 @@
         "type": "message",
         "event_id": "$dense-thread-root-1",
         "transaction_id": null,
-        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "send_state": {
@@ -278,7 +278,7 @@
         "type": "message",
         "event_id": "$dense-thread-reply-1",
         "transaction_id": null,
-        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@carol:example", "display_name": "Carol", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "send_state": {

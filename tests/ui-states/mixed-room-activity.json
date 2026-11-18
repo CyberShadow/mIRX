@@ -24,7 +24,7 @@
         "type": "message",
         "event_id": "$mixed-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "synced hello",
         "send_state": {
@@ -42,7 +42,7 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$mixed-topic-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "content": {
           "type": "topic",
           "topic": "mixed room topic"
@@ -59,11 +59,11 @@
       "kind": {
         "type": "state_notice",
         "event_id": "$mixed-join-1",
-        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
         "content": {
           "type": "member",
           "change": { "type": "joined" },
-          "target": { "user_id": "@bob:example", "display_name": "bob", "display_name_ambiguous": false },
+          "target": { "user_id": "@bob:example", "display_name": "Bob", "display_name_ambiguous": false },
           "reason": null
         }
       },
@@ -98,7 +98,7 @@
         "type": "message",
         "event_id": "$mixed-notice-1",
         "transaction_id": null,
-        "sender": { "user_id": "@system:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@system:example", "display_name": "Server", "display_name_ambiguous": false },
         "presentation": "notice",
         "body": "server maintenance",
         "send_state": {
@@ -117,7 +117,7 @@
         "type": "message",
         "event_id": "$mixed-emote-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "waves hello",
         "send_state": {
@@ -136,7 +136,7 @@
         "type": "message",
         "event_id": null,
         "transaction_id": "txn-pending-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "pending local echo",
         "send_state": {
@@ -155,7 +155,7 @@
         "type": "message",
         "event_id": null,
         "transaction_id": "txn-failed-1",
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "emote",
         "body": "failed local echo",
         "send_state": {

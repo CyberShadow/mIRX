@@ -288,7 +288,21 @@ struct MockBackfillHomeserver {
     base_url: String,
 }
 
+/// How the mock homeserver answers `/messages` history requests.
+enum MockMessages {
+    /// Never answer, so the request stays in flight for the whole test.
+    Hang,
+    /// Answer every request with this response body.
+    Respond(serde_json::Value),
+}
+
 fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
+    spawn_mock_homeserver(MockMessages::Hang)
+}
+
+fn spawn_mock_homeserver(
+    messages: MockMessages,
+) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     std::thread::spawn(move || {
@@ -492,7 +506,10 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
             if path.contains("/rooms/%21beta%3Aexample/messages")
                 || path.contains("/rooms/!beta:example/messages")
             {
-                std::thread::sleep(Duration::from_secs(60));
+                match &messages {
+                    MockMessages::Hang => std::thread::sleep(Duration::from_secs(60)),
+                    MockMessages::Respond(body) => respond_json(&mut stream, 200, body),
+                }
                 continue;
             }
 
@@ -3523,7 +3540,7 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
                 1_700_000_060_000,
                 "@carol:example",
                 RoomMemberChange::Joined,
-                Some("carol"),
+                Some("Carol"),
             ),
             text_entry_with_event_id(
                 "!ops:example",
@@ -3556,15 +3573,15 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     assert!(view_contains(ops_view, "Topic: incident review"));
     assert!(view_contains(
         ops_view,
-        "[22:15] <@alice:example> ops topic: incident review"
+        "[22:15] <Alice> ops topic: incident review"
     ));
     assert!(view_contains(
         ops_view,
-        "[22:13] * @alice:example changes topic to 'incident review'"
+        "[22:13] * Alice changes topic to 'incident review'"
     ));
     assert!(view_contains(
         ops_view,
-        "[22:14] * Joins: carol (@carol:example)"
+        "[22:14] * Joins: Carol (@carol:example)"
     ));
 
     Ok(())
@@ -3598,7 +3615,62 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
             "Zoe",
         ]
     );
-    assert!(view_contains(members_view, "member list context line"));
+    assert!(view_contains(
+        members_view,
+        "[22:13] <Alice> member list context line"
+    ));
+    assert!(view_contains(
+        members_view,
+        "[22:15] <Sam (@sam-one:example)> shared names show the user ID"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_renders_every_membership_change_in_mirc_format()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("membership-changes.json");
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            fixture_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!membership:example")?;
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity("!membership:example"));
+    let expected = [
+        "[22:13] * Joins: Carol (@carol:example)",
+        "[22:14] * Parts: @dave:example",
+        "[22:15] * Eve was kicked by Op (flooding)",
+        "[22:16] * Frank was banned by Op (spam)",
+        "[22:17] * Grace was banned by Op",
+        "[22:18] * Op removed ban on Frank",
+        "[22:19] * Op invites Heidi",
+        "[22:20] * Joins: Heidi (@heidi:example)",
+        "[22:21] * Ivan declined the invitation",
+        "[22:22] * Op revoked the invitation for Judy",
+        "[22:23] * Mallory knocks (let me in)",
+        "[22:24] * Op accepted knock from Mallory",
+        "[22:25] * Niaj withdrew knock",
+        "[22:26] * Op denied knock from Olivia",
+        "[22:27] * Carol is now known as Caz",
+        "[22:28] * Sam (@sam:example) changed avatar",
+    ];
+    assert_eq!(
+        view.lines
+            .iter()
+            .filter(|line| line.starts_with("[22:"))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        expected
+    );
 
     Ok(())
 }
@@ -3933,7 +4005,14 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
             "Zoe",
         ]
     );
-    assert!(view_contains(members_view, "member list context line"));
+    assert!(view_contains(
+        members_view,
+        "[22:13] <Alice> member list context line"
+    ));
+    assert!(view_contains(
+        members_view,
+        "[22:15] <Sam (@sam-one:example)> shared names show the user ID"
+    ));
 
     Ok(())
 }
@@ -4657,6 +4736,55 @@ fn render_state_thread_find_backfill_matches_older_thread_reply()
     );
     assert!(view_contains(thread_view, "older thread needle"));
     assert!(!view_contains(thread_view, "older room-only needle"));
+    Ok(())
+}
+
+#[test]
+fn automation_driver_backfilled_messages_show_the_senders_display_name()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    // The sync response makes @alice:example a member named "Alice"; the
+    // backfilled message only carries her user ID.
+    let server = spawn_mock_homeserver(MockMessages::Respond(serde_json::json!({
+        "start": "s-current",
+        "chunk": [{
+            "content": {
+                "msgtype": "m.text",
+                "body": "hello from history"
+            },
+            "event_id": "$history-alice",
+            "origin_server_ts": 1_699_999_000_000u64,
+            "sender": "@alice:example",
+            "type": "m.room.message"
+        }]
+    })))?;
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_for_min_rooms(1, Duration::from_secs(30))?;
+    app.select_room("!beta:example")?;
+    app.trigger_active_timeline_history_backfill()?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        "hello from history",
+        Duration::from_secs(30),
+    )?;
+
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(
+        view_lines_containing(view, "hello from history"),
+        vec!["[21:56] <Alice> hello from history"]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
@@ -6525,7 +6653,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 1_700_000_120_000,
                 "@bob:example",
                 RoomMemberChange::Joined,
-                Some("bob"),
+                Some("Bob"),
             ),
             member_entry_with_event_id(
                 "!mixed:example",
@@ -6583,29 +6711,23 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
 
     let ui_state = attached.dump_ui_state()?;
     let mixed_view = find_view(&ui_state, &room_identity("!mixed:example"));
+    assert!(view_contains(mixed_view, "[22:13] <Alice> synced hello"));
     assert!(view_contains(
         mixed_view,
-        "[22:13] <@alice:example> synced hello"
+        "[22:14] * Alice changes topic to 'mixed room topic'"
     ));
     assert!(view_contains(
         mixed_view,
-        "[22:14] * @alice:example changes topic to 'mixed room topic'"
+        "[22:17] -Server- server maintenance"
+    ));
+    assert!(view_contains(mixed_view, "[22:18] * Alice waves hello"));
+    assert!(view_contains(
+        mixed_view,
+        "[22:17] * Alice pending local echo (sending)"
     ));
     assert!(view_contains(
         mixed_view,
-        "[22:17] -@system:example- server maintenance"
-    ));
-    assert!(view_contains(
-        mixed_view,
-        "[22:18] * @alice:example waves hello"
-    ));
-    assert!(view_contains(
-        mixed_view,
-        "[22:17] * @alice:example pending local echo (sending)"
-    ));
-    assert!(view_contains(
-        mixed_view,
-        "[22:18] * @alice:example failed local echo (failed)"
+        "[22:18] * Alice failed local echo (failed)"
     ));
 
     let _ = fs::remove_file(&state_path);

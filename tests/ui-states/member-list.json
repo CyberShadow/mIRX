@@ -24,7 +24,7 @@
         "type": "message",
         "event_id": "$members-context-1",
         "transaction_id": null,
-        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@alice:example", "display_name": "Alice", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "member list context line",
         "send_state": {
@@ -43,9 +43,28 @@
         "type": "message",
         "event_id": "$members-context-2",
         "transaction_id": null,
-        "sender": { "user_id": "@casey:example", "display_name": null, "display_name_ambiguous": false },
+        "sender": { "user_id": "@casey:example", "display_name": "Casey", "display_name_ambiguous": false },
         "presentation": "text",
         "body": "timeline stays visible beside the list",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!members:example",
+      "activity_id": "event:$members-context-3",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "message",
+        "event_id": "$members-context-3",
+        "transaction_id": null,
+        "sender": { "user_id": "@sam-one:example", "display_name": "Sam", "display_name_ambiguous": true },
+        "presentation": "text",
+        "body": "shared names show the user ID",
         "send_state": {
           "state": "sent"
         }

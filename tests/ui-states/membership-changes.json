@@ -1,0 +1,485 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!membership:example",
+        "display_name": "Membership",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-1",
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "joined"
+          },
+          "target": {
+            "user_id": "@carol:example",
+            "display_name": "Carol",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-2",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-2",
+        "sender": {
+          "user_id": "@dave:example",
+          "display_name": null,
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "left"
+          },
+          "target": {
+            "user_id": "@dave:example",
+            "display_name": null,
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-3",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-3",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "kicked"
+          },
+          "target": {
+            "user_id": "@eve:example",
+            "display_name": "Eve",
+            "display_name_ambiguous": false
+          },
+          "reason": "flooding"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-4",
+      "timestamp_ms": 1700000180000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-4",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "banned"
+          },
+          "target": {
+            "user_id": "@frank:example",
+            "display_name": "Frank",
+            "display_name_ambiguous": false
+          },
+          "reason": "spam"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-5",
+      "timestamp_ms": 1700000240000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-5",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "kicked_and_banned"
+          },
+          "target": {
+            "user_id": "@grace:example",
+            "display_name": "Grace",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-6",
+      "timestamp_ms": 1700000300000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-6",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "unbanned"
+          },
+          "target": {
+            "user_id": "@frank:example",
+            "display_name": "Frank",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-7",
+      "timestamp_ms": 1700000360000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-7",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "invited"
+          },
+          "target": {
+            "user_id": "@heidi:example",
+            "display_name": "Heidi",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-8",
+      "timestamp_ms": 1700000420000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-8",
+        "sender": {
+          "user_id": "@heidi:example",
+          "display_name": "Heidi",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "invitation_accepted"
+          },
+          "target": {
+            "user_id": "@heidi:example",
+            "display_name": "Heidi",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-9",
+      "timestamp_ms": 1700000480000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-9",
+        "sender": {
+          "user_id": "@ivan:example",
+          "display_name": "Ivan",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "invitation_rejected"
+          },
+          "target": {
+            "user_id": "@ivan:example",
+            "display_name": "Ivan",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-10",
+      "timestamp_ms": 1700000540000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-10",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "invitation_revoked"
+          },
+          "target": {
+            "user_id": "@judy:example",
+            "display_name": "Judy",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-11",
+      "timestamp_ms": 1700000600000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-11",
+        "sender": {
+          "user_id": "@mallory:example",
+          "display_name": "Mallory",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "knocked"
+          },
+          "target": {
+            "user_id": "@mallory:example",
+            "display_name": "Mallory",
+            "display_name_ambiguous": false
+          },
+          "reason": "let me in"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-12",
+      "timestamp_ms": 1700000660000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-12",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "knock_accepted"
+          },
+          "target": {
+            "user_id": "@mallory:example",
+            "display_name": "Mallory",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-13",
+      "timestamp_ms": 1700000720000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-13",
+        "sender": {
+          "user_id": "@niaj:example",
+          "display_name": "Niaj",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "knock_retracted"
+          },
+          "target": {
+            "user_id": "@niaj:example",
+            "display_name": "Niaj",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-14",
+      "timestamp_ms": 1700000780000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-14",
+        "sender": {
+          "user_id": "@op:example",
+          "display_name": "Op",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "knock_denied"
+          },
+          "target": {
+            "user_id": "@olivia:example",
+            "display_name": "Olivia",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-15",
+      "timestamp_ms": 1700000840000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-15",
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Caz",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "display_name_changed",
+            "old": "Carol",
+            "new": "Caz"
+          },
+          "target": {
+            "user_id": "@carol:example",
+            "display_name": "Caz",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!membership:example",
+      "activity_id": "state:$membership-16",
+      "timestamp_ms": 1700000900000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$membership-16",
+        "sender": {
+          "user_id": "@sam:example",
+          "display_name": "Sam",
+          "display_name_ambiguous": true
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "avatar_changed"
+          },
+          "target": {
+            "user_id": "@sam:example",
+            "display_name": "Sam",
+            "display_name_ambiguous": true
+          },
+          "reason": null
+        }
+      },
+      "relation": null
+    }
+  }
+]
