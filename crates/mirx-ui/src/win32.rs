@@ -41,10 +41,10 @@ use windows_sys::Win32::Foundation::{
     POINT, RECT, SIZE, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_WINDOW, ClientToScreen, CreateSolidBrush, DT_END_ELLIPSIS, DT_NOPREFIX,
-    DT_SINGLELINE, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GetDC,
-    GetTextExtentPoint32W, HBRUSH, InvalidateRect, PAINTSTRUCT, ReleaseDC, ScreenToClient,
-    SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+    BeginPaint, COLOR_WINDOW, ClientToScreen, CreateSolidBrush, DT_NOPREFIX, DT_SINGLELINE,
+    DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GetDC, GetTextExtentPoint32W, HBRUSH,
+    InvalidateRect, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor,
+    TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -129,8 +129,8 @@ use crate::{
 mod timeline_text;
 
 use timeline_text::{
-    LogLine, action_line, event_line, member_change_text, message_line, nick_label,
-    topic_change_text,
+    TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line, event_line, member_change_text, message_line,
+    nick_label, topic_change_text,
 };
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
@@ -219,9 +219,6 @@ const ROOM_TIMELINE_MIN_WIDTH: i32 = 240;
 const TIMELINE_ROW_HEIGHT: i32 = 20;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
-const TIMELINE_COLUMN_GAP: i32 = 8;
-const TIMELINE_TIMESTAMP_COLUMN_WIDTH: i32 = 56;
-const TIMELINE_SENDER_COLUMN_WIDTH: i32 = 184;
 const TIMELINE_VERTICAL_PADDING: i32 = 6;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH: i32 = 160;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT: i32 = 120;
@@ -363,21 +360,19 @@ struct TimelineRow {
     identity: TimelineRowIdentity,
     event_id: Option<String>,
     kind: TimelineRowKind,
+    /// The row's text, painted exactly as find and selection see it.
     logical_text: String,
-    visual: TimelineRowVisual,
+    layout: TimelineRowLayout,
     image_state: Option<TimelineImageState>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TimelineRowVisual {
-    FullWidth {
-        text: String,
-    },
-    Log {
-        timestamp: String,
-        sender_prefix: String,
-        body: String,
-    },
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimelineRowLayout {
+    /// Context rows (headers, topic, typing): one painted line per text line.
+    FullWidth,
+    /// mIRC log lines: wrapped to the view, continuation lines indented past
+    /// the timestamp.
+    Log,
 }
 
 impl TimelineRow {
@@ -386,29 +381,19 @@ impl TimelineRow {
             identity: TimelineRowIdentity::default_for_row(&kind, &text),
             event_id: None,
             kind,
-            logical_text: text.clone(),
-            visual: TimelineRowVisual::FullWidth { text },
+            logical_text: text,
+            layout: TimelineRowLayout::FullWidth,
             image_state: None,
         }
     }
 
-    fn log(kind: TimelineRowKind, line: LogLine) -> Self {
-        let logical_text = line.text();
-        let LogLine {
-            timestamp,
-            prefix: sender_prefix,
-            body,
-        } = line;
+    fn log(kind: TimelineRowKind, text: String) -> Self {
         Self {
-            identity: TimelineRowIdentity::default_for_row(&kind, &logical_text),
+            identity: TimelineRowIdentity::default_for_row(&kind, &text),
             event_id: None,
             kind,
-            logical_text,
-            visual: TimelineRowVisual::Log {
-                timestamp,
-                sender_prefix,
-                body,
-            },
+            logical_text: text,
+            layout: TimelineRowLayout::Log,
             image_state: None,
         }
     }
@@ -475,11 +460,10 @@ struct TimelinePaintLine {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TimelinePaintLineVisual {
-    FullWidth(String),
-    Log {
-        timestamp: Option<String>,
-        sender_prefix: Option<String>,
-        body: String,
+    /// Text drawn `indent` pixels right of the timeline's left padding.
+    Text {
+        text: String,
+        indent: i32,
     },
     ImageSlot,
 }
@@ -3903,30 +3887,10 @@ unsafe fn timeline_state_mut(hwnd: HWND) -> &'static mut TimelineState {
     &mut *state_ptr
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TimelineColumnLayout {
-    timestamp_left: i32,
-    sender_left: i32,
-    body_left: i32,
-    body_right: i32,
-}
-
-fn timeline_column_layout(client_width: i32) -> TimelineColumnLayout {
-    let timestamp_left = TIMELINE_LEFT_PADDING;
-    let sender_left = timestamp_left + TIMELINE_TIMESTAMP_COLUMN_WIDTH + TIMELINE_COLUMN_GAP;
-    let body_left = sender_left + TIMELINE_SENDER_COLUMN_WIDTH + TIMELINE_COLUMN_GAP;
-    let body_right = (client_width - TIMELINE_RIGHT_PADDING).max(body_left + 1);
-    TimelineColumnLayout {
-        timestamp_left,
-        sender_left,
-        body_left,
-        body_right,
-    }
-}
-
-fn timeline_body_column_width(client_width: i32) -> i32 {
-    let layout = timeline_column_layout(client_width);
-    layout.body_right - layout.body_left
+/// The width available to timeline text, never less than one pixel so
+/// wrapping always makes progress in a collapsed view.
+fn timeline_text_width(client_width: i32) -> i32 {
+    (client_width - TIMELINE_LEFT_PADDING - TIMELINE_RIGHT_PADDING).max(1)
 }
 
 fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintLine> {
@@ -3935,7 +3899,7 @@ fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintLine> {
         .cloned()
         .map(|text| TimelinePaintLine {
             kind: TimelineRowKind::Plain,
-            visual: TimelinePaintLineVisual::FullWidth(text),
+            visual: TimelinePaintLineVisual::Text { text, indent: 0 },
             image_state: None,
             image_slot_index: None,
             source_row_index: None,
@@ -3948,11 +3912,22 @@ fn trim_timeline_visual_segment(text: &str) -> String {
         .to_owned()
 }
 
-fn wrap_timeline_visual_line<Measure>(line: &str, max_width: i32, measure: &Measure) -> Vec<String>
+/// Wraps one text line: the first segment fits `first_width`, later ones
+/// `continuation_width`. Breaks prefer whitespace, which is dropped at the
+/// break; unbroken tokens are split at the last fitting character.
+fn wrap_timeline_visual_line<Measure>(
+    line: &str,
+    first_width: i32,
+    continuation_width: i32,
+    measure: &Measure,
+) -> Vec<String>
 where
     Measure: Fn(&str) -> i32,
 {
-    assert!(max_width > 0, "timeline body column width must be positive");
+    assert!(
+        first_width > 0 && continuation_width > 0,
+        "timeline wrap widths must be positive"
+    );
 
     if line.is_empty() {
         return vec![String::new()];
@@ -3961,6 +3936,11 @@ where
     let mut wrapped = Vec::new();
     let mut remaining = line;
     while !remaining.is_empty() {
+        let max_width = if wrapped.is_empty() {
+            first_width
+        } else {
+            continuation_width
+        };
         if measure(remaining) <= max_width {
             wrapped.push(trim_timeline_visual_segment(remaining));
             break;
@@ -3974,11 +3954,13 @@ where
             if first_char_end.is_none() {
                 first_char_end = Some(next);
             }
+            // Whitespace is dropped at a break, so a space just past the
+            // width still ends a line whose text fits.
+            if ch.is_whitespace() && index > 0 {
+                last_whitespace_break = Some(index);
+            }
             if measure(&remaining[..next]) <= max_width {
                 last_fit_end = next;
-                if ch.is_whitespace() && index > 0 {
-                    last_whitespace_break = Some(index);
-                }
                 continue;
             }
             break;
@@ -3989,20 +3971,38 @@ where
             .or(first_char_end)
             .expect("a non-empty timeline body line must have at least one char boundary");
         wrapped.push(trim_timeline_visual_segment(&remaining[..break_index]));
-        remaining = &remaining[break_index..];
+        remaining = remaining[break_index..].trim_start();
     }
 
     wrapped
 }
 
-fn wrap_timeline_visual_body<Measure>(body: &str, max_width: i32, measure: &Measure) -> Vec<String>
+/// Paint lines for a log row: the first line starts at the left padding and
+/// every continuation, whether wrapped or from a newline in the text, is
+/// indented past the timestamp like mIRC's hanging indent.
+fn timeline_log_paint_texts<Measure>(
+    text: &str,
+    width: i32,
+    measure: &Measure,
+) -> Vec<(String, i32)>
 where
     Measure: Fn(&str) -> i32,
 {
-    split_rendered_lines(body)
-        .into_iter()
-        .flat_map(|line| wrap_timeline_visual_line(&line, max_width, measure))
-        .collect()
+    let indent = measure(TIMELINE_CONTINUATION_INDENT_SAMPLE).min(width - 1);
+    let continuation_width = width - indent;
+    let mut lines = Vec::new();
+    for line in split_rendered_lines(text) {
+        let first_width = if lines.is_empty() {
+            width
+        } else {
+            continuation_width
+        };
+        for segment in wrap_timeline_visual_line(&line, first_width, continuation_width, measure) {
+            let segment_indent = if lines.is_empty() { 0 } else { indent };
+            lines.push((segment, segment_indent));
+        }
+    }
+    lines
 }
 
 fn timeline_full_width_paint_lines(kind: &TimelineRowKind, text: &str) -> Vec<TimelinePaintLine> {
@@ -4010,7 +4010,10 @@ fn timeline_full_width_paint_lines(kind: &TimelineRowKind, text: &str) -> Vec<Ti
         .into_iter()
         .map(|line| TimelinePaintLine {
             kind: kind.clone(),
-            visual: TimelinePaintLineVisual::FullWidth(line),
+            visual: TimelinePaintLineVisual::Text {
+                text: line,
+                indent: 0,
+            },
             image_state: None,
             image_slot_index: None,
             source_row_index: None,
@@ -4026,36 +4029,27 @@ fn timeline_row_paint_lines_with_measure<Measure>(
 where
     Measure: Fn(&str) -> i32,
 {
-    let body_width = timeline_body_column_width(client_width);
+    let width = timeline_text_width(client_width);
     let mut paint_lines = Vec::new();
     for (source_row_index, row) in rows.iter().enumerate() {
-        match &row.visual {
-            TimelineRowVisual::FullWidth { text } => {
-                let mut row_paint_lines = timeline_full_width_paint_lines(&row.kind, text);
+        match row.layout {
+            TimelineRowLayout::FullWidth => {
+                let mut row_paint_lines =
+                    timeline_full_width_paint_lines(&row.kind, &row.logical_text);
                 for line in &mut row_paint_lines {
                     line.source_row_index = Some(source_row_index);
                 }
                 paint_lines.extend(row_paint_lines);
             }
-            TimelineRowVisual::Log {
-                timestamp,
-                sender_prefix,
-                body,
-            } => {
-                let mut first_visual_line = true;
-                for wrapped_body_line in wrap_timeline_visual_body(body, body_width, measure) {
+            TimelineRowLayout::Log => {
+                for (text, indent) in timeline_log_paint_texts(&row.logical_text, width, measure) {
                     paint_lines.push(TimelinePaintLine {
                         kind: row.kind.clone(),
-                        visual: TimelinePaintLineVisual::Log {
-                            timestamp: first_visual_line.then(|| timestamp.clone()),
-                            sender_prefix: first_visual_line.then(|| sender_prefix.clone()),
-                            body: wrapped_body_line,
-                        },
+                        visual: TimelinePaintLineVisual::Text { text, indent },
                         image_state: None,
                         image_slot_index: None,
                         source_row_index: Some(source_row_index),
                     });
-                    first_visual_line = false;
                 }
             }
         }
@@ -4797,7 +4791,6 @@ unsafe fn paint_timeline(hwnd: HWND) {
     SetBkMode(hdc, TRANSPARENT as i32);
     let mut client_rect = RECT::default();
     GetClientRect(hwnd, &mut client_rect);
-    let layout = timeline_column_layout(client_rect.right - client_rect.left);
     let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as *mut c_void;
     let previous = if font.is_null() {
         null_mut()
@@ -4849,65 +4842,13 @@ unsafe fn paint_timeline(hwnd: HWND) {
 
         SetTextColor(hdc, timeline_row_color(&line.kind));
         match &line.visual {
-            TimelinePaintLineVisual::FullWidth(text) => {
+            TimelinePaintLineVisual::Text { text, indent } => {
                 let wide = wide_null(text);
+                let left = TIMELINE_LEFT_PADDING + indent;
                 let mut rect = RECT {
-                    left: TIMELINE_LEFT_PADDING,
+                    left,
                     top: line_y,
-                    right: (client_rect.right - TIMELINE_RIGHT_PADDING)
-                        .max(TIMELINE_LEFT_PADDING + 1),
-                    bottom: line_y + state.line_height,
-                };
-                DrawTextW(
-                    hdc,
-                    wide.as_ptr(),
-                    wide.len() as i32 - 1,
-                    &mut rect,
-                    DT_SINGLELINE | DT_NOPREFIX,
-                );
-            }
-            TimelinePaintLineVisual::Log {
-                timestamp,
-                sender_prefix,
-                body,
-            } => {
-                if let Some(timestamp) = timestamp {
-                    let wide = wide_null(timestamp);
-                    let mut rect = RECT {
-                        left: layout.timestamp_left,
-                        top: line_y,
-                        right: layout.timestamp_left + TIMELINE_TIMESTAMP_COLUMN_WIDTH,
-                        bottom: line_y + state.line_height,
-                    };
-                    DrawTextW(
-                        hdc,
-                        wide.as_ptr(),
-                        wide.len() as i32 - 1,
-                        &mut rect,
-                        DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
-                    );
-                }
-                if let Some(sender_prefix) = sender_prefix {
-                    let wide = wide_null(sender_prefix);
-                    let mut rect = RECT {
-                        left: layout.sender_left,
-                        top: line_y,
-                        right: layout.sender_left + TIMELINE_SENDER_COLUMN_WIDTH,
-                        bottom: line_y + state.line_height,
-                    };
-                    DrawTextW(
-                        hdc,
-                        wide.as_ptr(),
-                        wide.len() as i32 - 1,
-                        &mut rect,
-                        DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
-                    );
-                }
-                let wide = wide_null(body);
-                let mut rect = RECT {
-                    left: layout.body_left,
-                    top: line_y,
-                    right: layout.body_right,
+                    right: (client_rect.right - TIMELINE_RIGHT_PADDING).max(left + 1),
                     bottom: line_y + state.line_height,
                 };
                 DrawTextW(
@@ -4935,6 +4876,10 @@ const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
 }
 
+const MIRC_MAROON: u32 = rgb(127, 0, 0);
+const MIRC_PURPLE: u32 = rgb(156, 0, 156);
+const MIRC_GREEN: u32 = rgb(0, 147, 0);
+
 fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
     match kind {
         TimelineRowKind::Header | TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
@@ -4949,22 +4894,24 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
             send_state: TimelineMessageSendState::Failed,
             ..
         } => rgb(0x86, 0x22, 0x22),
+        // mIRC's default palette: notices maroon, actions purple, and
+        // joins/parts/kicks/nick and topic changes green.
         TimelineRowKind::Message {
             presentation: RoomMessagePresentationKind::Notice,
             send_state: TimelineMessageSendState::Sent,
-        } => rgb(0x63, 0x54, 0x2A),
+        } => MIRC_MAROON,
         TimelineRowKind::Message {
             presentation: RoomMessagePresentationKind::Emote,
             send_state: TimelineMessageSendState::Sent,
-        } => rgb(0x24, 0x5E, 0x7A),
+        } => MIRC_PURPLE,
         TimelineRowKind::Message { .. } => rgb(0x00, 0x00, 0x00),
         TimelineRowKind::Image
         | TimelineRowKind::File
         | TimelineRowKind::Audio
-        | TimelineRowKind::Video => rgb(0x1F, 0x64, 0x5A),
+        | TimelineRowKind::Video => MIRC_PURPLE,
         TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
         TimelineRowKind::UnableToDecrypt => rgb(0x8A, 0x5A, 0x18),
-        TimelineRowKind::StateNotice => rgb(0x3D, 0x67, 0x35),
+        TimelineRowKind::StateNotice => MIRC_GREEN,
     }
 }
 
@@ -7979,10 +7926,10 @@ fn push_room_activity_row(
                     send_state: timeline_message_send_state(&message.send_state),
                 },
                 message_line(
-                    timestamp,
+                    &timestamp,
                     message.presentation,
                     &message.sender,
-                    format!("{}{suffix}", message.body),
+                    &format!("{}{suffix}", message.body),
                 ),
                 None,
             )
@@ -7997,9 +7944,9 @@ fn push_room_activity_row(
             (
                 TimelineRowKind::Image,
                 action_line(
-                    timestamp,
+                    &timestamp,
                     &message.sender,
-                    format!("sent image: {display_name}{metadata_suffix}"),
+                    &format!("sent image: {display_name}{metadata_suffix}"),
                 ),
                 image_state,
             )
@@ -8010,9 +7957,9 @@ fn push_room_activity_row(
             (
                 TimelineRowKind::File,
                 action_line(
-                    timestamp,
+                    &timestamp,
                     &message.sender,
-                    format!("sent file: {display_name}{metadata_suffix}"),
+                    &format!("sent file: {display_name}{metadata_suffix}"),
                 ),
                 None,
             )
@@ -8023,9 +7970,9 @@ fn push_room_activity_row(
             (
                 TimelineRowKind::Audio,
                 action_line(
-                    timestamp,
+                    &timestamp,
                     &message.sender,
-                    format!("sent audio: {display_name}{metadata_suffix}"),
+                    &format!("sent audio: {display_name}{metadata_suffix}"),
                 ),
                 None,
             )
@@ -8042,9 +7989,9 @@ fn push_room_activity_row(
             (
                 TimelineRowKind::Video,
                 action_line(
-                    timestamp,
+                    &timestamp,
                     &message.sender,
-                    format!("sent video: {display_name}{metadata_suffix}"),
+                    &format!("sent video: {display_name}{metadata_suffix}"),
                 ),
                 image_state,
             )
@@ -8052,18 +7999,18 @@ fn push_room_activity_row(
         RoomActivityKind::UnsupportedMessage(message) => (
             TimelineRowKind::Unsupported,
             action_line(
-                timestamp,
+                &timestamp,
                 &message.sender,
-                format!("sent unsupported {}: {}", message.msgtype, message.body),
+                &format!("sent unsupported {}: {}", message.msgtype, message.body),
             ),
             None,
         ),
         RoomActivityKind::UnableToDecrypt(message) => (
             TimelineRowKind::UnableToDecrypt,
             action_line(
-                timestamp,
+                &timestamp,
                 &message.sender,
-                "sent an encrypted message that could not be decrypted".to_owned(),
+                "sent an encrypted message that could not be decrypted",
             ),
             None,
         ),
@@ -8078,13 +8025,13 @@ fn push_room_activity_row(
             };
             (
                 TimelineRowKind::StateNotice,
-                event_line(timestamp, body),
+                event_line(&timestamp, &body),
                 None,
             )
         }
         RoomActivityKind::Redacted(_) => (
             TimelineRowKind::StateNotice,
-            event_line(timestamp, "message redacted".to_owned()),
+            event_line(&timestamp, "message redacted"),
             None,
         ),
     };
@@ -15977,11 +15924,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                 },
-                LogLine {
-                    timestamp: "[00:00]".to_owned(),
-                    prefix: "@alice:".to_owned(),
-                    body: "message".to_owned(),
-                },
+                "[00:00] @alice: message".to_owned(),
             )
             .with_event_id(Some(event_id))],
         );
@@ -17986,84 +17929,10 @@ mod tests {
                 "[22:15] * Parts: @dave:example".to_owned(),
             ]
         );
-        assert_eq!(
-            rows[0].visual.clone(),
-            TimelineRowVisual::FullWidth {
-                text: "Room: Ops [e2ee] (!ops:example)".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[4].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[22:13]".to_owned(),
-                sender_prefix: "<@alice:example>".to_owned(),
-                body: "<body>".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[5].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[22:13]".to_owned(),
-                sender_prefix: "-@alice:example-".to_owned(),
-                body: "maintenance window".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[6].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[22:14]".to_owned(),
-                sender_prefix: "* @alice:example".to_owned(),
-                body: "waves".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[9].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[16:00]".to_owned(),
-                sender_prefix: "* @alice:example.org".to_owned(),
-                body: "sent image: diagram.png (image/png, 640x480, 12345 bytes)".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[10].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[16:01]".to_owned(),
-                sender_prefix: "* @alice:example.org".to_owned(),
-                body: "sent file: report.pdf (application/pdf, 45678 bytes)".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[11].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[16:02]".to_owned(),
-                sender_prefix: "* @alice:example.org".to_owned(),
-                body: "sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[12].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[16:03]".to_owned(),
-                sender_prefix: "* @alice:example.org".to_owned(),
-                body: "sent unsupported com.example.custom: clip.mp4".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[13].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[22:15]".to_owned(),
-                sender_prefix: "*".to_owned(),
-                body: "Joins: carol (@carol:example)".to_owned(),
-            }
-        );
-        assert_eq!(
-            rows[14].visual.clone(),
-            TimelineRowVisual::Log {
-                timestamp: "[22:15]".to_owned(),
-                sender_prefix: "*".to_owned(),
-                body: "Parts: @dave:example".to_owned(),
-            }
-        );
+        assert_eq!(rows[0].layout, TimelineRowLayout::FullWidth);
+        for row in &rows[4..] {
+            assert_eq!(row.layout, TimelineRowLayout::Log, "{}", row.logical_text);
+        }
     }
 
     fn member_summary(
@@ -19894,22 +19763,15 @@ mod tests {
     fn timeline_row_paint_lines_expand_image_slots_without_changing_logical_text_rows() {
         let mut image_row = TimelineRow::log(
             TimelineRowKind::Image,
-            LogLine {
-                timestamp: "[16:00]".to_owned(),
-                prefix: "* @alice:example.org".to_owned(),
-                body: "sent image: diagram.png".to_owned(),
-            },
+            "[16:00] * @alice:example.org sent image: diagram.png".to_owned(),
         );
         image_row.image_state = Some(TimelineImageState::Pending);
         let rows = vec![
             image_row,
             TimelineRow::log(
                 TimelineRowKind::Unsupported,
-                LogLine {
-                    timestamp: "[16:01]".to_owned(),
-                    prefix: "* @alice:example.org".to_owned(),
-                    body: "sent unsupported com.example.custom: clip.mp4".to_owned(),
-                },
+                "[16:01] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                    .to_owned(),
             ),
         ];
 
@@ -19928,26 +19790,12 @@ mod tests {
             paint_lines
                 .iter()
                 .filter(|line| line.image_slot_index.is_none())
-                .map(|line| match &line.visual {
-                    TimelinePaintLineVisual::Log {
-                        timestamp,
-                        sender_prefix,
-                        body,
-                    } => format!(
-                        "{}|{}|{}",
-                        timestamp.as_deref().unwrap_or(""),
-                        sender_prefix.as_deref().unwrap_or(""),
-                        body
-                    ),
-                    TimelinePaintLineVisual::FullWidth(text) => text.clone(),
-                    TimelinePaintLineVisual::ImageSlot => String::new(),
-                })
+                .map(|line| line.visual.clone())
                 .collect::<Vec<_>>(),
-            vec![
-                "[16:00]|* @alice:example.org|sent image: diagram.png".to_owned(),
-                "[16:01]|* @alice:example.org|sent unsupported com.example.custom: clip.mp4"
-                    .to_owned(),
-            ]
+            logical_lines
+                .into_iter()
+                .map(|text| TimelinePaintLineVisual::Text { text, indent: 0 })
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             paint_lines
@@ -19959,87 +19807,72 @@ mod tests {
         assert_eq!(clamped_timeline_top_line(6, paint_lines.len(), 3), 6);
     }
 
-    #[test]
-    fn timeline_row_paint_lines_wrap_log_rows_without_changing_logical_projection() {
+    fn log_paint_texts(text: &str, client_width: i32) -> Vec<(String, i32)> {
         let rows = vec![TimelineRow::log(
             TimelineRowKind::Message {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
             },
-            LogLine {
-                timestamp: "[22:13]".to_owned(),
-                prefix: "<@alice:example>".to_owned(),
-                body: "alpha beta gamma".to_owned(),
-            },
+            text.to_owned(),
         )];
+        timeline_row_paint_lines_with_measure(&rows, client_width, &measure_ascii_width)
+            .into_iter()
+            .map(|line| match line.visual {
+                TimelinePaintLineVisual::Text { text, indent } => (text, indent),
+                TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+            })
+            .collect()
+    }
 
-        let paint_lines = timeline_row_paint_lines_with_measure(&rows, 280, &measure_ascii_width);
+    /// A client width whose text area is `text_width` pixels wide.
+    fn client_width_for_text(text_width: i32) -> i32 {
+        TIMELINE_LEFT_PADDING + text_width + TIMELINE_RIGHT_PADDING
+    }
+
+    #[test]
+    fn timeline_row_paint_lines_wrap_log_rows_with_a_hanging_indent() {
+        let text = "[22:13] <@alice:example> alpha beta gamma";
+        let indent = TIMELINE_CONTINUATION_INDENT_SAMPLE.len() as i32;
 
         assert_eq!(
-            project_timeline_rows(&rows),
-            vec!["[22:13] <@alice:example> alpha beta gamma".to_owned()]
-        );
-        assert_eq!(paint_lines.len(), 3);
-        assert_eq!(
-            paint_lines[0].visual.clone(),
-            TimelinePaintLineVisual::Log {
-                timestamp: Some("[22:13]".to_owned()),
-                sender_prefix: Some("<@alice:example>".to_owned()),
-                body: "alpha".to_owned(),
-            }
+            log_paint_texts(text, client_width_for_text(30)),
+            vec![
+                ("[22:13] <@alice:example> alpha".to_owned(), 0),
+                ("beta gamma".to_owned(), indent),
+            ]
         );
         assert_eq!(
-            paint_lines[1].visual.clone(),
-            TimelinePaintLineVisual::Log {
-                timestamp: None,
-                sender_prefix: None,
-                body: " beta".to_owned(),
-            }
-        );
-        assert_eq!(
-            paint_lines[2].visual.clone(),
-            TimelinePaintLineVisual::Log {
-                timestamp: None,
-                sender_prefix: None,
-                body: " gamma".to_owned(),
-            }
+            log_paint_texts(text, client_width_for_text(100)),
+            vec![(text.to_owned(), 0)]
         );
     }
 
     #[test]
-    fn timeline_row_paint_lines_hard_wrap_unbroken_tokens() {
-        let rows = vec![TimelineRow::log(
-            TimelineRowKind::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                send_state: TimelineMessageSendState::Sent,
-            },
-            LogLine {
-                timestamp: "[22:13]".to_owned(),
-                prefix: "<@alice:example>".to_owned(),
-                body: "abcdefghijklmno".to_owned(),
-            },
-        )];
-
-        let paint_lines = timeline_row_paint_lines_with_measure(&rows, 276, &measure_ascii_width);
+    fn timeline_row_paint_lines_indent_lines_after_newlines_like_wrapped_lines() {
+        let indent = TIMELINE_CONTINUATION_INDENT_SAMPLE.len() as i32;
 
         assert_eq!(
-            paint_lines
-                .into_iter()
-                .map(|line| match line.visual {
-                    TimelinePaintLineVisual::Log {
-                        timestamp,
-                        sender_prefix,
-                        body,
-                    } => (timestamp.is_some(), sender_prefix.is_some(), body,),
-                    _ => unreachable!("expected log paint lines"),
-                })
-                .collect::<Vec<_>>(),
+            log_paint_texts(
+                "[22:13] <@alice:example> first\nsecond line here and more",
+                client_width_for_text(30)
+            ),
             vec![
-                (true, true, "abcd".to_owned()),
-                (false, false, "efgh".to_owned()),
-                (false, false, "ijkl".to_owned()),
-                (false, false, "mno".to_owned()),
+                ("[22:13] <@alice:example> first".to_owned(), 0),
+                ("second line here and".to_owned(), indent),
+                ("more".to_owned(), indent),
             ]
+        );
+    }
+
+    #[test]
+    fn wrap_timeline_visual_line_uses_the_first_width_once_then_the_continuation_width() {
+        assert_eq!(
+            wrap_timeline_visual_line("abcdefghijklmno", 6, 4, &measure_ascii_width),
+            vec!["abcdef", "ghij", "klmn", "o"]
+        );
+        assert_eq!(
+            wrap_timeline_visual_line("alpha   beta", 5, 5, &measure_ascii_width),
+            vec!["alpha", "beta"]
         );
     }
 
@@ -20047,15 +19880,15 @@ mod tests {
     fn timeline_row_paint_lines_preserve_image_slots_after_wrapped_caption_lines() {
         let mut row = TimelineRow::log(
             TimelineRowKind::Image,
-            LogLine {
-                timestamp: "[16:00]".to_owned(),
-                prefix: "* @alice:example.org".to_owned(),
-                body: "sent image: alpha beta gamma".to_owned(),
-            },
+            "[16:00] * @alice:example.org sent image: alpha beta gamma".to_owned(),
         );
         row.image_state = Some(TimelineImageState::Pending);
 
-        let paint_lines = timeline_row_paint_lines_with_measure(&[row], 280, &measure_ascii_width);
+        let paint_lines = timeline_row_paint_lines_with_measure(
+            &[row],
+            client_width_for_text(30),
+            &measure_ascii_width,
+        );
         let caption_lines = paint_lines
             .iter()
             .take_while(|line| line.image_slot_index.is_none())
@@ -20084,13 +19917,17 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
             },
-            LogLine {
-                timestamp: "[22:13]".to_owned(),
-                prefix: "<@alice:example>".to_owned(),
-                body: "alpha beta gamma delta".to_owned(),
-            },
+            // Three continuation-width words after a full first line.
+            format!(
+                "[22:13] <@alice:example> alpha{}",
+                format!(" {}", "b".repeat(22)).repeat(3)
+            ),
         )];
-        let paint_lines = timeline_row_paint_lines_with_measure(&rows, 280, &measure_ascii_width);
+        let paint_lines = timeline_row_paint_lines_with_measure(
+            &rows,
+            client_width_for_text(30),
+            &measure_ascii_width,
+        );
 
         assert_eq!(paint_lines.len(), 4);
         assert_eq!(clamped_timeline_top_line(8, paint_lines.len(), 3), 1);
@@ -20385,11 +20222,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                 },
-                LogLine {
-                    timestamp: "[22:13]".to_owned(),
-                    prefix: "<@bob:example>".to_owned(),
-                    body: "current row".to_owned(),
-                },
+                "[22:13] <@bob:example> current row".to_owned(),
             )
             .with_event_id(Some("$current")),
         ];
@@ -24980,11 +24813,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                 },
-                LogLine {
-                    timestamp: "[00:00]".to_owned(),
-                    prefix: "@alice:".to_owned(),
-                    body: "message".to_owned(),
-                },
+                "[00:00] @alice: message".to_owned(),
             )
             .with_event_id(Some("$event:example")),
         ];

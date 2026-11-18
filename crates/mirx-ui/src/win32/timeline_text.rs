@@ -36,56 +36,33 @@ fn nick_with_user_id(profile: &RoomUserProfile) -> String {
     nick_label(&profile.user_id, profile.display_name.as_deref(), true)
 }
 
-/// A timeline log line: the `[hh:mm]` timestamp, the sender prefix (`<Nick>`,
-/// `* Nick`, `-Nick-`, or `*`), and the body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct LogLine {
-    pub(super) timestamp: String,
-    pub(super) prefix: String,
-    pub(super) body: String,
-}
+/// Log lines start with a `[hh:mm] ` timestamp; wrapped continuation lines
+/// are indented by this sample's width so they align past it.
+pub(super) const TIMELINE_CONTINUATION_INDENT_SAMPLE: &str = "[00:00] ";
 
-impl LogLine {
-    pub(super) fn text(&self) -> String {
-        format!("{} {} {}", self.timestamp, self.prefix, self.body)
-    }
-}
-
+/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`.
 pub(super) fn message_line(
-    timestamp: String,
+    timestamp: &str,
     presentation: RoomMessagePresentationKind,
     sender: &RoomUserProfile,
-    body: String,
-) -> LogLine {
+    body: &str,
+) -> String {
     let nick = profile_nick(sender);
-    let prefix = match presentation {
-        RoomMessagePresentationKind::Text => format!("<{nick}>"),
-        RoomMessagePresentationKind::Emote => format!("* {nick}"),
-        RoomMessagePresentationKind::Notice => format!("-{nick}-"),
-    };
-    LogLine {
-        timestamp,
-        prefix,
-        body,
+    match presentation {
+        RoomMessagePresentationKind::Text => format!("{timestamp} <{nick}> {body}"),
+        RoomMessagePresentationKind::Emote => format!("{timestamp} * {nick} {body}"),
+        RoomMessagePresentationKind::Notice => format!("{timestamp} -{nick}- {body}"),
     }
 }
 
 /// An action-style line, as for media: `[ts] * Nick sent image: ...`.
-pub(super) fn action_line(timestamp: String, sender: &RoomUserProfile, body: String) -> LogLine {
-    LogLine {
-        timestamp,
-        prefix: format!("* {}", profile_nick(sender)),
-        body,
-    }
+pub(super) fn action_line(timestamp: &str, sender: &RoomUserProfile, body: &str) -> String {
+    format!("{timestamp} * {} {body}", profile_nick(sender))
 }
 
 /// A line reporting an event rather than something a user said.
-pub(super) fn event_line(timestamp: String, body: String) -> LogLine {
-    LogLine {
-        timestamp,
-        prefix: "*".to_owned(),
-        body,
-    }
+pub(super) fn event_line(timestamp: &str, body: &str) -> String {
+    format!("{timestamp} * {body}")
 }
 
 pub(super) fn topic_change_text(sender: &RoomUserProfile, topic: &str) -> String {
@@ -159,9 +136,7 @@ mod tests {
     #[test]
     fn message_lines_use_mirc_sender_prefixes() {
         let alice = profile("@alice:example", Some("Alice"), false);
-        let line = |presentation| {
-            message_line("[12:34]".to_owned(), presentation, &alice, "hi".to_owned()).text()
-        };
+        let line = |presentation| message_line("[12:34]", presentation, &alice, "hi");
 
         assert_eq!(
             line(RoomMessagePresentationKind::Text),
@@ -176,15 +151,11 @@ mod tests {
             "[12:34] -Alice- hi"
         );
         assert_eq!(
-            action_line("[12:34]".to_owned(), &alice, "sent image: a.png".to_owned()).text(),
+            action_line("[12:34]", &alice, "sent image: a.png"),
             "[12:34] * Alice sent image: a.png"
         );
         assert_eq!(
-            event_line(
-                "[12:34]".to_owned(),
-                topic_change_text(&alice, "release day")
-            )
-            .text(),
+            event_line("[12:34]", &topic_change_text(&alice, "release day")),
             "[12:34] * Alice changes topic to 'release day'"
         );
     }
