@@ -50,7 +50,10 @@ use matrix_sdk::{
                     Relation as MessageContentRelation, Relation as MessageRelation,
                     RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
                 },
-                power_levels::UserPowerLevel,
+                power_levels::{
+                    OriginalSyncRoomPowerLevelsEvent, PossiblyRedactedRoomPowerLevelsEventContent,
+                    RoomPowerLevelsEventContent, SyncRoomPowerLevelsEvent, UserPowerLevel,
+                },
                 redaction::OriginalSyncRoomRedactionEvent,
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
@@ -63,7 +66,7 @@ use matrix_sdk::{
     store::{RoomLoadSettings, SerializableEventContent},
 };
 use matrix_sdk_base::{
-    RoomInfoNotableUpdateReasons, deserialized_responses::DisplayName,
+    RoomInfoNotableUpdateReasons, RoomState, deserialized_responses::DisplayName,
     read_receipts::RoomReadReceipts,
 };
 use matrix_sdk_crypto::CrossSigningStatus;
@@ -81,8 +84,9 @@ use crate::api::{
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomPowerLevelUserChange,
+    RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
@@ -1340,12 +1344,34 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
                 }
             }
 
-            if let Some(authenticated_user_id) = client.user_id()
-                && let Ok(snapshot) =
-                    joined_room_members_no_sync(authenticated_user_id, &room).await
-            {
-                emit_event(&events, Event::RoomMembers(snapshot));
+            emit_joined_room_members_after_state_change(&client, &room, &events).await;
+        }
+    });
+
+    let power_level_events = events.clone();
+    let power_level_client = client.clone();
+    client.add_event_handler(move |event: SyncRoomPowerLevelsEvent, room: Room| {
+        let events = power_level_events.clone();
+        let client = power_level_client.clone();
+        async move {
+            if let SyncRoomPowerLevelsEvent::Original(event) = event {
+                match room_activity_from_power_levels_event(
+                    &room,
+                    &event,
+                    &mut SenderProfileCache::new(&room),
+                )
+                .await
+                {
+                    Ok(Some(activity)) => {
+                        emit_event(&events, Event::RoomActivity(Box::new(activity)))
+                    }
+                    Ok(None) => {}
+                    Err(err) => emit_sync_error(&events, err),
+                }
             }
+
+            // Levels decide every member's rank and our moderation rights.
+            emit_joined_room_members_after_state_change(&client, &room, &events).await;
         }
     });
 
@@ -1837,6 +1863,120 @@ async fn room_activity_from_member_event(
         sender,
         target,
     )))
+}
+
+/// Emits a fresh member snapshot after a state event that can change it.
+/// Only a joined room has one: these handlers also see the event that
+/// removes us from a room.
+async fn emit_joined_room_members_after_state_change(
+    client: &Client,
+    room: &Room,
+    events: &EventSender,
+) {
+    if room.state() != RoomState::Joined {
+        return;
+    }
+    let authenticated_user_id = client
+        .user_id()
+        .expect("sync event handlers run only for an authenticated client");
+    match joined_room_members_no_sync(authenticated_user_id, room).await {
+        Ok(snapshot) => emit_event(events, Event::RoomMembers(snapshot)),
+        Err(err) => emit_sync_error(events, err),
+    }
+}
+
+/// What an `m.room.power_levels` event changed, before target profiles are
+/// resolved.
+#[derive(Debug, PartialEq, Eq)]
+struct PowerLevelsChange {
+    /// `(user, old, new)` effective levels, ordered by user ID.
+    users: Vec<(OwnedUserId, i64, i64)>,
+    users_default: Option<RoomPowerLevelValueChange>,
+    other_permissions_changed: bool,
+}
+
+/// Compares power levels with the ones they replace. A user's effective
+/// level is their explicit one or else the default for users, so changing
+/// the default also changes the level of every user without an explicit
+/// one; those users are not listed, the default change reports them.
+/// `None` when nothing changed.
+fn power_levels_change(
+    old: &PossiblyRedactedRoomPowerLevelsEventContent,
+    new: &RoomPowerLevelsEventContent,
+) -> Option<PowerLevelsChange> {
+    let users = old
+        .users
+        .keys()
+        .chain(new.users.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|user_id| {
+            let old_level = old.users.get(user_id).copied().unwrap_or(old.users_default);
+            let new_level = new.users.get(user_id).copied().unwrap_or(new.users_default);
+            (old_level != new_level).then(|| (user_id.clone(), old_level.into(), new_level.into()))
+        })
+        .collect::<Vec<_>>();
+    let users_default =
+        (old.users_default != new.users_default).then(|| RoomPowerLevelValueChange {
+            old: old.users_default.into(),
+            new: new.users_default.into(),
+        });
+    let other_permissions_changed = old.ban != new.ban
+        || old.kick != new.kick
+        || old.redact != new.redact
+        || old.invite != new.invite
+        || old.events != new.events
+        || old.events_default != new.events_default
+        || old.state_default != new.state_default
+        || old.notifications.room != new.notifications.room;
+
+    (!users.is_empty() || users_default.is_some() || other_permissions_changed).then_some(
+        PowerLevelsChange {
+            users,
+            users_default,
+            other_permissions_changed,
+        },
+    )
+}
+
+/// The timeline notice for a power-level change. Without `prev_content`
+/// (the room's first levels, or state replayed without history) there is
+/// nothing to compare against, so there is no notice.
+async fn room_activity_from_power_levels_event(
+    room: &Room,
+    event: &OriginalSyncRoomPowerLevelsEvent,
+    profiles: &mut SenderProfileCache<'_>,
+) -> Result<Option<RoomActivity>, MatrixCoreError> {
+    let Some(old) = event.unsigned.prev_content.as_ref() else {
+        return Ok(None);
+    };
+    let Some(change) = power_levels_change(old, &event.content) else {
+        return Ok(None);
+    };
+    let sender = profiles.get(&event.sender).await?;
+    let mut changes = Vec::with_capacity(change.users.len());
+    for (user_id, old, new) in change.users {
+        changes.push(RoomPowerLevelUserChange {
+            target: profiles.get(&user_id).await?,
+            old,
+            new,
+        });
+    }
+    Ok(Some(RoomActivity {
+        room_id: room.room_id().to_string(),
+        activity_id: format!("state:{}", event.event_id),
+        timestamp_ms: event.origin_server_ts.get().into(),
+        relation: None,
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: event.event_id.to_string(),
+            sender,
+            content: RoomStateNoticeContent::PowerLevels {
+                changes,
+                users_default: change.users_default,
+                other_permissions_changed: change.other_permissions_changed,
+            },
+        }),
+    }))
 }
 
 fn room_typing_from_sync_typing(room_id: &str, event: &SyncTypingEvent) -> RoomTyping {
@@ -3301,6 +3441,21 @@ async fn room_history_backfill_event_from_timeline_event(
             .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
+    // Every power-level field has a default, so any state event would
+    // deserialize as one: match the type first.
+    if event.kind.event_type().as_deref() == Some("m.room.power_levels") {
+        let event = raw
+            .deserialize_as_unchecked::<OriginalSyncRoomPowerLevelsEvent>()
+            .map_err(|err| {
+                MatrixCoreError::new(format!(
+                    "failed to decode Matrix power levels event in {room_id}: {err}"
+                ))
+            })?;
+        return Ok(room_activity_from_power_levels_event(room, &event, senders)
+            .await?
+            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+    }
+
     Ok(None)
 }
 
@@ -3328,19 +3483,19 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
-        ReactionEventIndexEntry, SenderProfileCache, attach_reply_relation, attach_thread_relation,
-        attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
-        direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
-        joined_room_members, joined_room_members_no_sync, kick_room_member,
-        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
-        map_send_queue_update, member_target_display_name,
+        LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
+        ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, attach_reply_relation,
+        attach_thread_relation, attach_thread_reply_relation, backfill_room_history,
+        ban_room_member, cancelled_state, direct_user_ids_by_room_from_content, fetch_room_media,
+        insert_pending_outgoing_kind, joined_room_members, joined_room_members_no_sync,
+        kick_room_member, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
+        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
+        map_local_message_activity, map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
-        own_room_user_profile, owned_event_id_from_str, reaction_event_content, read_file_bytes,
-        register_event_handlers, restore_session, room_activity_from_sync_member,
-        room_activity_from_sync_message, room_activity_from_sync_topic,
-        room_activity_update_from_indexed_reaction_redaction,
+        own_room_user_profile, owned_event_id_from_str, power_levels_change,
+        reaction_event_content, read_file_bytes, register_event_handlers, restore_session,
+        room_activity_from_sync_member, room_activity_from_sync_message,
+        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
@@ -4180,12 +4335,13 @@ mod tests {
         RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfillEvent,
         RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
         RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
-        RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
-        RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo,
-        SendMessageReplyTarget, SendMessageThreadTarget, StoredSession,
-        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomPowerLevelUserChange,
+        RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
+        RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
+        SendMessageThreadTarget, StoredSession, UnsupportedRoomMessageActivity,
+        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
+        VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, Room, RoomMemberships, SessionMeta,
@@ -4207,7 +4363,10 @@ mod tests {
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 reaction::OriginalSyncReactionEvent,
                 room::MediaSource,
-                room::power_levels::UserPowerLevel,
+                room::power_levels::{
+                    PossiblyRedactedRoomPowerLevelsEventContent, RoomPowerLevelsEventContent,
+                    UserPowerLevel,
+                },
                 room::{
                     member::{OriginalSyncRoomMemberEvent, RoomMemberEvent},
                     message::{
@@ -7002,6 +7161,351 @@ mod tests {
                         reason: Some("flooding".to_owned()),
                     },
                 })
+            );
+        });
+    }
+
+    fn power_levels_change_of(
+        old: serde_json::Value,
+        new: serde_json::Value,
+    ) -> Option<PowerLevelsChange> {
+        power_levels_change(
+            &serde_json::from_value::<PossiblyRedactedRoomPowerLevelsEventContent>(old)
+                .expect("old power levels"),
+            &serde_json::from_value::<RoomPowerLevelsEventContent>(new).expect("new power levels"),
+        )
+    }
+
+    fn user_level_change(user_id: &str, old: i64, new: i64) -> (OwnedUserId, i64, i64) {
+        (
+            OwnedUserId::try_from(user_id).expect("valid user id"),
+            old,
+            new,
+        )
+    }
+
+    #[test]
+    fn power_levels_change_reports_effective_user_levels_in_user_id_order() {
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({
+                    "users_default": 0,
+                    "users": {
+                        "@zed:example.org": 0,
+                        "@demoted:example.org": 50,
+                        "@removed:example.org": 100,
+                        "@same:example.org": 50
+                    }
+                }),
+                serde_json::json!({
+                    "users_default": 0,
+                    "users": {
+                        "@zed:example.org": 50,
+                        "@demoted:example.org": 0,
+                        "@added:example.org": 10,
+                        "@same:example.org": 50
+                    }
+                }),
+            ),
+            Some(PowerLevelsChange {
+                users: vec![
+                    user_level_change("@added:example.org", 0, 10),
+                    user_level_change("@demoted:example.org", 50, 0),
+                    user_level_change("@removed:example.org", 100, 0),
+                    user_level_change("@zed:example.org", 0, 50),
+                ],
+                users_default: None,
+                other_permissions_changed: false,
+            })
+        );
+    }
+
+    #[test]
+    fn power_levels_change_reports_default_and_permission_changes_separately() {
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "users_default": 0, "users": { "@op:example.org": 100 } }),
+                serde_json::json!({ "users_default": 10, "users": { "@op:example.org": 100 } }),
+            ),
+            Some(PowerLevelsChange {
+                users: Vec::new(),
+                users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                other_permissions_changed: false,
+            })
+        );
+        // A user whose explicit level is dropped falls back to the new
+        // default.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "users_default": 0, "users": { "@op:example.org": 0 } }),
+                serde_json::json!({ "users_default": 10 }),
+            ),
+            Some(PowerLevelsChange {
+                users: vec![user_level_change("@op:example.org", 0, 10)],
+                users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                other_permissions_changed: false,
+            })
+        );
+        for (old, new) in [
+            (serde_json::json!({}), serde_json::json!({ "ban": 100 })),
+            (serde_json::json!({}), serde_json::json!({ "kick": 0 })),
+            (serde_json::json!({}), serde_json::json!({ "redact": 0 })),
+            (serde_json::json!({}), serde_json::json!({ "invite": 50 })),
+            (
+                serde_json::json!({}),
+                serde_json::json!({ "events": { "m.room.name": 100 } }),
+            ),
+            (
+                serde_json::json!({}),
+                serde_json::json!({ "events_default": 10 }),
+            ),
+            (
+                serde_json::json!({}),
+                serde_json::json!({ "state_default": 100 }),
+            ),
+            (
+                serde_json::json!({}),
+                serde_json::json!({ "notifications": { "room": 0 } }),
+            ),
+        ] {
+            assert_eq!(
+                power_levels_change_of(old, new.clone()),
+                Some(PowerLevelsChange {
+                    users: Vec::new(),
+                    users_default: None,
+                    other_permissions_changed: true,
+                }),
+                "{new}"
+            );
+        }
+    }
+
+    #[test]
+    fn power_levels_change_is_none_for_identical_levels() {
+        let levels = serde_json::json!({
+            "ban": 50, "kick": 50, "users_default": 0,
+            "users": { "@op:example.org": 100 }
+        });
+        assert_eq!(power_levels_change_of(levels.clone(), levels), None);
+        // Spelling a default out explicitly is not a change.
+        assert_eq!(
+            power_levels_change_of(
+                serde_json::json!({ "users": { "@op:example.org": 100 } }),
+                serde_json::json!({
+                    "ban": 50, "users_default": 0,
+                    "users": { "@op:example.org": 100, "@zero:example.org": 0 }
+                }),
+            ),
+            None
+        );
+    }
+
+    fn power_levels_event_json(
+        event_id: &str,
+        content: serde_json::Value,
+        prev_content: Option<serde_json::Value>,
+    ) -> serde_json::Value {
+        let mut event = serde_json::json!({
+            "type": "m.room.power_levels",
+            "content": content,
+            "event_id": event_id,
+            "sender": "@example:localhost",
+            "state_key": "",
+            "origin_server_ts": 1700000000002u64
+        });
+        if let Some(prev_content) = prev_content {
+            event["unsigned"] = serde_json::json!({ "prev_content": prev_content });
+        }
+        event
+    }
+
+    fn member_can_kick(events: &[Event], user_id: &str) -> Vec<bool> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RoomMembers(snapshot) => snapshot
+                    .members
+                    .iter()
+                    .find(|member| member.user_id == user_id)
+                    .map(|member| member.can_kick),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn live_power_level_change_emits_notice_and_refreshes_member_capabilities() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events);
+            let levels = |actor: i64| {
+                serde_json::json!({
+                    "kick": 50, "ban": 50, "users_default": 0,
+                    "users": { "@example:localhost": actor, "@bob:localhost": 0 }
+                })
+            };
+            let mut state_events = profile_test_state_events();
+            state_events
+                .as_array_mut()
+                .expect("state events")
+                .push(power_levels_event_json(
+                    "$power0:localhost",
+                    levels(0),
+                    None,
+                ));
+
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
+                )
+                .await;
+            let first = drain_events(&event_rx);
+            assert!(
+                room_activity_by_id(&first, "state:$power0:localhost").is_empty(),
+                "levels without previous content are not a change: {first:?}"
+            );
+            assert_eq!(
+                member_can_kick(&first, "@bob:localhost").last(),
+                Some(&false)
+            );
+
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref()).add_timeline_event(
+                        raw_sync_timeline_event(power_levels_event_json(
+                            "$power1:localhost",
+                            levels(50),
+                            Some(levels(0)),
+                        )),
+                    ),
+                )
+                .await;
+            let second = drain_events(&event_rx);
+
+            let notice = room_activity_by_id(&second, "state:$power1:localhost");
+            assert_eq!(notice.len(), 1, "{second:?}");
+            assert_eq!(
+                notice[0].kind,
+                RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    event_id: "$power1:localhost".to_owned(),
+                    sender: member_profile("@example:localhost", "Me", false),
+                    content: RoomStateNoticeContent::PowerLevels {
+                        changes: vec![RoomPowerLevelUserChange {
+                            target: member_profile("@example:localhost", "Me", false),
+                            old: 0,
+                            new: 50,
+                        }],
+                        users_default: None,
+                        other_permissions_changed: false,
+                    },
+                })
+            );
+            // The regression: kick rights follow the new levels without any
+            // member event.
+            assert_eq!(member_can_kick(&second, "@bob:localhost"), vec![true]);
+            let Some(Event::RoomMembers(snapshot)) = second
+                .iter()
+                .find(|event| matches!(event, Event::RoomMembers(_)))
+            else {
+                panic!("member snapshot in {second:?}");
+            };
+            assert_eq!(snapshot.members[0].user_id, "@example:localhost");
+            assert_eq!(snapshot.members[0].rank, RoomMemberRank::Moderator);
+        });
+    }
+
+    #[test]
+    fn backfill_decodes_power_level_changes_and_ignores_other_state() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                )
+                .await;
+            let mut history_levels = power_levels_event_json(
+                "$power:localhost",
+                serde_json::json!({
+                    "users_default": 10,
+                    "users": { "@bob:localhost": 50 }
+                }),
+                Some(serde_json::json!({ "users": { "@bob:localhost": 0 } })),
+            );
+            history_levels["room_id"] = serde_json::json!(room_id().as_str());
+            // Every power-level field has a default, so this unrelated
+            // state event would decode as a change of the default level.
+            let history_other_state = serde_json::json!({
+                "type": "org.example.settings",
+                "room_id": room_id().as_str(),
+                "content": { "users_default": 5 },
+                "unsigned": { "prev_content": { "users_default": 0 } },
+                "event_id": "$settings:localhost",
+                "sender": "@example:localhost",
+                "state_key": "",
+                "origin_server_ts": 1700000000004u64
+            });
+            mock_server
+                .mock_room_messages()
+                .ok(RoomMessagesResponseTemplate::default().events(vec![
+                    Raw::<AnyTimelineEvent>::from_json_string(history_other_state.to_string())
+                        .expect("raw settings"),
+                    Raw::<AnyTimelineEvent>::from_json_string(history_levels.to_string())
+                        .expect("raw power levels"),
+                ]))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(
+                &client,
+                BackfillRoomHistoryRequest {
+                    room_id: room_id().to_string(),
+                    from: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("backfill room history");
+
+            assert_eq!(
+                backfill.events,
+                vec![RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
+                    room_id: room_id().to_string(),
+                    activity_id: "state:$power:localhost".to_owned(),
+                    timestamp_ms: 1700000000002,
+                    relation: None,
+                    kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                        event_id: "$power:localhost".to_owned(),
+                        sender: member_profile("@example:localhost", "Me", false),
+                        content: RoomStateNoticeContent::PowerLevels {
+                            changes: vec![RoomPowerLevelUserChange {
+                                target: member_profile("@bob:localhost", "Bob", false),
+                                old: 0,
+                                new: 50,
+                            },],
+                            users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                            other_permissions_changed: false,
+                        },
+                    }),
+                }))]
             );
         });
     }

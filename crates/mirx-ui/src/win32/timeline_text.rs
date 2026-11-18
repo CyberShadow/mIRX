@@ -4,7 +4,10 @@
 //! display names are disambiguated the same way in the timeline, the nick
 //! list, and the typing indicator. Ambiguity itself is decided by mirx-core.
 
-use mirx_core::{RoomMemberChange, RoomMessagePresentationKind, RoomUserProfile};
+use mirx_core::{
+    RoomMemberChange, RoomMessagePresentationKind, RoomPowerLevelUserChange,
+    RoomPowerLevelValueChange, RoomUserProfile,
+};
 
 /// The label for a user: their display name, the display name with the user
 /// ID when another member shares it, or the user ID when they have none.
@@ -107,6 +110,47 @@ pub(super) fn member_change_text(
         Some(reason) if !reason.is_empty() => format!("{text} ({reason})"),
         _ => text,
     }
+}
+
+/// mIRC reports privilege changes as `* Op sets mode: +o Nick`. Matrix power
+/// levels are numbers rather than a few flags, so mode letters would lose
+/// information; the line states the levels instead:
+/// `Op sets power level: Bob 0 -> 50, Carol 50 -> 0; default 0 -> 10`, with
+/// `; room permissions changed` when the levels needed for actions changed
+/// too, or `Op changes room permissions` when only those did. mirx-core
+/// reports at least one change.
+pub(super) fn power_levels_change_text(
+    sender: &RoomUserProfile,
+    changes: &[RoomPowerLevelUserChange],
+    users_default: Option<&RoomPowerLevelValueChange>,
+    other_permissions_changed: bool,
+) -> String {
+    let op = profile_nick(sender);
+    let users = (!changes.is_empty()).then(|| {
+        changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "{} {} -> {}",
+                    profile_nick(&change.target),
+                    change.old,
+                    change.new
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    });
+    let default = users_default.map(|change| format!("default {} -> {}", change.old, change.new));
+    let levels = users.into_iter().chain(default).collect::<Vec<_>>();
+    if levels.is_empty() {
+        return format!("{op} changes room permissions");
+    }
+    let permissions = if other_permissions_changed {
+        "; room permissions changed"
+    } else {
+        ""
+    };
+    format!("{op} sets power level: {}{permissions}", levels.join("; "))
 }
 
 #[cfg(test)]
@@ -251,6 +295,54 @@ mod tests {
         assert_eq!(
             text(RoomMemberChange::AvatarChanged, &carol, None),
             "Carol changed avatar"
+        );
+    }
+
+    #[test]
+    fn power_levels_change_text_covers_every_shape() {
+        let op = profile("@op:example", Some("Op"), false);
+        let bob = profile("@bob:example", Some("Bob"), false);
+        let sam = profile("@sam:example", Some("Sam"), true);
+        let anon = profile("@anon:example", None, false);
+        let change = |target: &RoomUserProfile, old, new| RoomPowerLevelUserChange {
+            target: target.clone(),
+            old,
+            new,
+        };
+        let default = RoomPowerLevelValueChange { old: 0, new: 10 };
+
+        assert_eq!(
+            power_levels_change_text(&op, &[change(&bob, 0, 50)], None, false),
+            "Op sets power level: Bob 0 -> 50"
+        );
+        assert_eq!(
+            power_levels_change_text(
+                &op,
+                &[change(&anon, 0, 100), change(&sam, 50, 0)],
+                None,
+                false
+            ),
+            "Op sets power level: @anon:example 0 -> 100, Sam (@sam:example) 50 -> 0"
+        );
+        assert_eq!(
+            power_levels_change_text(&op, &[], Some(&default), false),
+            "Op sets power level: default 0 -> 10"
+        );
+        assert_eq!(
+            power_levels_change_text(&op, &[change(&bob, 0, 50)], Some(&default), false),
+            "Op sets power level: Bob 0 -> 50; default 0 -> 10"
+        );
+        assert_eq!(
+            power_levels_change_text(&op, &[], None, true),
+            "Op changes room permissions"
+        );
+        assert_eq!(
+            power_levels_change_text(&op, &[change(&bob, 0, 50)], None, true),
+            "Op sets power level: Bob 0 -> 50; room permissions changed"
+        );
+        assert_eq!(
+            power_levels_change_text(&op, &[change(&bob, -1, 0)], Some(&default), true),
+            "Op sets power level: Bob -1 -> 0; default 0 -> 10; room permissions changed"
         );
     }
 }

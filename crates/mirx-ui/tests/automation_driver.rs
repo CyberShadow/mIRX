@@ -3629,6 +3629,131 @@ fn automation_driver_loads_member_list_fixture() -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+fn named_profile(user_id: &str, display_name: &str) -> mirx_core::RoomUserProfile {
+    mirx_core::RoomUserProfile {
+        user_id: user_id.to_owned(),
+        display_name: Some(display_name.to_owned()),
+        display_name_ambiguous: false,
+    }
+}
+
+fn power_levels_event(
+    room_id: &str,
+    event_id: &str,
+    timestamp_ms: u64,
+    changes: Vec<mirx_core::RoomPowerLevelUserChange>,
+    users_default: Option<mirx_core::RoomPowerLevelValueChange>,
+    other_permissions_changed: bool,
+) -> Event {
+    Event::RoomActivity(Box::new(CoreRoomActivity {
+        room_id: room_id.to_owned(),
+        activity_id: format!("state:{event_id}"),
+        timestamp_ms,
+        relation: None,
+        kind: CoreRoomActivityKind::StateNotice(mirx_core::RoomStateNoticeActivity {
+            event_id: event_id.to_owned(),
+            sender: named_profile("@admin:example", "Admin"),
+            content: mirx_core::RoomStateNoticeContent::PowerLevels {
+                changes,
+                users_default,
+                other_permissions_changed,
+            },
+        }),
+    }))
+}
+
+#[test]
+fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let room_id = "!ops:example";
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::SyncedRooms(vec![room_summary(room_id, "Ops", false)]),
+        power_levels_event(
+            room_id,
+            "$power-1",
+            1_700_000_000_000,
+            vec![
+                mirx_core::RoomPowerLevelUserChange {
+                    target: named_profile("@bob:example", "Bob"),
+                    old: 0,
+                    new: 50,
+                },
+                mirx_core::RoomPowerLevelUserChange {
+                    target: user_profile("@carol:example"),
+                    old: 50,
+                    new: 0,
+                },
+            ],
+            Some(mirx_core::RoomPowerLevelValueChange { old: 0, new: 10 }),
+            false,
+        ),
+        power_levels_event(
+            room_id,
+            "$power-2",
+            1_700_000_060_000,
+            Vec::new(),
+            None,
+            true,
+        ),
+    ])?;
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            state_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room(room_id)?;
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity(room_id));
+    assert!(
+        view_contains(
+            view,
+            "[22:13] * Admin sets power level: Bob 0 -> 50, @carol:example 50 -> 0; default 0 -> 10"
+        ),
+        "{:?}",
+        view.lines
+    );
+    assert!(
+        view_contains(view, "[22:14] * Admin changes room permissions"),
+        "{:?}",
+        view.lines
+    );
+    let activity = app.room_activity(Some(room_id))?;
+    assert_eq!(
+        activity[0].kind,
+        RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: "$power-1".to_owned(),
+            sender: "@admin:example".to_owned(),
+            state_key: String::new(),
+            content: RoomStateNoticeContent::PowerLevels {
+                changes: vec![
+                    mirx_testkit::RoomPowerLevelUserChange {
+                        user_id: "@bob:example".to_owned(),
+                        old: 0,
+                        new: 50,
+                    },
+                    mirx_testkit::RoomPowerLevelUserChange {
+                        user_id: "@carol:example".to_owned(),
+                        old: 50,
+                        new: 0,
+                    },
+                ],
+                users_default: Some(mirx_testkit::RoomPowerLevelValueChange { old: 0, new: 10 }),
+                other_permissions_changed: false,
+            },
+        })
+    );
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
 #[test]
 fn automation_driver_renders_every_membership_change_in_mirc_format()
 -> Result<(), Box<dyn std::error::Error>> {

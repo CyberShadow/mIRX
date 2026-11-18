@@ -6,10 +6,10 @@ use mirx_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
-    RoomTagSummary, RoomVideoActivity, RoomVideoInfo, StoredSession,
-    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
+    StoredSession, UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1605,6 +1605,19 @@ pub(crate) enum DumpRoomStateNoticeContent {
         target_display_name: Option<String>,
         reason: Option<String>,
     },
+    PowerLevels {
+        changes: Vec<DumpRoomPowerLevelUserChange>,
+        users_default: Option<RoomPowerLevelValueChange>,
+        other_permissions_changed: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpRoomPowerLevelUserChange {
+    pub(crate) user_id: String,
+    pub(crate) old: i64,
+    pub(crate) new: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1963,7 +1976,10 @@ pub(crate) fn dump_room_state_notice_activity_from_core(
         event_id: notice.event_id.clone(),
         sender: notice.sender.user_id.clone(),
         state_key: match &notice.content {
-            RoomStateNoticeContent::Topic { .. } => String::new(),
+            // Topic and power levels are room state with an empty state key.
+            RoomStateNoticeContent::Topic { .. } | RoomStateNoticeContent::PowerLevels { .. } => {
+                String::new()
+            }
             RoomStateNoticeContent::Member { target, .. } => target.user_id.clone(),
         },
         content: dump_room_state_notice_content_from_core(&notice.content),
@@ -1993,6 +2009,22 @@ pub(crate) fn dump_room_state_notice_content_from_core(
             change: change.clone(),
             target_display_name: target.display_name.clone(),
             reason: reason.clone(),
+        },
+        RoomStateNoticeContent::PowerLevels {
+            changes,
+            users_default,
+            other_permissions_changed,
+        } => DumpRoomStateNoticeContent::PowerLevels {
+            changes: changes
+                .iter()
+                .map(|change| DumpRoomPowerLevelUserChange {
+                    user_id: change.target.user_id.clone(),
+                    old: change.old,
+                    new: change.new,
+                })
+                .collect(),
+            users_default: users_default.clone(),
+            other_permissions_changed: *other_permissions_changed,
         },
     }
 }

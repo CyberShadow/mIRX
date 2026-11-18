@@ -829,6 +829,26 @@ pub enum RoomStateNoticeContent {
         target_display_name: Option<String>,
         reason: Option<String>,
     },
+    PowerLevels {
+        changes: Vec<RoomPowerLevelUserChange>,
+        users_default: Option<RoomPowerLevelValueChange>,
+        other_permissions_changed: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomPowerLevelUserChange {
+    pub user_id: String,
+    pub old: i64,
+    pub new: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomPowerLevelValueChange {
+    pub old: i64,
+    pub new: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -585,6 +585,33 @@ pub enum RoomStateNoticeContent {
         target: RoomUserProfile,
         reason: Option<String>,
     },
+    /// An `m.room.power_levels` change against the room's previous levels.
+    /// At least one field reports a change.
+    PowerLevels {
+        /// Users whose effective level changed, ordered by user ID.
+        changes: Vec<RoomPowerLevelUserChange>,
+        users_default: Option<RoomPowerLevelValueChange>,
+        /// Whether any level required for an action changed: ban, kick,
+        /// redact, invite, sending events or state, or notifications.
+        other_permissions_changed: bool,
+    },
+}
+
+/// A user's effective power level before and after a power-level change.
+/// A user without an explicit level has the room's default for users.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomPowerLevelUserChange {
+    pub target: RoomUserProfile,
+    pub old: i64,
+    pub new: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomPowerLevelValueChange {
+    pub old: i64,
+    pub new: i64,
 }
 
 /// A room membership transition, as classified by the Matrix spec's

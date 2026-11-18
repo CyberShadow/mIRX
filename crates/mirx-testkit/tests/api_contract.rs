@@ -27,16 +27,17 @@ use mirx_testkit::{
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
     RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMemberView, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity,
-    RoomVideoInfo, SendFileArgs, SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
-    SubmittedMembershipCommand, SubmittedReactionCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState, TestkitError, UiError,
-    UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewIdentity,
+    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReactionSummary, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, RoomUnableToDecryptActivity,
+    RoomUnableToDecryptReason, RoomVideoActivity, RoomVideoInfo, SendFileArgs,
+    SetupE2eeRecoveryArgs, SpaceChild, StatusBarState, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
+    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SwitchbarItem, SwitchbarState, TestkitError, UiError, UiFindHistorySearchState, UiFindState,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewIdentity,
 };
 
 #[test]
@@ -1567,6 +1568,83 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             .expect("deserialize member state-notice activity"),
         activity
     );
+}
+
+#[test]
+fn room_activity_power_levels_state_notice_round_trips_through_json() {
+    let activity = RoomActivity {
+        room_id: "!room:example".to_owned(),
+        activity_id: "state:$power:example".to_owned(),
+        timestamp_ms: 1_700_000_250_000,
+        relation: None,
+        reactions: Vec::new(),
+        kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+            event_id: "$power:example".to_owned(),
+            sender: "@admin:example".to_owned(),
+            state_key: String::new(),
+            content: RoomStateNoticeContent::PowerLevels {
+                changes: vec![RoomPowerLevelUserChange {
+                    user_id: "@bob:example".to_owned(),
+                    old: 0,
+                    new: 50,
+                }],
+                users_default: Some(RoomPowerLevelValueChange { old: 0, new: 10 }),
+                other_permissions_changed: true,
+            },
+        }),
+    };
+    let json = serde_json::json!({
+        "room_id": "!room:example",
+        "activity_id": "state:$power:example",
+        "timestamp_ms": 1700000250000u64,
+        "relation": null,
+        "reactions": [],
+        "kind": {
+            "type": "state_notice",
+            "event_id": "$power:example",
+            "sender": "@admin:example",
+            "state_key": "",
+            "content": {
+                "type": "power_levels",
+                "changes": [{ "user_id": "@bob:example", "old": 0, "new": 50 }],
+                "users_default": { "old": 0, "new": 10 },
+                "other_permissions_changed": true
+            }
+        }
+    });
+
+    assert_eq!(
+        serde_json::to_value(&activity).expect("serialize power levels state-notice activity"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_value::<RoomActivity>(json).expect("deserialize power levels notice"),
+        activity
+    );
+    for content in [
+        serde_json::json!({
+            "type": "power_levels",
+            "changes": [],
+            "users_default": null
+        }),
+        serde_json::json!({
+            "type": "power_levels",
+            "changes": [{ "user_id": "@bob:example", "old": 0, "new": 50, "unexpected": true }],
+            "users_default": null,
+            "other_permissions_changed": false
+        }),
+        serde_json::json!({
+            "type": "power_levels",
+            "changes": [],
+            "users_default": { "old": 0, "new": 10, "unexpected": true },
+            "other_permissions_changed": false
+        }),
+    ] {
+        assert!(
+            serde_json::from_value::<RoomStateNoticeContent>(content.clone()).is_err(),
+            "{content}"
+        );
+    }
 }
 
 #[test]

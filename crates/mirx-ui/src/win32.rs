@@ -130,7 +130,7 @@ mod timeline_text;
 
 use timeline_text::{
     TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line, event_line, member_change_text, message_line,
-    nick_label, topic_change_text,
+    nick_label, power_levels_change_text, topic_change_text,
 };
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
@@ -8022,6 +8022,16 @@ fn push_room_activity_row(
                     target,
                     reason,
                 } => member_change_text(&notice.sender, change, target, reason.as_deref()),
+                RoomStateNoticeContent::PowerLevels {
+                    changes,
+                    users_default,
+                    other_permissions_changed,
+                } => power_levels_change_text(
+                    &notice.sender,
+                    changes,
+                    users_default.as_ref(),
+                    *other_permissions_changed,
+                ),
             };
             (
                 TimelineRowKind::StateNotice,
