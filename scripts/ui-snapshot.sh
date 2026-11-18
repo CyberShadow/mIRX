@@ -15,6 +15,7 @@ driver_exe=
 generated_dir=
 diff_dir=
 keep_tmpdir=0
+updated_cases=()
 
 die() {
   echo "ui-snapshot: $*" >&2
@@ -122,8 +123,7 @@ ensure_wineprefix() {
 }
 
 resolve_binaries() {
-  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$tmpdir/cargo-target}"
-  target_dir="$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/debug"
+  target_dir="${CARGO_TARGET_DIR:-$root_dir/target}/x86_64-pc-windows-gnu/debug"
   ui_exe="$target_dir/mirx-ui.exe"
   driver_exe="$target_dir/mirx-snapshot-driver.exe"
 }
@@ -154,8 +154,8 @@ cleanup() {
   fi
 }
 
+# Cargo builds are incremental, so this rebuilds exactly the stale binaries.
 ensure_binaries() {
-  cargo clean --target x86_64-pc-windows-gnu -p mirx-ui -p mirx-testkit
   cargo build --target x86_64-pc-windows-gnu -p mirx-ui
   cargo build --target x86_64-pc-windows-gnu -p mirx-testkit --bin mirx-snapshot-driver
 }
@@ -2518,20 +2518,41 @@ run_case() {
     return "$driver_status"
   fi
 
-  import -window root "$generated_png"
-  echo "PNG $generated_png"
-
-  if [[ ! -f "$baseline_png" ]]; then
-    keep_tmpdir=1
-    echo "missing UI snapshot baseline: $baseline_png" >&2
-    echo "generated: $generated_png" >&2
+  if ! import -window root "$generated_png"; then
     cleanup_app
     return 1
   fi
-
-  compare_snapshot_pngs "$baseline_png" "$generated_png" "$diff_png"
-
   cleanup_app
+  echo "PNG $generated_png"
+
+  if [[ ! -f "$baseline_png" ]]; then
+    echo "missing UI snapshot baseline: $baseline_png" >&2
+    echo "generated: $generated_png" >&2
+    accept_or_reject_snapshot "$baseline_png" "$generated_png"
+    return
+  fi
+
+  if ! compare_snapshot_pngs "$baseline_png" "$generated_png" "$diff_png"; then
+    accept_or_reject_snapshot "$baseline_png" "$generated_png"
+    return
+  fi
+}
+
+# Status 0 = the generated PNG became the baseline (update mode), 1 = failure.
+accept_or_reject_snapshot() {
+  local baseline_png="$1"
+  local generated_png="$2"
+
+  if [[ "${MIRX_SNAPSHOT_UPDATE:-0}" != "1" ]]; then
+    keep_tmpdir=1
+    return 1
+  fi
+  if [[ -f "$baseline_png" ]]; then
+    echo "diff bbox: $(magick "$baseline_png" "$generated_png" -compose difference -composite -threshold 0 -format '%@' info:)" >&2
+  fi
+  cp "$generated_png" "$baseline_png" || return 1
+  updated_cases+=("$(basename "$baseline_png" .png)")
+  echo "updated baseline: $baseline_png" >&2
 }
 
 compare_snapshot_pngs() {
@@ -2547,7 +2568,6 @@ compare_snapshot_pngs() {
   ae_metric="${compare_output%%[[:space:]]*}"
 
   if [[ "$ae_metric" != "0" ]]; then
-    keep_tmpdir=1
     echo "visual snapshot mismatch" >&2
     echo "baseline:  $baseline_png" >&2
     echo "generated: $generated_png" >&2
@@ -2565,6 +2585,7 @@ main() {
   require_command Xvfb
   require_command import
   require_command compare
+  require_command magick
   require_command xdpyinfo
 
   [[ -d "$states_dir" ]] || die "missing states directory: $states_dir"
@@ -2609,9 +2630,26 @@ main() {
     state_files=("${discovered[@]}")
   fi
 
+  # Every case runs; failures are collected and reported together.
+  local failed_cases=()
+  updated_cases=()
   for state_path in "${state_files[@]}"; do
-    run_case "$state_path"
+    local case_name=${state_path##*/}
+    if ! run_case "$state_path"; then
+      failed_cases+=("${case_name%.json}")
+    fi
   done
+
+  if [[ ${#updated_cases[@]} -gt 0 ]]; then
+    echo "UPDATED: ${updated_cases[*]}"
+  fi
+  if [[ ${#failed_cases[@]} -gt 0 ]]; then
+    echo "FAILED: ${failed_cases[*]}" >&2
+    return 1
+  fi
+  if [[ ${#updated_cases[@]} -eq 0 ]]; then
+    echo "all ${#state_files[@]} UI snapshot cases passed"
+  fi
 }
 
 main "$@"
