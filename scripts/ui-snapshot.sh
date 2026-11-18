@@ -1640,6 +1640,42 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!alpha:example'
       ;;
+    activity-levels)
+      expect_selected='!lobby:example'
+      expect_active_view='room:!lobby:example'
+      append_events_path="$root_dir/tests/ui-state-updates/activity-levels.json"
+      room_view_expect_args=(
+        --expect-room-view '!lobby:example::<Bob> Alice: ping'
+        --expect-room-view '!lobby:example::* Bob waves at Alice'
+      )
+      room_activity_expect_args=(
+        --expect-room-activity '!lobby:example::"highlight":true'
+        --expect-room-activity '!pings:example::"highlight":true'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!events:example::event'
+        --expect-switchbar-activity 'room:!chat:example::message'
+        --expect-switchbar-activity 'room:!pings:example::highlight'
+        --expect-switchbar-activity 'room:!casey:example::message'
+        --expect-switchbar-activity 'room:!counts:example::highlight'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!lobby:example'
+      )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'Events::event'
+        --expect-navigation-activity 'Chat::message'
+        --expect-navigation-activity 'Pings::highlight'
+        --expect-navigation-activity 'Casey::message'
+        --expect-navigation-activity 'Counts::highlight'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'status'
+        --expect-no-navigation-activity 'Lobby'
+      )
+      expect_switchbar_active='room:!lobby:example'
+      ;;
     shell-constrained-layout)
       expect_selected='!focus:example'
       expect_active_view='room:!focus:example'

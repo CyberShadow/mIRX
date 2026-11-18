@@ -60,17 +60,17 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Controls::{
-    BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, EM_GETSEL, EM_REPLACESEL,
-    EM_SCROLLCARET, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, NMHDR, SB_SETTEXTW, SBARS_SIZEGRIP,
+    BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
+    CDRF_NOTIFYITEMDRAW, EM_GETSEL, EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL, I_IMAGENONE,
+    ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
+    NM_CUSTOMDRAW, NMHDR, NMTBCUSTOMDRAW, NMTVCUSTOMDRAW, SB_SETTEXTW, SBARS_SIZEGRIP,
     STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT,
     TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE,
-    TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTATE_MARKED, TBSTYLE_EX_MIXEDBUTTONS,
-    TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT,
-    TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_STATE, TVIF_TEXT, TVINSERTSTRUCTW,
-    TVINSERTSTRUCTW_0, TVIS_BOLD, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVM_SETITEMW,
-    TVN_SELCHANGEDW,
+    TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT,
+    TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT,
+    TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW,
+    TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST,
+    TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT,
@@ -416,6 +416,8 @@ impl TimelineRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Rows for lines other users wrote carry `highlight`: the user's push
+/// rules highlighted the line, so it is drawn in the highlight colour.
 enum TimelineRowKind {
     Header,
     Topic,
@@ -424,14 +426,27 @@ enum TimelineRowKind {
     Message {
         presentation: RoomMessagePresentationKind,
         send_state: TimelineMessageSendState,
+        highlight: bool,
     },
-    Image,
-    File,
-    Audio,
-    Video,
-    Unsupported,
+    Image {
+        highlight: bool,
+    },
+    File {
+        highlight: bool,
+    },
+    Audio {
+        highlight: bool,
+    },
+    Video {
+        highlight: bool,
+    },
+    Unsupported {
+        highlight: bool,
+    },
     UnableToDecrypt,
-    StateNotice,
+    StateNotice {
+        highlight: bool,
+    },
     Plain,
 }
 
@@ -3628,10 +3643,21 @@ unsafe extern "system" fn window_proc(
         }
         WM_COPYDATA => handle_copydata(hwnd, lparam),
         WM_NOTIFY => {
-            if handle_tree_selection(hwnd, lparam) {
-                0
-            } else {
-                default_window_proc(hwnd, message, wparam, lparam)
+            let header = &*(lparam as *const NMHDR);
+            let control_id =
+                u16::try_from(header.idFrom).expect("frame child control ids are 16-bit");
+            match (control_id, header.code) {
+                (TREE_ID, TVN_SELCHANGEDW) => {
+                    handle_tree_selection(hwnd);
+                    0
+                }
+                (TREE_ID, NM_CUSTOMDRAW) => {
+                    tree_custom_draw(state_ref(hwnd), &mut *(lparam as *mut NMTVCUSTOMDRAW))
+                }
+                (SWITCHBAR_ID, NM_CUSTOMDRAW) => {
+                    switchbar_custom_draw(state_ref(hwnd), &mut *(lparam as *mut NMTBCUSTOMDRAW))
+                }
+                _ => default_window_proc(hwnd, message, wparam, lparam),
             }
         }
         WM_SELF_TEST => {
@@ -4985,11 +5011,41 @@ const fn rgb(r: u8, g: u8, b: u8) -> u32 {
 }
 
 const MIRC_MAROON: u32 = rgb(127, 0, 0);
+const MIRC_RED: u32 = rgb(255, 0, 0);
+const MIRC_BLUE: u32 = rgb(0, 0, 252);
 const MIRC_PURPLE: u32 = rgb(156, 0, 156);
 const MIRC_GREEN: u32 = rgb(0, 147, 0);
 
+// mIRC's switchbar/treebar activity colours (Options > Display > Event,
+// Message, Highlight): an inactive window's button text takes the colour of
+// what happened in it. Message red is mIRC's well-known default; event
+// maroon and highlight blue are best recollection of mIRC 7's defaults and
+// are pending a check against a real install. Highlighted timeline lines use
+// the highlight colour too.
+const ACTIVITY_EVENT_COLOR: u32 = MIRC_MAROON;
+const ACTIVITY_MESSAGE_COLOR: u32 = MIRC_RED;
+const ACTIVITY_HIGHLIGHT_COLOR: u32 = MIRC_BLUE;
+
+fn activity_level_color(level: ViewActivityLevel) -> u32 {
+    match level {
+        ViewActivityLevel::Event => ACTIVITY_EVENT_COLOR,
+        ViewActivityLevel::Message => ACTIVITY_MESSAGE_COLOR,
+        ViewActivityLevel::Highlight => ACTIVITY_HIGHLIGHT_COLOR,
+    }
+}
+
 fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
     match kind {
+        // mIRC draws a highlighted line wholly in the highlight colour.
+        TimelineRowKind::Message {
+            highlight: true, ..
+        }
+        | TimelineRowKind::Image { highlight: true }
+        | TimelineRowKind::File { highlight: true }
+        | TimelineRowKind::Audio { highlight: true }
+        | TimelineRowKind::Video { highlight: true }
+        | TimelineRowKind::Unsupported { highlight: true }
+        | TimelineRowKind::StateNotice { highlight: true } => ACTIVITY_HIGHLIGHT_COLOR,
         TimelineRowKind::Header | TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
         TimelineRowKind::Topic => rgb(0x4A, 0x42, 0x2A),
         TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
@@ -5007,19 +5063,21 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         TimelineRowKind::Message {
             presentation: RoomMessagePresentationKind::Notice,
             send_state: TimelineMessageSendState::Sent,
+            ..
         } => MIRC_MAROON,
         TimelineRowKind::Message {
             presentation: RoomMessagePresentationKind::Emote,
             send_state: TimelineMessageSendState::Sent,
+            ..
         } => MIRC_PURPLE,
         TimelineRowKind::Message { .. } => rgb(0x00, 0x00, 0x00),
-        TimelineRowKind::Image
-        | TimelineRowKind::File
-        | TimelineRowKind::Audio
-        | TimelineRowKind::Video => MIRC_PURPLE,
-        TimelineRowKind::Unsupported => rgb(0x7A, 0x46, 0x16),
+        TimelineRowKind::Image { .. }
+        | TimelineRowKind::File { .. }
+        | TimelineRowKind::Audio { .. }
+        | TimelineRowKind::Video { .. } => MIRC_PURPLE,
+        TimelineRowKind::Unsupported { .. } => rgb(0x7A, 0x46, 0x16),
         TimelineRowKind::UnableToDecrypt => rgb(0x8A, 0x5A, 0x18),
-        TimelineRowKind::StateNotice => MIRC_GREEN,
+        TimelineRowKind::StateNotice { .. } => MIRC_GREEN,
     }
 }
 
@@ -8038,6 +8096,7 @@ fn push_room_activity_row(
                 TimelineRowKind::Message {
                     presentation: message.presentation,
                     send_state: timeline_message_send_state(&message.send_state),
+                    highlight: activity.highlight,
                 },
                 message_line(
                     &timestamp,
@@ -8056,7 +8115,9 @@ fn push_room_activity_row(
                 view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
             });
             (
-                TimelineRowKind::Image,
+                TimelineRowKind::Image {
+                    highlight: activity.highlight,
+                },
                 action_line(
                     &timestamp,
                     &message.sender,
@@ -8069,7 +8130,9 @@ fn push_room_activity_row(
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());
             (
-                TimelineRowKind::File,
+                TimelineRowKind::File {
+                    highlight: activity.highlight,
+                },
                 action_line(
                     &timestamp,
                     &message.sender,
@@ -8082,7 +8145,9 @@ fn push_room_activity_row(
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_audio_metadata_suffix(message.info.as_ref());
             (
-                TimelineRowKind::Audio,
+                TimelineRowKind::Audio {
+                    highlight: activity.highlight,
+                },
                 action_line(
                     &timestamp,
                     &message.sender,
@@ -8101,7 +8166,9 @@ fn push_room_activity_row(
                 })
             });
             (
-                TimelineRowKind::Video,
+                TimelineRowKind::Video {
+                    highlight: activity.highlight,
+                },
                 action_line(
                     &timestamp,
                     &message.sender,
@@ -8111,7 +8178,9 @@ fn push_room_activity_row(
             )
         }
         RoomActivityKind::UnsupportedMessage(message) => (
-            TimelineRowKind::Unsupported,
+            TimelineRowKind::Unsupported {
+                highlight: activity.highlight,
+            },
             action_line(
                 &timestamp,
                 &message.sender,
@@ -8148,13 +8217,16 @@ fn push_room_activity_row(
                 ),
             };
             (
-                TimelineRowKind::StateNotice,
+                TimelineRowKind::StateNotice {
+                    highlight: activity.highlight,
+                },
                 event_line(&timestamp, &body),
                 None,
             )
         }
+        // The redacted line no longer says what made it a highlight.
         RoomActivityKind::Redacted(_) => (
-            TimelineRowKind::StateNotice,
+            TimelineRowKind::StateNotice { highlight: false },
             event_line(&timestamp, "message redacted"),
             None,
         ),
@@ -9302,18 +9374,59 @@ fn switchbar_button_state(state: &WindowState, view_id: &ViewId) -> u8 {
     if state.active_view == *view_id {
         button_state |= TBSTATE_CHECKED as u8;
     }
-    if state.room_activity.contains_key(view_id) {
-        button_state |= TBSTATE_MARKED as u8;
-    }
     button_state
 }
 
-fn tree_item_state(state: &WindowState, view_id: &ViewId) -> u32 {
-    if state.room_activity.contains_key(view_id) {
-        TVIS_BOLD
-    } else {
-        0
+/// The text colour of a view's switchbar button and treebar items: its
+/// activity colour, or `None` for the control's own colour.
+fn view_activity_text_color(state: &WindowState, view_id: &ViewId) -> Option<u32> {
+    let level = state.room_activity.get(view_id)?;
+    assert_ne!(
+        *view_id, state.active_view,
+        "the active view never records activity"
+    );
+    Some(activity_level_color(*level))
+}
+
+/// The custom-draw reply that lets the control paint as usual.
+const CDRF_DEFAULT: LRESULT = 0;
+
+/// Asks for per-item notifications, then colours each item's text through
+/// `item_color`. Those are the only stages requested.
+fn activity_custom_draw(
+    draw_stage: u32,
+    clr_text: &mut u32,
+    item_color: impl FnOnce() -> Option<u32>,
+) -> LRESULT {
+    match draw_stage {
+        CDDS_PREPAINT => CDRF_NOTIFYITEMDRAW as LRESULT,
+        CDDS_ITEMPREPAINT => {
+            if let Some(color) = item_color() {
+                *clr_text = color;
+            }
+            CDRF_DEFAULT
+        }
+        stage => panic!("unrequested custom-draw stage {stage:#x}"),
     }
+}
+
+/// Switchbar items are identified by their button command id.
+fn switchbar_custom_draw(state: &WindowState, draw: &mut NMTBCUSTOMDRAW) -> LRESULT {
+    let command_id = draw.nmcd.dwItemSpec;
+    activity_custom_draw(draw.nmcd.dwDrawStage, &mut draw.clrText, || {
+        let view_id = &state.switchbar_views[command_id - SWITCHBAR_COMMAND_FIRST];
+        view_activity_text_color(state, view_id)
+    })
+}
+
+/// Treebar items are identified by their `HTREEITEM`. Group labels such as
+/// `rooms: 2` map to no view, so keep the tree's text colour.
+fn tree_custom_draw(state: &WindowState, draw: &mut NMTVCUSTOMDRAW) -> LRESULT {
+    let tree_item = draw.nmcd.dwItemSpec as isize;
+    activity_custom_draw(draw.nmcd.dwDrawStage, &mut draw.clrText, || {
+        let view_id = state.tree_items.get(&tree_item)?;
+        view_activity_text_color(state, view_id)
+    })
 }
 
 fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
@@ -9856,7 +9969,7 @@ unsafe fn apply_view_activation_state(
         state.active_view = view_id.clone();
     }
 
-    refresh_tree_item_activity_state(hwnd)?;
+    refresh_tree_activity_colors(hwnd)?;
     refresh_view_content(hwnd, view_id)?;
     select_tree_item(hwnd, view_id, preferred_tree_item);
 
@@ -10149,30 +10262,6 @@ unsafe fn insert_tree_item(tree: HWND, parent: isize, text: &str) -> isize {
     ) as isize
 }
 
-unsafe fn insert_tree_item_with_state(tree: HWND, parent: isize, text: &str, state: u32) -> isize {
-    let mut text = wide_null(text);
-    let item = TVITEMEXW {
-        mask: TVIF_TEXT | TVIF_STATE,
-        state,
-        stateMask: TVIS_BOLD,
-        pszText: text.as_mut_ptr(),
-        cchTextMax: text.len() as i32,
-        ..zeroed()
-    };
-    let insert = TVINSERTSTRUCTW {
-        hParent: parent as _,
-        hInsertAfter: TVI_LAST as _,
-        Anonymous: TVINSERTSTRUCTW_0 { itemex: item },
-    };
-
-    SendMessageW(
-        tree,
-        TVM_INSERTITEMW,
-        0,
-        (&insert as *const TVINSERTSTRUCTW) as LPARAM,
-    ) as isize
-}
-
 unsafe fn expand_tree_item(tree: HWND, item: isize) {
     SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, item as LPARAM);
 }
@@ -10183,12 +10272,7 @@ unsafe fn insert_mapped_tree_item(
     label: &str,
     view_id: ViewId,
 ) -> isize {
-    let item = insert_tree_item_with_state(
-        state.controls.tree,
-        parent,
-        label,
-        tree_item_state(state, &view_id),
-    );
+    let item = insert_tree_item(state.controls.tree, parent, label);
     state.tree_items.insert(item, view_id.clone());
     state.primary_tree_items.entry(view_id).or_insert(item);
     item
@@ -11284,6 +11368,10 @@ unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
         })
         .collect::<Vec<_>>();
 
+    // `switchbar_views` mirrors the buttons, indexed by command id: switch
+    // it while the toolbar is empty, so a paint never sees a button without
+    // its view.
+    state_mut(hwnd).switchbar_views = view_ids;
     if !buttons.is_empty()
         && SendMessageW(
             switchbar,
@@ -11295,8 +11383,6 @@ unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
         return Err("failed to add switchbar buttons".to_owned());
     }
     SendMessageW(switchbar, TB_AUTOSIZE, 0, 0);
-
-    state_mut(hwnd).switchbar_views = view_ids;
     refresh_switchbar_state(hwnd)
 }
 
@@ -11317,46 +11403,19 @@ unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
             return Err(format!("failed to refresh switchbar button {command_id}"));
         }
     }
+    // Repaint for the activity colours, which custom draw reads.
+    InvalidateRect(switchbar, null(), 1);
 
     Ok(())
 }
 
-unsafe fn refresh_tree_item_activity_state(hwnd: HWND) -> Result<(), String> {
+/// Repaints the treebar for the activity colours, which custom draw reads.
+unsafe fn refresh_tree_activity_colors(hwnd: HWND) -> Result<(), String> {
     let tree = state_ref(hwnd).controls.tree;
     if tree.is_null() {
         return Err("tree control was not created".to_owned());
     }
-
-    let updates = {
-        let state = state_ref(hwnd);
-        state
-            .tree_items
-            .iter()
-            .map(|(tree_item, view_id)| (*tree_item, tree_item_state(state, view_id)))
-            .collect::<Vec<_>>()
-    };
-
-    for (tree_item, item_state) in updates {
-        let mut item = TVITEMEXW {
-            mask: TVIF_STATE,
-            hItem: tree_item as _,
-            state: item_state,
-            stateMask: TVIS_BOLD,
-            ..zeroed()
-        };
-        if SendMessageW(
-            tree,
-            TVM_SETITEMW,
-            0,
-            (&mut item as *mut TVITEMEXW) as LPARAM,
-        ) == 0
-        {
-            return Err(format!(
-                "failed to refresh tree item activity state for handle 0x{tree_item:x}"
-            ));
-        }
-    }
-
+    InvalidateRect(tree, null(), 1);
     Ok(())
 }
 
@@ -12313,7 +12372,6 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         let state = state_mut(hwnd);
         state.pending_login_homeserver_url = None;
         state.current_session_homeserver_url = None;
-        state.switchbar_views.clear();
         state.room_activity.clear();
         state.room_activity_read_targets.clear();
         state.find_states.clear();
@@ -12367,20 +12425,11 @@ unsafe fn drain_core_events_and_refresh(hwnd: HWND) -> Result<usize, String> {
     apply_events_and_refresh(hwnd, events).map(|()| event_count)
 }
 
-unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
-    if lparam == 0 {
-        return false;
-    }
-
-    let notification = &*(lparam as *const NMHDR);
-    if notification.idFrom != TREE_ID as usize || notification.code != TVN_SELCHANGEDW {
-        return false;
-    }
-
+unsafe fn handle_tree_selection(hwnd: HWND) {
     let tree = state_ref(hwnd).controls.tree;
     let selected_item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
     if selected_item == 0 {
-        return true;
+        return;
     }
 
     let view_id = state_ref(hwnd).tree_items.get(&selected_item).cloned();
@@ -12389,8 +12438,6 @@ unsafe fn handle_tree_selection(hwnd: HWND, lparam: LPARAM) -> bool {
     {
         show_error_message(hwnd, "Treebar", &message);
     }
-
-    true
 }
 
 fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
@@ -16071,6 +16118,7 @@ mod tests {
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 "[00:00] @alice: message".to_owned(),
             )
@@ -16719,6 +16767,7 @@ mod tests {
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 TimelineRowKind::ReactionSummary,
             ]
@@ -17025,7 +17074,10 @@ mod tests {
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
-            vec![TimelineRowKind::Header, TimelineRowKind::StateNotice]
+            vec![
+                TimelineRowKind::Header,
+                TimelineRowKind::StateNotice { highlight: false }
+            ]
         );
         assert_eq!(
             project_timeline_rows(&rows),
@@ -17180,11 +17232,13 @@ mod tests {
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 TimelineRowKind::ReactionSummary,
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 TimelineRowKind::ReactionSummary,
             ]
@@ -18020,33 +18074,38 @@ mod tests {
                 TimelineRowKind::Header,
                 TimelineRowKind::Topic,
                 TimelineRowKind::Typing,
-                TimelineRowKind::StateNotice,
+                TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Notice,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Emote,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Pending,
+                    highlight: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Failed,
+                    highlight: false,
                 },
-                TimelineRowKind::Image,
-                TimelineRowKind::File,
-                TimelineRowKind::Audio,
-                TimelineRowKind::Unsupported,
-                TimelineRowKind::StateNotice,
-                TimelineRowKind::StateNotice,
+                TimelineRowKind::Image { highlight: false },
+                TimelineRowKind::File { highlight: false },
+                TimelineRowKind::Audio { highlight: false },
+                TimelineRowKind::Unsupported { highlight: false },
+                TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::StateNotice { highlight: false },
             ]
         );
         assert_eq!(
@@ -18313,10 +18372,11 @@ mod tests {
                 TimelineRowKind::Topic,
                 TimelineRowKind::Typing,
                 TimelineRowKind::Plain,
-                TimelineRowKind::StateNotice,
+                TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
             ]
         );
@@ -18399,10 +18459,11 @@ mod tests {
                 TimelineRowKind::Header,
                 TimelineRowKind::Topic,
                 TimelineRowKind::Typing,
-                TimelineRowKind::StateNotice,
+                TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
             ]
         );
@@ -18792,7 +18853,7 @@ mod tests {
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
         let image_row = rows
             .iter()
-            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
             .expect("image row must be present");
 
         assert_eq!(image_row.image_state, Some(TimelineImageState::Pending));
@@ -18851,7 +18912,7 @@ mod tests {
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
         let image_row = rows
             .iter()
-            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
             .expect("image row must be present");
         assert_eq!(
             image_row.image_state,
@@ -19286,7 +19347,7 @@ mod tests {
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
         let image_row = rows
             .iter()
-            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
             .expect("image row must be present");
         assert!(matches!(
             image_row.image_state,
@@ -19351,7 +19412,7 @@ mod tests {
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
         let image_row = rows
             .iter()
-            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
             .expect("image row must be present");
         assert_eq!(
             image_row.image_state,
@@ -19396,7 +19457,7 @@ mod tests {
             build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
         let image_row = rows
             .iter()
-            .find(|row| matches!(row.kind, TimelineRowKind::Image))
+            .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
             .expect("thread image row must be present");
         assert_eq!(
             image_row.image_state,
@@ -19434,7 +19495,7 @@ mod tests {
             build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
         let video_row = rows
             .iter()
-            .find(|row| matches!(row.kind, TimelineRowKind::Video))
+            .find(|row| matches!(row.kind, TimelineRowKind::Video { .. }))
             .expect("thread video row must be present");
         assert_eq!(
             video_row.image_state,
@@ -19934,14 +19995,14 @@ mod tests {
     #[test]
     fn timeline_row_paint_lines_expand_image_slots_without_changing_logical_text_rows() {
         let mut image_row = TimelineRow::log(
-            TimelineRowKind::Image,
+            TimelineRowKind::Image { highlight: false },
             "[16:00] * @alice:example.org sent image: diagram.png".to_owned(),
         );
         image_row.image_state = Some(TimelineImageState::Pending);
         let rows = vec![
             image_row,
             TimelineRow::log(
-                TimelineRowKind::Unsupported,
+                TimelineRowKind::Unsupported { highlight: false },
                 "[16:01] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
             ),
@@ -19984,6 +20045,7 @@ mod tests {
             TimelineRowKind::Message {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
+                highlight: false,
             },
             text.to_owned(),
         )];
@@ -20051,7 +20113,7 @@ mod tests {
     #[test]
     fn timeline_row_paint_lines_preserve_image_slots_after_wrapped_caption_lines() {
         let mut row = TimelineRow::log(
-            TimelineRowKind::Image,
+            TimelineRowKind::Image { highlight: false },
             "[16:00] * @alice:example.org sent image: alpha beta gamma".to_owned(),
         );
         row.image_state = Some(TimelineImageState::Pending);
@@ -20088,6 +20150,7 @@ mod tests {
             TimelineRowKind::Message {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
+                highlight: false,
             },
             // Three continuation-width words after a full first line.
             format!(
@@ -20393,6 +20456,7 @@ mod tests {
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 "[22:13] <@bob:example> current row".to_owned(),
             )
@@ -22419,16 +22483,16 @@ mod tests {
     }
 
     #[test]
-    fn switchbar_button_state_tracks_checked_and_marked_bits() {
+    fn switchbar_button_state_tracks_only_the_checked_bit() {
         let mut state = test_state();
         let room_view = room_view_id("!room:example");
 
         state
             .room_activity
-            .insert(room_view.clone(), ViewActivityLevel::Message);
+            .insert(room_view.clone(), ViewActivityLevel::Highlight);
         assert_eq!(
             switchbar_button_state(&state, &room_view),
-            (TBSTATE_ENABLED | TBSTATE_MARKED) as u8
+            TBSTATE_ENABLED as u8
         );
 
         state.room_activity.clear();
@@ -22437,39 +22501,168 @@ mod tests {
             switchbar_button_state(&state, &room_view),
             (TBSTATE_ENABLED | TBSTATE_CHECKED) as u8
         );
+    }
 
+    #[test]
+    fn activity_levels_use_mirc_switchbar_colors() {
+        assert_eq!(activity_level_color(ViewActivityLevel::Event), MIRC_MAROON);
+        assert_eq!(activity_level_color(ViewActivityLevel::Message), MIRC_RED);
+        assert_eq!(
+            activity_level_color(ViewActivityLevel::Highlight),
+            MIRC_BLUE
+        );
+    }
+
+    fn switchbar_draw(stage: u32, command_id: usize) -> NMTBCUSTOMDRAW {
+        let mut draw = NMTBCUSTOMDRAW::default();
+        draw.nmcd.dwDrawStage = stage;
+        draw.nmcd.dwItemSpec = command_id;
+        draw.clrText = rgb(1, 2, 3);
+        draw
+    }
+
+    #[test]
+    fn switchbar_custom_draw_colors_buttons_by_activity_level() {
+        let mut state = test_state();
+        state.active_view = ViewId::Status;
+        state.switchbar_views = vec![
+            ViewId::Status,
+            room_view_id("!event:example"),
+            room_view_id("!message:example"),
+            room_view_id("!highlight:example"),
+        ];
+        state.room_activity = BTreeMap::from([
+            (room_view_id("!event:example"), ViewActivityLevel::Event),
+            (room_view_id("!message:example"), ViewActivityLevel::Message),
+            (
+                room_view_id("!highlight:example"),
+                ViewActivityLevel::Highlight,
+            ),
+        ]);
+
+        let mut prepaint = switchbar_draw(CDDS_PREPAINT, 0);
+        assert_eq!(
+            switchbar_custom_draw(&state, &mut prepaint),
+            CDRF_NOTIFYITEMDRAW as LRESULT
+        );
+        assert_eq!(prepaint.clrText, rgb(1, 2, 3));
+
+        for (index, expected) in [rgb(1, 2, 3), MIRC_MAROON, MIRC_RED, MIRC_BLUE]
+            .into_iter()
+            .enumerate()
+        {
+            let mut draw = switchbar_draw(CDDS_ITEMPREPAINT, SWITCHBAR_COMMAND_FIRST + index);
+            assert_eq!(switchbar_custom_draw(&state, &mut draw), CDRF_DEFAULT);
+            assert_eq!(draw.clrText, expected, "button {index}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "the active view never records activity")]
+    fn switchbar_custom_draw_rejects_activity_on_the_active_view() {
+        let mut state = test_state();
+        state.active_view = room_view_id("!room:example");
+        state.switchbar_views = vec![room_view_id("!room:example")];
         state
             .room_activity
-            .insert(room_view.clone(), ViewActivityLevel::Message);
-        assert_eq!(
-            switchbar_button_state(&state, &room_view),
-            (TBSTATE_ENABLED | TBSTATE_CHECKED | TBSTATE_MARKED) as u8
+            .insert(room_view_id("!room:example"), ViewActivityLevel::Message);
+
+        switchbar_custom_draw(
+            &state,
+            &mut switchbar_draw(CDDS_ITEMPREPAINT, SWITCHBAR_COMMAND_FIRST),
         );
     }
 
     #[test]
-    fn tree_item_state_bolds_only_matching_exact_view() {
+    fn tree_custom_draw_colors_mapped_items_and_leaves_group_labels() {
         let mut state = test_state();
-        let room_view = room_view_id("!room:example");
-        let thread_view = thread_view_id("!room:example", "$thread-root");
-        let other_room_view = room_view_id("!other:example");
+        state.active_view = ViewId::Status;
+        state.tree_items = BTreeMap::from([
+            (11, room_view_id("!room:example")),
+            (12, thread_view_id("!room:example", "$root")),
+        ]);
+        state.room_activity.insert(
+            thread_view_id("!room:example", "$root"),
+            ViewActivityLevel::Highlight,
+        );
 
-        state
-            .room_activity
-            .insert(room_view.clone(), ViewActivityLevel::Message);
-        assert_eq!(tree_item_state(&state, &room_view), TVIS_BOLD);
-        assert_eq!(tree_item_state(&state, &thread_view), 0);
-        assert_eq!(tree_item_state(&state, &ViewId::Status), 0);
-        assert_eq!(tree_item_state(&state, &other_room_view), 0);
+        let draw = |stage, item: usize| {
+            let mut draw = NMTVCUSTOMDRAW::default();
+            draw.nmcd.dwDrawStage = stage;
+            draw.nmcd.dwItemSpec = item;
+            draw.clrText = rgb(1, 2, 3);
+            let reply = tree_custom_draw(&state, &mut draw);
+            (reply, draw.clrText)
+        };
 
-        state.room_activity.clear();
-        state
-            .room_activity
-            .insert(thread_view.clone(), ViewActivityLevel::Message);
-        assert_eq!(tree_item_state(&state, &room_view), 0);
-        assert_eq!(tree_item_state(&state, &thread_view), TVIS_BOLD);
-        assert_eq!(tree_item_state(&state, &ViewId::Status), 0);
-        assert_eq!(tree_item_state(&state, &other_room_view), 0);
+        assert_eq!(
+            draw(CDDS_PREPAINT, 0),
+            (CDRF_NOTIFYITEMDRAW as LRESULT, rgb(1, 2, 3))
+        );
+        assert_eq!(draw(CDDS_ITEMPREPAINT, 10), (CDRF_DEFAULT, rgb(1, 2, 3)));
+        assert_eq!(draw(CDDS_ITEMPREPAINT, 11), (CDRF_DEFAULT, rgb(1, 2, 3)));
+        assert_eq!(draw(CDDS_ITEMPREPAINT, 12), (CDRF_DEFAULT, MIRC_BLUE));
+    }
+
+    #[test]
+    fn highlighted_rows_use_the_highlight_color_whatever_their_presentation() {
+        for presentation in [
+            RoomMessagePresentationKind::Text,
+            RoomMessagePresentationKind::Emote,
+            RoomMessagePresentationKind::Notice,
+        ] {
+            let row = |highlight| TimelineRowKind::Message {
+                presentation,
+                send_state: TimelineMessageSendState::Sent,
+                highlight,
+            };
+            assert_eq!(timeline_row_color(&row(true)), MIRC_BLUE);
+            assert_ne!(timeline_row_color(&row(false)), MIRC_BLUE);
+        }
+        assert_eq!(
+            timeline_row_color(&TimelineRowKind::Image { highlight: true }),
+            MIRC_BLUE
+        );
+        assert_eq!(
+            timeline_row_color(&TimelineRowKind::StateNotice { highlight: true }),
+            MIRC_BLUE
+        );
+        assert_eq!(
+            timeline_row_color(&TimelineRowKind::StateNotice { highlight: false }),
+            MIRC_GREEN
+        );
+    }
+
+    #[test]
+    fn highlighted_activity_builds_highlighted_rows_but_redactions_do_not() {
+        let mut rows = Vec::new();
+        let mention = highlighted(sent_message_activity(
+            "!room:example",
+            "$m",
+            None,
+            "ping",
+            1,
+        ));
+        push_room_activity_row(&mut rows, None, &mention);
+        let redacted = RoomActivity {
+            kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+                event_id: "$m".to_owned(),
+            }),
+            ..mention.clone()
+        };
+        push_room_activity_row(&mut rows, None, &redacted);
+
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Message {
+                    presentation: RoomMessagePresentationKind::Text,
+                    send_state: TimelineMessageSendState::Sent,
+                    highlight: true,
+                },
+                TimelineRowKind::StateNotice { highlight: false },
+            ]
+        );
     }
 
     fn event_room_activity(event: Event) -> RoomActivity {
@@ -25264,6 +25457,7 @@ mod tests {
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
+                    highlight: false,
                 },
                 "[00:00] @alice: message".to_owned(),
             )

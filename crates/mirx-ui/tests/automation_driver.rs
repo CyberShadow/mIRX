@@ -2247,7 +2247,6 @@ fn assert_raw_switchbar_state(
     ui_state: &UiState,
     identity: &ViewIdentity,
     checked: bool,
-    marked: bool,
 ) {
     let index = ui_state
         .switchbar
@@ -2271,9 +2270,10 @@ fn assert_raw_switchbar_state(
         checked,
         "unexpected raw checked state for {identity:?}"
     );
+    // Activity is drawn as the button's text colour, never the marked fill.
     assert_eq!(
-        state & TBSTATE_MARKED as usize != 0,
-        marked,
+        state & TBSTATE_MARKED as usize,
+        0,
         "unexpected raw marked state for {identity:?}"
     );
 }
@@ -7634,6 +7634,76 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
 }
 
 #[test]
+fn automation_driver_reports_activity_levels_and_highlight_lines()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("activity-levels.json");
+    let update_path = fixture_update_path("activity-levels.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!lobby:example"));
+    for (room_id, label, level) in [
+        ("!lobby:example", "Lobby", None),
+        ("!events:example", "Events", Some(ViewActivityLevel::Event)),
+        ("!chat:example", "Chat", Some(ViewActivityLevel::Message)),
+        (
+            "!pings:example",
+            "Pings",
+            Some(ViewActivityLevel::Highlight),
+        ),
+        ("!casey:example", "Casey", Some(ViewActivityLevel::Message)),
+        (
+            "!counts:example",
+            "Counts",
+            Some(ViewActivityLevel::Highlight),
+        ),
+    ] {
+        assert_switchbar_activity(&ui_state, &room_identity(room_id), level);
+        assert_navigation_activity(&ui_state, &["mirx", "rooms: 6", label], level);
+        assert_eq!(
+            find_ui_room(&ui_state, room_id).activity,
+            level,
+            "{room_id}"
+        );
+    }
+
+    let highlights = app
+        .room_activity(Some("!lobby:example"))?
+        .into_iter()
+        .map(|activity| (activity.activity_id, activity.highlight))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        highlights,
+        vec![
+            ("event:$lobby-1".to_owned(), false),
+            ("event:$lobby-2".to_owned(), true),
+            ("event:$lobby-3".to_owned(), true),
+            ("event:$lobby-4".to_owned(), false),
+        ]
+    );
+
+    app.select_room("!pings:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let activated_state = app.dump_ui_state()?;
+    assert_switchbar_activity(&activated_state, &room_identity("!pings:example"), None);
+    assert_switchbar_activity(
+        &activated_state,
+        &room_identity("!chat:example"),
+        Some(ViewActivityLevel::Message),
+    );
+    Ok(())
+}
+
+#[test]
 fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -7797,9 +7867,9 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     );
     assert_switchbar_activity(&initial_state, &alpha_room_identity, None);
     assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], None);
-    assert_raw_switchbar_state(&app, &initial_state, &alpha_room_identity, true, false);
-    assert_raw_switchbar_state(&app, &initial_state, &beta_room_identity, false, true);
-    assert_raw_switchbar_state(&app, &initial_state, &alpha_thread_identity, false, true);
+    assert_raw_switchbar_state(&app, &initial_state, &alpha_room_identity, true);
+    assert_raw_switchbar_state(&app, &initial_state, &beta_room_identity, false);
+    assert_raw_switchbar_state(&app, &initial_state, &alpha_thread_identity, false);
 
     native_activate_mdi_view(&app, &alpha_thread_identity)?;
     let thread_state = app.dump_ui_state()?;
@@ -7825,8 +7895,8 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     );
     assert_switchbar_activity(&thread_state, &alpha_room_identity, None);
     assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], None);
-    assert_raw_switchbar_state(&app, &thread_state, &alpha_thread_identity, true, false);
-    assert_raw_switchbar_state(&app, &thread_state, &beta_room_identity, false, true);
+    assert_raw_switchbar_state(&app, &thread_state, &alpha_thread_identity, true);
+    assert_raw_switchbar_state(&app, &thread_state, &beta_room_identity, false);
 
     native_activate_mdi_view(&app, &beta_room_identity)?;
     let beta_state = app.dump_ui_state()?;
@@ -7844,7 +7914,7 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     );
     assert_switchbar_activity(&beta_state, &alpha_room_identity, None);
     assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], None);
-    assert_raw_switchbar_state(&app, &beta_state, &beta_room_identity, true, false);
+    assert_raw_switchbar_state(&app, &beta_state, &beta_room_identity, true);
 
     Ok(())
 }

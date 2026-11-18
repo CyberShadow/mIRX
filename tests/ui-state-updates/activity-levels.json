@@ -1,0 +1,104 @@
+[
+  {
+    "RoomActivity": {
+      "room_id": "!events:example",
+      "activity_id": "state:$events-join",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$events-join",
+        "sender": {
+          "user_id": "@dave:example",
+          "display_name": "Dave",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "member",
+          "change": {
+            "type": "joined"
+          },
+          "target": {
+            "user_id": "@dave:example",
+            "display_name": "Dave",
+            "display_name_ambiguous": false
+          },
+          "reason": null
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!chat:example",
+      "activity_id": "event:$chat-1",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$chat-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "lunch?",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!pings:example",
+      "activity_id": "event:$pings-1",
+      "timestamp_ms": 1700000360000,
+      "highlight": true,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$pings-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "Alice: review please",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!casey:example",
+      "activity_id": "event:$casey-1",
+      "timestamp_ms": 1700000420000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$casey-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@casey:example",
+          "display_name": "Casey",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "hey, got a minute?",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]
