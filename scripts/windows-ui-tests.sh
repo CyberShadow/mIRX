@@ -10,12 +10,13 @@ cleanup() {
   fi
 }
 
-if [[ -z "${CARGO_TARGET_DIR:-}" ]] || [[ -z "${WINEPREFIX:-}" ]]; then
+# Each run gets a fresh Wine prefix. Cargo builds incrementally into the
+# normal target dir (or the caller's CARGO_TARGET_DIR).
+if [[ -z "${WINEPREFIX:-}" ]]; then
   tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mirx-windows-ui-tests.XXXXXX")
   trap cleanup EXIT
 fi
 
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$tmpdir/cargo-target}"
 export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
 export WINEARCH="${WINEARCH:-win64}"
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
