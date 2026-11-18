@@ -23,7 +23,7 @@
       "kind": {
         "type": "image",
         "event_id": "$image-typed:example.org",
-        "sender": "@alice:example.org",
+        "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
         "body": "diagram.png",
         "filename": "diagram.png",
         "source": {

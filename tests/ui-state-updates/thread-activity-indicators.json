@@ -14,7 +14,7 @@
         "type": "message",
         "event_id": "$thread-activity-2",
         "transaction_id": null,
-        "sender": "@erin:example",
+        "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh thread activity",
         "send_state": {

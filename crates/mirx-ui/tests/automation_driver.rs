@@ -32,17 +32,17 @@ use mirx_testkit::{
     NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
     RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-    RoomImageMediaState, RoomMediaSource, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
-    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
-    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
-    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewIdentity,
+    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
+    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
+    UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -59,6 +59,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
     WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
 };
+
+fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
+    mirx_core::RoomUserProfile {
+        user_id: user_id.to_owned(),
+        display_name: None,
+        display_name_ambiguous: false,
+    }
+}
 
 #[allow(dead_code)]
 #[path = "../src/dpapi.rs"]
@@ -817,7 +825,7 @@ fn message_event(
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: Some(generated_event_id(room_id, body)),
             transaction_id: None,
-            sender: sender.to_owned(),
+            sender: user_profile(sender),
             presentation,
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Sent,
@@ -871,7 +879,7 @@ fn message_event_with_event_id_and_relation(
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
-            sender: sender.to_owned(),
+            sender: user_profile(sender),
             presentation,
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Sent,
@@ -934,7 +942,7 @@ fn pending_message_event_with_presentation(
         kind: CoreRoomActivityKind::Message(CoreRoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id.to_owned()),
-            sender: sender.to_owned(),
+            sender: user_profile(sender),
             presentation,
             body: body.to_owned(),
             send_state: CoreRoomMessageSendState::Pending,
@@ -1050,6 +1058,7 @@ fn room_members_event(room_id: &str, members: &[(&str, Option<&str>)]) -> Event 
             .map(|(user_id, display_name)| RoomMemberSummary {
                 user_id: (*user_id).to_owned(),
                 display_name: display_name.map(str::to_owned),
+                display_name_ambiguous: false,
                 can_kick: false,
                 can_ban: false,
             })
@@ -1342,8 +1351,7 @@ fn topic_event_with_event_id(
         relation: None,
         kind: CoreRoomActivityKind::StateNotice(mirx_core::RoomStateNoticeActivity {
             event_id: event_id.to_owned(),
-            sender: sender.to_owned(),
-            state_key: String::new(),
+            sender: user_profile(sender),
             content: mirx_core::RoomStateNoticeContent::Topic {
                 topic: topic.to_owned(),
             },
@@ -1357,8 +1365,8 @@ fn member_entry_with_event_id(
     sender: &str,
     timestamp_ms: u64,
     state_key: &str,
-    membership: &str,
-    displayname: Option<&str>,
+    change: RoomMemberChange,
+    target_display_name: Option<&str>,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
@@ -1371,8 +1379,9 @@ fn member_entry_with_event_id(
             sender: sender.to_owned(),
             state_key: state_key.to_owned(),
             content: RoomStateNoticeContent::Member {
-                membership: membership.to_owned(),
-                displayname: displayname.map(str::to_owned),
+                change,
+                target_display_name: target_display_name.map(str::to_owned),
+                reason: None,
             },
         }),
     }
@@ -3513,7 +3522,7 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
                 "@carol:example",
                 1_700_000_060_000,
                 "@carol:example",
-                "join",
+                RoomMemberChange::Joined,
                 Some("carol"),
             ),
             text_entry_with_event_id(
@@ -3547,13 +3556,16 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     assert!(view_contains(ops_view, "Topic: incident review"));
     assert!(view_contains(
         ops_view,
-        "[22:15] @alice:example: ops topic: incident review"
+        "[22:15] <@alice:example> ops topic: incident review"
     ));
     assert!(view_contains(
         ops_view,
-        "* [22:13] @alice:example set topic: incident review"
+        "[22:13] * @alice:example changes topic to 'incident review'"
     ));
-    assert!(view_contains(ops_view, "* [22:14] carol joined"));
+    assert!(view_contains(
+        ops_view,
+        "[22:14] * Joins: carol (@carol:example)"
+    ));
 
     Ok(())
 }
@@ -6085,7 +6097,7 @@ fn automation_driver_applies_receive_side_redactions_without_leaking_payloads()
         "redaction thread root payload should disappear",
         "redaction thread reply payload should disappear",
     ];
-    let redacted_topic_row = "@grace:example set topic: redaction topic should disappear";
+    let redacted_topic_row = "@grace:example changes topic to 'redaction topic should disappear'";
     let room_activity_text = serde_json::to_string(&room_activity)?;
     let ui_state_text = serde_json::to_string(&ui_state)?;
     let model_text = serde_json::to_string(&model)?;
@@ -6512,7 +6524,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 "@bob:example",
                 1_700_000_120_000,
                 "@bob:example",
-                "join",
+                RoomMemberChange::Joined,
                 Some("bob"),
             ),
             member_entry_with_event_id(
@@ -6521,7 +6533,7 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
                 "@carol:example",
                 1_700_000_180_000,
                 "@carol:example",
-                "leave",
+                RoomMemberChange::Left,
                 None,
             ),
             message_entry_with_event_id(
@@ -6573,11 +6585,11 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
     let mixed_view = find_view(&ui_state, &room_identity("!mixed:example"));
     assert!(view_contains(
         mixed_view,
-        "[22:13] @alice:example: synced hello"
+        "[22:13] <@alice:example> synced hello"
     ));
     assert!(view_contains(
         mixed_view,
-        "* [22:14] @alice:example set topic: mixed room topic"
+        "[22:14] * @alice:example changes topic to 'mixed room topic'"
     ));
     assert!(view_contains(
         mixed_view,
@@ -6585,15 +6597,15 @@ fn automation_driver_loads_mixed_room_activity_fixture_via_file_api()
     ));
     assert!(view_contains(
         mixed_view,
-        "* [22:18] @alice:example waves hello"
+        "[22:18] * @alice:example waves hello"
     ));
     assert!(view_contains(
         mixed_view,
-        "* [22:17] @alice:example pending local echo (sending)"
+        "[22:17] * @alice:example pending local echo (sending)"
     ));
     assert!(view_contains(
         mixed_view,
-        "* [22:18] @alice:example failed local echo (failed)"
+        "[22:18] * @alice:example failed local echo (failed)"
     ));
 
     let _ = fs::remove_file(&state_path);
@@ -7601,7 +7613,7 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
     let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
     assert!(view_contains(
         image_view,
-        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+        "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
     ));
     assert!(!view_contains(image_view, "unsupported m.image"));
 
@@ -7686,7 +7698,7 @@ fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
     let media_view = find_view(&initial_state, &room_identity("!media:example.org"));
     assert!(view_contains(
         media_view,
-        "* [16:00] @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)",
+        "[16:00] * @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)",
     ));
     assert!(!view_contains(media_view, "unsupported"));
 
@@ -7772,7 +7784,7 @@ fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
     let media_view = find_view(&initial_state, &room_identity("!media:example.org"));
     assert!(view_contains(
         media_view,
-        "* [16:01] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)",
+        "[16:01] * @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)",
     ));
     assert!(!view_contains(media_view, "unsupported"));
 
@@ -7797,7 +7809,7 @@ fn automation_driver_renders_loaded_image_message_fixture_and_exposes_loaded_med
     let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
     assert!(view_contains(
         image_view,
-        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+        "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
     ));
     assert_eq!(
         app.room_activity(Some("!images:example.org"))?,
@@ -7833,7 +7845,7 @@ fn automation_driver_renders_failed_image_message_fixture_and_exposes_failed_med
     let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
     assert!(view_contains(
         image_view,
-        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+        "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
     ));
     assert_eq!(
         app.room_activity(Some("!images:example.org"))?,
@@ -7952,7 +7964,7 @@ fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_met
     let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
     assert!(view_contains(
         image_view,
-        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+        "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
     ));
     assert!(!view_contains(image_view, "unsupported m.image"));
 
@@ -7977,7 +7989,7 @@ fn automation_driver_renders_encrypted_loaded_image_and_exposes_loaded_media_sta
     let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
     assert!(view_contains(
         image_view,
-        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+        "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
     ));
     assert_eq!(
         app.room_activity(Some("!images:example.org"))?,
@@ -8013,7 +8025,7 @@ fn automation_driver_renders_encrypted_failed_image_and_exposes_failed_media_sta
     let image_view = find_view(&initial_state, &room_identity("!images:example.org"));
     assert!(view_contains(
         image_view,
-        "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
+        "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)",
     ));
     assert_eq!(
         app.room_activity(Some("!images:example.org"))?,
@@ -8090,7 +8102,7 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
     );
     assert!(view_contains(
         find_view(&initial_state, &room_identity("!media:example.org")),
-        "* [16:00] @alice:example.org sent unsupported com.example.custom: custom payload",
+        "[16:00] * @alice:example.org sent unsupported com.example.custom: custom payload",
     ));
     assert!(!view_contains(
         find_view(&initial_state, &room_identity("!media:example.org")),
@@ -10192,7 +10204,7 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
     assert!(!view_contains(beta_view, "Topic: incident review"));
     assert!(!view_contains(
         beta_view,
-        "* [22:16] @alice:example set topic: incident review"
+        "[22:16] * @alice:example changes topic to 'incident review'"
     ));
 
     app.append_synthetic_events(&serde_json::to_string(&vec![topic_event_with_event_id(
@@ -10234,7 +10246,7 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
     assert!(view_contains(beta_view, "Topic: incident review"));
     assert!(view_contains(
         beta_view,
-        "* [22:16] @alice:example set topic: incident review"
+        "[22:16] * @alice:example changes topic to 'incident review'"
     ));
 
     drop(app);
@@ -10263,7 +10275,10 @@ fn automation_driver_renders_synced_topic_without_topic_notice()
     let state = app.dump_ui_state()?;
     let beta_view = find_view(&state, &room_identity("!beta:example"));
     assert!(view_contains(beta_view, "Topic: incident review"));
-    assert!(!view_contains(beta_view, "set topic: incident review"));
+    assert!(!view_contains(
+        beta_view,
+        "changes topic to 'incident review'"
+    ));
 
     app.append_synthetic_events(&serde_json::to_string(&vec![topic_event_with_event_id(
         "!beta:example",
@@ -10276,7 +10291,10 @@ fn automation_driver_renders_synced_topic_without_topic_notice()
     let state = app.dump_ui_state()?;
     let beta_view = find_view(&state, &room_identity("!beta:example"));
     assert!(view_contains(beta_view, "Topic: deployment window"));
-    assert!(view_contains(beta_view, "set topic: deployment window"));
+    assert!(view_contains(
+        beta_view,
+        "changes topic to 'deployment window'"
+    ));
     assert!(!view_contains(beta_view, "Topic: incident review"));
 
     drop(app);

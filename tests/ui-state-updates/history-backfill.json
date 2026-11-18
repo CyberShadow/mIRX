@@ -14,7 +14,7 @@
             "type": "message",
             "event_id": "$history-old-1",
             "transaction_id": null,
-            "sender": "@alice:example",
+            "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
             "presentation": "text",
             "body": "older room line one",
             "send_state": {
@@ -32,7 +32,7 @@
             "type": "message",
             "event_id": "$history-old-2",
             "transaction_id": null,
-            "sender": "@alice:example",
+            "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
             "presentation": "text",
             "body": "older room line two",
             "send_state": {
@@ -50,7 +50,7 @@
             "type": "message",
             "event_id": "$history-current-1",
             "transaction_id": null,
-            "sender": "@alice:example",
+            "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
             "presentation": "text",
             "body": "current room line one",
             "send_state": {

@@ -8,7 +8,7 @@
         "type": "message",
         "event_id": "$beta-activity",
         "transaction_id": null,
-        "sender": "@erin:example",
+        "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "beta wakeup",
         "send_state": {
@@ -33,7 +33,7 @@
         "type": "message",
         "event_id": "$alpha-thread-activity",
         "transaction_id": null,
-        "sender": "@frank:example",
+        "sender": { "user_id": "@frank:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh alpha thread",
         "send_state": {

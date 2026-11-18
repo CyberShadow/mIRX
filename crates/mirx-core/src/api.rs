@@ -378,11 +378,23 @@ pub enum RoomActivityKind {
     Redacted(RoomRedactedActivity),
 }
 
+/// A room member's identity together with the room-scoped profile used to
+/// display them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomUserProfile {
+    pub user_id: String,
+    pub display_name: Option<String>,
+    /// Whether another room member shares `display_name`, so it alone does
+    /// not identify this user.
+    pub display_name_ambiguous: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomUnableToDecryptActivity {
     pub event_id: String,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub session_id: Option<String>,
     pub reason: RoomUnableToDecryptReason,
 }
@@ -413,7 +425,7 @@ pub enum RoomMessagePresentationKind {
 pub struct RoomMessageActivity {
     pub event_id: Option<String>,
     pub transaction_id: Option<String>,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub send_state: RoomMessageSendState,
@@ -423,7 +435,7 @@ pub struct RoomMessageActivity {
 #[serde(deny_unknown_fields)]
 pub struct RoomImageActivity {
     pub event_id: String,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub body: String,
     pub filename: Option<String>,
     pub source: RoomMediaSource,
@@ -434,7 +446,7 @@ pub struct RoomImageActivity {
 #[serde(deny_unknown_fields)]
 pub struct RoomFileActivity {
     pub event_id: String,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub body: String,
     pub filename: Option<String>,
     pub source: RoomMediaSource,
@@ -445,7 +457,7 @@ pub struct RoomFileActivity {
 #[serde(deny_unknown_fields)]
 pub struct RoomAudioActivity {
     pub event_id: String,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub body: String,
     pub filename: Option<String>,
     pub source: RoomMediaSource,
@@ -456,7 +468,7 @@ pub struct RoomAudioActivity {
 #[serde(deny_unknown_fields)]
 pub struct RoomVideoActivity {
     pub event_id: String,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub body: String,
     pub filename: Option<String>,
     pub source: RoomMediaSource,
@@ -535,7 +547,7 @@ pub struct RoomVideoInfo {
 #[serde(deny_unknown_fields)]
 pub struct UnsupportedRoomMessageActivity {
     pub event_id: String,
-    pub sender: String,
+    pub sender: RoomUserProfile,
     pub msgtype: String,
     pub body: String,
 }
@@ -552,8 +564,7 @@ pub enum RoomMessageSendState {
 #[serde(deny_unknown_fields)]
 pub struct RoomStateNoticeActivity {
     pub event_id: String,
-    pub sender: String,
-    pub state_key: String,
+    pub sender: RoomUserProfile,
     pub content: RoomStateNoticeContent,
 }
 
@@ -570,9 +581,36 @@ pub enum RoomStateNoticeContent {
         topic: String,
     },
     Member {
-        membership: String,
-        displayname: Option<String>,
+        change: RoomMemberChange,
+        target: RoomUserProfile,
+        reason: Option<String>,
     },
+}
+
+/// A room membership transition, as classified by the Matrix spec's
+/// `m.room.member` transition table.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomMemberChange {
+    Joined,
+    Left,
+    Kicked,
+    Banned,
+    KickedAndBanned,
+    Unbanned,
+    Invited,
+    InvitationAccepted,
+    InvitationRejected,
+    InvitationRevoked,
+    Knocked,
+    KnockAccepted,
+    KnockRetracted,
+    KnockDenied,
+    DisplayNameChanged {
+        old: Option<String>,
+        new: Option<String>,
+    },
+    AvatarChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -627,6 +665,7 @@ pub struct RoomTyping {
 pub struct RoomMemberSummary {
     pub user_id: String,
     pub display_name: Option<String>,
+    pub display_name_ambiguous: bool,
     pub can_kick: bool,
     pub can_ban: bool,
 }

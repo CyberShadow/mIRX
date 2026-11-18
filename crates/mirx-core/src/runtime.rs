@@ -1540,6 +1540,7 @@ mod tests {
                 .map(|(user_id, display_name)| RoomMemberSummary {
                     user_id: (*user_id).to_owned(),
                     display_name: display_name.map(str::to_owned),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 })

@@ -38,7 +38,7 @@
         "type": "message",
         "event_id": "$beta-latest",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "beta latest",
         "send_state": {

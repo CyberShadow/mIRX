@@ -24,7 +24,7 @@
         "type": "message",
         "event_id": "$react-normal",
         "transaction_id": null,
-        "sender": "@normal:example",
+        "sender": { "user_id": "@normal:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "normal reaction target",
         "send_state": {
@@ -43,7 +43,7 @@
         "type": "message",
         "event_id": "$react-thread-root",
         "transaction_id": null,
-        "sender": "@root:example",
+        "sender": { "user_id": "@root:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread reaction root",
         "send_state": {
@@ -68,7 +68,7 @@
         "type": "message",
         "event_id": "$react-thread-reply",
         "transaction_id": null,
-        "sender": "@reply:example",
+        "sender": { "user_id": "@reply:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread reaction reply",
         "send_state": {

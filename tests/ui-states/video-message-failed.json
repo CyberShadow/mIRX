@@ -1,6 +1,6 @@
 [
   "Started",
   {"SyncedRooms":[{"room_id":"!media:example.org","display_name":"Media", "topic": null,"encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"membership":"join"}]},
-  {"RoomActivity":{"room_id":"!media:example.org","activity_id":"event:$video1:example.org","timestamp_ms":1710000120000,"kind":{"type":"video","event_id":"$video1:example.org","sender":"@alice:example.org","body":"clip.mp4","filename":"clip.mp4","source":{"type":"plain","url":"mxc://example.org/video"},"info":{"mimetype":"video/mp4","size":34567,"duration_ms":12000,"width":1920,"height":1080,"thumbnail_source":{"type":"plain","url":"mxc://example.org/video-thumbnail"}}},"relation":null}},
+  {"RoomActivity":{"room_id":"!media:example.org","activity_id":"event:$video1:example.org","timestamp_ms":1710000120000,"kind":{"type":"video","event_id":"$video1:example.org","sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },"body":"clip.mp4","filename":"clip.mp4","source":{"type":"plain","url":"mxc://example.org/video"},"info":{"mimetype":"video/mp4","size":34567,"duration_ms":12000,"width":1920,"height":1080,"thumbnail_source":{"type":"plain","url":"mxc://example.org/video-thumbnail"}}},"relation":null}},
   {"RoomMedia":{"room_id":"!media:example.org","activity_id":"event:$video1:example.org","event_id":"$video1:example.org","kind":{"type":"failed","format":{"type":"thumbnail","width":160,"height":120},"message":"failed to fetch room image media: unavailable"}}}
 ]

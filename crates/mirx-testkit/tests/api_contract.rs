@@ -25,7 +25,7 @@ use mirx_testkit::{
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
     RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
-    RoomImageMediaState, RoomMediaSource, RoomMemberView, RoomMessageActivity,
+    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMemberView, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomTag, RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity,
@@ -1526,8 +1526,12 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             sender: "@carol:example".to_owned(),
             state_key: "@carol:example".to_owned(),
             content: RoomStateNoticeContent::Member {
-                membership: "join".to_owned(),
-                displayname: Some("carol".to_owned()),
+                change: RoomMemberChange::DisplayNameChanged {
+                    old: None,
+                    new: Some("carol".to_owned()),
+                },
+                target_display_name: Some("carol".to_owned()),
+                reason: Some("rename".to_owned()),
             },
         }),
     };
@@ -1547,8 +1551,13 @@ fn room_activity_member_state_notice_round_trips_through_json() {
                 "state_key": "@carol:example",
                 "content": {
                     "type": "member",
-                    "membership": "join",
-                    "displayname": "carol"
+                    "change": {
+                        "type": "display_name_changed",
+                        "old": null,
+                        "new": "carol"
+                    },
+                    "target_display_name": "carol",
+                    "reason": "rename"
                 }
             }
         })
@@ -5335,8 +5344,9 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<RoomStateNoticeContent>(
             r#"{
             "type":"member",
-            "membership":"join",
-            "displayname":"carol",
+            "change":{"type":"joined"},
+            "target_display_name":"carol",
+            "reason":null,
             "unexpected":true
         }"#
         )
@@ -5837,8 +5847,9 @@ fn room_state_notice_content_rejects_impossible_tagged_combinations() {
         serde_json::from_str::<RoomStateNoticeContent>(
             r#"{
             "type":"topic",
-            "membership":"join",
-            "displayname":"alice"
+            "change":{"type":"joined"},
+            "target_display_name":"alice",
+            "reason":null
         }"#
         )
         .is_err()
@@ -5851,7 +5862,7 @@ fn room_state_notice_content_rejects_impossible_tagged_combinations() {
             "state_key":"@alice:example",
             "content":{
                 "type":"member",
-                "membership":"join",
+                "change":{"type":"joined"},
                 "topic":"incident review"
             }
         }"#

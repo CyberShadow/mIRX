@@ -35,7 +35,7 @@
         "type": "message",
         "event_id": "$support-1",
         "transaction_id": null,
-        "sender": "@support:example",
+        "sender": { "user_id": "@support:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "support queue is empty",
         "send_state": {
@@ -54,7 +54,7 @@
         "type": "message",
         "event_id": "$verify-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "verification requested by @alice:example",
         "send_state": {
@@ -73,7 +73,7 @@
         "type": "message",
         "event_id": "$verify-2",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "sas emoji ready",
         "send_state": {
@@ -92,7 +92,7 @@
         "type": "message",
         "event_id": "$verify-3",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "waiting for confirmation",
         "send_state": {

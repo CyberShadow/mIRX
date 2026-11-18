@@ -5,11 +5,11 @@ use std::fmt;
 use mirx_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomVideoActivity, RoomVideoInfo, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationState, VerificationStateEvent,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, RoomVideoActivity, RoomVideoInfo, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1601,8 +1601,9 @@ pub(crate) enum DumpRoomStateNoticeContent {
         topic: String,
     },
     Member {
-        membership: String,
-        displayname: Option<String>,
+        change: RoomMemberChange,
+        target_display_name: Option<String>,
+        reason: Option<String>,
     },
 }
 
@@ -1749,7 +1750,7 @@ pub(crate) fn dump_room_message_activity_line_from_activity(
         timestamp_ms: activity.timestamp_ms,
         event_id: message.event_id.clone(),
         transaction_id: message.transaction_id.clone(),
-        sender: message.sender.clone(),
+        sender: message.sender.user_id.clone(),
         presentation: message.presentation,
         body: message.body.clone(),
         send_state: dump_room_message_send_state_from_core(&message.send_state),
@@ -1779,7 +1780,7 @@ pub(crate) fn dump_room_activity_kind_from_core(kind: &RoomActivityKind) -> Dump
         RoomActivityKind::UnableToDecrypt(message) => {
             DumpRoomActivityKind::UnableToDecrypt(DumpRoomUnableToDecryptActivity {
                 event_id: message.event_id.clone(),
-                sender: message.sender.clone(),
+                sender: message.sender.user_id.clone(),
                 session_id: message.session_id.clone(),
                 reason: message.reason.clone(),
             })
@@ -1799,7 +1800,7 @@ pub(crate) fn dump_room_message_activity_from_core(
     DumpRoomMessageActivity {
         event_id: message.event_id.clone(),
         transaction_id: message.transaction_id.clone(),
-        sender: message.sender.clone(),
+        sender: message.sender.user_id.clone(),
         presentation: message.presentation,
         body: message.body.clone(),
         send_state: dump_room_message_send_state_from_core(&message.send_state),
@@ -1827,7 +1828,7 @@ pub(crate) fn dump_room_image_activity_from_core(
 ) -> DumpRoomImageActivity {
     DumpRoomImageActivity {
         event_id: image.event_id.clone(),
-        sender: image.sender.clone(),
+        sender: image.sender.user_id.clone(),
         body: image.body.clone(),
         filename: image.filename.clone(),
         source: dump_room_media_source_from_core(&image.source),
@@ -1839,7 +1840,7 @@ pub(crate) fn dump_room_image_activity_from_core(
 pub(crate) fn dump_room_file_activity_from_core(file: &RoomFileActivity) -> DumpRoomFileActivity {
     DumpRoomFileActivity {
         event_id: file.event_id.clone(),
-        sender: file.sender.clone(),
+        sender: file.sender.user_id.clone(),
         body: file.body.clone(),
         filename: file.filename.clone(),
         source: dump_room_media_source_from_core(&file.source),
@@ -1852,7 +1853,7 @@ pub(crate) fn dump_room_audio_activity_from_core(
 ) -> DumpRoomAudioActivity {
     DumpRoomAudioActivity {
         event_id: audio.event_id.clone(),
-        sender: audio.sender.clone(),
+        sender: audio.sender.user_id.clone(),
         body: audio.body.clone(),
         filename: audio.filename.clone(),
         source: dump_room_media_source_from_core(&audio.source),
@@ -1865,7 +1866,7 @@ pub(crate) fn dump_room_video_activity_from_core(
 ) -> DumpRoomVideoActivity {
     DumpRoomVideoActivity {
         event_id: video.event_id.clone(),
-        sender: video.sender.clone(),
+        sender: video.sender.user_id.clone(),
         body: video.body.clone(),
         filename: video.filename.clone(),
         source: dump_room_media_source_from_core(&video.source),
@@ -1949,7 +1950,7 @@ pub(crate) fn dump_unsupported_room_message_activity_from_core(
 ) -> DumpUnsupportedRoomMessageActivity {
     DumpUnsupportedRoomMessageActivity {
         event_id: message.event_id.clone(),
-        sender: message.sender.clone(),
+        sender: message.sender.user_id.clone(),
         msgtype: message.msgtype.clone(),
         body: message.body.clone(),
     }
@@ -1960,8 +1961,11 @@ pub(crate) fn dump_room_state_notice_activity_from_core(
 ) -> DumpRoomStateNoticeActivity {
     DumpRoomStateNoticeActivity {
         event_id: notice.event_id.clone(),
-        sender: notice.sender.clone(),
-        state_key: notice.state_key.clone(),
+        sender: notice.sender.user_id.clone(),
+        state_key: match &notice.content {
+            RoomStateNoticeContent::Topic { .. } => String::new(),
+            RoomStateNoticeContent::Member { target, .. } => target.user_id.clone(),
+        },
         content: dump_room_state_notice_content_from_core(&notice.content),
     }
 }
@@ -1982,11 +1986,13 @@ pub(crate) fn dump_room_state_notice_content_from_core(
             topic: topic.clone(),
         },
         RoomStateNoticeContent::Member {
-            membership,
-            displayname,
+            change,
+            target,
+            reason,
         } => DumpRoomStateNoticeContent::Member {
-            membership: membership.clone(),
-            displayname: displayname.clone(),
+            change: change.clone(),
+            target_display_name: target.display_name.clone(),
+            reason: reason.clone(),
         },
     }
 }
@@ -2485,6 +2491,13 @@ mod tests {
         WaitIdleResponse, failure_response, parse_command_request, success_response,
     };
 
+    fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
+        mirx_core::RoomUserProfile {
+            user_id: user_id.to_owned(),
+            display_name: None,
+            display_name_ambiguous: false,
+        }
+    }
     fn stored_session() -> StoredSession {
         StoredSession {
             user_id: "@alice:example".to_owned(),
@@ -2902,7 +2915,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -2930,7 +2943,7 @@ mod tests {
                             kind: RoomActivityKind::Message(RoomMessageActivity {
                                 event_id: Some("$event:example".to_owned()),
                                 transaction_id: None,
-                                sender: "@alice:example".to_owned(),
+                                sender: user_profile("@alice:example"),
                                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                                 body: "hello".to_owned(),
                                 send_state: RoomMessageSendState::Sent,
@@ -5717,7 +5730,7 @@ mod tests {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$plain:example".to_owned()),
                 transaction_id: None,
-                sender: "@plain:example".to_owned(),
+                sender: user_profile("@plain:example"),
                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "plain".to_owned(),
                 send_state: RoomMessageSendState::Sent,
@@ -5753,7 +5766,7 @@ mod tests {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$event:example".to_owned()),
                 transaction_id: Some("txn-1".to_owned()),
-                sender: "@alice:example".to_owned(),
+                sender: user_profile("@alice:example"),
                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 send_state: RoomMessageSendState::Sent,
@@ -5882,7 +5895,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                 event_id: "$custom1:example.org".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                sender: user_profile("@alice:example.org"),
                 msgtype: "com.example.custom".to_owned(),
                 body: "clip.mp4".to_owned(),
             }),
@@ -5936,7 +5949,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                 event_id: "$image1:example.org".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                sender: user_profile("@alice:example.org"),
                 body: "diagram.png".to_owned(),
                 filename: Some("diagram.png".to_owned()),
                 source: sample_encrypted_room_media_source("mxc://example.org/diagram"),
@@ -6049,7 +6062,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                 event_id: "$file1:example.org".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                sender: user_profile("@alice:example.org"),
                 body: "Quarterly report".to_owned(),
                 filename: Some("report.pdf".to_owned()),
                 source: sample_encrypted_room_media_source("mxc://example.org/report"),
@@ -6125,7 +6138,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                 event_id: "$audio2:example.org".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                sender: user_profile("@alice:example.org"),
                 body: "Voice note".to_owned(),
                 filename: Some("voice-note.ogg".to_owned()),
                 source: sample_encrypted_room_media_source("mxc://example.org/audio"),
@@ -6204,7 +6217,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                 event_id: "$video1:example.org".to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                sender: user_profile("@alice:example.org"),
                 body: "clip.mp4".to_owned(),
                 filename: Some("clip.mp4".to_owned()),
                 source: RoomMediaSource::Plain {
@@ -6461,11 +6474,12 @@ mod tests {
                     "type":"state_notice",
                     "event_id":"$state-1",
                     "sender":"@alice:example",
-                    "state_key":"",
+                    "state_key":"@alice:example",
                     "content":{
                         "type":"member",
-                        "membership":"join",
-                        "displayname":"alice"
+                        "change":{"type":"joined"},
+                        "target_display_name":"alice",
+                        "reason":null
                     }
                 }
             }))

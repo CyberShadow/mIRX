@@ -1,6 +1,6 @@
 [
   "Started",
   {"SyncedRooms":[{"room_id":"!find-history:example","display_name":"Find History","topic":null,"encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"membership":"join"}]},
-  {"RoomActivity":{"room_id":"!find-history:example","activity_id":"event:$find-history-current-1","timestamp_ms":1700001200000,"kind":{"type":"message","event_id":"$find-history-current-1","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"current room line one","send_state":{"state":"sent"}},"relation":null}},
-  {"RoomActivity":{"room_id":"!find-history:example","activity_id":"event:$find-history-current-2","timestamp_ms":1700001260000,"kind":{"type":"message","event_id":"$find-history-current-2","transaction_id":null,"sender":"@alice:example","presentation":"text","body":"current room line two","send_state":{"state":"sent"}},"relation":null}}
+  {"RoomActivity":{"room_id":"!find-history:example","activity_id":"event:$find-history-current-1","timestamp_ms":1700001200000,"kind":{"type":"message","event_id":"$find-history-current-1","transaction_id":null,"sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },"presentation":"text","body":"current room line one","send_state":{"state":"sent"}},"relation":null}},
+  {"RoomActivity":{"room_id":"!find-history:example","activity_id":"event:$find-history-current-2","timestamp_ms":1700001260000,"kind":{"type":"message","event_id":"$find-history-current-2","transaction_id":null,"sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },"presentation":"text","body":"current room line two","send_state":{"state":"sent"}},"relation":null}}
 ]

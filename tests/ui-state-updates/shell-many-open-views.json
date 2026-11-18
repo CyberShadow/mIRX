@@ -8,7 +8,7 @@
         "type": "message",
         "event_id": "$alerts-fresh",
         "transaction_id": null,
-        "sender": "@erin:example",
+        "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh alert activity",
         "send_state": { "state": "sent" }
@@ -25,7 +25,7 @@
         "type": "message",
         "event_id": "$support-fresh",
         "transaction_id": null,
-        "sender": "@gina:example",
+        "sender": { "user_id": "@gina:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh support activity",
         "send_state": { "state": "sent" }
@@ -48,7 +48,7 @@
         "type": "message",
         "event_id": "$focus-thread-fresh",
         "transaction_id": null,
-        "sender": "@dana:example",
+        "sender": { "user_id": "@dana:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh inactive thread activity",
         "send_state": { "state": "sent" }

@@ -1,0 +1,285 @@
+//! mIRC-style text for timeline lines and nicks.
+//!
+//! Every user shown in the UI goes through [`nick_label`], so duplicate
+//! display names are disambiguated the same way in the timeline, the nick
+//! list, and the typing indicator. Ambiguity itself is decided by mirx-core.
+
+use mirx_core::{RoomMemberChange, RoomMessagePresentationKind, RoomUserProfile};
+
+/// The label for a user: their display name, the display name with the user
+/// ID when another member shares it, or the user ID when they have none.
+pub(super) fn nick_label(user_id: &str, display_name: Option<&str>, ambiguous: bool) -> String {
+    match display_name {
+        // An empty display name cannot identify anyone; Matrix permits it.
+        Some(name) if !name.is_empty() => {
+            if ambiguous {
+                format!("{name} ({user_id})")
+            } else {
+                name.to_owned()
+            }
+        }
+        _ => user_id.to_owned(),
+    }
+}
+
+pub(super) fn profile_nick(profile: &RoomUserProfile) -> String {
+    nick_label(
+        &profile.user_id,
+        profile.display_name.as_deref(),
+        profile.display_name_ambiguous,
+    )
+}
+
+/// The nick together with the user ID, as mIRC shows `nick (user@host)` on
+/// joins and parts.
+fn nick_with_user_id(profile: &RoomUserProfile) -> String {
+    nick_label(&profile.user_id, profile.display_name.as_deref(), true)
+}
+
+/// A timeline log line: the `[hh:mm]` timestamp, the sender prefix (`<Nick>`,
+/// `* Nick`, `-Nick-`, or `*`), and the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LogLine {
+    pub(super) timestamp: String,
+    pub(super) prefix: String,
+    pub(super) body: String,
+}
+
+impl LogLine {
+    pub(super) fn text(&self) -> String {
+        format!("{} {} {}", self.timestamp, self.prefix, self.body)
+    }
+}
+
+pub(super) fn message_line(
+    timestamp: String,
+    presentation: RoomMessagePresentationKind,
+    sender: &RoomUserProfile,
+    body: String,
+) -> LogLine {
+    let nick = profile_nick(sender);
+    let prefix = match presentation {
+        RoomMessagePresentationKind::Text => format!("<{nick}>"),
+        RoomMessagePresentationKind::Emote => format!("* {nick}"),
+        RoomMessagePresentationKind::Notice => format!("-{nick}-"),
+    };
+    LogLine {
+        timestamp,
+        prefix,
+        body,
+    }
+}
+
+/// An action-style line, as for media: `[ts] * Nick sent image: ...`.
+pub(super) fn action_line(timestamp: String, sender: &RoomUserProfile, body: String) -> LogLine {
+    LogLine {
+        timestamp,
+        prefix: format!("* {}", profile_nick(sender)),
+        body,
+    }
+}
+
+/// A line reporting an event rather than something a user said.
+pub(super) fn event_line(timestamp: String, body: String) -> LogLine {
+    LogLine {
+        timestamp,
+        prefix: "*".to_owned(),
+        body,
+    }
+}
+
+pub(super) fn topic_change_text(sender: &RoomUserProfile, topic: &str) -> String {
+    format!("{} changes topic to '{topic}'", profile_nick(sender))
+}
+
+pub(super) fn member_change_text(
+    sender: &RoomUserProfile,
+    change: &RoomMemberChange,
+    target: &RoomUserProfile,
+    reason: Option<&str>,
+) -> String {
+    let op = profile_nick(sender);
+    let nick = profile_nick(target);
+    let text = match change {
+        RoomMemberChange::Joined | RoomMemberChange::InvitationAccepted => {
+            format!("Joins: {}", nick_with_user_id(target))
+        }
+        RoomMemberChange::Left => format!("Parts: {}", nick_with_user_id(target)),
+        RoomMemberChange::Kicked => format!("{nick} was kicked by {op}"),
+        RoomMemberChange::Banned | RoomMemberChange::KickedAndBanned => {
+            format!("{nick} was banned by {op}")
+        }
+        RoomMemberChange::Unbanned => format!("{op} removed ban on {nick}"),
+        RoomMemberChange::Invited => format!("{op} invites {nick}"),
+        RoomMemberChange::InvitationRejected => format!("{nick} declined the invitation"),
+        RoomMemberChange::InvitationRevoked => format!("{op} revoked the invitation for {nick}"),
+        RoomMemberChange::Knocked => format!("{nick} knocks"),
+        // Accepting a knock invites the knocker; they join separately.
+        RoomMemberChange::KnockAccepted => format!("{op} accepted knock from {nick}"),
+        RoomMemberChange::KnockRetracted => format!("{nick} withdrew knock"),
+        RoomMemberChange::KnockDenied => format!("{op} denied knock from {nick}"),
+        RoomMemberChange::DisplayNameChanged { old, new } => format!(
+            "{} is now known as {}",
+            nick_label(&target.user_id, old.as_deref(), false),
+            nick_label(&target.user_id, new.as_deref(), false),
+        ),
+        RoomMemberChange::AvatarChanged => format!("{nick} changed avatar"),
+    };
+    match reason {
+        // Clients send an empty reason when the user gave none.
+        Some(reason) if !reason.is_empty() => format!("{text} ({reason})"),
+        _ => text,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile(user_id: &str, display_name: Option<&str>, ambiguous: bool) -> RoomUserProfile {
+        RoomUserProfile {
+            user_id: user_id.to_owned(),
+            display_name: display_name.map(str::to_owned),
+            display_name_ambiguous: ambiguous,
+        }
+    }
+
+    #[test]
+    fn nick_label_prefers_display_name_and_disambiguates_duplicates() {
+        assert_eq!(nick_label("@alice:example", Some("Alice"), false), "Alice");
+        assert_eq!(
+            nick_label("@sam1:example", Some("Sam"), true),
+            "Sam (@sam1:example)"
+        );
+        assert_eq!(nick_label("@bob:example", None, false), "@bob:example");
+        assert_eq!(nick_label("@bob:example", None, true), "@bob:example");
+        assert_eq!(nick_label("@eve:example", Some(""), false), "@eve:example");
+    }
+
+    #[test]
+    fn message_lines_use_mirc_sender_prefixes() {
+        let alice = profile("@alice:example", Some("Alice"), false);
+        let line = |presentation| {
+            message_line("[12:34]".to_owned(), presentation, &alice, "hi".to_owned()).text()
+        };
+
+        assert_eq!(
+            line(RoomMessagePresentationKind::Text),
+            "[12:34] <Alice> hi"
+        );
+        assert_eq!(
+            line(RoomMessagePresentationKind::Emote),
+            "[12:34] * Alice hi"
+        );
+        assert_eq!(
+            line(RoomMessagePresentationKind::Notice),
+            "[12:34] -Alice- hi"
+        );
+        assert_eq!(
+            action_line("[12:34]".to_owned(), &alice, "sent image: a.png".to_owned()).text(),
+            "[12:34] * Alice sent image: a.png"
+        );
+        assert_eq!(
+            event_line(
+                "[12:34]".to_owned(),
+                topic_change_text(&alice, "release day")
+            )
+            .text(),
+            "[12:34] * Alice changes topic to 'release day'"
+        );
+    }
+
+    #[test]
+    fn member_change_text_covers_every_change() {
+        let op = profile("@op:example", Some("Op"), false);
+        let carol = profile("@carol:example", Some("Carol"), false);
+        let sam = profile("@sam:example", Some("Sam"), true);
+        let anon = profile("@anon:example", None, false);
+        let text = |change: RoomMemberChange, target: &RoomUserProfile, reason: Option<&str>| {
+            member_change_text(&op, &change, target, reason)
+        };
+
+        assert_eq!(
+            text(RoomMemberChange::Joined, &carol, None),
+            "Joins: Carol (@carol:example)"
+        );
+        assert_eq!(
+            text(RoomMemberChange::InvitationAccepted, &anon, None),
+            "Joins: @anon:example"
+        );
+        assert_eq!(
+            text(RoomMemberChange::Left, &carol, Some("bye")),
+            "Parts: Carol (@carol:example) (bye)"
+        );
+        assert_eq!(
+            text(RoomMemberChange::Kicked, &sam, Some("flood")),
+            "Sam (@sam:example) was kicked by Op (flood)"
+        );
+        assert_eq!(
+            text(RoomMemberChange::Banned, &carol, None),
+            "Carol was banned by Op"
+        );
+        assert_eq!(
+            text(RoomMemberChange::KickedAndBanned, &carol, Some("")),
+            "Carol was banned by Op"
+        );
+        assert_eq!(
+            text(RoomMemberChange::Unbanned, &carol, None),
+            "Op removed ban on Carol"
+        );
+        assert_eq!(
+            text(RoomMemberChange::Invited, &carol, None),
+            "Op invites Carol"
+        );
+        assert_eq!(
+            text(RoomMemberChange::InvitationRejected, &carol, None),
+            "Carol declined the invitation"
+        );
+        assert_eq!(
+            text(RoomMemberChange::InvitationRevoked, &carol, None),
+            "Op revoked the invitation for Carol"
+        );
+        assert_eq!(
+            text(RoomMemberChange::Knocked, &carol, Some("let me in")),
+            "Carol knocks (let me in)"
+        );
+        assert_eq!(
+            text(RoomMemberChange::KnockAccepted, &carol, None),
+            "Op accepted knock from Carol"
+        );
+        assert_eq!(
+            text(RoomMemberChange::KnockRetracted, &carol, None),
+            "Carol withdrew knock"
+        );
+        assert_eq!(
+            text(RoomMemberChange::KnockDenied, &carol, None),
+            "Op denied knock from Carol"
+        );
+        assert_eq!(
+            text(
+                RoomMemberChange::DisplayNameChanged {
+                    old: Some("Carol".to_owned()),
+                    new: Some("Caz".to_owned()),
+                },
+                &carol,
+                None,
+            ),
+            "Carol is now known as Caz"
+        );
+        assert_eq!(
+            text(
+                RoomMemberChange::DisplayNameChanged {
+                    old: None,
+                    new: Some("Carol".to_owned()),
+                },
+                &carol,
+                None,
+            ),
+            "@carol:example is now known as Carol"
+        );
+        assert_eq!(
+            text(RoomMemberChange::AvatarChanged, &carol, None),
+            "Carol changed avatar"
+        );
+    }
+}

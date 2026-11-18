@@ -20,6 +20,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, SendMessageW, WM_MDIDESTROY, WM_MDIGETACTIVE,
 };
 
+fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
+    mirx_core::RoomUserProfile {
+        user_id: user_id.to_owned(),
+        display_name: None,
+        display_name_ambiguous: false,
+    }
+}
+
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 const MDI_ID: i32 = 1002;
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
@@ -106,7 +114,7 @@ fn sent_message_activity(
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.to_owned()),
             transaction_id: None,
-            sender: sender.to_owned(),
+            sender: user_profile(sender),
             presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             send_state: RoomMessageSendState::Sent,

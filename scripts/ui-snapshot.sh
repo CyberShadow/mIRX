@@ -237,9 +237,9 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
         --expect-room-view '!ops:example::Topic: incident review'
-        --expect-room-view '!ops:example::* [22:13] @alice:example set topic: incident review'
-        --expect-room-view '!ops:example::* [22:14] carol joined'
-        --expect-room-view '!ops:example::[22:15] @alice:example: ops topic: incident review'
+        --expect-room-view "!ops:example::[22:13] * @alice:example changes topic to 'incident review'"
+        --expect-room-view '!ops:example::[22:14] * Joins: carol (@carol:example)'
+        --expect-room-view '!ops:example::[22:15] <@alice:example> ops topic: incident review'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !random:example'
@@ -915,7 +915,7 @@ configure_case_expectations() {
         --expect-no-view 'room:!redactions:example::redaction unsupported payload should disappear'
         --expect-no-view 'room:!redactions:example::redaction thread root payload should disappear'
         --expect-no-view 'room:!redactions:example::redaction thread reply payload should disappear'
-        --expect-no-view 'room:!redactions:example::@grace:example set topic: redaction topic should disappear'
+        --expect-no-view "room:!redactions:example::@grace:example changes topic to 'redaction topic should disappear'"
         --expect-no-view 'thread:!redactions:example|$redact-thread-root::redaction thread root payload should disappear'
         --expect-no-view 'thread:!redactions:example|$redact-thread-root::redaction thread reply payload should disappear'
       )
@@ -950,9 +950,9 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!verify:example::Room: Verify [e2ee] (!verify:example)'
-        --expect-room-view '!verify:example::[22:14] @alice:example: verification requested by @alice:example'
-        --expect-room-view '!verify:example::[22:15] @alice:example: sas emoji ready'
-        --expect-room-view '!verify:example::[22:16] @alice:example: waiting for confirmation'
+        --expect-room-view '!verify:example::[22:14] <@alice:example> verification requested by @alice:example'
+        --expect-room-view '!verify:example::[22:15] <@alice:example> sas emoji ready'
+        --expect-room-view '!verify:example::[22:16] <@alice:example> waiting for confirmation'
       )
       status_view_expect_args=(
         --expect-status-view 'flow-verify-123'
@@ -1271,14 +1271,14 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!mixed:example::Room: Mixed [e2ee] (!mixed:example)'
         --expect-room-view '!mixed:example::Topic: mixed room topic'
-        --expect-room-view '!mixed:example::[22:13] @alice:example: synced hello'
-        --expect-room-view '!mixed:example::* [22:14] @alice:example set topic: mixed room topic'
-        --expect-room-view '!mixed:example::* [22:15] bob joined'
-        --expect-room-view '!mixed:example::* [22:16] @carol:example left'
+        --expect-room-view '!mixed:example::[22:13] <@alice:example> synced hello'
+        --expect-room-view "!mixed:example::[22:14] * @alice:example changes topic to 'mixed room topic'"
+        --expect-room-view '!mixed:example::[22:15] * Joins: bob (@bob:example)'
+        --expect-room-view '!mixed:example::[22:16] * Parts: @carol:example'
         --expect-room-view '!mixed:example::[22:17] -@system:example- server maintenance'
-        --expect-room-view '!mixed:example::* [22:18] @alice:example waves hello'
-        --expect-room-view '!mixed:example::* [22:17] @alice:example pending local echo (sending)'
-        --expect-room-view '!mixed:example::* [22:18] @alice:example failed local echo (failed)'
+        --expect-room-view '!mixed:example::[22:18] * @alice:example waves hello'
+        --expect-room-view '!mixed:example::[22:17] * @alice:example pending local echo (sending)'
+        --expect-room-view '!mixed:example::[22:18] * @alice:example failed local echo (failed)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1328,19 +1328,19 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!dense:example::Room: Dense (!dense:example)'
         --expect-room-view '!dense:example::Topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::[22:13] @dense.sender.with.a.very.long.mxid:example.org: dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:13] <@dense.sender.with.a.very.long.mxid:example.org> dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view '!dense:example::[22:14] -@system:example- dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::* [22:15] @alice:example dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::* [22:16] @alice:example set topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::* [22:17] Dense Member Alpha Beta Gamma Delta joined'
-        --expect-room-view '!dense:example::* [22:17] @dense-leaver:example left'
-        --expect-room-view '!dense:example::* [22:18] @alice:example sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
-        --expect-room-view '!dense:example::* [22:18] @alice:example sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
-        --expect-room-view '!dense:example::[22:19] @alice:example: dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
-        --expect-room-view '!dense:example::[22:20] @alice:example: dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
-        --expect-room-view '!dense:example::* [22:21] @alice:example sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
-        --expect-room-view '!dense:example::[22:22] @bob:example: dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::[22:23] @carol:example: dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:15] * @alice:example dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view "!dense:example::[22:16] * @alice:example changes topic to 'dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'"
+        --expect-room-view '!dense:example::[22:17] * Joins: Dense Member Alpha Beta Gamma Delta (@dense-member:example)'
+        --expect-room-view '!dense:example::[22:17] * Parts: @dense-leaver:example'
+        --expect-room-view '!dense:example::[22:18] * @alice:example sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
+        --expect-room-view '!dense:example::[22:18] * @alice:example sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
+        --expect-room-view '!dense:example::[22:19] <@alice:example> dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
+        --expect-room-view '!dense:example::[22:20] <@alice:example> dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
+        --expect-room-view '!dense:example::[22:21] * @alice:example sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!dense:example::[22:22] <@bob:example> dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:23] <@carol:example> dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1878,7 +1878,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
-        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent unsupported com.example.custom: custom payload'
+        --expect-room-view '!media:example.org::[16:00] * @alice:example.org sent unsupported com.example.custom: custom payload'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !media:example.org'
@@ -1919,7 +1919,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!encrypted:example.org::Room: Encrypted [e2ee] (!encrypted:example.org)'
-        --expect-room-view '!encrypted:example.org::* [16:00] @alice:example.org sent an encrypted message that could not be decrypted'
+        --expect-room-view '!encrypted:example.org::[16:00] * @alice:example.org sent an encrypted message that could not be decrypted'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !encrypted:example.org'
@@ -1954,7 +1954,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
-        --expect-room-view '!media:example.org::* [16:00] @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)'
+        --expect-room-view '!media:example.org::[16:00] * @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !media:example.org'
@@ -1992,7 +1992,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
-        --expect-room-view '!media:example.org::* [16:01] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
+        --expect-room-view '!media:example.org::[16:01] * @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !media:example.org'
@@ -2045,7 +2045,7 @@ configure_case_expectations() {
       fi
       room_view_expect_args=(
         --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
-        --expect-room-view '!media:example.org::* [16:02] @alice:example.org sent video: clip.mp4 (video/mp4, 1920x1080, 34567 bytes, 12000 ms)'
+        --expect-room-view '!media:example.org::[16:02] * @alice:example.org sent video: clip.mp4 (video/mp4, 1920x1080, 34567 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
         --expect-status-bar "$([[ "$case_name" == video-message ]] && echo 'timeline update from !media:example.org' || echo 'preview media update from !media:example.org')"
@@ -2084,7 +2084,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
-        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !images:example.org'
@@ -2117,7 +2117,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
-        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'preview media update from !images:example.org'
@@ -2150,7 +2150,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
-        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'preview media update from !images:example.org'
@@ -2188,7 +2188,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
-        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'timeline update from !images:example.org'
@@ -2225,7 +2225,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
-        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'preview media update from !images:example.org'
@@ -2262,7 +2262,7 @@ configure_case_expectations() {
       )
       room_view_expect_args=(
         --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
-        --expect-room-view '!images:example.org::* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
         --expect-status-bar 'preview media update from !images:example.org'

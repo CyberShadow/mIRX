@@ -825,9 +825,34 @@ pub enum RoomStateNoticeContent {
         topic: String,
     },
     Member {
-        membership: String,
-        displayname: Option<String>,
+        change: RoomMemberChange,
+        target_display_name: Option<String>,
+        reason: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomMemberChange {
+    Joined,
+    Left,
+    Kicked,
+    Banned,
+    KickedAndBanned,
+    Unbanned,
+    Invited,
+    InvitationAccepted,
+    InvitationRejected,
+    InvitationRevoked,
+    Knocked,
+    KnockAccepted,
+    KnockRetracted,
+    KnockDenied,
+    DisplayNameChanged {
+        old: Option<String>,
+        new: Option<String>,
+    },
+    AvatarChanged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

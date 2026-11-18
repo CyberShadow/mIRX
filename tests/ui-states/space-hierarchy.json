@@ -112,7 +112,7 @@
         "type": "message",
         "event_id": "$ops-space-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "ops workspace is ready",
         "send_state": {
@@ -131,7 +131,7 @@
         "type": "message",
         "event_id": "$shared-space-1",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "shared room has updates",
         "send_state": {
@@ -150,7 +150,7 @@
         "type": "message",
         "event_id": "$random-space-1",
         "transaction_id": null,
-        "sender": "@carol:example",
+        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "random room has updates",
         "send_state": {

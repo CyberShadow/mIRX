@@ -8,7 +8,7 @@
         "type": "message",
         "event_id": "$inbox-fresh",
         "transaction_id": null,
-        "sender": "@carol:example",
+        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh inbox activity marker",
         "send_state": { "state": "sent" }
@@ -25,7 +25,7 @@
         "type": "message",
         "event_id": "$mentions-fresh",
         "transaction_id": null,
-        "sender": "@dave:example",
+        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh mentions activity marker",
         "send_state": { "state": "sent" }
@@ -48,7 +48,7 @@
         "type": "message",
         "event_id": "$active-thread-fresh",
         "transaction_id": null,
-        "sender": "@frank:example",
+        "sender": { "user_id": "@frank:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "fresh inactive thread marker",
         "send_state": { "state": "sent" }

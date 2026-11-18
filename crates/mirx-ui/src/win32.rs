@@ -28,7 +28,7 @@ use mirx_core::{
     RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
@@ -124,6 +124,13 @@ use crate::{
         dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
         parse_command_request, success_response,
     },
+};
+
+mod timeline_text;
+
+use timeline_text::{
+    LogLine, action_line, event_line, member_change_text, message_line, nick_label,
+    topic_change_text,
 };
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
@@ -385,13 +392,13 @@ impl TimelineRow {
         }
     }
 
-    fn log(
-        kind: TimelineRowKind,
-        logical_text: String,
-        timestamp: String,
-        sender_prefix: String,
-        body: String,
-    ) -> Self {
+    fn log(kind: TimelineRowKind, line: LogLine) -> Self {
+        let logical_text = line.text();
+        let LogLine {
+            timestamp,
+            prefix: sender_prefix,
+            body,
+        } = line;
         Self {
             identity: TimelineRowIdentity::default_for_row(&kind, &logical_text),
             event_id: None,
@@ -869,6 +876,15 @@ impl RoomViewModel {
 
     fn replace_members(&mut self, members: RoomMembers) {
         self.members = members.members;
+    }
+
+    /// A user's nick from the joined-member snapshot; users outside it, such
+    /// as typing notifications racing a membership change, show by user ID.
+    fn member_nick(&self, user_id: &str) -> String {
+        self.members
+            .iter()
+            .find(|member| member.user_id == user_id)
+            .map_or_else(|| user_id.to_owned(), room_member_nick)
     }
 
     fn projected_preview_state(
@@ -1615,7 +1631,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: message.event_id.clone(),
             transaction_id: message.transaction_id.clone(),
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: message.presentation,
             body: message.body.clone(),
@@ -1625,7 +1641,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
             transaction_id: None,
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: RoomMessagePresentationKind::Text,
             body: format!("[unsupported {}] {}", message.msgtype, message.body),
@@ -1635,7 +1651,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
             transaction_id: None,
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: RoomMessagePresentationKind::Text,
             body: "[encrypted] Unable to decrypt message".to_owned(),
@@ -1645,7 +1661,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
             transaction_id: None,
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: RoomMessagePresentationKind::Text,
             body: format!(
@@ -1658,7 +1674,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
             transaction_id: None,
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: RoomMessagePresentationKind::Text,
             body: format!(
@@ -1671,7 +1687,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
             transaction_id: None,
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: RoomMessagePresentationKind::Text,
             body: format!(
@@ -1684,7 +1700,7 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
             room_id: activity.room_id.clone(),
             event_id: Some(message.event_id.clone()),
             transaction_id: None,
-            sender: message.sender.clone(),
+            sender: message.sender.user_id.clone(),
             timestamp_ms: activity.timestamp_ms,
             presentation: RoomMessagePresentationKind::Text,
             body: format!(
@@ -2302,45 +2318,23 @@ fn apply_room_members_event(state: &mut WindowState, members: RoomMembers) {
         .replace_members(members);
 }
 
-fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
-    let mut display_name_counts = BTreeMap::new();
-    for member in members {
-        if let Some(display_name) = member
-            .display_name
-            .as_deref()
-            .filter(|name| !name.is_empty())
-        {
-            *display_name_counts
-                .entry(display_name.to_owned())
-                .or_insert(0usize) += 1;
-        }
-    }
+fn room_member_nick(member: &RoomMemberSummary) -> String {
+    nick_label(
+        &member.user_id,
+        member.display_name.as_deref(),
+        member.display_name_ambiguous,
+    )
+}
 
+fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
     members
         .iter()
-        .map(|member| {
-            let label = match member.display_name.as_deref() {
-                Some(display_name) if !display_name.is_empty() => {
-                    if display_name_counts
-                        .get(display_name)
-                        .copied()
-                        .unwrap_or_default()
-                        > 1
-                    {
-                        format!("{display_name} ({})", member.user_id)
-                    } else {
-                        display_name.to_owned()
-                    }
-                }
-                _ => member.user_id.clone(),
-            };
-            RoomMemberView {
-                user_id: member.user_id.clone(),
-                display_name: member.display_name.clone(),
-                label,
-                can_kick: member.can_kick,
-                can_ban: member.can_ban,
-            }
+        .map(|member| RoomMemberView {
+            user_id: member.user_id.clone(),
+            display_name: member.display_name.clone(),
+            label: room_member_nick(member),
+            can_kick: member.can_kick,
+            can_ban: member.can_ban,
         })
         .collect()
 }
@@ -7930,7 +7924,12 @@ fn push_room_context_rows(
     if let Some(room_view) = room_view
         && !room_view.typing_user_ids.is_empty()
     {
-        let users = room_view.typing_user_ids.join(", ");
+        let users = room_view
+            .typing_user_ids
+            .iter()
+            .map(|user_id| room_view.member_nick(user_id))
+            .collect::<Vec<_>>()
+            .join(", ");
         let verb = if room_view.typing_user_ids.len() == 1 {
             "is"
         } else {
@@ -7966,45 +7965,27 @@ fn push_room_activity_row(
     room_view: Option<&RoomViewModel>,
     activity: &RoomActivity,
 ) {
-    match &activity.kind {
+    let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+    let (kind, line, image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
             let suffix = match &message.send_state {
                 RoomMessageSendState::Pending => " (sending)",
                 RoomMessageSendState::Sent => "",
                 RoomMessageSendState::Failed { .. } => " (failed)",
             };
-            let (logical_text, sender_prefix, body) = match message.presentation {
-                RoomMessagePresentationKind::Text => (
-                    format!("{timestamp} {}: {}{suffix}", message.sender, message.body),
-                    format!("{}:", message.sender),
-                    format!("{}{}", message.body, suffix),
-                ),
-                RoomMessagePresentationKind::Notice => (
-                    format!("{timestamp} -{}- {}{suffix}", message.sender, message.body),
-                    format!("-{}-", message.sender),
-                    format!("{}{}", message.body, suffix),
-                ),
-                RoomMessagePresentationKind::Emote => (
-                    format!("* {timestamp} {} {}{suffix}", message.sender, message.body),
-                    format!("* {}", message.sender),
-                    format!("{}{}", message.body, suffix),
-                ),
-            };
-            rows.push(
-                TimelineRow::log(
-                    TimelineRowKind::Message {
-                        presentation: message.presentation,
-                        send_state: timeline_message_send_state(&message.send_state),
-                    },
-                    logical_text,
+            (
+                TimelineRowKind::Message {
+                    presentation: message.presentation,
+                    send_state: timeline_message_send_state(&message.send_state),
+                },
+                message_line(
                     timestamp,
-                    sender_prefix,
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
+                    message.presentation,
+                    &message.sender,
+                    format!("{}{suffix}", message.body),
+                ),
+                None,
+            )
         }
         RoomActivityKind::Image(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
@@ -8013,168 +7994,105 @@ fn push_room_activity_row(
             let image_state = room_view.map(|view| {
                 view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
             });
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = format!("sent image: {display_name}{metadata_suffix}");
-            let mut row = TimelineRow::log(
+            (
                 TimelineRowKind::Image,
-                format!("* {timestamp} {} {body}", message.sender),
-                timestamp,
-                format!("* {}", message.sender),
-                body,
+                action_line(
+                    timestamp,
+                    &message.sender,
+                    format!("sent image: {display_name}{metadata_suffix}"),
+                ),
+                image_state,
             )
-            .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-            .with_event_id(room_activity_event_id(activity));
-            row.image_state = image_state;
-            rows.push(row);
         }
         RoomActivityKind::File(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_file_metadata_suffix(message.info.as_ref());
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = format!("sent file: {display_name}{metadata_suffix}");
-            rows.push(
-                TimelineRow::log(
-                    TimelineRowKind::File,
-                    format!("* {timestamp} {} {body}", message.sender),
+            (
+                TimelineRowKind::File,
+                action_line(
                     timestamp,
-                    format!("* {}", message.sender),
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
+                    &message.sender,
+                    format!("sent file: {display_name}{metadata_suffix}"),
+                ),
+                None,
+            )
         }
         RoomActivityKind::Audio(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_audio_metadata_suffix(message.info.as_ref());
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = format!("sent audio: {display_name}{metadata_suffix}");
-            rows.push(
-                TimelineRow::log(
-                    TimelineRowKind::Audio,
-                    format!("* {timestamp} {} {body}", message.sender),
+            (
+                TimelineRowKind::Audio,
+                action_line(
                     timestamp,
-                    format!("* {}", message.sender),
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
+                    &message.sender,
+                    format!("sent audio: {display_name}{metadata_suffix}"),
+                ),
+                None,
+            )
         }
         RoomActivityKind::Video(message) => {
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_video_metadata_suffix(message.info.as_ref());
             let format = timeline_thumbnail_format();
-            let image_state = timeline_video_preview_source(message).map(|_| {
+            let image_state = timeline_video_preview_source(message).and_then(|_| {
                 room_view.map(|view| {
                     view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
                 })
             });
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = format!("sent video: {display_name}{metadata_suffix}");
-            let mut row = TimelineRow::log(
+            (
                 TimelineRowKind::Video,
-                format!("* {timestamp} {} {body}", message.sender),
-                timestamp,
-                format!("* {}", message.sender),
-                body,
+                action_line(
+                    timestamp,
+                    &message.sender,
+                    format!("sent video: {display_name}{metadata_suffix}"),
+                ),
+                image_state,
             )
-            .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-            .with_event_id(room_activity_event_id(activity));
-            row.image_state = image_state.flatten();
-            rows.push(row);
         }
-        RoomActivityKind::UnsupportedMessage(message) => {
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = format!("sent unsupported {}: {}", message.msgtype, message.body);
-            rows.push(
-                TimelineRow::log(
-                    TimelineRowKind::Unsupported,
-                    format!("* {timestamp} {} {body}", message.sender),
-                    timestamp,
-                    format!("* {}", message.sender),
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
+        RoomActivityKind::UnsupportedMessage(message) => (
+            TimelineRowKind::Unsupported,
+            action_line(
+                timestamp,
+                &message.sender,
+                format!("sent unsupported {}: {}", message.msgtype, message.body),
+            ),
+            None,
+        ),
+        RoomActivityKind::UnableToDecrypt(message) => (
+            TimelineRowKind::UnableToDecrypt,
+            action_line(
+                timestamp,
+                &message.sender,
+                "sent an encrypted message that could not be decrypted".to_owned(),
+            ),
+            None,
+        ),
+        RoomActivityKind::StateNotice(notice) => {
+            let body = match &notice.content {
+                RoomStateNoticeContent::Topic { topic } => topic_change_text(&notice.sender, topic),
+                RoomStateNoticeContent::Member {
+                    change,
+                    target,
+                    reason,
+                } => member_change_text(&notice.sender, change, target, reason.as_deref()),
+            };
+            (
+                TimelineRowKind::StateNotice,
+                event_line(timestamp, body),
+                None,
+            )
         }
-        RoomActivityKind::UnableToDecrypt(message) => {
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = "sent an encrypted message that could not be decrypted".to_owned();
-            rows.push(
-                TimelineRow::log(
-                    TimelineRowKind::UnableToDecrypt,
-                    format!("* {timestamp} {} {body}", message.sender),
-                    timestamp,
-                    format!("* {}", message.sender),
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
-        }
-        RoomActivityKind::StateNotice(notice) => match &notice.content {
-            RoomStateNoticeContent::Topic { topic } => {
-                let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-                let body = format!("{} set topic: {topic}", notice.sender);
-                rows.push(
-                    TimelineRow::log(
-                        TimelineRowKind::StateNotice,
-                        format!("* {timestamp} {body}"),
-                        timestamp,
-                        "*".to_owned(),
-                        body,
-                    )
-                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                    .with_event_id(room_activity_event_id(activity)),
-                );
-            }
-            RoomStateNoticeContent::Member {
-                membership,
-                displayname,
-            } => {
-                let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-                let body = match membership.as_str() {
-                    "join" => {
-                        let member = displayname.as_deref().unwrap_or(notice.state_key.as_str());
-                        format!("{member} joined")
-                    }
-                    "leave" => {
-                        let member = displayname.as_deref().unwrap_or(notice.state_key.as_str());
-                        format!("{member} left")
-                    }
-                    membership => format!("{} membership: {membership}", notice.state_key),
-                };
-                rows.push(
-                    TimelineRow::log(
-                        TimelineRowKind::StateNotice,
-                        format!("* {timestamp} {body}"),
-                        timestamp,
-                        "*".to_owned(),
-                        body,
-                    )
-                    .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                    .with_event_id(room_activity_event_id(activity)),
-                );
-            }
-        },
-        RoomActivityKind::Redacted(_) => {
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
-            let body = "message redacted".to_owned();
-            rows.push(
-                TimelineRow::log(
-                    TimelineRowKind::StateNotice,
-                    format!("* {timestamp} {body}"),
-                    timestamp,
-                    "*".to_owned(),
-                    body,
-                )
-                .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-                .with_event_id(room_activity_event_id(activity)),
-            );
-        }
-    }
+        RoomActivityKind::Redacted(_) => (
+            TimelineRowKind::StateNotice,
+            event_line(timestamp, "message redacted".to_owned()),
+            None,
+        ),
+    };
+    let mut row = TimelineRow::log(kind, line)
+        .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+        .with_event_id(room_activity_event_id(activity));
+    row.image_state = image_state;
+    rows.push(row);
 
     let Some(room_view) = room_view else {
         return;
@@ -12030,7 +11948,11 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$one-first".to_owned()),
                 transaction_id: None,
-                sender: "@alice:example".to_owned(),
+                sender: RoomUserProfile {
+                    user_id: "@alice:example".to_owned(),
+                    display_name: None,
+                    display_name_ambiguous: false,
+                },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "first line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
@@ -12044,7 +11966,11 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$one-second".to_owned()),
                 transaction_id: None,
-                sender: "@alice:example".to_owned(),
+                sender: RoomUserProfile {
+                    user_id: "@alice:example".to_owned(),
+                    display_name: None,
+                    display_name_ambiguous: false,
+                },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "second line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
@@ -12058,7 +11984,11 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$two-third".to_owned()),
                 transaction_id: None,
-                sender: "@bob:example".to_owned(),
+                sender: RoomUserProfile {
+                    user_id: "@bob:example".to_owned(),
+                    display_name: None,
+                    display_name_ambiguous: false,
+                },
                 presentation: RoomMessagePresentationKind::Text,
                 body: "third line".to_owned(),
                 send_state: RoomMessageSendState::Sent,
@@ -14913,9 +14843,17 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use mirx_core::RoomStateNoticeActivity;
+    use mirx_core::{RoomMemberChange, RoomStateNoticeActivity};
 
     use super::*;
+
+    fn user_profile(user_id: &str) -> RoomUserProfile {
+        RoomUserProfile {
+            user_id: user_id.to_owned(),
+            display_name: None,
+            display_name_ambiguous: false,
+        }
+    }
 
     static LOCAL_APP_DATA_LOCK: StdMutex<()> = StdMutex::new(());
     static TEST_TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -15016,7 +14954,7 @@ mod tests {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some(event_id.to_owned()),
                 transaction_id: transaction_id.map(str::to_owned),
-                sender: "@alice:example".to_owned(),
+                sender: user_profile("@alice:example"),
                 presentation,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Sent,
@@ -15217,7 +15155,7 @@ mod tests {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
-                sender: "@alice:example".to_owned(),
+                sender: user_profile("@alice:example"),
                 presentation,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Pending,
@@ -15443,7 +15381,7 @@ mod tests {
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: None,
                 transaction_id: Some(transaction_id.to_owned()),
-                sender: "@alice:example".to_owned(),
+                sender: user_profile("@alice:example"),
                 presentation,
                 body: body.to_owned(),
                 send_state: RoomMessageSendState::Failed {
@@ -15488,8 +15426,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                 event_id: format!("$topic:{room_id}:{topic}"),
-                sender: "@alice:example".to_owned(),
-                state_key: String::new(),
+                sender: user_profile("@alice:example"),
                 content: RoomStateNoticeContent::Topic {
                     topic: topic.to_owned(),
                 },
@@ -15511,7 +15448,7 @@ mod tests {
         assert!(
             !initial
                 .iter()
-                .any(|line| line.contains("set topic: incident review"))
+                .any(|line| line.contains("changes topic to 'incident review'"))
         );
 
         apply_core_event(&mut state, topic_state("!ops:example", "deployment window")).unwrap();
@@ -15521,7 +15458,7 @@ mod tests {
         assert!(
             updated
                 .iter()
-                .any(|line| line.contains("set topic: deployment window"))
+                .any(|line| line.contains("changes topic to 'deployment window'"))
         );
         assert!(!updated.contains(&"Topic: incident review".to_owned()));
 
@@ -15535,21 +15472,26 @@ mod tests {
     fn member_state(
         room_id: &str,
         state_key: &str,
-        membership: &str,
+        change: RoomMemberChange,
         display_name: Option<&str>,
     ) -> Event {
+        let event_id = format!("$member:{room_id}:{state_key}:{change:?}");
         Event::RoomActivity(Box::new(RoomActivity {
             room_id: room_id.to_owned(),
             timestamp_ms: 1_700_000_120_000,
-            activity_id: format!("state:$member:{room_id}:{state_key}:{membership}"),
+            activity_id: format!("state:{event_id}"),
             relation: None,
             kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
-                event_id: format!("$member:{room_id}:{state_key}:{membership}"),
-                sender: "@alice:example".to_owned(),
-                state_key: state_key.to_owned(),
+                event_id,
+                sender: user_profile("@alice:example"),
                 content: RoomStateNoticeContent::Member {
-                    membership: membership.to_owned(),
-                    displayname: display_name.map(str::to_owned),
+                    change,
+                    target: RoomUserProfile {
+                        user_id: state_key.to_owned(),
+                        display_name: display_name.map(str::to_owned),
+                        display_name_ambiguous: false,
+                    },
+                    reason: None,
                 },
             }),
         }))
@@ -15570,7 +15512,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(mirx_core::UnsupportedRoomMessageActivity {
                 event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
+                sender: user_profile(sender),
                 msgtype: msgtype.to_owned(),
                 body: body.to_owned(),
             }),
@@ -15608,7 +15550,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::UnableToDecrypt(mirx_core::RoomUnableToDecryptActivity {
                 event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
+                sender: user_profile(sender),
                 session_id: Some("SESSIONID".to_owned()),
                 reason: mirx_core::RoomUnableToDecryptReason::MissingMegolmSession,
             }),
@@ -15631,7 +15573,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Image(Box::new(mirx_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
+                sender: user_profile(sender),
                 body: body.to_owned(),
                 filename: filename.map(str::to_owned),
                 source: mirx_core::RoomMediaSource::Plain {
@@ -15658,7 +15600,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::File(Box::new(mirx_core::RoomFileActivity {
                 event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
+                sender: user_profile(sender),
                 body: body.to_owned(),
                 filename: filename.map(str::to_owned),
                 source: mirx_core::RoomMediaSource::Plain {
@@ -15685,7 +15627,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Audio(Box::new(mirx_core::RoomAudioActivity {
                 event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
+                sender: user_profile(sender),
                 body: body.to_owned(),
                 filename: filename.map(str::to_owned),
                 source: mirx_core::RoomMediaSource::Plain {
@@ -15728,7 +15670,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Video(Box::new(mirx_core::RoomVideoActivity {
                 event_id: event_id.to_owned(),
-                sender: "@alice:example.org".to_owned(),
+                sender: user_profile("@alice:example.org"),
                 body: "clip.mp4".to_owned(),
                 filename: Some("clip.mp4".to_owned()),
                 source: RoomMediaSource::Plain {
@@ -15763,7 +15705,7 @@ mod tests {
             relation: None,
             kind: RoomActivityKind::Image(Box::new(mirx_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
-                sender: sender.to_owned(),
+                sender: user_profile(sender),
                 body: body.to_owned(),
                 filename: None,
                 source: encrypted_media_source("mxc://example.org/encrypted"),
@@ -16035,10 +15977,11 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                 },
-                "message".to_owned(),
-                "[00:00]".to_owned(),
-                "@alice:".to_owned(),
-                "message".to_owned(),
+                LogLine {
+                    timestamp: "[00:00]".to_owned(),
+                    prefix: "@alice:".to_owned(),
+                    body: "message".to_owned(),
+                },
             )
             .with_event_id(Some(event_id))],
         );
@@ -16348,7 +16291,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] @alice:example waves (sending)".to_owned(),
+                "[22:13] * @alice:example waves (sending)".to_owned(),
             ]
         );
     }
@@ -16400,7 +16343,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "[22:13] <@alice:example> hello".to_owned(),
             ]
         );
     }
@@ -16454,7 +16397,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] @alice:example edited body".to_owned(),
+                "[22:13] * @alice:example edited body".to_owned(),
             ]
         );
     }
@@ -16693,7 +16636,7 @@ mod tests {
             project_timeline_rows(&rows),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x1".to_owned(),
             ]
         );
@@ -16765,7 +16708,7 @@ mod tests {
             project_timeline_rows(&rows),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x1  eyes x1  heart x2".to_owned(),
             ]
         );
@@ -16923,7 +16866,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x2  heart x1".to_owned(),
             ]
         );
@@ -16944,7 +16887,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x1  heart x1".to_owned(),
             ]
         );
@@ -16997,7 +16940,7 @@ mod tests {
             project_timeline_rows(&rows),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] message redacted".to_owned(),
+                "[22:13] * message redacted".to_owned(),
             ]
         );
     }
@@ -17159,9 +17102,9 @@ mod tests {
             project_timeline_rows(&rows),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "[22:14] @alice:example: root msg".to_owned(),
+                "[22:14] <@alice:example> root msg".to_owned(),
                 "    reactions: heart x1".to_owned(),
-                "[22:15] @alice:example: thread rep".to_owned(),
+                "[22:15] <@alice:example> thread rep".to_owned(),
                 "    reactions: eyes x1".to_owned(),
             ]
         );
@@ -17334,7 +17277,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] @alice:example waves".to_owned(),
+                "[22:13] * @alice:example waves".to_owned(),
             ]
         );
         assert_eq!(
@@ -17412,7 +17355,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] @alice:example waves".to_owned(),
+                "[22:13] * @alice:example waves".to_owned(),
             ]
         );
     }
@@ -17472,7 +17415,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] @alice:example waves (failed)".to_owned(),
+                "[22:13] * @alice:example waves (failed)".to_owned(),
             ]
         );
     }
@@ -17512,7 +17455,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [22:13] @alice:example waves (failed)".to_owned(),
+                "[22:13] * @alice:example waves (failed)".to_owned(),
             ]
         );
     }
@@ -17960,12 +17903,22 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            member_state("!ops:example", "@carol:example", "join", Some("carol")),
+            member_state(
+                "!ops:example",
+                "@carol:example",
+                RoomMemberChange::Joined,
+                Some("carol"),
+            ),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            member_state("!ops:example", "@dave:example", "leave", None),
+            member_state(
+                "!ops:example",
+                "@dave:example",
+                RoomMemberChange::Left,
+                None,
+            ),
         )
         .unwrap();
 
@@ -18015,22 +17968,22 @@ mod tests {
                 "Room: Ops [e2ee] (!ops:example)".to_owned(),
                 "Topic: incident review".to_owned(),
                 "* @alice:example.org, @bob:example.org are typing".to_owned(),
-                "* [22:14] @alice:example set topic: incident review".to_owned(),
-                "[22:13] @alice:example: <body>".to_owned(),
+                "[22:14] * @alice:example changes topic to 'incident review'".to_owned(),
+                "[22:13] <@alice:example> <body>".to_owned(),
                 "[22:13] -@alice:example- maintenance window".to_owned(),
-                "* [22:14] @alice:example waves".to_owned(),
-                "[22:13] @alice:example: pending local echo (sending)".to_owned(),
-                "[22:13] @alice:example: failed local echo (failed)".to_owned(),
-                "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
+                "[22:14] * @alice:example waves".to_owned(),
+                "[22:13] <@alice:example> pending local echo (sending)".to_owned(),
+                "[22:13] <@alice:example> failed local echo (failed)".to_owned(),
+                "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
                     .to_owned(),
-                "* [16:01] @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)"
+                "[16:01] * @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)"
                     .to_owned(),
-                "* [16:02] @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)"
+                "[16:02] * @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)"
                     .to_owned(),
-                "* [16:03] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                "[16:03] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
-                "* [22:15] carol joined".to_owned(),
-                "* [22:15] @dave:example left".to_owned(),
+                "[22:15] * Joins: carol (@carol:example)".to_owned(),
+                "[22:15] * Parts: @dave:example".to_owned(),
             ]
         );
         assert_eq!(
@@ -18043,7 +17996,7 @@ mod tests {
             rows[4].visual.clone(),
             TimelineRowVisual::Log {
                 timestamp: "[22:13]".to_owned(),
-                sender_prefix: "@alice:example:".to_owned(),
+                sender_prefix: "<@alice:example>".to_owned(),
                 body: "<body>".to_owned(),
             }
         );
@@ -18100,7 +18053,7 @@ mod tests {
             TimelineRowVisual::Log {
                 timestamp: "[22:15]".to_owned(),
                 sender_prefix: "*".to_owned(),
-                body: "carol joined".to_owned(),
+                body: "Joins: carol (@carol:example)".to_owned(),
             }
         );
         assert_eq!(
@@ -18108,8 +18061,93 @@ mod tests {
             TimelineRowVisual::Log {
                 timestamp: "[22:15]".to_owned(),
                 sender_prefix: "*".to_owned(),
-                body: "@dave:example left".to_owned(),
+                body: "Parts: @dave:example".to_owned(),
             }
+        );
+    }
+
+    fn member_summary(
+        user_id: &str,
+        display_name: Option<&str>,
+        display_name_ambiguous: bool,
+    ) -> RoomMemberSummary {
+        RoomMemberSummary {
+            user_id: user_id.to_owned(),
+            display_name: display_name.map(str::to_owned),
+            display_name_ambiguous,
+            can_kick: false,
+            can_ban: false,
+        }
+    }
+
+    #[test]
+    fn typing_indicator_names_typists_by_member_nick() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            Event::RoomMembers(RoomMembers {
+                room_id: "!ops:example".to_owned(),
+                members: vec![
+                    member_summary("@alice:example", Some("Alice"), false),
+                    member_summary("@sam1:example", Some("Sam"), true),
+                ],
+            }),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event(
+                "!ops:example",
+                &["@alice:example", "@sam1:example", "@stranger:example"],
+            ),
+        )
+        .unwrap();
+
+        assert!(
+            render_room_lines(&state.model, "!ops:example")
+                .contains(&"* Alice, Sam (@sam1:example), @stranger:example are typing".to_owned())
+        );
+    }
+
+    #[test]
+    fn member_view_rows_disambiguate_by_the_core_ambiguity_flag() {
+        let labels = room_member_view_rows(&[
+            member_summary("@alex:example", Some("Alex"), true),
+            member_summary("@bo1:example", Some("Bo"), false),
+            member_summary("@bo2:example", Some("Bo"), false),
+            member_summary("@nameless:example", None, false),
+        ])
+        .into_iter()
+        .map(|member| member.label)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            labels,
+            vec!["Alex (@alex:example)", "Bo", "Bo", "@nameless:example"]
+        );
+    }
+
+    #[test]
+    fn room_lines_show_sender_display_names() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let mut activity =
+            sent_message_activity("!ops:example", "$named", None, "hello", 1_700_000_000_000);
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            unreachable!("message activity helper builds messages");
+        };
+        message.sender = RoomUserProfile {
+            user_id: "@sam1:example".to_owned(),
+            display_name: Some("Sam".to_owned()),
+            display_name_ambiguous: true,
+        };
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
+
+        assert!(
+            render_room_lines(&state.model, "!ops:example")
+                .iter()
+                .any(|line| line.ends_with("<Sam (@sam1:example)> hello"))
         );
     }
 
@@ -18160,17 +18198,32 @@ mod tests {
         .unwrap();
         apply_core_event(
             &mut state,
-            member_state("!ops:example", "@carol:example", "join", Some("carol")),
+            member_state(
+                "!ops:example",
+                "@carol:example",
+                RoomMemberChange::Joined,
+                Some("carol"),
+            ),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            member_state("!ops:example", "@dave:example", "leave", None),
+            member_state(
+                "!ops:example",
+                "@dave:example",
+                RoomMemberChange::Left,
+                None,
+            ),
         )
         .unwrap();
         apply_core_event(
             &mut state,
-            member_state("!ops:example", "@erin:example", "ban", Some("erin")),
+            member_state(
+                "!ops:example",
+                "@erin:example",
+                RoomMemberChange::Banned,
+                Some("erin"),
+            ),
         )
         .unwrap();
 
@@ -18180,13 +18233,13 @@ mod tests {
                 "Room: Ops [e2ee] (!ops:example)".to_owned(),
                 "Topic: incident review".to_owned(),
                 "* @alice:example.org, @bob:example.org are typing".to_owned(),
-                "* [22:14] @alice:example set topic: incident review".to_owned(),
-                "[22:13] @alice:example: <body>".to_owned(),
+                "[22:14] * @alice:example changes topic to 'incident review'".to_owned(),
+                "[22:13] <@alice:example> <body>".to_owned(),
                 "[22:13] -@alice:example- maintenance window".to_owned(),
-                "* [22:14] @alice:example waves".to_owned(),
-                "* [22:15] carol joined".to_owned(),
-                "* [22:15] @dave:example left".to_owned(),
-                "* [22:15] @erin:example membership: ban".to_owned(),
+                "[22:14] * @alice:example waves".to_owned(),
+                "[22:15] * Joins: carol (@carol:example)".to_owned(),
+                "[22:15] * Parts: @dave:example".to_owned(),
+                "[22:15] * erin was banned by @alice:example".to_owned(),
             ]
         );
     }
@@ -18363,14 +18416,19 @@ mod tests {
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
             &mut state,
-            member_state("!ops:example", "@carol:example", "join", Some("carol")),
+            member_state(
+                "!ops:example",
+                "@carol:example",
+                RoomMemberChange::Joined,
+                Some("carol"),
+            ),
         )
         .unwrap();
         apply_core_event(
             &mut state,
             incoming_redacted(
                 "!ops:example",
-                "$member:!ops:example:@carol:example:join",
+                "$member:!ops:example:@carol:example:Joined",
                 "$redaction:example.org",
             ),
         )
@@ -18378,8 +18436,7 @@ mod tests {
 
         let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
-        assert!(!rendered.contains("carol joined"));
-        assert!(!rendered.contains("membership: join"));
+        assert!(!rendered.contains("Joins: carol"));
     }
 
     #[test]
@@ -18546,7 +18603,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                "[16:00] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
             ]
         );
@@ -18571,7 +18628,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops [e2ee] (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent an encrypted message that could not be decrypted"
+                "[16:00] * @alice:example.org sent an encrypted message that could not be decrypted"
                     .to_owned(),
             ]
         );
@@ -18639,7 +18696,7 @@ mod tests {
             lines,
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
+                "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
                     .to_owned(),
             ]
         );
@@ -18668,7 +18725,7 @@ mod tests {
             render_room_lines(&state.model, "!ops:example"),
             vec![
                 "Room: Ops (!ops:example)".to_owned(),
-                "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
+                "[16:00] * @alice:example.org sent image: diagram.png".to_owned(),
             ]
         );
     }
@@ -19837,21 +19894,22 @@ mod tests {
     fn timeline_row_paint_lines_expand_image_slots_without_changing_logical_text_rows() {
         let mut image_row = TimelineRow::log(
             TimelineRowKind::Image,
-            "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
-            "[16:00]".to_owned(),
-            "* @alice:example.org".to_owned(),
-            "sent image: diagram.png".to_owned(),
+            LogLine {
+                timestamp: "[16:00]".to_owned(),
+                prefix: "* @alice:example.org".to_owned(),
+                body: "sent image: diagram.png".to_owned(),
+            },
         );
         image_row.image_state = Some(TimelineImageState::Pending);
         let rows = vec![
             image_row,
             TimelineRow::log(
                 TimelineRowKind::Unsupported,
-                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4"
-                    .to_owned(),
-                "[16:01]".to_owned(),
-                "* @alice:example.org".to_owned(),
-                "sent unsupported com.example.custom: clip.mp4".to_owned(),
+                LogLine {
+                    timestamp: "[16:01]".to_owned(),
+                    prefix: "* @alice:example.org".to_owned(),
+                    body: "sent unsupported com.example.custom: clip.mp4".to_owned(),
+                },
             ),
         ];
 
@@ -19861,8 +19919,8 @@ mod tests {
         assert_eq!(
             logical_lines,
             vec![
-                "* [16:00] @alice:example.org sent image: diagram.png".to_owned(),
-                "* [16:01] @alice:example.org sent unsupported com.example.custom: clip.mp4"
+                "[16:00] * @alice:example.org sent image: diagram.png".to_owned(),
+                "[16:01] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
             ]
         );
@@ -19908,24 +19966,25 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
             },
-            "[22:13] @alice:example: alpha beta gamma".to_owned(),
-            "[22:13]".to_owned(),
-            "@alice:example:".to_owned(),
-            "alpha beta gamma".to_owned(),
+            LogLine {
+                timestamp: "[22:13]".to_owned(),
+                prefix: "<@alice:example>".to_owned(),
+                body: "alpha beta gamma".to_owned(),
+            },
         )];
 
         let paint_lines = timeline_row_paint_lines_with_measure(&rows, 280, &measure_ascii_width);
 
         assert_eq!(
             project_timeline_rows(&rows),
-            vec!["[22:13] @alice:example: alpha beta gamma".to_owned()]
+            vec!["[22:13] <@alice:example> alpha beta gamma".to_owned()]
         );
         assert_eq!(paint_lines.len(), 3);
         assert_eq!(
             paint_lines[0].visual.clone(),
             TimelinePaintLineVisual::Log {
                 timestamp: Some("[22:13]".to_owned()),
-                sender_prefix: Some("@alice:example:".to_owned()),
+                sender_prefix: Some("<@alice:example>".to_owned()),
                 body: "alpha".to_owned(),
             }
         );
@@ -19954,10 +20013,11 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
             },
-            "[22:13] @alice:example: abcdefghijklmno".to_owned(),
-            "[22:13]".to_owned(),
-            "@alice:example:".to_owned(),
-            "abcdefghijklmno".to_owned(),
+            LogLine {
+                timestamp: "[22:13]".to_owned(),
+                prefix: "<@alice:example>".to_owned(),
+                body: "abcdefghijklmno".to_owned(),
+            },
         )];
 
         let paint_lines = timeline_row_paint_lines_with_measure(&rows, 276, &measure_ascii_width);
@@ -19987,10 +20047,11 @@ mod tests {
     fn timeline_row_paint_lines_preserve_image_slots_after_wrapped_caption_lines() {
         let mut row = TimelineRow::log(
             TimelineRowKind::Image,
-            "* [16:00] @alice:example.org sent image: alpha beta gamma".to_owned(),
-            "[16:00]".to_owned(),
-            "* @alice:example.org".to_owned(),
-            "sent image: alpha beta gamma".to_owned(),
+            LogLine {
+                timestamp: "[16:00]".to_owned(),
+                prefix: "* @alice:example.org".to_owned(),
+                body: "sent image: alpha beta gamma".to_owned(),
+            },
         );
         row.image_state = Some(TimelineImageState::Pending);
 
@@ -20023,10 +20084,11 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
             },
-            "[22:13] @alice:example: alpha beta gamma delta".to_owned(),
-            "[22:13]".to_owned(),
-            "@alice:example:".to_owned(),
-            "alpha beta gamma delta".to_owned(),
+            LogLine {
+                timestamp: "[22:13]".to_owned(),
+                prefix: "<@alice:example>".to_owned(),
+                body: "alpha beta gamma delta".to_owned(),
+            },
         )];
         let paint_lines = timeline_row_paint_lines_with_measure(&rows, 280, &measure_ascii_width);
 
@@ -20260,17 +20322,17 @@ mod tests {
 
     #[test]
     fn normalize_timeline_text_converts_embedded_newlines_to_crlf() {
-        let text = "[22:13] @bob:example: multiline row 00 line a\nmultiline row 00 line b";
+        let text = "[22:13] <@bob:example> multiline row 00 line a\nmultiline row 00 line b";
         let (normalized, lines) = normalize_timeline_text(text);
 
         assert_eq!(
             normalized,
-            "[22:13] @bob:example: multiline row 00 line a\r\nmultiline row 00 line b"
+            "[22:13] <@bob:example> multiline row 00 line a\r\nmultiline row 00 line b"
         );
         assert_eq!(
             lines,
             vec![
-                "[22:13] @bob:example: multiline row 00 line a".to_owned(),
+                "[22:13] <@bob:example> multiline row 00 line a".to_owned(),
                 "multiline row 00 line b".to_owned(),
             ]
         );
@@ -20323,10 +20385,11 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                 },
-                "[22:13] @bob:example: current row".to_owned(),
-                "[22:13]".to_owned(),
-                "@bob:example:".to_owned(),
-                "current row".to_owned(),
+                LogLine {
+                    timestamp: "[22:13]".to_owned(),
+                    prefix: "<@bob:example>".to_owned(),
+                    body: "current row".to_owned(),
+                },
             )
             .with_event_id(Some("$current")),
         ];
@@ -24917,10 +24980,11 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                 },
-                "message".to_owned(),
-                "[00:00]".to_owned(),
-                "@alice:".to_owned(),
-                "message".to_owned(),
+                LogLine {
+                    timestamp: "[00:00]".to_owned(),
+                    prefix: "@alice:".to_owned(),
+                    body: "message".to_owned(),
+                },
             )
             .with_event_id(Some("$event:example")),
         ];
@@ -25583,8 +25647,8 @@ mod tests {
             vec![
                 "Room: Room (!room:example)".to_owned(),
                 "Topic: existing topic".to_owned(),
-                "* [22:14] @alice:example set topic: existing topic".to_owned(),
-                "[22:13] @alice:example: hello".to_owned(),
+                "[22:14] * @alice:example changes topic to 'existing topic'".to_owned(),
+                "[22:13] <@alice:example> hello".to_owned(),
             ]
         );
 

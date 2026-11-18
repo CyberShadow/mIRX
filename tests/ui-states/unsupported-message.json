@@ -34,7 +34,7 @@
       "kind": {
         "type": "unsupported_message",
         "event_id": "$unsupported1:example.org",
-        "sender": "@alice:example.org",
+        "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
         "msgtype": "com.example.custom",
         "body": "custom payload"
       },

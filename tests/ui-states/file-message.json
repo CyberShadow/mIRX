@@ -23,7 +23,7 @@
       "kind": {
         "type": "file",
         "event_id": "$file1:example.org",
-        "sender": "@alice:example.org",
+        "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
         "body": "Quarterly report",
         "filename": "report.pdf",
         "source": {

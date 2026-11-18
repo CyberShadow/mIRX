@@ -41,7 +41,7 @@
         "type": "message",
         "event_id": "$ops-room-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "lobby",
         "send_state": {
@@ -60,7 +60,7 @@
         "type": "message",
         "event_id": "$thread-root",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "root msg",
         "send_state": {
@@ -83,7 +83,7 @@
         "type": "message",
         "event_id": "$reply-1",
         "transaction_id": null,
-        "sender": "@carol:example",
+        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "plain",
         "send_state": {
@@ -107,7 +107,7 @@
         "type": "message",
         "event_id": "$thread-1",
         "transaction_id": null,
-        "sender": "@dave:example",
+        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "thread rep",
         "send_state": {
@@ -131,7 +131,7 @@
         "type": "message",
         "event_id": null,
         "transaction_id": "thread-pending-1",
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "pending threaded draft",
         "send_state": {

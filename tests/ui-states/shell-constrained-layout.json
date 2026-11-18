@@ -46,7 +46,7 @@
         "type": "message",
         "event_id": "$focus-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "focus kickoff for constrained shell snapshot coverage",
         "send_state": {
@@ -65,7 +65,7 @@
         "type": "message",
         "event_id": "$focus-2",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "member pane stays visible while the timeline still has enough width to read",
         "send_state": {
@@ -84,7 +84,7 @@
         "type": "message",
         "event_id": "$focus-3",
         "transaction_id": null,
-        "sender": "@carol:example",
+        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "long visible timeline line for the 900x620 shell frame so the MDI content remains obvious",
         "send_state": {
@@ -103,7 +103,7 @@
         "type": "message",
         "event_id": "$focus-4",
         "transaction_id": null,
-        "sender": "@dave:example",
+        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "another line keeps the room busy without depending on any new protocol behavior",
         "send_state": {
@@ -122,7 +122,7 @@
         "type": "message",
         "event_id": "$inbox-1",
         "transaction_id": null,
-        "sender": "@erin:example",
+        "sender": { "user_id": "@erin:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "inbox update keeps the status bar visible",
         "send_state": {
@@ -138,25 +138,25 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
+          "display_name": "Alice", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob",
+          "display_name": "Bob", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@casey:example",
-          "display_name": "Casey",
+          "display_name": "Casey", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@dana:example",
-          "display_name": "Dana",
+          "display_name": "Dana", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         }

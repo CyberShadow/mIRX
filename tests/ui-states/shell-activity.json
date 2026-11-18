@@ -35,7 +35,7 @@
         "type": "message",
         "event_id": "$alpha-room-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "alpha lobby",
         "send_state": {
@@ -54,7 +54,7 @@
         "type": "message",
         "event_id": "$alpha-thread-root",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "alpha root",
         "send_state": {
@@ -73,7 +73,7 @@
         "type": "message",
         "event_id": "$alpha-room-2",
         "transaction_id": null,
-        "sender": "@carol:example",
+        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "alpha parent room content",
         "send_state": {
@@ -98,7 +98,7 @@
         "type": "message",
         "event_id": "$alpha-thread-base",
         "transaction_id": null,
-        "sender": "@dave:example",
+        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "alpha thread base",
         "send_state": {

@@ -24,7 +24,7 @@
         "type": "message",
         "event_id": "$members-context-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "member list context line",
         "send_state": {
@@ -43,7 +43,7 @@
         "type": "message",
         "event_id": "$members-context-2",
         "transaction_id": null,
-        "sender": "@casey:example",
+        "sender": { "user_id": "@casey:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "timeline stays visible beside the list",
         "send_state": {
@@ -59,43 +59,43 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice",
+          "display_name": "Alice", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@casey:example",
-          "display_name": "Casey",
+          "display_name": "Casey", "display_name_ambiguous": false,
           "can_kick": true,
           "can_ban": true
         },
         {
           "user_id": "@sam-one:example",
-          "display_name": "Sam",
+          "display_name": "Sam", "display_name_ambiguous": true,
           "can_kick": true,
           "can_ban": false
         },
         {
           "user_id": "@sam-two:example",
-          "display_name": "Sam",
+          "display_name": "Sam", "display_name_ambiguous": true,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@ghost:example",
-          "display_name": null,
+          "display_name": null, "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@blank:example",
-          "display_name": "",
+          "display_name": "", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@zoe:example",
-          "display_name": "Zoe",
+          "display_name": "Zoe", "display_name_ambiguous": false,
           "can_kick": false,
           "can_ban": false
         }

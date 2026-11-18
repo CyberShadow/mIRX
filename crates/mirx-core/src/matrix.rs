@@ -41,7 +41,10 @@ use matrix_sdk::{
             relation::{Annotation, Reply, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
-                member::{OriginalSyncRoomMemberEvent, SyncRoomMemberEvent},
+                member::{
+                    MembershipChange, MembershipState, OriginalSyncRoomMemberEvent,
+                    SyncRoomMemberEvent,
+                },
                 message::{
                     AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
                     Relation as MessageContentRelation, Relation as MessageRelation,
@@ -58,7 +61,10 @@ use matrix_sdk::{
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
 };
-use matrix_sdk_base::{RoomInfoNotableUpdateReasons, read_receipts::RoomReadReceipts};
+use matrix_sdk_base::{
+    RoomInfoNotableUpdateReasons, deserialized_responses::DisplayName,
+    read_receipts::RoomReadReceipts,
+};
 use matrix_sdk_crypto::CrossSigningStatus;
 use mime::Mime;
 use tokio::task::JoinHandle;
@@ -72,15 +78,15 @@ use crate::api::{
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
-    RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomVideoActivity,
-    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+    RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
+    SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -623,6 +629,7 @@ fn sorted_room_member_summaries_from_parts(
         .map(|(user_id, display_name)| RoomMemberSummary {
             user_id,
             display_name,
+            display_name_ambiguous: false,
             can_kick: false,
             can_ban: false,
         })
@@ -699,6 +706,7 @@ fn room_members_from_matrix_members(
                 RoomMemberSummary {
                     user_id: member.user_id().to_string(),
                     display_name: member.display_name().map(str::to_owned),
+                    display_name_ambiguous: member.name_ambiguous(),
                     can_kick,
                     can_ban,
                 }
@@ -746,6 +754,104 @@ pub(crate) async fn summarize_joined_room_members(
     }
 
     Ok(room_members)
+}
+
+/// Resolves `user_id`'s current profile in `room` from the SDK member store.
+/// A user the store has never seen as a member has no room profile.
+async fn room_user_profile(
+    room: &Room,
+    user_id: &UserId,
+) -> Result<RoomUserProfile, MatrixCoreError> {
+    let member = room.get_member_no_sync(user_id).await.map_err(|err| {
+        MatrixCoreError::new(format!(
+            "failed to read Matrix room member {user_id} in {}: {err}",
+            room.room_id()
+        ))
+    })?;
+    Ok(match member {
+        Some(member) => RoomUserProfile {
+            user_id: user_id.to_string(),
+            display_name: member.display_name().map(str::to_owned),
+            display_name_ambiguous: member.name_ambiguous(),
+        },
+        None => RoomUserProfile {
+            user_id: user_id.to_string(),
+            display_name: None,
+            display_name_ambiguous: false,
+        },
+    })
+}
+
+/// Builds the profile of a membership event's target from the display name
+/// that event carried. Ambiguity follows the SDK rule for members: the name
+/// is ambiguous when it looks like a user ID or another user in the room
+/// currently uses it.
+async fn member_target_profile(
+    room: &Room,
+    target: &UserId,
+    display_name: Option<String>,
+) -> Result<RoomUserProfile, MatrixCoreError> {
+    let display_name_ambiguous = match display_name.as_deref() {
+        // Without a display name the target is shown by user ID.
+        None => false,
+        Some(name) => {
+            let name = DisplayName::new(name);
+            name.is_inherently_ambiguous()
+                || room
+                    .client()
+                    .state_store()
+                    .get_users_with_display_name(room.room_id(), &name)
+                    .await
+                    .map_err(|err| {
+                        MatrixCoreError::new(format!(
+                            "failed to read Matrix room display names in {}: {err}",
+                            room.room_id()
+                        ))
+                    })?
+                    .iter()
+                    .any(|user_id| user_id != target)
+        }
+    };
+    Ok(RoomUserProfile {
+        user_id: target.to_string(),
+        display_name,
+        display_name_ambiguous,
+    })
+}
+
+/// Sender profiles resolved while mapping one batch of events, so each
+/// distinct sender is read from the store once.
+struct SenderProfileCache<'a> {
+    room: &'a Room,
+    profiles: BTreeMap<OwnedUserId, RoomUserProfile>,
+}
+
+impl<'a> SenderProfileCache<'a> {
+    fn new(room: &'a Room) -> Self {
+        Self {
+            room,
+            profiles: BTreeMap::new(),
+        }
+    }
+
+    async fn get(&mut self, user_id: &UserId) -> Result<RoomUserProfile, MatrixCoreError> {
+        if let Some(profile) = self.profiles.get(user_id) {
+            return Ok(profile.clone());
+        }
+        let profile = room_user_profile(self.room, user_id).await?;
+        self.profiles.insert(user_id.to_owned(), profile.clone());
+        Ok(profile)
+    }
+}
+
+fn emit_sync_error(events: &EventSender, err: MatrixCoreError) {
+    emit_event(
+        events,
+        Event::Error(CoreErrorEvent {
+            operation: Operation::StartSync,
+            message: err.to_string(),
+        }),
+    );
 }
 
 pub(crate) fn room_read_update_is_relevant(reasons: RoomInfoNotableUpdateReasons) -> bool {
@@ -1052,10 +1158,23 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
         let events = timeline_events.clone();
         async move {
-            if let Some(event) =
-                room_timeline_event_from_sync_message(room.room_id().as_str(), &event)
-            {
-                emit_event(&events, event);
+            let room_id = room.room_id().as_str();
+            if let Some(replacement) = sync_message_replacement(&event) {
+                if let Some(update) =
+                    room_activity_update_from_sync_message_replacement(room_id, &event, replacement)
+                {
+                    emit_event(&events, Event::RoomActivityUpdate(update));
+                }
+                return;
+            }
+            match room_user_profile(&room, &event.sender).await {
+                Ok(sender) => {
+                    if let Some(activity) = room_activity_from_sync_message(room_id, &event, sender)
+                    {
+                        emit_event(&events, Event::RoomActivity(Box::new(activity)));
+                    }
+                }
+                Err(err) => emit_sync_error(&events, err),
             }
         }
     });
@@ -1139,13 +1258,17 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         let events = topic_events.clone();
         async move {
             if let SyncRoomTopicEvent::Original(event) = event {
-                emit_event(
-                    &events,
-                    Event::RoomActivity(Box::new(room_activity_from_sync_topic(
-                        room.room_id().as_str(),
-                        &event,
-                    ))),
-                );
+                match room_user_profile(&room, &event.sender).await {
+                    Ok(sender) => emit_event(
+                        &events,
+                        Event::RoomActivity(Box::new(room_activity_from_sync_topic(
+                            room.room_id().as_str(),
+                            &event,
+                            sender,
+                        ))),
+                    ),
+                    Err(err) => emit_sync_error(&events, err),
+                }
             }
         }
     });
@@ -1157,13 +1280,19 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
         let client = member_client.clone();
         async move {
             if let SyncRoomMemberEvent::Original(event) = event {
-                emit_event(
-                    &events,
-                    Event::RoomActivity(Box::new(room_activity_from_sync_member(
-                        room.room_id().as_str(),
-                        &event,
-                    ))),
-                );
+                match room_activity_from_member_event(
+                    &room,
+                    &event,
+                    &mut SenderProfileCache::new(&room),
+                )
+                .await
+                {
+                    Ok(Some(activity)) => {
+                        emit_event(&events, Event::RoomActivity(Box::new(activity)))
+                    }
+                    Ok(None) => {}
+                    Err(err) => emit_sync_error(&events, err),
+                }
             }
 
             if let Some(authenticated_user_id) = client.user_id()
@@ -1208,22 +1337,21 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     );
 }
 
-fn room_timeline_event_from_sync_message(
-    room_id: &str,
-    event: &OriginalSyncRoomMessageEvent,
-) -> Option<Event> {
-    if let Some(MessageRelation::Replacement(replacement)) = event.content.relates_to.as_ref() {
-        return room_activity_update_from_sync_message_replacement(room_id, event, replacement)
-            .map(Event::RoomActivityUpdate);
-    }
+type MessageReplacement =
+    matrix_sdk::ruma::events::relation::Replacement<RoomMessageEventContentWithoutRelation>;
 
-    room_activity_from_sync_message(room_id, event)
-        .map(|activity| Event::RoomActivity(Box::new(activity)))
+/// An edit replaces an existing activity instead of adding a timeline line.
+fn sync_message_replacement(event: &OriginalSyncRoomMessageEvent) -> Option<&MessageReplacement> {
+    match event.content.relates_to.as_ref()? {
+        MessageRelation::Replacement(replacement) => Some(replacement),
+        _ => None,
+    }
 }
 
 fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
+    sender: RoomUserProfile,
 ) -> Option<RoomActivity> {
     let relation = room_activity_relation_from_message(event);
 
@@ -1242,7 +1370,7 @@ fn room_activity_from_sync_message(
                     .transaction_id
                     .as_ref()
                     .map(ToString::to_string),
-                sender: event.sender.to_string(),
+                sender,
                 presentation,
                 body,
                 send_state: RoomMessageSendState::Sent,
@@ -1258,7 +1386,7 @@ fn room_activity_from_sync_message(
             relation: relation.clone(),
             kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                 event_id: event.event_id.to_string(),
-                sender: event.sender.to_string(),
+                sender,
                 body: image.body.clone(),
                 filename: image.filename.clone(),
                 source: room_media_source_from_matrix(&image.source),
@@ -1275,7 +1403,7 @@ fn room_activity_from_sync_message(
             relation: relation.clone(),
             kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                 event_id: event.event_id.to_string(),
-                sender: event.sender.to_string(),
+                sender,
                 body: file.body.clone(),
                 filename: file.filename.clone(),
                 source: room_media_source_from_matrix(&file.source),
@@ -1292,7 +1420,7 @@ fn room_activity_from_sync_message(
             relation: relation.clone(),
             kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                 event_id: event.event_id.to_string(),
-                sender: event.sender.to_string(),
+                sender,
                 body: audio.body.clone(),
                 filename: audio.filename.clone(),
                 source: room_media_source_from_matrix(&audio.source),
@@ -1309,7 +1437,7 @@ fn room_activity_from_sync_message(
             relation: relation.clone(),
             kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                 event_id: event.event_id.to_string(),
-                sender: event.sender.to_string(),
+                sender,
                 body: video.body.clone(),
                 filename: video.filename.clone(),
                 source: room_media_source_from_matrix(&video.source),
@@ -1327,7 +1455,7 @@ fn room_activity_from_sync_message(
         relation,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: event.event_id.to_string(),
-            sender: event.sender.to_string(),
+            sender,
             msgtype,
             body,
         }),
@@ -1337,9 +1465,7 @@ fn room_activity_from_sync_message(
 fn room_activity_update_from_sync_message_replacement(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
-    replacement: &matrix_sdk::ruma::events::relation::Replacement<
-        RoomMessageEventContentWithoutRelation,
-    >,
+    replacement: &MessageReplacement,
 ) -> Option<RoomActivityUpdate> {
     let (presentation, body) =
         room_message_presentation_and_body_from_message_type(&replacement.new_content.msgtype)?;
@@ -1546,6 +1672,7 @@ fn unsupported_room_message_body(message_type: &MessageType) -> Option<(String, 
 fn room_activity_from_sync_topic(
     room_id: &str,
     event: &OriginalSyncRoomTopicEvent,
+    sender: RoomUserProfile,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
@@ -1554,8 +1681,7 @@ fn room_activity_from_sync_topic(
         relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
-            sender: event.sender.to_string(),
-            state_key: String::new(),
+            sender,
             content: RoomStateNoticeContent::Topic {
                 topic: event.content.topic.to_string(),
             },
@@ -1563,9 +1689,73 @@ fn room_activity_from_sync_topic(
     }
 }
 
+/// Classifies a membership event. `None` means the event changed nothing a
+/// timeline line could report: no transition, a transition the spec forbids,
+/// or one ruma does not classify.
+fn room_member_change_from_sync_member(
+    event: &OriginalSyncRoomMemberEvent,
+) -> Option<RoomMemberChange> {
+    Some(match event.membership_change() {
+        MembershipChange::None | MembershipChange::Error | MembershipChange::NotImplemented => {
+            return None;
+        }
+        MembershipChange::Joined => RoomMemberChange::Joined,
+        MembershipChange::Left => RoomMemberChange::Left,
+        MembershipChange::Kicked => RoomMemberChange::Kicked,
+        MembershipChange::Banned => RoomMemberChange::Banned,
+        MembershipChange::KickedAndBanned => RoomMemberChange::KickedAndBanned,
+        MembershipChange::Unbanned => RoomMemberChange::Unbanned,
+        MembershipChange::Invited => RoomMemberChange::Invited,
+        MembershipChange::InvitationAccepted => RoomMemberChange::InvitationAccepted,
+        MembershipChange::InvitationRejected => RoomMemberChange::InvitationRejected,
+        MembershipChange::InvitationRevoked => RoomMemberChange::InvitationRevoked,
+        MembershipChange::Knocked => RoomMemberChange::Knocked,
+        MembershipChange::KnockAccepted => RoomMemberChange::KnockAccepted,
+        MembershipChange::KnockRetracted => RoomMemberChange::KnockRetracted,
+        MembershipChange::KnockDenied => RoomMemberChange::KnockDenied,
+        // A combined rename and avatar change is reported as the rename.
+        MembershipChange::ProfileChanged {
+            displayname_change: Some(change),
+            ..
+        } => RoomMemberChange::DisplayNameChanged {
+            old: change.old.map(str::to_owned),
+            new: change.new.map(str::to_owned),
+        },
+        MembershipChange::ProfileChanged {
+            displayname_change: None,
+            avatar_url_change: Some(_),
+        } => RoomMemberChange::AvatarChanged,
+        MembershipChange::ProfileChanged {
+            displayname_change: None,
+            avatar_url_change: None,
+        } => unreachable!("ruma reports ProfileChanged only when the name or avatar differs"),
+        // ruma marks MembershipChange as non_exhaustive.
+        _ => return None,
+    })
+}
+
+/// The display name a membership event's target had: the event's own for
+/// memberships that describe the member (join, invite, knock), the previous
+/// one for leave and ban events, which carry no profile.
+fn member_target_display_name(event: &OriginalSyncRoomMemberEvent) -> Option<String> {
+    match event.content.membership {
+        MembershipState::Join | MembershipState::Invite | MembershipState::Knock => {
+            event.content.displayname.clone()
+        }
+        _ => event
+            .unsigned
+            .prev_content
+            .as_ref()
+            .and_then(|prev| prev.displayname.clone()),
+    }
+}
+
 fn room_activity_from_sync_member(
     room_id: &str,
     event: &OriginalSyncRoomMemberEvent,
+    change: RoomMemberChange,
+    sender: RoomUserProfile,
+    target: RoomUserProfile,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
@@ -1574,14 +1764,34 @@ fn room_activity_from_sync_member(
         relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
-            sender: event.sender.to_string(),
-            state_key: event.state_key.to_string(),
+            sender,
             content: RoomStateNoticeContent::Member {
-                membership: event.content.membership.to_string(),
-                displayname: event.content.displayname.clone(),
+                change,
+                target,
+                reason: event.content.reason.clone(),
             },
         }),
     }
+}
+
+async fn room_activity_from_member_event(
+    room: &Room,
+    event: &OriginalSyncRoomMemberEvent,
+    senders: &mut SenderProfileCache<'_>,
+) -> Result<Option<RoomActivity>, MatrixCoreError> {
+    let Some(change) = room_member_change_from_sync_member(event) else {
+        return Ok(None);
+    };
+    let sender = senders.get(&event.sender).await?;
+    let target =
+        member_target_profile(room, &event.state_key, member_target_display_name(event)).await?;
+    Ok(Some(room_activity_from_sync_member(
+        room.room_id().as_str(),
+        event,
+        change,
+        sender,
+        target,
+    )))
 }
 
 fn room_typing_from_sync_typing(room_id: &str, event: &SyncTypingEvent) -> RoomTyping {
@@ -2151,20 +2361,26 @@ pub(crate) fn start_send_queue_update_task(
 
         loop {
             match updates.recv().await {
-                Ok(update) => match map_send_queue_update(update, &current_user_id, &pending) {
-                    Ok(mapped_events) => {
-                        for event in mapped_events {
-                            emit_event(&events, event);
+                Ok(update) => {
+                    match own_room_user_profile(&client, &update.room_id, &current_user_id)
+                        .await
+                        .and_then(|own_profile| {
+                            map_send_queue_update(update, &own_profile, &pending)
+                        }) {
+                        Ok(mapped_events) => {
+                            for event in mapped_events {
+                                emit_event(&events, event);
+                            }
                         }
+                        Err(err) => emit_event(
+                            &events,
+                            Event::Error(CoreErrorEvent {
+                                operation: Operation::SendMessage,
+                                message: format!("failed to map Matrix send queue update: {err}"),
+                            }),
+                        ),
                     }
-                    Err(err) => emit_event(
-                        &events,
-                        Event::Error(CoreErrorEvent {
-                            operation: Operation::SendMessage,
-                            message: format!("failed to map Matrix send queue update: {err}"),
-                        }),
-                    ),
-                },
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
                     &events,
@@ -2178,16 +2394,36 @@ pub(crate) fn start_send_queue_update_task(
     })
 }
 
+/// The authenticated user's profile in a room with queued sends; local echoes
+/// are attributed to it.
+async fn own_room_user_profile(
+    client: &Client,
+    room_id: &RoomId,
+    current_user_id: &str,
+) -> Result<RoomUserProfile, MatrixCoreError> {
+    let room = client.get_room(room_id).ok_or_else(|| {
+        MatrixCoreError::new(format!(
+            "Matrix send queue reported unknown room: {room_id}"
+        ))
+    })?;
+    let user_id = UserId::parse(current_user_id).map_err(|err| {
+        MatrixCoreError::new(format!(
+            "invalid authenticated user id {current_user_id}: {err}"
+        ))
+    })?;
+    room_user_profile(&room, &user_id).await
+}
+
 fn map_send_queue_update(
     update: SendQueueUpdate,
-    current_user_id: &str,
+    own_profile: &RoomUserProfile,
     pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
     let room_id = update.room_id.to_string();
 
     match update.update {
         RoomSendQueueUpdate::NewLocalEvent(local_echo) => {
-            map_local_echo(room_id, local_echo, current_user_id, pending)
+            map_local_echo(room_id, local_echo, own_profile, pending)
         }
         RoomSendQueueUpdate::SentEvent {
             transaction_id,
@@ -2273,11 +2509,12 @@ async fn hydrate_send_queue_local_echoes(
 
     let mut events = Vec::new();
     for (room_id, room_local_echoes) in local_echoes {
+        let own_profile = own_room_user_profile(client, &room_id, current_user_id).await?;
         for local_echo in room_local_echoes {
             events.extend(map_local_echo(
                 room_id.to_string(),
                 local_echo,
-                current_user_id,
+                &own_profile,
                 pending,
             )?);
         }
@@ -2289,7 +2526,7 @@ async fn hydrate_send_queue_local_echoes(
 fn map_local_echo(
     room_id: String,
     local_echo: LocalEcho,
-    current_user_id: &str,
+    own_profile: &RoomUserProfile,
     pending: &PendingOutgoingRegistry,
 ) -> Result<Vec<Event>, MatrixCoreError> {
     let transaction_id = local_echo.transaction_id.to_string();
@@ -2301,7 +2538,7 @@ fn map_local_echo(
         } => outgoing_events_from_local_echo_event(
             room_id,
             transaction_id,
-            current_user_id,
+            own_profile,
             send_handle.created_at,
             &serialized_event,
             send_error.as_ref().map(ToString::to_string),
@@ -2348,7 +2585,7 @@ fn map_local_echo(
 fn outgoing_events_from_local_echo_event(
     room_id: String,
     transaction_id: String,
-    current_user_id: &str,
+    own_profile: &RoomUserProfile,
     created_at: MilliSecondsSinceUnixEpoch,
     serialized_event: &SerializableEventContent,
     send_error: Option<String>,
@@ -2377,7 +2614,7 @@ fn outgoing_events_from_local_echo_event(
     if let Some(activity) = map_local_message_activity(
         room_id.clone(),
         transaction_id.clone(),
-        current_user_id,
+        own_profile,
         created_at,
         serialized_event,
     )? {
@@ -2463,7 +2700,7 @@ struct LocalEchoMessageDetails {
 fn map_local_message_activity(
     room_id: String,
     transaction_id: String,
-    current_user_id: &str,
+    own_profile: &RoomUserProfile,
     created_at: MilliSecondsSinceUnixEpoch,
     serialized_event: &SerializableEventContent,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
@@ -2484,7 +2721,7 @@ fn map_local_message_activity(
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
             transaction_id: Some(transaction_id),
-            sender: current_user_id.to_owned(),
+            sender: own_profile.clone(),
             presentation,
             body,
             send_state: RoomMessageSendState::Pending,
@@ -2846,10 +3083,11 @@ pub(crate) async fn backfill_room_history(
         MatrixCoreError::new(format!("failed to backfill Matrix room history: {err}"))
     })?;
     let events = room_history_backfill_events_from_timeline(
-        room.room_id().as_str(),
+        &room,
         response.chunk,
         room.clone_info().room_version_rules_or_default().redaction,
-    );
+    )
+    .await?;
 
     Ok(RoomHistoryBackfill {
         room_id: request.room_id,
@@ -2859,31 +3097,39 @@ pub(crate) async fn backfill_room_history(
     })
 }
 
-fn room_history_backfill_events_from_timeline(
-    room_id: &str,
+/// Maps a backward `/messages` page to oldest-first backfill events. Sender
+/// profiles are the members' current ones: the SDK store does not keep the
+/// profile a sender had when an older event was sent.
+async fn room_history_backfill_events_from_timeline(
+    room: &Room,
     chunk: Vec<TimelineEvent>,
     redaction_rules: matrix_sdk::ruma::room_version_rules::RedactionRules,
-) -> Vec<RoomHistoryBackfillEvent> {
+) -> Result<Vec<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let mut reaction_index = BTreeMap::new();
+    let mut senders = SenderProfileCache::new(room);
+    let mut events = Vec::with_capacity(chunk.len());
 
-    chunk
-        .into_iter()
-        .rev()
-        .filter_map(|event| {
+    for event in chunk.into_iter().rev() {
+        events.extend(
             room_history_backfill_event_from_timeline_event(
-                room_id,
+                room,
                 &event,
                 &redaction_rules,
                 &mut reaction_index,
+                &mut senders,
             )
-        })
-        .collect()
+            .await?,
+        );
+    }
+
+    Ok(events)
 }
 
 fn room_activity_from_unable_to_decrypt_timeline_event(
     room_id: &str,
     event: &TimelineEvent,
     utd_info: &UnableToDecryptInfo,
+    sender: RoomUserProfile,
 ) -> Option<RoomActivity> {
     let event_id = event.event_id()?.to_string();
 
@@ -2894,7 +3140,7 @@ fn room_activity_from_unable_to_decrypt_timeline_event(
         relation: None,
         kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
             event_id,
-            sender: event.sender()?.to_string(),
+            sender,
             session_id: utd_info.session_id.clone(),
             reason: room_unable_to_decrypt_reason_from_sdk(&utd_info.reason),
         }),
@@ -2930,27 +3176,40 @@ fn room_unable_to_decrypt_reason_from_sdk(
     }
 }
 
-fn room_history_backfill_event_from_timeline_event(
-    room_id: &str,
+async fn room_history_backfill_event_from_timeline_event(
+    room: &Room,
     event: &TimelineEvent,
     redaction_rules: &matrix_sdk::ruma::room_version_rules::RedactionRules,
     reaction_index: &mut BTreeMap<String, ReactionEventIndexEntry>,
-) -> Option<RoomHistoryBackfillEvent> {
+    senders: &mut SenderProfileCache<'_>,
+) -> Result<Option<RoomHistoryBackfillEvent>, MatrixCoreError> {
+    let room_id = room.room_id().as_str();
+
     if let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &event.kind {
-        return room_activity_from_unable_to_decrypt_timeline_event(room_id, event, utd_info)
-            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity)));
+        let Some(sender) = event.sender() else {
+            return Ok(None);
+        };
+        let sender = senders.get(&sender).await?;
+        return Ok(room_activity_from_unable_to_decrypt_timeline_event(
+            room_id, event, utd_info, sender,
+        )
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
     let raw = event.raw();
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMessageEvent>() {
-        return match room_timeline_event_from_sync_message(room_id, &event)? {
-            Event::RoomActivity(activity) => Some(RoomHistoryBackfillEvent::Activity(activity)),
-            Event::RoomActivityUpdate(update) => {
-                Some(RoomHistoryBackfillEvent::ActivityUpdate(update))
-            }
-            _ => None,
-        };
+        if let Some(replacement) = sync_message_replacement(&event) {
+            return Ok(room_activity_update_from_sync_message_replacement(
+                room_id,
+                &event,
+                replacement,
+            )
+            .map(RoomHistoryBackfillEvent::ActivityUpdate));
+        }
+        let sender = senders.get(&event.sender).await?;
+        return Ok(room_activity_from_sync_message(room_id, &event, sender)
+            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncReactionEvent>() {
@@ -2961,42 +3220,43 @@ fn room_history_backfill_event_from_timeline_event(
                 key: event.content.relates_to.key.clone(),
             },
         );
-        return Some(RoomHistoryBackfillEvent::ActivityUpdate(
+        return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
             room_activity_update_from_sync_reaction(room_id, &event),
-        ));
+        )));
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomRedactionEvent>() {
         let redacted_event_id = event.redacts(redaction_rules).to_string();
         if let Some(entry) = reaction_index.remove(redacted_event_id.as_str()) {
-            return Some(RoomHistoryBackfillEvent::ActivityUpdate(
+            return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
                 room_activity_update_from_indexed_reaction_redaction(
                     room_id,
                     redacted_event_id,
                     &event,
                     entry,
                 ),
-            ));
+            )));
         }
 
-        return Some(RoomHistoryBackfillEvent::ActivityUpdate(
+        return Ok(Some(RoomHistoryBackfillEvent::ActivityUpdate(
             room_activity_update_from_sync_redaction(room_id, &event, redacted_event_id),
-        ));
+        )));
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomTopicEvent>() {
-        return Some(RoomHistoryBackfillEvent::Activity(Box::new(
-            room_activity_from_sync_topic(room_id, &event),
-        )));
+        let sender = senders.get(&event.sender).await?;
+        return Ok(Some(RoomHistoryBackfillEvent::Activity(Box::new(
+            room_activity_from_sync_topic(room_id, &event, sender),
+        ))));
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>() {
-        return Some(RoomHistoryBackfillEvent::Activity(Box::new(
-            room_activity_from_sync_member(room_id, &event),
-        )));
+        return Ok(room_activity_from_member_event(room, &event, senders)
+            .await?
+            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
-    None
+    Ok(None)
 }
 
 pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
@@ -3024,27 +3284,29 @@ mod tests {
 
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, ReactionEventIndex,
-        ReactionEventIndexEntry, attach_reply_relation, attach_thread_relation,
+        ReactionEventIndexEntry, SenderProfileCache, attach_reply_relation, attach_thread_relation,
         attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
         direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
         joined_room_members, joined_room_members_no_sync, kick_room_member,
         map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
-        map_send_queue_update, message_presentation_and_body_from_serialized_event,
-        outgoing_events_from_local_echo_event, owned_event_id_from_str, reaction_event_content,
-        read_file_bytes, register_event_handlers, restore_session, room_activity_from_sync_member,
+        map_send_queue_update, member_target_display_name,
+        message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
+        own_room_user_profile, owned_event_id_from_str, reaction_event_content, read_file_bytes,
+        register_event_handlers, restore_session, room_activity_from_sync_member,
         room_activity_from_sync_message, room_activity_from_sync_topic,
         room_activity_update_from_indexed_reaction_redaction,
+        room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
-        room_media_request_parameters, room_members_from_parts, room_message_event_content,
+        room_media_request_parameters, room_member_change_from_sync_member,
+        room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
-        room_read_update_is_relevant, room_tag_summaries_from_tags,
-        room_timeline_event_from_sync_message, room_typing_from_sync_typing,
+        room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
         room_unable_to_decrypt_reason_from_sdk, sorted_room_member_summaries_from_parts,
-        verification_flow_id_from_to_device, verification_request_from_to_device,
-        verification_requested_state_event,
+        sync_message_replacement, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
     };
 
     #[test]
@@ -3131,12 +3393,14 @@ mod tests {
                     RoomMemberSummary {
                         user_id: "@example:localhost".to_owned(),
                         display_name: Some("Actor".to_owned()),
+                        display_name_ambiguous: false,
                         can_kick: false,
                         can_ban: false,
                     },
                     RoomMemberSummary {
                         user_id: "@bob:localhost".to_owned(),
                         display_name: Some("Bob".to_owned()),
+                        display_name_ambiguous: false,
                         can_kick: true,
                         can_ban: false,
                     },
@@ -3498,24 +3762,28 @@ mod tests {
                         RoomMemberSummary {
                             user_id: "@alice:example.org".to_owned(),
                             display_name: Some("Actor".to_owned()),
+                            display_name_ambiguous: false,
                             can_kick: false,
                             can_ban: false
                         },
                         RoomMemberSummary {
                             user_id: "@default:example.org".to_owned(),
                             display_name: Some("Default".to_owned()),
+                            display_name_ambiguous: false,
                             can_kick: false,
                             can_ban: true
                         },
                         RoomMemberSummary {
                             user_id: "@equal:example.org".to_owned(),
                             display_name: Some("Equal".to_owned()),
+                            display_name_ambiguous: false,
                             can_kick: false,
                             can_ban: false
                         },
                         RoomMemberSummary {
                             user_id: "@higher:example.org".to_owned(),
                             display_name: Some("Higher".to_owned()),
+                            display_name_ambiguous: false,
                             can_kick: false,
                             can_ban: false
                         },
@@ -3578,12 +3846,7 @@ mod tests {
         );
 
         assert_eq!(
-            room_history_backfill_event_from_timeline_event(
-                "!room:example.org",
-                &event,
-                &RedactionRules::V1,
-                &mut BTreeMap::new(),
-            ),
+            backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new(),),
             Some(RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "$encrypted1:example.org".to_owned(),
@@ -3591,7 +3854,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
                     event_id: "$encrypted1:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     session_id: Some("SESSIONID".to_owned()),
                     reason: RoomUnableToDecryptReason::MissingMegolmSession,
                 }),
@@ -3628,11 +3891,7 @@ mod tests {
         );
 
         assert_eq!(
-            room_history_backfill_events_from_timeline(
-                "!room:example.org",
-                vec![event],
-                RedactionRules::V1,
-            ),
+            backfill_events(vec![event], RedactionRules::V1,),
             vec![RoomHistoryBackfillEvent::Activity(Box::new(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "$encrypted-vector:example.org".to_owned(),
@@ -3640,7 +3899,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
                     event_id: "$encrypted-vector:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     session_id: Some("SESSIONID".to_owned()),
                     reason: RoomUnableToDecryptReason::MissingMegolmSession,
                 }),
@@ -3676,15 +3935,16 @@ mod tests {
         RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
         RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfillEvent,
         RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-        RoomMemberSummary, RoomMembers, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
-        RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget, SendMessageThreadTarget,
-        StoredSession, UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        RoomMemberChange, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+        RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+        RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo,
+        SendMessageReplyTarget, SendMessageThreadTarget, StoredSession,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
         VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
-        Client, RoomMemberships, SessionMeta,
+        Client, Room, RoomMemberships, SessionMeta,
         deserialized_responses::{TimelineEvent, UnableToDecryptInfo, UnableToDecryptReason},
         encryption::{
             backups::BackupState,
@@ -3697,7 +3957,8 @@ mod tests {
             UInt,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
-                AnyMessageLikeEventContent, AnySyncStateEvent, ToDeviceEvent,
+                AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent,
+                AnyTimelineEvent, ToDeviceEvent,
                 direct::DirectEventContent,
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 reaction::OriginalSyncReactionEvent,
@@ -3719,7 +3980,7 @@ mod tests {
         },
         send_queue::{LocalEchoContent, RoomSendQueue, RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
-        test_utils::mocks::MatrixMockServer,
+        test_utils::mocks::{MatrixMockServer, RoomMessagesResponseTemplate},
     };
     use matrix_sdk_base::cross_process_lock::CrossProcessLockConfig;
     use matrix_sdk_base::{
@@ -3981,6 +4242,67 @@ mod tests {
             hashes: encrypted_file_hashes(),
             v: "v2".to_owned(),
         }
+    }
+
+    fn profile(user_id: &str) -> RoomUserProfile {
+        RoomUserProfile {
+            user_id: user_id.to_owned(),
+            display_name: None,
+            display_name_ambiguous: false,
+        }
+    }
+
+    fn sync_message_replacement_update(
+        event: &OriginalSyncRoomMessageEvent,
+    ) -> Option<RoomActivityUpdate> {
+        room_activity_update_from_sync_message_replacement(
+            "!room:example.org",
+            event,
+            sync_message_replacement(event).expect("replacement relation"),
+        )
+    }
+
+    /// Runs `map` against `!room:example.org` in an offline client whose
+    /// store knows no members, so every sender resolves to a bare user ID.
+    fn with_memberless_room<T>(map: impl AsyncFnOnce(&Room) -> T) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+            .block_on(async {
+                let client = client_with_joined_members(serde_json::json!([])).await;
+                let room = client.get_room(room_id().as_ref()).expect("joined room");
+                map(&room).await
+            })
+    }
+
+    fn backfill_event(
+        event: &TimelineEvent,
+        redaction_rules: &RedactionRules,
+        reaction_index: &mut BTreeMap<String, ReactionEventIndexEntry>,
+    ) -> Option<RoomHistoryBackfillEvent> {
+        with_memberless_room(async |room| {
+            room_history_backfill_event_from_timeline_event(
+                room,
+                event,
+                redaction_rules,
+                reaction_index,
+                &mut SenderProfileCache::new(room),
+            )
+            .await
+            .expect("map backfill event")
+        })
+    }
+
+    fn backfill_events(
+        chunk: Vec<TimelineEvent>,
+        redaction_rules: RedactionRules,
+    ) -> Vec<RoomHistoryBackfillEvent> {
+        with_memberless_room(async |room| {
+            room_history_backfill_events_from_timeline(room, chunk, redaction_rules)
+                .await
+                .expect("map backfill events")
+        })
     }
 
     fn timeline_event(event: serde_json::Value) -> TimelineEvent {
@@ -4316,30 +4638,35 @@ mod tests {
                 RoomMemberSummary {
                     user_id: "@beta:example.org".to_owned(),
                     display_name: Some(String::new()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@charlie:example.org".to_owned(),
                     display_name: None,
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
                     display_name: Some("ALICE".to_owned()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@echo:example.org".to_owned(),
                     display_name: Some("alice".to_owned()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@delta:example.org".to_owned(),
                     display_name: Some("beta".to_owned()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4363,18 +4690,21 @@ mod tests {
                 RoomMemberSummary {
                     user_id: "@alpha:example.org".to_owned(),
                     display_name: Some("same".to_owned()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@mike:example.org".to_owned(),
                     display_name: Some("same".to_owned()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
                 RoomMemberSummary {
                     user_id: "@zulu:example.org".to_owned(),
                     display_name: Some("Same".to_owned()),
+                    display_name_ambiguous: false,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4400,7 +4730,11 @@ mod tests {
         .expect("deserialize sync message event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
@@ -4409,7 +4743,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Sent,
@@ -4433,7 +4767,11 @@ mod tests {
         .expect("deserialize sync notice event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
@@ -4442,7 +4780,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: None,
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Notice,
                     body: "heads up".to_owned(),
                     send_state: RoomMessageSendState::Sent,
@@ -4466,7 +4804,11 @@ mod tests {
         .expect("deserialize sync emote event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
@@ -4475,7 +4817,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
                     transaction_id: None,
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
                     send_state: RoomMessageSendState::Sent,
@@ -4507,8 +4849,8 @@ mod tests {
         .expect("deserialize sync text replacement event");
 
         assert_eq!(
-            room_timeline_event_from_sync_message("!room:example.org", &event),
-            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+            sync_message_replacement_update(&event),
+            Some(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
                 target: RoomActivityUpdateTarget::Event {
                     event_id: "$original:example.org".to_owned(),
@@ -4520,7 +4862,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     body: "edited body".to_owned(),
                 },
-            }))
+            })
         );
     }
 
@@ -4567,8 +4909,8 @@ mod tests {
         .expect("deserialize sync emote replacement event");
 
         assert_eq!(
-            room_timeline_event_from_sync_message("!room:example.org", &notice_event),
-            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+            sync_message_replacement_update(&notice_event),
+            Some(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
                 target: RoomActivityUpdateTarget::Event {
                     event_id: "$notice:example.org".to_owned(),
@@ -4580,11 +4922,11 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Notice,
                     body: "heads up".to_owned(),
                 },
-            }))
+            })
         );
         assert_eq!(
-            room_timeline_event_from_sync_message("!room:example.org", &emote_event),
-            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+            sync_message_replacement_update(&emote_event),
+            Some(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
                 target: RoomActivityUpdateTarget::Event {
                     event_id: "$emote:example.org".to_owned(),
@@ -4596,7 +4938,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
                 },
-            }))
+            })
         );
     }
 
@@ -4631,8 +4973,8 @@ mod tests {
         .expect("deserialize sync threaded replacement event");
 
         assert_eq!(
-            room_timeline_event_from_sync_message("!room:example.org", &event),
-            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+            sync_message_replacement_update(&event),
+            Some(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
                 target: RoomActivityUpdateTarget::Event {
                     event_id: "$thread-reply:example.org".to_owned(),
@@ -4644,7 +4986,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     body: "thread reply edited".to_owned(),
                 },
-            }))
+            })
         );
     }
 
@@ -4696,12 +5038,7 @@ mod tests {
             "origin_server_ts": 1700000000100u64
         }));
 
-        let mapped = room_history_backfill_event_from_timeline_event(
-            "!room:example.org",
-            &event,
-            &RedactionRules::V1,
-            &mut BTreeMap::new(),
-        );
+        let mapped = backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new());
 
         assert_eq!(
             mapped,
@@ -4713,7 +5050,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$history:example.org".to_owned()),
                     transaction_id: None,
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "older message".to_owned(),
                     send_state: RoomMessageSendState::Sent,
@@ -4744,12 +5081,7 @@ mod tests {
             "origin_server_ts": 1700000001000u64
         }));
 
-        let mapped = room_history_backfill_event_from_timeline_event(
-            "!room:example.org",
-            &event,
-            &RedactionRules::V1,
-            &mut BTreeMap::new(),
-        );
+        let mapped = backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new());
 
         assert_eq!(
             mapped,
@@ -4788,12 +5120,7 @@ mod tests {
             "origin_server_ts": 1700000001500u64
         }));
 
-        let mapped = room_history_backfill_event_from_timeline_event(
-            "!room:example.org",
-            &event,
-            &RedactionRules::V1,
-            &mut BTreeMap::new(),
-        );
+        let mapped = backfill_event(&event, &RedactionRules::V1, &mut BTreeMap::new());
 
         assert_eq!(
             mapped,
@@ -4816,8 +5143,7 @@ mod tests {
 
     #[test]
     fn room_backfill_normalizes_backward_page_to_oldest_first() {
-        let events = room_history_backfill_events_from_timeline(
-            "!room:example.org",
+        let events = backfill_events(
             vec![
                 timeline_event(serde_json::json!({
                     "type": "m.room.message",
@@ -4856,7 +5182,7 @@ mod tests {
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: Some("$older:example.org".to_owned()),
                         transaction_id: None,
-                        sender: "@alice:example.org".to_owned(),
+                        sender: profile("@alice:example.org"),
                         presentation: RoomMessagePresentationKind::Text,
                         body: "older".to_owned(),
                         send_state: RoomMessageSendState::Sent,
@@ -4870,7 +5196,7 @@ mod tests {
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: Some("$newer:example.org".to_owned()),
                         transaction_id: None,
-                        sender: "@alice:example.org".to_owned(),
+                        sender: profile("@alice:example.org"),
                         presentation: RoomMessagePresentationKind::Text,
                         body: "newer".to_owned(),
                         send_state: RoomMessageSendState::Sent,
@@ -5163,8 +5489,8 @@ mod tests {
             .expect("deserialize redaction event");
 
         assert_eq!(
-            room_timeline_event_from_sync_message("!room:example.org", &replacement_event),
-            Some(Event::RoomActivityUpdate(RoomActivityUpdate {
+            sync_message_replacement_update(&replacement_event),
+            Some(RoomActivityUpdate {
                 room_id: "!room:example.org".to_owned(),
                 target: RoomActivityUpdateTarget::Event {
                     event_id: "$original:example.org".to_owned(),
@@ -5176,7 +5502,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     body: "edited body".to_owned(),
                 },
-            }))
+            })
         );
         assert_eq!(
             room_activity_update_from_sync_redaction(
@@ -5220,10 +5546,7 @@ mod tests {
         }))
         .expect("deserialize sync image replacement event");
 
-        assert_eq!(
-            room_timeline_event_from_sync_message("!room:example.org", &image_event),
-            None
-        );
+        assert_eq!(sync_message_replacement_update(&image_event), None);
     }
 
     #[test]
@@ -5249,7 +5572,11 @@ mod tests {
         .expect("deserialize threaded sync text event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$threaded:example.org".to_owned(),
@@ -5262,7 +5589,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$threaded:example.org".to_owned()),
                     transaction_id: None,
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
                     send_state: RoomMessageSendState::Sent,
@@ -5291,7 +5618,11 @@ mod tests {
         .expect("deserialize reply sync text event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$reply:example.org".to_owned(),
@@ -5302,7 +5633,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$reply:example.org".to_owned()),
                     transaction_id: None,
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "reply only".to_owned(),
                     send_state: RoomMessageSendState::Sent,
@@ -5332,7 +5663,11 @@ mod tests {
         .expect("deserialize threaded sync image event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image-thread:example.org".to_owned(),
@@ -5344,7 +5679,7 @@ mod tests {
                 }),
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image-thread:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "diagram.png".to_owned(),
                     filename: None,
                     source: RoomMediaSource::Plain {
@@ -5379,7 +5714,11 @@ mod tests {
         .expect("deserialize sync image event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
@@ -5387,7 +5726,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$event:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "diagram.png".to_owned(),
                     filename: None,
                     source: RoomMediaSource::Plain {
@@ -5423,7 +5762,11 @@ mod tests {
         .expect("deserialize sync image event with filename");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image:example.org".to_owned(),
@@ -5431,7 +5774,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "Quarterly diagram".to_owned(),
                     filename: Some("diagram.png".to_owned()),
                     source: RoomMediaSource::Plain {
@@ -5490,7 +5833,11 @@ mod tests {
         .expect("deserialize encrypted sync image event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$encrypted:example.org".to_owned(),
@@ -5498,7 +5845,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$encrypted:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "secret.png".to_owned(),
                     filename: None,
                     source: RoomMediaSource::Encrypted {
@@ -5562,7 +5909,11 @@ mod tests {
         .expect("deserialize sync image event with thumbnail");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image-thumb:example.org".to_owned(),
@@ -5570,7 +5921,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image-thumb:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "diagram.png".to_owned(),
                     filename: None,
                     source: RoomMediaSource::Plain {
@@ -5613,7 +5964,11 @@ mod tests {
         .expect("deserialize sync audio event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$audio:example.org".to_owned(),
@@ -5621,7 +5976,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                     event_id: "$audio:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "Voice note".to_owned(),
                     filename: Some("voice-note.ogg".to_owned()),
                     source: RoomMediaSource::Plain {
@@ -5658,7 +6013,11 @@ mod tests {
         .expect("deserialize sync file event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$file:example.org".to_owned(),
@@ -5666,7 +6025,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                     event_id: "$file:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "Quarterly report".to_owned(),
                     filename: Some("report.pdf".to_owned()),
                     source: RoomMediaSource::Plain {
@@ -5706,7 +6065,11 @@ mod tests {
         .expect("deserialize sync video event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$video:example.org".to_owned(),
@@ -5714,7 +6077,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                     event_id: "$video:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     body: "demo.mp4".to_owned(),
                     filename: Some("clip.mp4".to_owned()),
                     source: RoomMediaSource::Plain {
@@ -5751,7 +6114,11 @@ mod tests {
         .expect("deserialize sync location event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             None
         );
     }
@@ -5776,7 +6143,11 @@ mod tests {
         .expect("deserialize custom sync message event");
 
         assert_eq!(
-            room_activity_from_sync_message("!room:example.org", &event),
+            room_activity_from_sync_message(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$custom:example.org".to_owned(),
@@ -5784,7 +6155,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                     event_id: "$custom:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     msgtype: "com.example.custom".to_owned(),
                     body: "Custom body".to_owned(),
                 }),
@@ -5807,7 +6178,11 @@ mod tests {
         .expect("deserialize topic event");
 
         assert_eq!(
-            room_activity_from_sync_topic("!room:example.org", &event),
+            room_activity_from_sync_topic(
+                "!room:example.org",
+                &event,
+                profile("@alice:example.org")
+            ),
             RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "state:$topic:example.org".to_owned(),
@@ -5815,8 +6190,7 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                     event_id: "$topic:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
-                    state_key: String::new(),
+                    sender: profile("@alice:example.org"),
                     content: RoomStateNoticeContent::Topic {
                         topic: "incident review".to_owned(),
                     },
@@ -5825,23 +6199,238 @@ mod tests {
         );
     }
 
-    #[test]
-    fn member_state_mapping_produces_state_notice_activity() {
-        let event: OriginalSyncRoomMemberEvent = serde_json::from_value(serde_json::json!({
+    fn member_event(
+        sender: &str,
+        target: &str,
+        content: serde_json::Value,
+        prev_content: Option<serde_json::Value>,
+    ) -> OriginalSyncRoomMemberEvent {
+        let mut event = serde_json::json!({
             "type": "m.room.member",
-            "content": {
-                "membership": "join",
-                "displayname": "carol"
-            },
+            "content": content,
             "event_id": "$member:example.org",
-            "sender": "@alice:example.org",
+            "sender": sender,
             "origin_server_ts": 1700000000002u64,
-            "state_key": "@carol:example.org"
-        }))
-        .expect("deserialize member event");
+            "state_key": target
+        });
+        if let Some(prev_content) = prev_content {
+            event["unsigned"] = serde_json::json!({ "prev_content": prev_content });
+        }
+        serde_json::from_value(event).expect("deserialize member event")
+    }
+
+    #[test]
+    fn member_change_classification_covers_spec_transitions() {
+        let carol = "@carol:example.org";
+        let op = "@alice:example.org";
+        let joined = serde_json::json!({ "membership": "join", "displayname": "Carol" });
+        let invited = serde_json::json!({ "membership": "invite", "displayname": "Carol" });
+        let knocking = serde_json::json!({ "membership": "knock", "displayname": "Carol" });
+        let left = serde_json::json!({ "membership": "leave" });
+        let banned = serde_json::json!({ "membership": "ban" });
+        let cases = [
+            (carol, joined.clone(), None, Some(RoomMemberChange::Joined)),
+            (
+                carol,
+                joined.clone(),
+                Some(knocking.clone()),
+                Some(RoomMemberChange::Joined),
+            ),
+            (
+                carol,
+                joined.clone(),
+                Some(invited.clone()),
+                Some(RoomMemberChange::InvitationAccepted),
+            ),
+            (
+                carol,
+                left.clone(),
+                Some(joined.clone()),
+                Some(RoomMemberChange::Left),
+            ),
+            (
+                op,
+                left.clone(),
+                Some(joined.clone()),
+                Some(RoomMemberChange::Kicked),
+            ),
+            (
+                op,
+                banned.clone(),
+                Some(joined.clone()),
+                Some(RoomMemberChange::KickedAndBanned),
+            ),
+            (
+                op,
+                banned.clone(),
+                Some(left.clone()),
+                Some(RoomMemberChange::Banned),
+            ),
+            (
+                op,
+                left.clone(),
+                Some(banned.clone()),
+                Some(RoomMemberChange::Unbanned),
+            ),
+            (
+                op,
+                invited.clone(),
+                Some(left.clone()),
+                Some(RoomMemberChange::Invited),
+            ),
+            (
+                carol,
+                left.clone(),
+                Some(invited.clone()),
+                Some(RoomMemberChange::InvitationRejected),
+            ),
+            (
+                op,
+                left.clone(),
+                Some(invited.clone()),
+                Some(RoomMemberChange::InvitationRevoked),
+            ),
+            (
+                carol,
+                knocking.clone(),
+                Some(left.clone()),
+                Some(RoomMemberChange::Knocked),
+            ),
+            (
+                op,
+                invited.clone(),
+                Some(knocking.clone()),
+                Some(RoomMemberChange::KnockAccepted),
+            ),
+            (
+                carol,
+                left.clone(),
+                Some(knocking.clone()),
+                Some(RoomMemberChange::KnockRetracted),
+            ),
+            (
+                op,
+                left.clone(),
+                Some(knocking.clone()),
+                Some(RoomMemberChange::KnockDenied),
+            ),
+            (
+                carol,
+                serde_json::json!({ "membership": "join", "displayname": "Caz" }),
+                Some(joined.clone()),
+                Some(RoomMemberChange::DisplayNameChanged {
+                    old: Some("Carol".to_owned()),
+                    new: Some("Caz".to_owned()),
+                }),
+            ),
+            (
+                carol,
+                serde_json::json!({ "membership": "join" }),
+                Some(joined.clone()),
+                Some(RoomMemberChange::DisplayNameChanged {
+                    old: Some("Carol".to_owned()),
+                    new: None,
+                }),
+            ),
+            (
+                carol,
+                serde_json::json!({
+                    "membership": "join",
+                    "displayname": "Carol",
+                    "avatar_url": "mxc://example.org/avatar"
+                }),
+                Some(joined.clone()),
+                Some(RoomMemberChange::AvatarChanged),
+            ),
+            (
+                carol,
+                serde_json::json!({
+                    "membership": "join",
+                    "displayname": "Caz",
+                    "avatar_url": "mxc://example.org/avatar"
+                }),
+                Some(joined.clone()),
+                Some(RoomMemberChange::DisplayNameChanged {
+                    old: Some("Carol".to_owned()),
+                    new: Some("Caz".to_owned()),
+                }),
+            ),
+            // A member event repeating the current profile changes nothing.
+            (carol, joined.clone(), Some(joined.clone()), None),
+            // The spec forbids join -> invite; ruma classifies it as an error.
+            (op, invited.clone(), Some(joined.clone()), None),
+        ];
+
+        for (sender, content, prev_content, expected) in cases {
+            let event = member_event(sender, carol, content.clone(), prev_content.clone());
+            assert_eq!(
+                room_member_change_from_sync_member(&event),
+                expected,
+                "{sender} {prev_content:?} -> {content}"
+            );
+        }
+    }
+
+    #[test]
+    fn member_target_display_name_comes_from_the_event_describing_the_member() {
+        let carol = "@carol:example.org";
+        let joined = serde_json::json!({ "membership": "join", "displayname": "Carol" });
+
+        for (content, prev_content, expected) in [
+            (joined.clone(), None, Some("Carol")),
+            (
+                serde_json::json!({ "membership": "invite", "displayname": "Invitee" }),
+                None,
+                Some("Invitee"),
+            ),
+            (
+                serde_json::json!({ "membership": "knock", "displayname": "Knocker" }),
+                None,
+                Some("Knocker"),
+            ),
+            (
+                serde_json::json!({ "membership": "leave" }),
+                Some(joined.clone()),
+                Some("Carol"),
+            ),
+            (
+                serde_json::json!({ "membership": "ban", "reason": "spam" }),
+                Some(joined.clone()),
+                Some("Carol"),
+            ),
+            (serde_json::json!({ "membership": "leave" }), None, None),
+        ] {
+            let event = member_event(carol, carol, content.clone(), prev_content);
+            assert_eq!(
+                member_target_display_name(&event).as_deref(),
+                expected,
+                "{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn kick_member_state_mapping_carries_change_target_and_reason() {
+        let event = member_event(
+            "@alice:example.org",
+            "@carol:example.org",
+            serde_json::json!({ "membership": "leave", "reason": "flooding" }),
+            Some(serde_json::json!({ "membership": "join", "displayname": "Carol" })),
+        );
+        let target = RoomUserProfile {
+            user_id: "@carol:example.org".to_owned(),
+            display_name: member_target_display_name(&event),
+            display_name_ambiguous: false,
+        };
 
         assert_eq!(
-            room_activity_from_sync_member("!room:example.org", &event),
+            room_activity_from_sync_member(
+                "!room:example.org",
+                &event,
+                room_member_change_from_sync_member(&event).expect("kick changes membership"),
+                profile("@alice:example.org"),
+                target,
+            ),
             RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "state:$member:example.org".to_owned(),
@@ -5849,15 +6438,343 @@ mod tests {
                 relation: None,
                 kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                     event_id: "$member:example.org".to_owned(),
-                    sender: "@alice:example.org".to_owned(),
-                    state_key: "@carol:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     content: RoomStateNoticeContent::Member {
-                        membership: "join".to_owned(),
-                        displayname: Some("carol".to_owned()),
+                        change: RoomMemberChange::Kicked,
+                        target: RoomUserProfile {
+                            user_id: "@carol:example.org".to_owned(),
+                            display_name: Some("Carol".to_owned()),
+                            display_name_ambiguous: false,
+                        },
+                        reason: Some("flooding".to_owned()),
                     },
                 }),
             }
         );
+    }
+
+    fn profile_test_state_events() -> serde_json::Value {
+        serde_json::json!([
+            { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
+            { "type": "m.room.member", "state_key": "@example:localhost", "sender": "@example:localhost", "event_id": "$me:localhost", "origin_server_ts": 2u64, "content": { "membership": "join", "displayname": "Me" } },
+            { "type": "m.room.member", "state_key": "@bob:localhost", "sender": "@bob:localhost", "event_id": "$bob:localhost", "origin_server_ts": 3u64, "content": { "membership": "join", "displayname": "Bob" } },
+            { "type": "m.room.member", "state_key": "@sam1:localhost", "sender": "@sam1:localhost", "event_id": "$sam1:localhost", "origin_server_ts": 4u64, "content": { "membership": "join", "displayname": "Sam" } },
+            { "type": "m.room.member", "state_key": "@sam2:localhost", "sender": "@sam2:localhost", "event_id": "$sam2:localhost", "origin_server_ts": 5u64, "content": { "membership": "join", "displayname": "Sam" } }
+        ])
+    }
+
+    fn raw_sync_timeline_event(event: serde_json::Value) -> Raw<AnySyncTimelineEvent> {
+        Raw::from_json_string(event.to_string()).expect("serialize raw sync timeline event")
+    }
+
+    fn text_message_json(event_id: &str, sender: &str, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.message",
+            "content": { "msgtype": "m.text", "body": body },
+            "event_id": event_id,
+            "sender": sender,
+            "origin_server_ts": 1700000000000u64
+        })
+    }
+
+    fn member_change_json(
+        event_id: &str,
+        user_id: &str,
+        content: serde_json::Value,
+        prev_content: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.member",
+            "content": content,
+            "unsigned": { "prev_content": prev_content },
+            "event_id": event_id,
+            "sender": user_id,
+            "state_key": user_id,
+            "origin_server_ts": 1700000000001u64
+        })
+    }
+
+    fn drain_events(event_rx: &mpsc::Receiver<Event>) -> Vec<Event> {
+        std::iter::from_fn(|| event_rx.recv_timeout(Duration::from_millis(500)).ok()).collect()
+    }
+
+    fn room_activity_by_id<'a>(events: &'a [Event], activity_id: &str) -> Vec<&'a RoomActivity> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::RoomActivity(activity) if activity.activity_id == activity_id => {
+                    Some(activity.as_ref())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn sender_of(activity: &RoomActivity) -> &RoomUserProfile {
+        match &activity.kind {
+            RoomActivityKind::Message(message) => &message.sender,
+            RoomActivityKind::StateNotice(notice) => &notice.sender,
+            kind => panic!("unexpected activity kind {kind:?}"),
+        }
+    }
+
+    fn member_profile(user_id: &str, display_name: &str, ambiguous: bool) -> RoomUserProfile {
+        RoomUserProfile {
+            user_id: user_id.to_owned(),
+            display_name: Some(display_name.to_owned()),
+            display_name_ambiguous: ambiguous,
+        }
+    }
+
+    #[test]
+    fn live_activity_carries_sender_profiles_and_member_changes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events);
+            let state_events = profile_test_state_events();
+
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events))
+                        .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                            "$bob-msg:localhost",
+                            "@bob:localhost",
+                            "hi",
+                        )))
+                        .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                            "$sam-msg:localhost",
+                            "@sam1:localhost",
+                            "hello",
+                        ))),
+                )
+                .await;
+            let first = drain_events(&event_rx);
+
+            let bob_message = room_activity_by_id(&first, "event:$bob-msg:localhost");
+            assert_eq!(bob_message.len(), 1);
+            assert_eq!(
+                sender_of(bob_message[0]),
+                &member_profile("@bob:localhost", "Bob", false)
+            );
+            let sam_message = room_activity_by_id(&first, "event:$sam-msg:localhost");
+            assert_eq!(sam_message.len(), 1);
+            assert_eq!(
+                sender_of(sam_message[0]),
+                &member_profile("@sam1:localhost", "Sam", true)
+            );
+            let Some(Event::RoomMembers(snapshot)) = first
+                .iter()
+                .rev()
+                .find(|event| matches!(event, Event::RoomMembers(_)))
+            else {
+                panic!("member snapshot in {first:?}");
+            };
+            assert_eq!(
+                snapshot
+                    .members
+                    .iter()
+                    .map(|member| (member.user_id.as_str(), member.display_name_ambiguous))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("@bob:localhost", false),
+                    ("@example:localhost", false),
+                    ("@sam1:localhost", true),
+                    ("@sam2:localhost", true),
+                ]
+            );
+
+            let bob_joined = serde_json::json!({ "membership": "join", "displayname": "Bob" });
+            let sam_joined = serde_json::json!({ "membership": "join", "displayname": "Sam" });
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_timeline_event(raw_sync_timeline_event(member_change_json(
+                            "$bob-rename:localhost",
+                            "@bob:localhost",
+                            serde_json::json!({ "membership": "join", "displayname": "Robert" }),
+                            bob_joined,
+                        )))
+                        .add_timeline_event(raw_sync_timeline_event(member_change_json(
+                            "$sam-avatar:localhost",
+                            "@sam2:localhost",
+                            serde_json::json!({
+                                "membership": "join",
+                                "displayname": "Sam",
+                                "avatar_url": "mxc://localhost/avatar"
+                            }),
+                            sam_joined.clone(),
+                        )))
+                        .add_timeline_event(raw_sync_timeline_event(member_change_json(
+                            "$sam-noop:localhost",
+                            "@sam1:localhost",
+                            sam_joined.clone(),
+                            sam_joined,
+                        ))),
+                )
+                .await;
+            let second = drain_events(&event_rx);
+
+            let rename = room_activity_by_id(&second, "state:$bob-rename:localhost");
+            assert_eq!(rename.len(), 1);
+            assert_eq!(
+                rename[0].kind,
+                RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    event_id: "$bob-rename:localhost".to_owned(),
+                    sender: member_profile("@bob:localhost", "Robert", false),
+                    content: RoomStateNoticeContent::Member {
+                        change: RoomMemberChange::DisplayNameChanged {
+                            old: Some("Bob".to_owned()),
+                            new: Some("Robert".to_owned()),
+                        },
+                        target: member_profile("@bob:localhost", "Robert", false),
+                        reason: None,
+                    },
+                })
+            );
+            let avatar = room_activity_by_id(&second, "state:$sam-avatar:localhost");
+            assert_eq!(avatar.len(), 1);
+            assert_eq!(
+                avatar[0].kind,
+                RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    event_id: "$sam-avatar:localhost".to_owned(),
+                    sender: member_profile("@sam2:localhost", "Sam", true),
+                    content: RoomStateNoticeContent::Member {
+                        change: RoomMemberChange::AvatarChanged,
+                        target: member_profile("@sam2:localhost", "Sam", true),
+                        reason: None,
+                    },
+                })
+            );
+            assert!(room_activity_by_id(&second, "state:$sam-noop:localhost").is_empty());
+            assert!(
+                !second.iter().any(|event| matches!(event, Event::Error(_))),
+                "{second:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn backfill_resolves_current_sender_profiles_and_member_targets() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let state_events = profile_test_state_events();
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
+                )
+                .await;
+            let mut history_message = text_message_json("$old:localhost", "@bob:localhost", "old");
+            history_message["room_id"] = serde_json::json!(room_id().as_str());
+            let history_kick = serde_json::json!({
+                "type": "m.room.member",
+                "room_id": room_id().as_str(),
+                "content": { "membership": "leave", "reason": "flooding" },
+                "unsigned": { "prev_content": { "membership": "join", "displayname": "Sam" } },
+                "event_id": "$kick:localhost",
+                "sender": "@example:localhost",
+                "state_key": "@sam2:localhost",
+                "origin_server_ts": 1700000000003u64
+            });
+            mock_server
+                .mock_room_messages()
+                .ok(RoomMessagesResponseTemplate::default().events(vec![
+                    Raw::<AnyTimelineEvent>::from_json_string(history_kick.to_string())
+                        .expect("raw kick"),
+                    Raw::<AnyTimelineEvent>::from_json_string(history_message.to_string())
+                        .expect("raw message"),
+                ]))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(
+                &client,
+                BackfillRoomHistoryRequest {
+                    room_id: room_id().to_string(),
+                    from: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("backfill room history");
+
+            let activities = backfill
+                .events
+                .iter()
+                .map(|event| match event {
+                    RoomHistoryBackfillEvent::Activity(activity) => activity.as_ref(),
+                    update => panic!("unexpected backfill update {update:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(activities.len(), 2);
+            assert_eq!(
+                sender_of(activities[0]),
+                &member_profile("@bob:localhost", "Bob", false)
+            );
+            assert_eq!(
+                activities[1].kind,
+                RoomActivityKind::StateNotice(RoomStateNoticeActivity {
+                    event_id: "$kick:localhost".to_owned(),
+                    sender: member_profile("@example:localhost", "Me", false),
+                    content: RoomStateNoticeContent::Member {
+                        change: RoomMemberChange::Kicked,
+                        target: member_profile("@sam2:localhost", "Sam", true),
+                        reason: Some("flooding".to_owned()),
+                    },
+                })
+            );
+        });
+    }
+
+    #[test]
+    fn local_echo_sender_is_the_authenticated_users_room_profile() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let client = client_with_joined_members(serde_json::json!([
+                {
+                    "type": "m.room.member",
+                    "state_key": "@alice:example.org",
+                    "sender": "@alice:example.org",
+                    "event_id": "$alice:example.org",
+                    "origin_server_ts": 1u64,
+                    "content": { "membership": "join", "displayname": "Alice" }
+                }
+            ]))
+            .await;
+
+            assert_eq!(
+                own_room_user_profile(&client, room_id().as_ref(), "@alice:example.org")
+                    .await
+                    .expect("own room profile"),
+                RoomUserProfile {
+                    user_id: "@alice:example.org".to_owned(),
+                    display_name: Some("Alice".to_owned()),
+                    display_name_ambiguous: false,
+                }
+            );
+        });
     }
 
     #[test]
@@ -6174,7 +7091,7 @@ mod tests {
         let activity = map_local_message_activity(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
         )
@@ -6191,7 +7108,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6212,7 +7129,7 @@ mod tests {
         let activity = map_local_message_activity(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
         )
@@ -6229,7 +7146,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Notice,
                     body: "heads up".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6249,7 +7166,7 @@ mod tests {
         let activity = map_local_message_activity(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
         )
@@ -6266,7 +7183,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Emote,
                     body: "waves".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6351,7 +7268,7 @@ mod tests {
         let activity = map_local_message_activity(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
         )
@@ -6372,7 +7289,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6399,7 +7316,7 @@ mod tests {
         let activity = map_local_message_activity(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
         )
@@ -6418,7 +7335,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello in reply".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6459,7 +7376,7 @@ mod tests {
                     event_id: event_id(),
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map sent update");
@@ -6498,7 +7415,7 @@ mod tests {
                     event_id: event_id(),
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map reaction sent update");
@@ -6525,7 +7442,7 @@ mod tests {
                     event_id: event_id(),
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map edit sent update");
@@ -6552,7 +7469,7 @@ mod tests {
                     event_id: event_id(),
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map redaction sent update");
@@ -6573,7 +7490,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             MilliSecondsSinceUnixEpoch::now(),
             &serialized_event,
             None,
@@ -6607,7 +7524,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             MilliSecondsSinceUnixEpoch::now(),
             &serialized_event,
             None,
@@ -6674,7 +7591,7 @@ mod tests {
             let events = map_local_echo(
                 "!room:example.org".to_owned(),
                 react_local_echo,
-                "@alice:example.org",
+                &profile("@alice:example.org"),
                 &pending,
             )
             .expect("map react local echo");
@@ -6729,7 +7646,7 @@ mod tests {
             let events = map_local_echo(
                 "!room:example.org".to_owned(),
                 redaction_local_echo,
-                "@alice:example.org",
+                &profile("@alice:example.org"),
                 &pending,
             )
             .expect("map redaction local echo");
@@ -6759,7 +7676,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
             None,
@@ -6777,7 +7694,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6806,7 +7723,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
             None,
@@ -6828,7 +7745,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello from thread".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6856,7 +7773,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
             None,
@@ -6876,7 +7793,7 @@ mod tests {
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
                     transaction_id: Some("txn-1".to_owned()),
-                    sender: "@alice:example.org".to_owned(),
+                    sender: profile("@alice:example.org"),
                     presentation: RoomMessagePresentationKind::Text,
                     body: "hello in reply".to_owned(),
                     send_state: RoomMessageSendState::Pending,
@@ -6897,7 +7814,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             created_at,
             &serialized_event,
             Some("Other unrecoverable error: wedged".to_owned()),
@@ -6916,7 +7833,7 @@ mod tests {
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: None,
                         transaction_id: Some("txn-1".to_owned()),
-                        sender: "@alice:example.org".to_owned(),
+                        sender: profile("@alice:example.org"),
                         presentation: RoomMessagePresentationKind::Text,
                         body: "hello".to_owned(),
                         send_state: RoomMessageSendState::Pending,
@@ -6956,7 +7873,7 @@ mod tests {
         let events = outgoing_events_from_local_echo_event(
             "!room:example.org".to_owned(),
             "txn-1".to_owned(),
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             MilliSecondsSinceUnixEpoch::now(),
             &serialized_event,
             Some("edit send failed".to_owned()),
@@ -6994,7 +7911,7 @@ mod tests {
                     is_recoverable: true,
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map send error");
@@ -7042,7 +7959,7 @@ mod tests {
                     is_recoverable: true,
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map edit send error");
@@ -7079,7 +7996,7 @@ mod tests {
                     is_recoverable: true,
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map reaction send error");
@@ -7115,7 +8032,7 @@ mod tests {
                     is_recoverable: true,
                 },
             },
-            "@alice:example.org",
+            &profile("@alice:example.org"),
             &pending,
         )
         .expect("map redaction send error");

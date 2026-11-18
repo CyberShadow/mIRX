@@ -23,7 +23,7 @@
       "kind": {
         "type": "video",
         "event_id": "$video1:example.org",
-        "sender": "@alice:example.org",
+        "sender": { "user_id": "@alice:example.org", "display_name": null, "display_name_ambiguous": false },
         "body": "clip.mp4",
         "filename": "clip.mp4",
         "source": {

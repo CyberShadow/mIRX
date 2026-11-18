@@ -24,7 +24,7 @@
         "type": "message",
         "event_id": "$find-miss-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "alpha status update",
         "send_state": {
@@ -43,7 +43,7 @@
         "type": "message",
         "event_id": "$find-miss-2",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "beta follow-up",
         "send_state": {

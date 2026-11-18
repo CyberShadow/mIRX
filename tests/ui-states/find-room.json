@@ -24,7 +24,7 @@
         "type": "message",
         "event_id": "$find-room-1",
         "transaction_id": null,
-        "sender": "@alice:example",
+        "sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "opening line before the search hit",
         "send_state": {
@@ -43,7 +43,7 @@
         "type": "message",
         "event_id": "$find-room-2",
         "transaction_id": null,
-        "sender": "@bob:example",
+        "sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "needle in the first matching row",
         "send_state": {
@@ -62,7 +62,7 @@
         "type": "message",
         "event_id": "$find-room-3",
         "transaction_id": null,
-        "sender": "@carol:example",
+        "sender": { "user_id": "@carol:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "neutral middle line",
         "send_state": {
@@ -81,7 +81,7 @@
         "type": "message",
         "event_id": "$find-room-4",
         "transaction_id": null,
-        "sender": "@dave:example",
+        "sender": { "user_id": "@dave:example", "display_name": null, "display_name_ambiguous": false },
         "presentation": "text",
         "body": "needle appears again in the second matching row",
         "send_state": {
