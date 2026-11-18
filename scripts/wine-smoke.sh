@@ -38,6 +38,10 @@ fi
 
 exe_path=${1:-"$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/mirx-ui.exe"}
 
+if [[ $# -eq 0 ]] && [[ ! -f "$exe_path" ]]; then
+  cargo build --release --package mirx-ui --target x86_64-pc-windows-gnu
+fi
+
 ensure_wineprefix
 
 if command -v xvfb-run >/dev/null 2>&1; then
