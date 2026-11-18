@@ -8134,6 +8134,61 @@ fn automation_driver_reports_activity_levels_and_highlight_lines()
 }
 
 #[test]
+fn automation_driver_own_messages_do_not_colour_the_switchbar()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let mut direct_room = room_summary("!dm:example", "Bob", false);
+    direct_room.is_direct = true;
+    direct_room.direct_user_ids = vec!["@bob:example".to_owned()];
+    // `--render-state` activates the first room, so both rooms under test
+    // stay in the background.
+    let state_path = write_state_file(&[
+        Event::Started,
+        Event::LoggedIn {
+            session: core_stored_session(),
+        },
+        Event::SyncedRooms(vec![
+            room_summary("!lobby:example", "Lobby", false),
+            room_summary("!a:example", "A", false),
+            direct_room,
+        ]),
+        // Ours, say sent from the phone: no colour, as in mIRC.
+        text_event(
+            "!dm:example",
+            "@alice:example",
+            1_700_000_000_000,
+            "sent elsewhere",
+        ),
+        text_event("!a:example", "@bob:example", 1_700_000_060_000, "hi all"),
+    ])?;
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            state_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!lobby:example"));
+    assert_switchbar_activity(&ui_state, &room_identity("!dm:example"), None);
+    assert_switchbar_activity(
+        &ui_state,
+        &room_identity("!a:example"),
+        Some(ViewActivityLevel::Message),
+    );
+    assert!(view_contains(
+        find_view(&ui_state, &room_identity("!dm:example")),
+        "sent elsewhere"
+    ));
+
+    let _ = fs::remove_file(&state_path);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =

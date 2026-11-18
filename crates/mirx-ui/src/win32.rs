@@ -1730,14 +1730,36 @@ fn last_activity_from_room_activity(activity: &RoomActivity) -> Option<LastMessa
     }
 }
 
+/// Who a line comes from. A redaction placeholder has no sender: the core
+/// does not report who removed the event.
+fn room_activity_sender_user_id(activity: &RoomActivity) -> Option<&str> {
+    match &activity.kind {
+        RoomActivityKind::Message(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Image(message) => Some(&message.sender.user_id),
+        RoomActivityKind::File(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Audio(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Video(message) => Some(&message.sender.user_id),
+        RoomActivityKind::UnsupportedMessage(message) => Some(&message.sender.user_id),
+        RoomActivityKind::UnableToDecrypt(message) => Some(&message.sender.user_id),
+        RoomActivityKind::StateNotice(notice) => Some(&notice.sender.user_id),
+        RoomActivityKind::Redacted(RoomRedactedActivity { event_id: _ }) => None,
+    }
+}
+
 /// The activity a line marks its view with while the user is elsewhere.
-/// `None` for our own pending echo: the user just wrote it.
-fn activity_level_for(activity: &RoomActivity) -> Option<ViewActivityLevel> {
+/// `None` for our own lines, as in mIRC: our pending echo, its sync echo
+/// and what we sent from another device. Without a signed-in user
+/// (`own_user_id` is `None`) no line is ours. The login flow delivers the
+/// initial sync's lines before `LoggedIn`, but their rooms are not in the
+/// room list yet, so they colour nothing either.
+fn activity_level_for(
+    activity: &RoomActivity,
+    own_user_id: Option<&str>,
+) -> Option<ViewActivityLevel> {
+    if own_user_id.is_some_and(|me| room_activity_sender_user_id(activity) == Some(me)) {
+        return None;
+    }
     let level = match &activity.kind {
-        RoomActivityKind::Message(RoomMessageActivity {
-            send_state: RoomMessageSendState::Pending,
-            ..
-        }) => return None,
         RoomActivityKind::Message(_)
         | RoomActivityKind::Image(_)
         | RoomActivityKind::File(_)
@@ -2058,7 +2080,7 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     let clears_last_activity = matches!(activity.kind, RoomActivityKind::Redacted(_));
     let target_view_id = room_activity_target_view_id(&activity);
     let mut wants_attention = false;
-    if let Some(level) = activity_level_for(&activity)
+    if let Some(level) = activity_level_for(&activity, state.model.own_user_id.as_deref())
         && let Some(room_is_direct) =
             sendable_room_by_id(&state.model.rooms, &activity.room_id).map(|room| room.is_direct)
     {
@@ -23012,27 +23034,103 @@ mod tests {
             &undecryptable,
         ] {
             assert_eq!(
-                activity_level_for(activity),
+                activity_level_for(activity, None),
                 Some(ViewActivityLevel::Message),
                 "{activity:?}"
             );
         }
         for activity in [&state_notice, &redacted] {
             assert_eq!(
-                activity_level_for(activity),
+                activity_level_for(activity, None),
                 Some(ViewActivityLevel::Event),
                 "{activity:?}"
             );
         }
         for activity in [message, image, state_notice, redacted] {
             assert_eq!(
-                activity_level_for(&highlighted(activity)),
+                activity_level_for(&highlighted(activity), None),
                 Some(ViewActivityLevel::Highlight)
             );
         }
+    }
+
+    #[test]
+    fn activity_level_for_ignores_our_own_lines() {
+        let me = Some("@alice:example");
+        let own_message = sent_message_activity("!room:example", "$m", None, "hi", 1);
+        let own_pending = pending_message_activity("!room:example", "txn", "draft");
+        let own_image = image_activity("!room:example", "$i", "@alice:example", 1, "i", None, None);
+        let own_notice = event_room_activity(topic_state("!room:example", "topic"));
+        let others_image =
+            image_activity("!room:example", "$o", "@bob:example", 1, "o", None, None);
+        let redacted = RoomActivity {
+            kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+                event_id: "$r".to_owned(),
+            }),
+            ..own_message.clone()
+        };
+
+        for activity in [&own_message, &own_pending, &own_image, &own_notice] {
+            assert_eq!(activity_level_for(activity, me), None, "{activity:?}");
+        }
+        // Sender first: the core never highlights our own line, but a
+        // highlight must not make it ours to look at.
         assert_eq!(
-            activity_level_for(&pending_message_activity("!room:example", "txn", "draft")),
+            activity_level_for(&highlighted(own_message.clone()), me),
             None
+        );
+        assert_eq!(
+            activity_level_for(&others_image, me),
+            Some(ViewActivityLevel::Message)
+        );
+        assert_eq!(
+            activity_level_for(&redacted, me),
+            Some(ViewActivityLevel::Event)
+        );
+        // Not signed in: nothing is ours.
+        assert_eq!(
+            activity_level_for(&own_message, None),
+            Some(ViewActivityLevel::Message)
+        );
+    }
+
+    #[test]
+    fn own_direct_message_neither_colours_nor_flashes() {
+        let mut state = test_state();
+        let mut direct_room = room("!dm:example", "Dm", false);
+        direct_room.is_direct = true;
+        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+        state.model.rooms = vec![direct_room];
+        state.model.own_user_id = Some("@me:example".to_owned());
+        let message_from = |event_id: &str, user_id: &str| {
+            let mut activity = sent_message_activity("!dm:example", event_id, None, "hi", 1);
+            let RoomActivityKind::Message(message) = &mut activity.kind else {
+                unreachable!("a sent message activity is a message");
+            };
+            message.sender = user_profile(user_id);
+            activity
+        };
+        assert_ne!(state.active_view, room_view_id("!dm:example"));
+
+        assert!(!apply_room_activity_event(
+            &mut state,
+            message_from("$own", "@me:example")
+        ));
+        assert_eq!(state.room_activity.get(&room_view_id("!dm:example")), None);
+        assert_eq!(
+            state
+                .room_activity_read_targets
+                .get(&room_view_id("!dm:example")),
+            None
+        );
+
+        assert!(apply_room_activity_event(
+            &mut state,
+            message_from("$theirs", "@alice:example")
+        ));
+        assert_eq!(
+            state.room_activity.get(&room_view_id("!dm:example")),
+            Some(&ViewActivityLevel::Message)
         );
     }
 
