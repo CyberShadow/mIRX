@@ -37,7 +37,7 @@ use mirx_testkit::{
     SwitchbarItem, SwitchbarState, TestkitError, UiError, UiFindHistorySearchState, UiFindState,
     UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
     UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewIdentity,
+    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -642,19 +642,19 @@ fn data_models_round_trip_through_json() {
     let ui_state = UiState {
         navigation: NavigationNode {
             text: "mirx".to_owned(),
-            has_activity: false,
+            activity: None,
             children: vec![
                 NavigationNode {
                     text: "status".to_owned(),
-                    has_activity: false,
+                    activity: None,
                     children: vec![],
                 },
                 NavigationNode {
                     text: "rooms: 1".to_owned(),
-                    has_activity: false,
+                    activity: None,
                     children: vec![NavigationNode {
                         text: "Room".to_owned(),
-                        has_activity: true,
+                        activity: Some(ViewActivityLevel::Message),
                         children: vec![],
                     }],
                 },
@@ -709,7 +709,7 @@ fn data_models_round_trip_through_json() {
                     identity: ViewIdentity::Status,
                     title: "Status".to_owned(),
                     active: false,
-                    has_activity: false,
+                    activity: None,
                 },
                 SwitchbarItem {
                     identity: ViewIdentity::Room {
@@ -717,7 +717,7 @@ fn data_models_round_trip_through_json() {
                     },
                     title: "Room".to_owned(),
                     active: true,
-                    has_activity: true,
+                    activity: Some(ViewActivityLevel::Message),
                 },
                 SwitchbarItem {
                     identity: ViewIdentity::Thread {
@@ -726,7 +726,7 @@ fn data_models_round_trip_through_json() {
                     },
                     title: "Thread".to_owned(),
                     active: false,
-                    has_activity: true,
+                    activity: Some(ViewActivityLevel::Message),
                 },
             ],
         },
@@ -754,7 +754,7 @@ fn data_models_round_trip_through_json() {
                 order: Some("0.25".to_owned()),
             }],
             space_children: vec![],
-            has_activity: true,
+            activity: Some(ViewActivityLevel::Message),
             read_target_event_id: Some("$event:example".to_owned()),
             read_state: Some(UiRoomReadState {
                 latest_active_event_id: Some("$latest:example".to_owned()),
@@ -883,20 +883,20 @@ fn data_models_round_trip_through_json() {
         serde_json::json!({
             "navigation": {
                 "text": "mirx",
-                "has_activity": false,
+                "activity": null,
                 "children": [
                     {
                         "text": "status",
-                        "has_activity": false,
+                        "activity": null,
                         "children": [],
                     },
                     {
                         "text": "rooms: 1",
-                        "has_activity": false,
+                        "activity": null,
                         "children": [
                             {
                                 "text": "Room",
-                                "has_activity": true,
+                                "activity": "message",
                                 "children": [],
                             }
                         ],
@@ -961,7 +961,7 @@ fn data_models_round_trip_through_json() {
                         },
                         "title": "Status",
                         "active": false,
-                        "has_activity": false,
+                        "activity": null,
                     },
                     {
                         "identity": {
@@ -970,7 +970,7 @@ fn data_models_round_trip_through_json() {
                         },
                         "title": "Room",
                         "active": true,
-                        "has_activity": true,
+                        "activity": "message",
                     },
                     {
                         "identity": {
@@ -980,7 +980,7 @@ fn data_models_round_trip_through_json() {
                         },
                         "title": "Thread",
                         "active": false,
-                        "has_activity": true,
+                        "activity": "message",
                     }
                 ],
             },
@@ -1012,7 +1012,7 @@ fn data_models_round_trip_through_json() {
                         }
                     ],
                     "space_children": [],
-                    "has_activity": true,
+                    "activity": "message",
                     "read_target_event_id": "$event:example",
                     "read_state": {
                         "latest_active_event_id": "$latest:example",
@@ -5553,7 +5553,7 @@ fn data_models_reject_unknown_fields() {
             "direct_user_ids":[],
             "tags":[],
             "space_children":[],
-            "has_activity":false,
+            "activity":null,
             "read_target_event_id":null,
             "read_state":null,
             "history_backfill":{"state":"idle"},
@@ -5580,7 +5580,7 @@ fn data_models_reject_unknown_fields() {
         serde_json::from_str::<NavigationNode>(
             r#"{
             "text":"mirx",
-            "has_activity":false,
+            "activity":null,
             "children":[],
             "unexpected":true
         }"#
@@ -5700,7 +5700,7 @@ fn data_models_reject_unknown_fields() {
             "identity":{"kind":"status"},
             "title":"Status",
             "active":true,
-            "has_activity":false,
+            "activity":null,
             "unexpected":true
         }"#
         )
@@ -6043,7 +6043,7 @@ fn switchbar_helpers_find_items_and_active_item() {
     let ui_state = UiState {
         navigation: NavigationNode {
             text: "mirx".to_owned(),
-            has_activity: false,
+            activity: None,
             children: vec![],
         },
         mdi: MdiState {
@@ -6061,7 +6061,7 @@ fn switchbar_helpers_find_items_and_active_item() {
                     identity: ViewIdentity::Status,
                     title: "Status".to_owned(),
                     active: false,
-                    has_activity: false,
+                    activity: None,
                 },
                 SwitchbarItem {
                     identity: ViewIdentity::Room {
@@ -6069,7 +6069,7 @@ fn switchbar_helpers_find_items_and_active_item() {
                     },
                     title: "Room".to_owned(),
                     active: true,
-                    has_activity: true,
+                    activity: Some(ViewActivityLevel::Message),
                 },
             ],
         },
@@ -6093,29 +6093,28 @@ fn switchbar_helpers_find_items_and_active_item() {
 }
 
 #[test]
-fn navigation_node_defaults_missing_activity_to_false() {
+fn navigation_node_rejects_legacy_activity_flag() {
+    let error = serde_json::from_str::<NavigationNode>(
+        r#"{"text":"mirx","has_activity":true,"activity":null,"children":[]}"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        error.to_string().contains("unknown field `has_activity`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn view_activity_levels_serialize_in_snake_case() {
     assert_eq!(
-        serde_json::from_str::<NavigationNode>(
-            r#"{
-            "text":"mirx",
-            "children":[
-                {
-                    "text":"status",
-                    "children":[]
-                }
-            ]
-        }"#
-        )
-        .expect("deserialize navigation node without has_activity"),
-        NavigationNode {
-            text: "mirx".to_owned(),
-            has_activity: false,
-            children: vec![NavigationNode {
-                text: "status".to_owned(),
-                has_activity: false,
-                children: vec![],
-            }],
-        }
+        serde_json::to_value([
+            ViewActivityLevel::Event,
+            ViewActivityLevel::Message,
+            ViewActivityLevel::Highlight,
+        ])
+        .unwrap(),
+        serde_json::json!(["event", "message", "highlight"])
     );
 }
 
@@ -6123,16 +6122,16 @@ fn navigation_node_defaults_missing_activity_to_false() {
 fn navigation_node_path_helpers_match_unique_paths() {
     let navigation = NavigationNode {
         text: "mirx".to_owned(),
-        has_activity: false,
+        activity: None,
         children: vec![NavigationNode {
             text: "rooms: 1".to_owned(),
-            has_activity: false,
+            activity: None,
             children: vec![NavigationNode {
                 text: "Alpha [query: @alice:example]".to_owned(),
-                has_activity: true,
+                activity: Some(ViewActivityLevel::Message),
                 children: vec![NavigationNode {
                     text: "thread root".to_owned(),
-                    has_activity: true,
+                    activity: Some(ViewActivityLevel::Message),
                     children: vec![],
                 }],
             }],
@@ -6157,23 +6156,23 @@ fn navigation_node_path_helpers_match_unique_paths() {
 fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
     let navigation = NavigationNode {
         text: "mirx".to_owned(),
-        has_activity: false,
+        activity: None,
         children: vec![
             NavigationNode {
                 text: "rooms: 1".to_owned(),
-                has_activity: false,
+                activity: None,
                 children: vec![NavigationNode {
                     text: "Alpha".to_owned(),
-                    has_activity: false,
+                    activity: None,
                     children: vec![],
                 }],
             },
             NavigationNode {
                 text: "threads: 1".to_owned(),
-                has_activity: false,
+                activity: None,
                 children: vec![NavigationNode {
                     text: "Alpha thread".to_owned(),
-                    has_activity: true,
+                    activity: Some(ViewActivityLevel::Message),
                     children: vec![],
                 }],
             },
@@ -6191,19 +6190,19 @@ fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
 fn navigation_node_exact_text_path_returns_none_for_ambiguous_matches() {
     let navigation = NavigationNode {
         text: "mirx".to_owned(),
-        has_activity: false,
+        activity: None,
         children: vec![NavigationNode {
             text: "rooms: 1".to_owned(),
-            has_activity: false,
+            activity: None,
             children: vec![
                 NavigationNode {
                     text: "Alpha".to_owned(),
-                    has_activity: false,
+                    activity: None,
                     children: vec![],
                 },
                 NavigationNode {
                     text: "Alpha".to_owned(),
-                    has_activity: true,
+                    activity: Some(ViewActivityLevel::Message),
                     children: vec![],
                 },
             ],

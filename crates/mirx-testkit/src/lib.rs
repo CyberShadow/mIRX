@@ -1138,6 +1138,16 @@ pub enum UiFindHistorySearchState {
     Failed { message: String },
 }
 
+/// What happened in a view the user is not looking at, in mIRC's
+/// switchbar/treebar colour precedence: a higher level replaces a lower one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewActivityLevel {
+    Event,
+    Message,
+    Highlight,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiRoomState {
@@ -1150,7 +1160,7 @@ pub struct UiRoomState {
     pub direct_user_ids: Vec<String>,
     pub tags: Vec<RoomTag>,
     pub space_children: Vec<SpaceChild>,
-    pub has_activity: bool,
+    pub activity: Option<ViewActivityLevel>,
     pub read_target_event_id: Option<String>,
     pub read_state: Option<UiRoomReadState>,
     pub history_backfill: UiRoomHistoryBackfillState,
@@ -1185,8 +1195,8 @@ pub struct UiRoomReadState {
 #[serde(deny_unknown_fields)]
 pub struct NavigationNode {
     pub text: String,
-    #[serde(default)]
-    pub has_activity: bool,
+    /// `None` for nodes without activity and for group labels.
+    pub activity: Option<ViewActivityLevel>,
     pub children: Vec<NavigationNode>,
 }
 
@@ -1426,7 +1436,7 @@ pub struct SwitchbarItem {
     pub identity: ViewIdentity,
     pub title: String,
     pub active: bool,
-    pub has_activity: bool,
+    pub activity: Option<ViewActivityLevel>,
 }
 
 impl UiState {

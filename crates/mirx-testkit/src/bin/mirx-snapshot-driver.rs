@@ -9,7 +9,7 @@ mod cli {
     use std::time::Duration;
 
     use mirx_core::RoomMembership;
-    use mirx_testkit::ViewIdentity;
+    use mirx_testkit::{ViewActivityLevel, ViewIdentity};
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
     const DEFAULT_WAIT_IDLE: Duration = Duration::from_secs(5);
@@ -46,11 +46,11 @@ mod cli {
         pub(crate) expect_switchbar_items: Vec<SwitchbarItemExpectation>,
         pub(crate) expect_no_switchbar_items: Vec<ViewIdentity>,
         pub(crate) expect_switchbar_active: Option<ViewIdentity>,
-        pub(crate) expect_switchbar_activity: Vec<ViewIdentity>,
+        pub(crate) expect_switchbar_activity: Vec<SwitchbarActivityExpectation>,
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
         pub(crate) expect_navigation_texts: Vec<String>,
         pub(crate) expect_no_navigation_texts: Vec<String>,
-        pub(crate) expect_navigation_activity: Vec<String>,
+        pub(crate) expect_navigation_activity: Vec<NavigationActivityExpectation>,
         pub(crate) expect_no_navigation_activity: Vec<String>,
         pub(crate) expect_direct_rooms: Vec<String>,
         pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
@@ -89,6 +89,40 @@ mod cli {
     pub(crate) struct SwitchbarItemExpectation {
         pub(crate) identity: ViewIdentity,
         pub(crate) title_substring: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct SwitchbarActivityExpectation {
+        pub(crate) identity: ViewIdentity,
+        pub(crate) level: ViewActivityLevel,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct NavigationActivityExpectation {
+        pub(crate) path_or_label: String,
+        pub(crate) level: ViewActivityLevel,
+    }
+
+    /// Splits `<target>::<event|message|highlight>`. The level is last, so
+    /// targets may contain `::`-free Matrix IDs with single colons.
+    pub(crate) fn parse_activity_expectation<'a>(
+        flag_name: &str,
+        value: &'a str,
+    ) -> Result<(&'a str, ViewActivityLevel), String> {
+        let invalid = || {
+            format!(
+                "invalid {flag_name} value {value:?}; expected <target>::<event|message|highlight>\n{}",
+                usage()
+            )
+        };
+        let (target, level) = value.rsplit_once("::").ok_or_else(invalid)?;
+        let level = match level {
+            "event" => ViewActivityLevel::Event,
+            "message" => ViewActivityLevel::Message,
+            "highlight" => ViewActivityLevel::Highlight,
+            _ => return Err(invalid()),
+        };
+        Ok((target, level))
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -415,12 +449,17 @@ mod cli {
                     let value = args.next().ok_or_else(|| {
                         "missing value for --expect-switchbar-activity".to_owned()
                     })?;
+                    let (identity, level) =
+                        parse_activity_expectation("--expect-switchbar-activity", &value)?;
                     config
                         .expect_switchbar_activity
-                        .push(parse_view_identity_arg(
-                            "--expect-switchbar-activity",
-                            &value,
-                        )?);
+                        .push(SwitchbarActivityExpectation {
+                            identity: parse_view_identity_arg(
+                                "--expect-switchbar-activity",
+                                identity,
+                            )?,
+                            level,
+                        });
                 }
                 "--expect-no-switchbar-activity" => {
                     let value = args.next().ok_or_else(|| {
@@ -448,11 +487,17 @@ mod cli {
                     );
                 }
                 "--expect-navigation-activity" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-navigation-activity".to_owned()
+                    })?;
+                    let (path_or_label, level) =
+                        parse_activity_expectation("--expect-navigation-activity", &value)?;
                     config
                         .expect_navigation_activity
-                        .push(args.next().ok_or_else(|| {
-                            "missing value for --expect-navigation-activity".to_owned()
-                        })?);
+                        .push(NavigationActivityExpectation {
+                            path_or_label: path_or_label.to_owned(),
+                            level,
+                        });
                 }
                 "--expect-no-navigation-activity" => {
                     config
@@ -511,11 +556,11 @@ mod cli {
             "  <identity> is status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>",
             "  --expect-no-switchbar-item <identity>",
             "  --expect-switchbar-active <identity>",
-            "  --expect-switchbar-activity <identity>",
+            "  --expect-switchbar-activity <identity>::<event|message|highlight>",
             "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
             "  --expect-no-navigation-text <substring>",
-            "  --expect-navigation-activity <path-or-label>",
+            "  --expect-navigation-activity <path-or-label>::<event|message|highlight>",
             "  --expect-no-navigation-activity <path-or-label>",
         ]
         .join("\n")
@@ -708,12 +753,13 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            Action, RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
-            RoomUnreadExpectation, ViewExpectation, format_view_identity, parse_args,
+            Action, NavigationActivityExpectation, RoomMembershipExpectation,
+            RoomReadTargetExpectation, RoomTagExpectation, RoomUnreadExpectation,
+            SwitchbarActivityExpectation, ViewExpectation, format_view_identity, parse_args,
             parse_view_expectation, parse_view_identity_arg, usage,
         };
         use mirx_core::RoomMembership;
-        use mirx_testkit::ViewIdentity;
+        use mirx_testkit::{ViewActivityLevel, ViewIdentity};
         use std::time::Duration;
 
         #[test]
@@ -740,7 +786,9 @@ mod cli {
                 "--expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>"
             ));
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
-            assert!(usage().contains("--expect-navigation-activity <path-or-label>"));
+            assert!(usage().contains(
+                "--expect-navigation-activity <path-or-label>::<event|message|highlight>"
+            ));
             assert!(usage().contains("--expect-no-navigation-activity <path-or-label>"));
         }
 
@@ -989,7 +1037,7 @@ mod cli {
                     "--expect-switchbar-active",
                     "room:!ops:example",
                     "--expect-switchbar-activity",
-                    "thread:!ops:example|$thread-root",
+                    "thread:!ops:example|$thread-root::highlight",
                     "--expect-no-switchbar-activity",
                     "room:!ops:example",
                     "--expect-navigation-text",
@@ -997,7 +1045,7 @@ mod cli {
                     "--expect-no-navigation-text",
                     "plain",
                     "--expect-navigation-activity",
-                    "Alpha/root msg",
+                    "Alpha/root msg::event",
                     "--expect-no-navigation-activity",
                     "Beta",
                 ]
@@ -1069,9 +1117,12 @@ mod cli {
             );
             assert_eq!(
                 config.expect_switchbar_activity,
-                vec![ViewIdentity::Thread {
-                    room_id: "!ops:example".to_owned(),
-                    thread_root_event_id: "$thread-root".to_owned(),
+                vec![SwitchbarActivityExpectation {
+                    identity: ViewIdentity::Thread {
+                        room_id: "!ops:example".to_owned(),
+                        thread_root_event_id: "$thread-root".to_owned(),
+                    },
+                    level: ViewActivityLevel::Highlight,
                 }]
             );
             assert_eq!(
@@ -1084,7 +1135,10 @@ mod cli {
             assert_eq!(config.expect_no_navigation_texts, vec!["plain".to_owned()]);
             assert_eq!(
                 config.expect_navigation_activity,
-                vec!["Alpha/root msg".to_owned()]
+                vec![NavigationActivityExpectation {
+                    path_or_label: "Alpha/root msg".to_owned(),
+                    level: ViewActivityLevel::Event,
+                }]
             );
             assert_eq!(
                 config.expect_no_navigation_activity,
@@ -1134,6 +1188,25 @@ mod cli {
                 .unwrap(),
                 "missing value for --expect-no-navigation-activity"
             );
+        }
+
+        #[test]
+        fn parse_args_rejects_activity_expectations_without_a_level() {
+            for (flag, value) in [
+                ("--expect-switchbar-activity", "room:!ops:example"),
+                ("--expect-switchbar-activity", "room:!ops:example::loud"),
+                ("--expect-navigation-activity", "Beta"),
+            ] {
+                let error = parse_args([flag, value].into_iter().map(str::to_owned))
+                    .err()
+                    .unwrap();
+                assert!(
+                    error.starts_with(&format!(
+                        "invalid {flag} value {value:?}; expected <target>::<event|message|highlight>"
+                    )),
+                    "{error}"
+                );
+            }
         }
 
         #[test]
@@ -1597,10 +1670,10 @@ mod navigation_lookup_tests {
     use super::find_navigation_node_by_path_or_label;
     use mirx_testkit::NavigationNode;
 
-    fn nav(text: &str, has_activity: bool, children: Vec<NavigationNode>) -> NavigationNode {
+    fn nav(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
         NavigationNode {
             text: text.to_owned(),
-            has_activity,
+            activity: None,
             children,
         }
     }
@@ -1608,15 +1681,13 @@ mod navigation_lookup_tests {
     fn sample_navigation() -> NavigationNode {
         nav(
             "mirx",
-            false,
             vec![
-                nav("status", false, vec![]),
+                nav("status", vec![]),
                 nav(
                     "rooms: 2",
-                    false,
                     vec![
-                        nav("Alpha", false, vec![nav("alpha root", true, vec![])]),
-                        nav("Beta", true, vec![]),
+                        nav("Alpha", vec![nav("alpha root", vec![])]),
+                        nav("Beta", vec![]),
                     ],
                 ),
             ],
@@ -1649,8 +1720,7 @@ mod navigation_lookup_tests {
     fn navigation_lookup_rejects_ambiguous_bare_label() {
         let navigation = nav(
             "mirx",
-            false,
-            vec![nav("Beta", true, vec![]), nav("Beta thread", true, vec![])],
+            vec![nav("Beta", vec![]), nav("Beta thread", vec![])],
         );
 
         assert!(find_navigation_node_by_path_or_label(&navigation, "Beta").is_none());
@@ -2227,20 +2297,27 @@ mod windows_main {
                 );
             }
 
-            for identity in &config.expect_switchbar_activity {
+            for expectation in &config.expect_switchbar_activity {
+                let identity = &expectation.identity;
                 let item = ui_state.switchbar.item(identity).ok_or_else(|| {
                     format!(
                         "switchbar activity assertion failed: missing item {}",
                         format_view_identity(identity)
                     )
                 })?;
-                if !item.has_activity {
+                if item.activity != Some(expectation.level) {
                     return Err(format!(
-                        "switchbar activity assertion failed: expected {} to have activity, found false",
-                        format_view_identity(identity)
+                        "switchbar activity assertion failed: expected {} to have {:?} activity, found {:?}",
+                        format_view_identity(identity),
+                        expectation.level,
+                        item.activity
                     ));
                 }
-                println!("PASS switchbar activity {}", format_view_identity(identity));
+                println!(
+                    "PASS switchbar activity {} {:?}",
+                    format_view_identity(identity),
+                    expectation.level
+                );
             }
 
             for identity in &config.expect_no_switchbar_activity {
@@ -2250,9 +2327,9 @@ mod windows_main {
                         format_view_identity(identity)
                     )
                 })?;
-                if item.has_activity {
+                if let Some(level) = item.activity {
                     return Err(format!(
-                        "switchbar no-activity assertion failed: expected {} to have no activity, found true",
+                        "switchbar no-activity assertion failed: expected {} to have no activity, found {level:?}",
                         format_view_identity(identity)
                     ));
                 }
@@ -2282,7 +2359,8 @@ mod windows_main {
                 println!("PASS navigation excludes {:?}", substring);
             }
 
-            for path_or_label in &config.expect_navigation_activity {
+            for expectation in &config.expect_navigation_activity {
+                let path_or_label = &expectation.path_or_label;
                 let node = crate::find_navigation_node_by_path_or_label(
                     &ui_state.navigation,
                     path_or_label,
@@ -2293,13 +2371,16 @@ mod windows_main {
                         path_or_label
                     )
                 })?;
-                if !node.has_activity {
+                if node.activity != Some(expectation.level) {
                     return Err(format!(
-                        "navigation activity assertion failed: expected {:?} to have activity, found false",
-                        path_or_label
+                        "navigation activity assertion failed: expected {:?} to have {:?} activity, found {:?}",
+                        path_or_label, expectation.level, node.activity
                     ));
                 }
-                println!("PASS navigation activity {:?}", path_or_label);
+                println!(
+                    "PASS navigation activity {:?} {:?}",
+                    path_or_label, expectation.level
+                );
             }
 
             for path_or_label in &config.expect_no_navigation_activity {
@@ -2311,9 +2392,9 @@ mod windows_main {
                                 path_or_label
                             )
                         })?;
-                if node.has_activity {
+                if let Some(level) = node.activity {
                     return Err(format!(
-                        "navigation no-activity assertion failed: expected {:?} to have no activity, found true",
+                        "navigation no-activity assertion failed: expected {:?} to have no activity, found {level:?}",
                         path_or_label
                     ));
                 }

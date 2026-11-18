@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 27;
+pub(crate) const PROTOCOL_VERSION: u32 = 28;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -900,6 +900,19 @@ pub(crate) enum UiFindHistorySearchState {
     Failed { message: String },
 }
 
+/// What happened in a view the user is not looking at, in mIRC's
+/// switchbar/treebar colour precedence: a higher level replaces a lower one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ViewActivityLevel {
+    /// Joins, parts, topic and power-level changes.
+    Event,
+    /// Someone talked.
+    Message,
+    /// A line the user's push rules highlight, e.g. one mentioning them.
+    Highlight,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiRoomState {
@@ -912,7 +925,7 @@ pub(crate) struct UiRoomState {
     pub(crate) direct_user_ids: Vec<String>,
     pub(crate) tags: Vec<DumpRoomTag>,
     pub(crate) space_children: Vec<DumpSpaceChild>,
-    pub(crate) has_activity: bool,
+    pub(crate) activity: Option<ViewActivityLevel>,
     pub(crate) read_target_event_id: Option<String>,
     pub(crate) read_state: Option<UiRoomReadState>,
     pub(crate) history_backfill: UiRoomHistoryBackfillState,
@@ -947,8 +960,8 @@ pub(crate) struct UiRoomReadState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct NavigationNode {
     pub(crate) text: String,
-    #[serde(default)]
-    pub(crate) has_activity: bool,
+    /// `None` for nodes without activity and for group labels.
+    pub(crate) activity: Option<ViewActivityLevel>,
     pub(crate) children: Vec<NavigationNode>,
 }
 
@@ -1133,7 +1146,7 @@ pub(crate) struct SwitchbarItem {
     pub(crate) identity: ViewIdentity,
     pub(crate) title: String,
     pub(crate) active: bool,
-    pub(crate) has_activity: bool,
+    pub(crate) activity: Option<ViewActivityLevel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2529,8 +2542,9 @@ mod tests {
         SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
         SendTextResponse, SetComposeTextArgs, SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem,
         SwitchbarState, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
-        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewIdentity, WaitIdleArgs,
-        WaitIdleResponse, failure_response, parse_command_request, success_response,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2611,8 +2625,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_27() {
-        assert_eq!(PROTOCOL_VERSION, 27);
+    fn protocol_version_is_28() {
+        assert_eq!(PROTOCOL_VERSION, 28);
     }
 
     #[test]
@@ -4130,7 +4144,7 @@ mod tests {
             },
             title: "Thread".to_owned(),
             active: false,
-            has_activity: true,
+            activity: Some(ViewActivityLevel::Message),
         };
         let switchbar_item_json = json!({
             "identity": {
@@ -4140,7 +4154,7 @@ mod tests {
             },
             "title": "Thread",
             "active": false,
-            "has_activity": true,
+            "activity": "message",
         });
         assert_eq!(
             serde_json::from_value::<SwitchbarItem>(switchbar_item_json.clone())
@@ -4203,7 +4217,7 @@ mod tests {
                 },
                 "title": "Thread",
                 "active": false,
-                "has_activity": true,
+                "activity": "message",
             }))
             .is_err()
         );
@@ -4295,7 +4309,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":27,
+                    "protocol_version":28,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4680,19 +4694,19 @@ mod tests {
                 UiState {
                     navigation: NavigationNode {
                         text: "mirx".to_owned(),
-                        has_activity: false,
+                        activity: None,
                         children: vec![
                             NavigationNode {
                                 text: "status".to_owned(),
-                                has_activity: false,
+                                activity: None,
                                 children: vec![],
                             },
                             NavigationNode {
                                 text: "rooms: 1".to_owned(),
-                                has_activity: false,
+                                activity: None,
                                 children: vec![NavigationNode {
                                     text: "Room".to_owned(),
-                                    has_activity: true,
+                                    activity: Some(ViewActivityLevel::Message),
                                     children: vec![],
                                 }],
                             },
@@ -4747,7 +4761,7 @@ mod tests {
                                 identity: ViewIdentity::Status,
                                 title: "Status".to_owned(),
                                 active: false,
-                                has_activity: false,
+                                activity: None,
                             },
                             SwitchbarItem {
                                 identity: ViewIdentity::Room {
@@ -4755,7 +4769,7 @@ mod tests {
                                 },
                                 title: "Room".to_owned(),
                                 active: true,
-                                has_activity: true,
+                                activity: Some(ViewActivityLevel::Message),
                             },
                             SwitchbarItem {
                                 identity: ViewIdentity::Thread {
@@ -4764,7 +4778,7 @@ mod tests {
                                 },
                                 title: "Thread".to_owned(),
                                 active: false,
-                                has_activity: true,
+                                activity: Some(ViewActivityLevel::Message),
                             },
                         ],
                     },
@@ -4792,7 +4806,7 @@ mod tests {
                             order: Some("0.25".to_owned()),
                         }],
                         space_children: Vec::new(),
-                        has_activity: true,
+                        activity: Some(ViewActivityLevel::Message),
                         read_target_event_id: Some("$event:example".to_owned()),
                         read_state: Some(UiRoomReadState {
                             latest_active_event_id: Some("$latest:example".to_owned()),
@@ -4813,10 +4827,10 @@ mod tests {
                 "json":{
                     "navigation":{
                         "text":"mirx",
-                        "has_activity":false,
+                        "activity":null,
                         "children":[
-                            {"text":"status","has_activity":false,"children":[]},
-                            {"text":"rooms: 1","has_activity":false,"children":[{"text":"Room","has_activity":true,"children":[]}]}
+                            {"text":"status","activity":null,"children":[]},
+                            {"text":"rooms: 1","activity":null,"children":[{"text":"Room","activity":"message","children":[]}]}
                         ]
                     },
                     "mdi":{
@@ -4863,19 +4877,19 @@ mod tests {
                                 "identity":{"kind":"status"},
                                 "title":"Status",
                                 "active":false,
-                                "has_activity":false
+                                "activity":null
                             },
                             {
                                 "identity":{"kind":"room","room_id":"!room:example"},
                                 "title":"Room",
                                 "active":true,
-                                "has_activity":true
+                                "activity":"message"
                             },
                             {
                                 "identity":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"},
                                 "title":"Thread",
                                 "active":false,
-                                "has_activity":true
+                                "activity":"message"
                             }
                         ]
                     },
@@ -4904,7 +4918,7 @@ mod tests {
                                 }
                             ],
                             "space_children":[],
-                            "has_activity":true,
+                            "activity":"message",
                             "read_target_event_id":"$event:example",
                             "read_state":{
                                 "latest_active_event_id":"$latest:example",
@@ -5742,7 +5756,7 @@ mod tests {
                 "direct_user_ids":[],
                 "tags":[],
                 "space_children":[],
-                "has_activity":false,
+                "activity":null,
                 "read_target_event_id":null,
                 "read_state":null,
                 "history_backfill":{"state":"idle"},

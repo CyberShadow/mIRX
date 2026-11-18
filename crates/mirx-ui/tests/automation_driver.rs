@@ -42,7 +42,7 @@ use mirx_testkit::{
     SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
     UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
     UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewIdentity,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, RECT, WPARAM};
 use windows_sys::Win32::System::DataExchange::{
@@ -1704,9 +1704,13 @@ fn assert_active_switchbar_item(ui_state: &UiState, identity: &ViewIdentity) {
     assert!(find_switchbar_item(ui_state, identity).active);
 }
 
-fn assert_switchbar_activity(ui_state: &UiState, identity: &ViewIdentity, expected: bool) {
+fn assert_switchbar_activity(
+    ui_state: &UiState,
+    identity: &ViewIdentity,
+    expected: Option<ViewActivityLevel>,
+) {
     assert_eq!(
-        find_switchbar_item(ui_state, identity).has_activity,
+        find_switchbar_item(ui_state, identity).activity,
         expected,
         "unexpected switchbar activity for {identity:?}"
     );
@@ -1762,17 +1766,17 @@ fn assert_navigation_not_contains(node: &NavigationNode, substring: &str) {
 }
 
 fn nav(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
-    nav_with_activity(text, false, children)
+    nav_with_activity(text, None, children)
 }
 
 fn nav_with_activity(
     text: &str,
-    has_activity: bool,
+    activity: Option<ViewActivityLevel>,
     children: Vec<NavigationNode>,
 ) -> NavigationNode {
     NavigationNode {
         text: text.to_owned(),
-        has_activity,
+        activity,
         children,
     }
 }
@@ -1821,13 +1825,17 @@ fn navigation_path_by_substrings(
         .collect()
 }
 
-fn assert_navigation_activity(ui_state: &UiState, path_substrings: &[&str], expected: bool) {
+fn assert_navigation_activity(
+    ui_state: &UiState,
+    path_substrings: &[&str],
+    expected: Option<ViewActivityLevel>,
+) {
     let node = ui_state
         .navigation
         .find_by_substring_path(path_substrings)
         .unwrap_or_else(|| panic!("missing unique navigation path containing {path_substrings:?}"));
     assert_eq!(
-        node.has_activity, expected,
+        node.activity, expected,
         "unexpected navigation activity for {path_substrings:?}"
     );
 }
@@ -2457,9 +2465,13 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
         vec!["Status", "Beta [e2ee]", "Alpha"]
     );
     assert_active_switchbar_item(&ui_state, &ui_state.mdi.active);
-    assert_switchbar_activity(&ui_state, &ViewIdentity::Status, false);
-    assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), false);
-    assert_switchbar_activity(&ui_state, &room_identity("!alpha:example"), true);
+    assert_switchbar_activity(&ui_state, &ViewIdentity::Status, None);
+    assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), None);
+    assert_switchbar_activity(
+        &ui_state,
+        &room_identity("!alpha:example"),
+        Some(ViewActivityLevel::Message),
+    );
 
     let beta_view = find_view(&ui_state, &room_identity("!beta:example"));
     assert!(beta_view.active);
@@ -2669,7 +2681,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 27);
+    assert_eq!(version.protocol_version, 28);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -2776,7 +2788,11 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
             &room_identity("!delta:example"),
         ]
     );
-    assert_switchbar_activity(&replacement_state, &room_identity("!delta:example"), true);
+    assert_switchbar_activity(
+        &replacement_state,
+        &room_identity("!delta:example"),
+        Some(ViewActivityLevel::Message),
+    );
     assert_navigation_not_contains(&replacement_state.navigation, "alpha first");
     assert_navigation_not_contains(&replacement_state.navigation, "beta first");
     assert_navigation_not_contains(&replacement_state.navigation, "beta second");
@@ -5329,9 +5345,9 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     assert_active_switchbar_item(&ui_state, &room_identity("!beta:example"));
     assert_eq!(app.selected_navigation_path()?, expected_path);
     assert_compose_has_focus(&app);
-    assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), false);
-    assert_navigation_activity(&ui_state, &["mirx", "rooms: 1", "Beta"], false);
-    assert!(!find_ui_room(&ui_state, "!beta:example").has_activity);
+    assert_switchbar_activity(&ui_state, &room_identity("!beta:example"), None);
+    assert_navigation_activity(&ui_state, &["mirx", "rooms: 1", "Beta"], None);
+    assert_eq!(find_ui_room(&ui_state, "!beta:example").activity, None);
     assert_eq!(
         find_ui_room(&ui_state, "!beta:example").read_target_event_id,
         None
@@ -5765,14 +5781,26 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
                             "Work",
                             vec![
                                 nav("Ops [e2ee]", vec![]),
-                                nav_with_activity("Shared", true, vec![]),
+                                nav_with_activity(
+                                    "Shared",
+                                    Some(ViewActivityLevel::Message),
+                                    vec![]
+                                ),
                             ],
                         ),
                         nav(
                             "Social",
                             vec![
-                                nav_with_activity("Shared", true, vec![]),
-                                nav_with_activity("Random", true, vec![]),
+                                nav_with_activity(
+                                    "Shared",
+                                    Some(ViewActivityLevel::Message),
+                                    vec![]
+                                ),
+                                nav_with_activity(
+                                    "Random",
+                                    Some(ViewActivityLevel::Message),
+                                    vec![]
+                                ),
                             ],
                         ),
                         nav(
@@ -5850,7 +5878,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
                 room_tag("u.work", None),
             ],
             space_children: Vec::new(),
-            has_activity: false,
+            activity: None,
             read_target_event_id: None,
             read_state: None,
             history_backfill: UiRoomHistoryBackfillState::Idle,
@@ -5869,10 +5897,18 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         find_switchbar_item(&initial_state, &room_identity("!direct:example")).title,
         "Direct [query: @alice:example] [e2ee]"
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!ops:example"), false);
-    assert_switchbar_activity(&initial_state, &room_identity("!shared:example"), true);
-    assert_switchbar_activity(&initial_state, &room_identity("!random:example"), true);
-    assert_switchbar_activity(&initial_state, &room_identity("!direct:example"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!ops:example"), None);
+    assert_switchbar_activity(
+        &initial_state,
+        &room_identity("!shared:example"),
+        Some(ViewActivityLevel::Message),
+    );
+    assert_switchbar_activity(
+        &initial_state,
+        &room_identity("!random:example"),
+        Some(ViewActivityLevel::Message),
+    );
+    assert_switchbar_activity(&initial_state, &room_identity("!direct:example"), None);
     assert_eq!(
         app.selected_navigation_path()?,
         nav_path(&["mirx", "rooms: 4", "Work", "Ops [e2ee]"])
@@ -5923,7 +5959,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         app.dump_model()?.selected_room.as_deref(),
         Some("!shared:example")
     );
-    assert_switchbar_activity(&shared_state, &room_identity("!shared:example"), false);
+    assert_switchbar_activity(&shared_state, &room_identity("!shared:example"), None);
 
     app.select_room("!shared:example")?;
     assert_eq!(
@@ -6130,8 +6166,8 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
     app.wait_idle(Duration::from_secs(5))?;
     let thread_state = app.dump_ui_state()?;
     assert_eq!(thread_state.mdi.active, thread_view_identity);
-    assert_switchbar_activity(&thread_state, &room_identity("!ops:example"), false);
-    assert_switchbar_activity(&thread_state, &thread_view_identity, false);
+    assert_switchbar_activity(&thread_state, &room_identity("!ops:example"), None);
+    assert_switchbar_activity(&thread_state, &thread_view_identity, None);
 
     assert_eq!(
         app.send_text_target(None, "queued threaded automation send")?,
@@ -6142,8 +6178,8 @@ fn automation_driver_send_text_target_none_uses_active_thread_view()
     let post_send_state = app.dump_ui_state()?;
     assert_eq!(post_send_state.mdi.active, thread_view_identity);
     assert_active_switchbar_item(&post_send_state, &thread_view_identity);
-    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), false);
-    assert_switchbar_activity(&post_send_state, &thread_view_identity, false);
+    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), None);
+    assert_switchbar_activity(&post_send_state, &thread_view_identity, None);
     let thread_view = find_view(&post_send_state, &thread_view_identity);
     assert!(view_contains(thread_view, "root msg"));
     assert!(view_contains(thread_view, "thread rep"));
@@ -6246,8 +6282,12 @@ fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivate
         ]
     );
     assert_active_switchbar_item(&inactive_thread_state, &room_view_identity);
-    assert_switchbar_activity(&inactive_thread_state, &room_view_identity, false);
-    assert_switchbar_activity(&inactive_thread_state, &thread_view_identity, true);
+    assert_switchbar_activity(&inactive_thread_state, &room_view_identity, None);
+    assert_switchbar_activity(
+        &inactive_thread_state,
+        &thread_view_identity,
+        Some(ViewActivityLevel::Message),
+    );
     assert_eq!(
         find_switchbar_item(&inactive_thread_state, &thread_view_identity).title,
         "Thread: root msg"
@@ -6257,8 +6297,8 @@ fn automation_driver_inactive_thread_activity_marks_only_thread_until_reactivate
     let reactivated_thread_state = app.dump_ui_state()?;
     assert_eq!(reactivated_thread_state.mdi.active, thread_view_identity);
     assert_active_switchbar_item(&reactivated_thread_state, &thread_view_identity);
-    assert_switchbar_activity(&reactivated_thread_state, &room_view_identity, false);
-    assert_switchbar_activity(&reactivated_thread_state, &thread_view_identity, false);
+    assert_switchbar_activity(&reactivated_thread_state, &room_view_identity, None);
+    assert_switchbar_activity(&reactivated_thread_state, &thread_view_identity, None);
 
     Ok(())
 }
@@ -6840,8 +6880,8 @@ fn automation_driver_thread_me_submission_preserves_active_thread_view()
     let post_send_state = app.dump_ui_state()?;
     assert_eq!(post_send_state.mdi.active, thread_view_identity);
     assert_active_switchbar_item(&post_send_state, &thread_view_identity);
-    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), false);
-    assert_switchbar_activity(&post_send_state, &thread_view_identity, false);
+    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), None);
+    assert_switchbar_activity(&post_send_state, &thread_view_identity, None);
     let thread_view = find_view(&post_send_state, &thread_view_identity);
     assert!(view_contains(thread_view, "root msg"));
     assert!(view_contains(thread_view, "thread rep"));
@@ -6879,8 +6919,8 @@ fn automation_driver_explicit_room_target_send_ignores_active_thread_view()
     let post_send_state = app.dump_ui_state()?;
     assert_eq!(post_send_state.mdi.active, thread_view_identity);
     assert_active_switchbar_item(&post_send_state, &thread_view_identity);
-    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), false);
-    assert_switchbar_activity(&post_send_state, &thread_view_identity, false);
+    assert_switchbar_activity(&post_send_state, &room_identity("!ops:example"), None);
+    assert_switchbar_activity(&post_send_state, &thread_view_identity, None);
 
     Ok(())
 }
@@ -6987,7 +7027,11 @@ fn automation_driver_loads_checked_in_event_fixture_via_file_api()
         ]
     );
     assert_active_switchbar_item(&ui_state, &room_identity("!verify:example"));
-    assert_switchbar_activity(&ui_state, &room_identity("!support:example"), true);
+    assert_switchbar_activity(
+        &ui_state,
+        &room_identity("!support:example"),
+        Some(ViewActivityLevel::Message),
+    );
     let verify_view = find_view(&ui_state, &room_identity("!verify:example"));
     assert!(view_contains(verify_view, "verification requested"));
     assert!(view_contains(verify_view, "sas emoji ready"));
@@ -7574,12 +7618,16 @@ fn automation_driver_clears_room_activity_when_inactive_room_is_activated()
     app.wait_idle(Duration::from_secs(5))?;
 
     let initial_state = app.dump_ui_state()?;
-    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
+    assert_switchbar_activity(
+        &initial_state,
+        &room_identity("!alpha:example"),
+        Some(ViewActivityLevel::Message),
+    );
 
     app.select_room("!alpha:example")?;
     let activated_state = app.dump_ui_state()?;
     assert_active_switchbar_item(&activated_state, &room_identity("!alpha:example"));
-    assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
+    assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), None);
 
     let _ = fs::remove_file(&state_path);
     Ok(())
@@ -7621,16 +7669,28 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     assert_eq!(initial_state.mdi.active, room_view_identity);
     assert_active_switchbar_item(&initial_state, &room_view_identity);
     assert_eq!(app.selected_navigation_path()?, alpha_room_path);
-    assert_switchbar_activity(&initial_state, &beta_view_identity, true);
-    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Beta"], true);
-    assert_switchbar_activity(&initial_state, &thread_view_identity, true);
+    assert_switchbar_activity(
+        &initial_state,
+        &beta_view_identity,
+        Some(ViewActivityLevel::Message),
+    );
+    assert_navigation_activity(
+        &initial_state,
+        &["mirx", "rooms: 2", "Beta"],
+        Some(ViewActivityLevel::Message),
+    );
+    assert_switchbar_activity(
+        &initial_state,
+        &thread_view_identity,
+        Some(ViewActivityLevel::Message),
+    );
     assert_navigation_activity(
         &initial_state,
         &["mirx", "rooms: 2", "Alpha", "alpha root"],
-        true,
+        Some(ViewActivityLevel::Message),
     );
-    assert_switchbar_activity(&initial_state, &room_view_identity, false);
-    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], false);
+    assert_switchbar_activity(&initial_state, &room_view_identity, None);
+    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], None);
 
     app.select_navigation_path(&alpha_thread_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7638,16 +7698,24 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     assert_eq!(thread_state.mdi.active, thread_view_identity);
     assert_active_switchbar_item(&thread_state, &thread_view_identity);
     assert_eq!(app.selected_navigation_path()?, alpha_thread_path);
-    assert_switchbar_activity(&thread_state, &thread_view_identity, false);
+    assert_switchbar_activity(&thread_state, &thread_view_identity, None);
     assert_navigation_activity(
         &thread_state,
         &["mirx", "rooms: 2", "Alpha", "alpha root"],
-        false,
+        None,
     );
-    assert_switchbar_activity(&thread_state, &beta_view_identity, true);
-    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Beta"], true);
-    assert_switchbar_activity(&thread_state, &room_view_identity, false);
-    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], false);
+    assert_switchbar_activity(
+        &thread_state,
+        &beta_view_identity,
+        Some(ViewActivityLevel::Message),
+    );
+    assert_navigation_activity(
+        &thread_state,
+        &["mirx", "rooms: 2", "Beta"],
+        Some(ViewActivityLevel::Message),
+    );
+    assert_switchbar_activity(&thread_state, &room_view_identity, None);
+    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], None);
 
     app.select_navigation_path(&beta_room_path)?;
     app.wait_idle(Duration::from_secs(5))?;
@@ -7655,16 +7723,16 @@ fn automation_driver_clears_tree_and_switchbar_activity_markers_on_activation()
     assert_eq!(beta_state.mdi.active, beta_view_identity);
     assert_active_switchbar_item(&beta_state, &beta_view_identity);
     assert_eq!(app.selected_navigation_path()?, beta_room_path);
-    assert_switchbar_activity(&beta_state, &beta_view_identity, false);
-    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Beta"], false);
-    assert_switchbar_activity(&beta_state, &thread_view_identity, false);
+    assert_switchbar_activity(&beta_state, &beta_view_identity, None);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Beta"], None);
+    assert_switchbar_activity(&beta_state, &thread_view_identity, None);
     assert_navigation_activity(
         &beta_state,
         &["mirx", "rooms: 2", "Alpha", "alpha root"],
-        false,
+        None,
     );
-    assert_switchbar_activity(&beta_state, &room_view_identity, false);
-    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], false);
+    assert_switchbar_activity(&beta_state, &room_view_identity, None);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], None);
 
     Ok(())
 }
@@ -7707,16 +7775,28 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     assert_eq!(initial_state.mdi.active, alpha_room_identity);
     assert_active_switchbar_item(&initial_state, &alpha_room_identity);
     assert_eq!(app.selected_navigation_path()?, alpha_room_path);
-    assert_switchbar_activity(&initial_state, &beta_room_identity, true);
-    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Beta"], true);
-    assert_switchbar_activity(&initial_state, &alpha_thread_identity, true);
+    assert_switchbar_activity(
+        &initial_state,
+        &beta_room_identity,
+        Some(ViewActivityLevel::Message),
+    );
+    assert_navigation_activity(
+        &initial_state,
+        &["mirx", "rooms: 2", "Beta"],
+        Some(ViewActivityLevel::Message),
+    );
+    assert_switchbar_activity(
+        &initial_state,
+        &alpha_thread_identity,
+        Some(ViewActivityLevel::Message),
+    );
     assert_navigation_activity(
         &initial_state,
         &["mirx", "rooms: 2", "Alpha", "alpha root"],
-        true,
+        Some(ViewActivityLevel::Message),
     );
-    assert_switchbar_activity(&initial_state, &alpha_room_identity, false);
-    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], false);
+    assert_switchbar_activity(&initial_state, &alpha_room_identity, None);
+    assert_navigation_activity(&initial_state, &["mirx", "rooms: 2", "Alpha"], None);
     assert_raw_switchbar_state(&app, &initial_state, &alpha_room_identity, true, false);
     assert_raw_switchbar_state(&app, &initial_state, &beta_room_identity, false, true);
     assert_raw_switchbar_state(&app, &initial_state, &alpha_thread_identity, false, true);
@@ -7727,16 +7807,24 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     assert_active_switchbar_item(&thread_state, &alpha_thread_identity);
     assert_eq!(app.selected_navigation_path()?, alpha_thread_path);
     assert_compose_has_focus(&app);
-    assert_switchbar_activity(&thread_state, &alpha_thread_identity, false);
+    assert_switchbar_activity(&thread_state, &alpha_thread_identity, None);
     assert_navigation_activity(
         &thread_state,
         &["mirx", "rooms: 2", "Alpha", "alpha root"],
-        false,
+        None,
     );
-    assert_switchbar_activity(&thread_state, &beta_room_identity, true);
-    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Beta"], true);
-    assert_switchbar_activity(&thread_state, &alpha_room_identity, false);
-    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], false);
+    assert_switchbar_activity(
+        &thread_state,
+        &beta_room_identity,
+        Some(ViewActivityLevel::Message),
+    );
+    assert_navigation_activity(
+        &thread_state,
+        &["mirx", "rooms: 2", "Beta"],
+        Some(ViewActivityLevel::Message),
+    );
+    assert_switchbar_activity(&thread_state, &alpha_room_identity, None);
+    assert_navigation_activity(&thread_state, &["mirx", "rooms: 2", "Alpha"], None);
     assert_raw_switchbar_state(&app, &thread_state, &alpha_thread_identity, true, false);
     assert_raw_switchbar_state(&app, &thread_state, &beta_room_identity, false, true);
 
@@ -7746,16 +7834,16 @@ fn automation_driver_native_mdi_activation_reconciles_shell_state()
     assert_active_switchbar_item(&beta_state, &beta_room_identity);
     assert_eq!(app.selected_navigation_path()?, beta_room_path);
     assert_compose_has_focus(&app);
-    assert_switchbar_activity(&beta_state, &beta_room_identity, false);
-    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Beta"], false);
-    assert_switchbar_activity(&beta_state, &alpha_thread_identity, false);
+    assert_switchbar_activity(&beta_state, &beta_room_identity, None);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Beta"], None);
+    assert_switchbar_activity(&beta_state, &alpha_thread_identity, None);
     assert_navigation_activity(
         &beta_state,
         &["mirx", "rooms: 2", "Alpha", "alpha root"],
-        false,
+        None,
     );
-    assert_switchbar_activity(&beta_state, &alpha_room_identity, false);
-    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], false);
+    assert_switchbar_activity(&beta_state, &alpha_room_identity, None);
+    assert_navigation_activity(&beta_state, &["mirx", "rooms: 2", "Alpha"], None);
     assert_raw_switchbar_state(&app, &beta_state, &beta_room_identity, true, false);
 
     Ok(())
@@ -7936,8 +8024,12 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         find_switchbar_item(&initial_state, &room_identity("!alpha:example")).title,
         "Alpha [query: @alice:example] [@1 !2 *1 M]"
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), false);
-    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example"), true);
+    assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), None);
+    assert_switchbar_activity(
+        &initial_state,
+        &room_identity("!alpha:example"),
+        Some(ViewActivityLevel::Highlight),
+    );
     assert!(navigation_contains(
         &initial_state.navigation,
         "Alpha [query: @alice:example] [@1 !2 *1 M]"
@@ -7954,7 +8046,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
             direct_user_ids: Vec::new(),
             tags: Vec::new(),
             space_children: Vec::new(),
-            has_activity: false,
+            activity: None,
             read_target_event_id: None,
             read_state: Some(UiRoomReadState {
                 latest_active_event_id: Some("$beta-latest".to_owned()),
@@ -7979,7 +8071,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
             direct_user_ids: vec!["@alice:example".to_owned()],
             tags: vec![room_tag("m.favourite", Some("0.25"))],
             space_children: Vec::new(),
-            has_activity: true,
+            activity: Some(ViewActivityLevel::Highlight),
             read_target_event_id: None,
             read_state: Some(UiRoomReadState {
                 latest_active_event_id: Some("$alpha-latest".to_owned()),
@@ -8005,7 +8097,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
         find_switchbar_item(&activated_state, &room_identity("!alpha:example")).title,
         "Alpha [query: @alice:example] [@1 !2 *1 M]"
     );
-    assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), false);
+    assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), None);
     assert!(navigation_contains(
         &activated_state.navigation,
         "Alpha [query: @alice:example] [@1 !2 *1 M]"
@@ -8022,7 +8114,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
             direct_user_ids: vec!["@alice:example".to_owned()],
             tags: vec![room_tag("m.favourite", Some("0.25"))],
             space_children: Vec::new(),
-            has_activity: false,
+            activity: None,
             read_target_event_id: None,
             read_state: Some(UiRoomReadState {
                 latest_active_event_id: Some("$alpha-latest".to_owned()),
@@ -8126,7 +8218,7 @@ fn automation_driver_renders_image_message_fixture_and_exposes_typed_activity()
             send_state: RoomMessageSendState::Sent,
         })
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!images:example.org"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!images:example.org"), None);
     assert_eq!(
         app.room_activity(Some("!images:example.org"))?,
         vec![image_entry_with_event_id(
@@ -8185,7 +8277,7 @@ fn automation_driver_renders_file_message_fixture_and_exposes_typed_activity()
             send_state: RoomMessageSendState::Sent,
         })
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), None);
     let media_activity = app.room_activity(Some("!media:example.org"))?;
     assert_eq!(
         media_activity,
@@ -8270,7 +8362,7 @@ fn automation_driver_renders_audio_message_fixture_and_exposes_typed_activity()
             send_state: RoomMessageSendState::Sent,
         })
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), None);
     let media_activity = app.room_activity(Some("!media:example.org"))?;
     assert_eq!(
         media_activity,
@@ -8477,7 +8569,7 @@ fn automation_driver_renders_encrypted_pending_image_and_exposes_full_source_met
             send_state: RoomMessageSendState::Sent,
         })
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!images:example.org"), false);
+    assert_switchbar_activity(&initial_state, &room_identity("!images:example.org"), None);
     assert_eq!(
         app.room_activity(Some("!images:example.org"))?,
         vec![image_entry_with_event_id(
@@ -8607,8 +8699,12 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
             send_state: RoomMessageSendState::Sent,
         })
     );
-    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example.org"), false);
-    assert_switchbar_activity(&initial_state, &room_identity("!media:example.org"), true);
+    assert_switchbar_activity(&initial_state, &room_identity("!alpha:example.org"), None);
+    assert_switchbar_activity(
+        &initial_state,
+        &room_identity("!media:example.org"),
+        Some(ViewActivityLevel::Message),
+    );
     let media_activity = app.room_activity(Some("!media:example.org"))?;
     assert_eq!(
         media_activity,
@@ -8650,11 +8746,7 @@ fn automation_driver_renders_unsupported_message_fixture_and_clears_activity_on_
         app.dump_model()?.selected_room.as_deref(),
         Some("!media:example.org")
     );
-    assert_switchbar_activity(
-        &activated_state,
-        &room_identity("!media:example.org"),
-        false,
-    );
+    assert_switchbar_activity(&activated_state, &room_identity("!media:example.org"), None);
 
     Ok(())
 }

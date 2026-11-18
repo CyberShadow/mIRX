@@ -251,8 +251,8 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!random:example::Random'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!lobby:example'
-        --expect-switchbar-activity 'room:!random:example'
+        --expect-switchbar-activity 'room:!lobby:example::message'
+        --expect-switchbar-activity 'room:!random:example::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!ops:example'
@@ -455,8 +455,8 @@ configure_case_expectations() {
         --expect-no-switchbar-item 'room:!social:example'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!shared:example'
-        --expect-switchbar-activity 'room:!random:example'
+        --expect-switchbar-activity 'room:!shared:example::message'
+        --expect-switchbar-activity 'room:!random:example::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!ops:example'
@@ -771,7 +771,7 @@ configure_case_expectations() {
         --expect-no-switchbar-item 'room:!work:example'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'thread:!ops:example|$thread-root'
+        --expect-switchbar-activity 'thread:!ops:example|$thread-root::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!ops:example'
@@ -970,7 +970,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!support:example::Support'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!support:example'
+        --expect-switchbar-activity 'room:!support:example::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!verify:example'
@@ -1618,8 +1618,8 @@ configure_case_expectations() {
         --expect-switchbar-item 'thread:!alpha:example|$alpha-thread-root::alpha root'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!beta:example'
-        --expect-switchbar-activity 'thread:!alpha:example|$alpha-thread-root'
+        --expect-switchbar-activity 'room:!beta:example::message'
+        --expect-switchbar-activity 'thread:!alpha:example|$alpha-thread-root::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'status'
@@ -1631,8 +1631,8 @@ configure_case_expectations() {
         --expect-navigation-text 'alpha root'
       )
       navigation_activity_expect_args=(
-        --expect-navigation-activity 'Beta'
-        --expect-navigation-activity 'Alpha/alpha root'
+        --expect-navigation-activity 'Beta::message'
+        --expect-navigation-activity 'Alpha/alpha root::message'
       )
       navigation_no_activity_expect_args=(
         --expect-no-navigation-activity 'status'
@@ -1704,9 +1704,9 @@ configure_case_expectations() {
         --expect-switchbar-item 'thread:!focus:example|$focus-root::review thread root'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!alerts:example'
-        --expect-switchbar-activity 'room:!support:example'
-        --expect-switchbar-activity 'thread:!focus:example|$focus-root'
+        --expect-switchbar-activity 'room:!alerts:example::message'
+        --expect-switchbar-activity 'room:!support:example::message'
+        --expect-switchbar-activity 'thread:!focus:example|$focus-root::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'status'
@@ -1720,9 +1720,9 @@ configure_case_expectations() {
         --expect-navigation-text 'review thread root'
       )
       navigation_activity_expect_args=(
-        --expect-navigation-activity 'Alerts'
-        --expect-navigation-activity 'Support Queue'
-        --expect-navigation-activity 'Focus/review thread root'
+        --expect-navigation-activity 'Alerts::message'
+        --expect-navigation-activity 'Support Queue::message'
+        --expect-navigation-activity 'Focus/review thread root::message'
       )
       expect_switchbar_active='room:!focus:example'
       ;;
@@ -1753,7 +1753,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!long-query:example::@very-long-direct-user-identifier-for-constrained-shell:example [query: @very-long-direct-user-identifier-for-constrained-shell:example] [e2ee]'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!long-inbox:example'
+        --expect-switchbar-activity 'room:!long-inbox:example::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'status'
@@ -1792,9 +1792,9 @@ configure_case_expectations() {
         --expect-switchbar-item 'thread:!active:example|$active-root::active thread root'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!inbox:example'
-        --expect-switchbar-activity 'room:!mentions:example'
-        --expect-switchbar-activity 'thread:!active:example|$active-root'
+        --expect-switchbar-activity 'room:!inbox:example::message'
+        --expect-switchbar-activity 'room:!mentions:example::message'
+        --expect-switchbar-activity 'thread:!active:example|$active-root::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'status'
@@ -1807,9 +1807,9 @@ configure_case_expectations() {
         --expect-navigation-text 'active thread root'
       )
       navigation_activity_expect_args=(
-        --expect-navigation-activity 'Inbox'
-        --expect-navigation-activity 'Mentions'
-        --expect-navigation-activity 'Active Focus/active thread root'
+        --expect-navigation-activity 'Inbox::message'
+        --expect-navigation-activity 'Mentions::message'
+        --expect-navigation-activity 'Active Focus/active thread root::message'
       )
       navigation_no_activity_expect_args=(
         --expect-no-navigation-activity 'status'
@@ -1893,7 +1893,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!alpha:example::Alpha [query: @alice:example] [@1 !2 *1 M]'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!alpha:example'
+        --expect-switchbar-activity 'room:!alpha:example::highlight'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!beta:example'
@@ -1963,7 +1963,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!media:example.org::Media'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!media:example.org'
+        --expect-switchbar-activity 'room:!media:example.org::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!alpha:example.org'
@@ -2004,7 +2004,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!encrypted:example.org::Encrypted'
       )
       switchbar_activity_expect_args=(
-        --expect-switchbar-activity 'room:!encrypted:example.org'
+        --expect-switchbar-activity 'room:!encrypted:example.org::message'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!alpha:example.org'
