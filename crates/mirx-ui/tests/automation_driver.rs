@@ -284,6 +284,17 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     std::thread::spawn(move || {
+        let alice_member = serde_json::json!({
+            "content": {
+                "membership": "join",
+                "displayname": "Alice"
+            },
+            "event_id": "$member",
+            "origin_server_ts": 1700000000001u64,
+            "sender": "@alice:example",
+            "state_key": "@alice:example",
+            "type": "m.room.member"
+        });
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut request = Vec::new();
@@ -346,17 +357,7 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
                                                 "state_key": "",
                                                 "type": "m.room.create"
                                             },
-                                            {
-                                                "content": {
-                                                    "membership": "join",
-                                                    "displayname": "Alice"
-                                                },
-                                                "event_id": "$member",
-                                                "origin_server_ts": 1700000000001u64,
-                                                "sender": "@alice:example",
-                                                "state_key": "@alice:example",
-                                                "type": "m.room.member"
-                                            },
+                                            alice_member,
                                             {
                                                 "content": {
                                                     "name": "Beta"
@@ -462,6 +463,19 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
                         "sender": "@alice:example",
                         "state_key": "",
                         "type": "m.room.encryption"
+                    }),
+                );
+                continue;
+            }
+
+            if path.contains("/rooms/%21beta%3Aexample/members")
+                || path.contains("/rooms/!beta:example/members")
+            {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "chunk": [alice_member]
                     }),
                 );
                 continue;
