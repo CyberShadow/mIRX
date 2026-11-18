@@ -5,8 +5,8 @@ use std::fmt;
 use mirx_core::{
     CoreErrorEvent, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
-    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
     StoredSession, UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
@@ -1104,7 +1104,9 @@ impl<'de> Deserialize<'de> for ComposeKey {
 pub(crate) struct RoomMemberView {
     pub(crate) user_id: String,
     pub(crate) display_name: Option<String>,
+    /// The bare nick; the nick list shows it after the rank prefix.
     pub(crate) label: String,
+    pub(crate) rank: RoomMemberRank,
     pub(crate) can_kick: bool,
     pub(crate) can_ban: bool,
 }
@@ -2464,10 +2466,10 @@ mod tests {
         E2eeRecoveryState, E2eeStatus, Event, Operation, RoomActivity, RoomActivityKind,
         RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
         RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-        RoomMediaSource, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-        RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomSummary, RoomTagSummary,
-        RoomVideoActivity, RoomVideoInfo, SpaceChildSummary, StoredSession,
-        UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
+        RoomMediaSource, RoomMemberRank, RoomMembership, RoomMessageActivity,
+        RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+        RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo, SpaceChildSummary,
+        StoredSession, UnsupportedRoomMessageActivity, VerificationRequest, VerificationState,
         VerificationStateEvent,
     };
     use serde_json::{Value, json};
@@ -4696,6 +4698,7 @@ mod tests {
                                     user_id: "@alice:example".to_owned(),
                                     display_name: Some("Alice".to_owned()),
                                     label: "Alice".to_owned(),
+                                    rank: RoomMemberRank::Moderator,
                                     can_kick: true,
                                     can_ban: false,
                                 }],
@@ -4813,6 +4816,7 @@ mod tests {
                                         "user_id":"@alice:example",
                                         "display_name":"Alice",
                                         "label":"Alice",
+                                        "rank":"moderator",
                                         "can_kick":true,
                                         "can_ban":false
                                     }

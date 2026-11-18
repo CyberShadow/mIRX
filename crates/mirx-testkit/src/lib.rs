@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mirx_core::{E2eeStatus, RoomMembership};
+use mirx_core::{E2eeStatus, RoomMemberRank, RoomMembership};
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1395,7 +1395,9 @@ impl<'de> Deserialize<'de> for ComposeKey {
 pub struct RoomMemberView {
     pub user_id: String,
     pub display_name: Option<String>,
+    /// The bare nick; the nick list shows it after the rank prefix.
     pub label: String,
+    pub rank: RoomMemberRank,
     pub can_kick: bool,
     pub can_ban: bool,
 }

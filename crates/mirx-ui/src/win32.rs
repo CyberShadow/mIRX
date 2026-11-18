@@ -130,7 +130,7 @@ mod timeline_text;
 
 use timeline_text::{
     TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line, event_line, member_change_text, message_line,
-    nick_label, power_levels_change_text, topic_change_text,
+    nick_label, power_levels_change_text, rank_prefix, topic_change_text,
 };
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
@@ -2317,6 +2317,7 @@ fn room_member_view_rows(members: &[RoomMemberSummary]) -> Vec<RoomMemberView> {
             user_id: member.user_id.clone(),
             display_name: member.display_name.clone(),
             label: room_member_nick(member),
+            rank: member.rank,
             can_kick: member.can_kick,
             can_ban: member.can_ban,
         })
@@ -4509,10 +4510,12 @@ unsafe fn timeline_top_line_for_source_row_index(
         .sum()
 }
 
+/// Fills the nick list in `rows` order: rows are looked up by list index, so
+/// the list must not sort itself.
 unsafe fn set_room_member_list(hwnd: HWND, rows: &[RoomMemberView]) {
     SendMessageW(hwnd, LB_RESETCONTENT, 0, 0);
     for row in rows {
-        let label = wide_null(&row.label);
+        let label = wide_null(&format!("{}{}", rank_prefix(row.rank), row.label));
         SendMessageW(hwnd, LB_ADDSTRING, 0, label.as_ptr() as LPARAM);
     }
 }
@@ -18006,6 +18009,28 @@ mod tests {
         assert_eq!(
             labels,
             vec!["Alex (@alex:example)", "Bo", "Bo", "@nameless:example"]
+        );
+    }
+
+    #[test]
+    fn member_view_rows_keep_core_order_and_carry_rank_beside_the_bare_label() {
+        let ranked = |user_id: &str, name: &str, rank| RoomMemberSummary {
+            rank,
+            ..member_summary(user_id, Some(name), false)
+        };
+        let rows = room_member_view_rows(&[
+            ranked("@zed:example", "Zed", RoomMemberRank::Moderator),
+            ranked("@amy:example", "Amy", RoomMemberRank::Voiced),
+        ]);
+
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.label.as_str(), row.rank))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Zed", RoomMemberRank::Moderator),
+                ("Amy", RoomMemberRank::Voiced)
+            ]
         );
     }
 

@@ -14,7 +14,7 @@ use mirx_core::{
     RoomHistoryBackfill as CoreRoomHistoryBackfill,
     RoomHistoryBackfillEvent as CoreRoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia,
     RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind,
-    RoomMediaSource as CoreRoomMediaSource, RoomMembership, RoomReadState,
+    RoomMediaSource as CoreRoomMediaSource, RoomMemberRank, RoomMembership, RoomReadState,
 };
 use mirx_testkit::{
     BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
@@ -681,6 +681,7 @@ fn data_models_round_trip_through_json() {
                         user_id: "@alice:example".to_owned(),
                         display_name: Some("Alice".to_owned()),
                         label: "Alice".to_owned(),
+                        rank: RoomMemberRank::Voiced,
                         can_kick: true,
                         can_ban: false,
                     }],
@@ -928,6 +929,7 @@ fn data_models_round_trip_through_json() {
                                 "user_id": "@alice:example",
                                 "display_name": "Alice",
                                 "label": "Alice",
+                                "rank": "voiced",
                                 "can_kick": true,
                                 "can_ban": false,
                             }
@@ -5558,6 +5560,7 @@ fn data_models_reject_unknown_fields() {
             "user_id":"@alice:example",
             "display_name":"Alice",
             "label":"Alice",
+            "rank":"member",
             "can_kick":true,
             "can_ban":false,
             "unexpected":true
@@ -5571,6 +5574,7 @@ fn data_models_reject_unknown_fields() {
             "user_id":"@alice:example",
             "display_name":"Alice",
             "label":"Alice",
+            "rank":"member",
             "can_ban":false
         }"#
         )
@@ -5582,10 +5586,39 @@ fn data_models_reject_unknown_fields() {
             "user_id":"@alice:example",
             "display_name":"Alice",
             "label":"Alice",
+            "rank":"member",
             "can_kick":true
         }"#
         )
         .is_err()
+    );
+    assert!(
+        serde_json::from_str::<RoomMemberView>(
+            r#"{
+            "user_id":"@alice:example",
+            "display_name":"Alice",
+            "label":"Alice",
+            "can_kick":true,
+            "can_ban":false
+        }"#
+        )
+        .is_err(),
+        "room member view must require rank"
+    );
+    assert_eq!(
+        serde_json::from_str::<RoomMemberView>(
+            r#"{
+            "user_id":"@alice:example",
+            "display_name":"Alice",
+            "label":"Alice",
+            "rank":"creator",
+            "can_kick":true,
+            "can_ban":false
+        }"#
+        )
+        .expect("complete room member view")
+        .rank,
+        RoomMemberRank::Creator
     );
     assert!(
         serde_json::from_str::<StatusBarState>(

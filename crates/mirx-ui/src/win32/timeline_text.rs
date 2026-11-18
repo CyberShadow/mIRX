@@ -5,7 +5,7 @@
 //! list, and the typing indicator. Ambiguity itself is decided by mirx-core.
 
 use mirx_core::{
-    RoomMemberChange, RoomMessagePresentationKind, RoomPowerLevelUserChange,
+    RoomMemberChange, RoomMemberRank, RoomMessagePresentationKind, RoomPowerLevelUserChange,
     RoomPowerLevelValueChange, RoomUserProfile,
 };
 
@@ -22,6 +22,21 @@ pub(super) fn nick_label(user_id: &str, display_name: Option<&str>, ambiguous: b
             }
         }
         _ => user_id.to_owned(),
+    }
+}
+
+/// The nick list prefix for a rank, after the IRCd convention `~` owner,
+/// `&` admin, `@` op, `+` voice. Matrix's default kick and ban level is 50,
+/// which is what IRC ops can do, so moderators are `@`; IRC bridges such as
+/// matrix-appservice-irc map `+o` to power level 50 likewise, and
+/// weechat-matrix shows the same `& @ +` prefixes.
+pub(super) fn rank_prefix(rank: RoomMemberRank) -> &'static str {
+    match rank {
+        RoomMemberRank::Creator => "~",
+        RoomMemberRank::Administrator => "&",
+        RoomMemberRank::Moderator => "@",
+        RoomMemberRank::Voiced => "+",
+        RoomMemberRank::Member => "",
     }
 }
 
@@ -296,6 +311,15 @@ mod tests {
             text(RoomMemberChange::AvatarChanged, &carol, None),
             "Carol changed avatar"
         );
+    }
+
+    #[test]
+    fn rank_prefix_follows_ircd_convention() {
+        assert_eq!(rank_prefix(RoomMemberRank::Creator), "~");
+        assert_eq!(rank_prefix(RoomMemberRank::Administrator), "&");
+        assert_eq!(rank_prefix(RoomMemberRank::Moderator), "@");
+        assert_eq!(rank_prefix(RoomMemberRank::Voiced), "+");
+        assert_eq!(rank_prefix(RoomMemberRank::Member), "");
     }
 
     #[test]

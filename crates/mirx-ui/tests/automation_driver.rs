@@ -55,9 +55,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect,
     GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO,
-    SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    GetWindowThreadProcessId, IsWindow, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN, PostMessageW,
+    SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW, WM_CHAR,
+    WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
+    WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -317,6 +318,17 @@ fn spawn_mock_homeserver(
             "state_key": "@alice:example",
             "type": "m.room.member"
         });
+        let bob_member = serde_json::json!({
+            "content": {
+                "membership": "join",
+                "displayname": "Bob"
+            },
+            "event_id": "$bob-member",
+            "origin_server_ts": 1700000000004u64,
+            "sender": "@bob:example",
+            "state_key": "@bob:example",
+            "type": "m.room.member"
+        });
         for mut stream in listener.incoming().flatten() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
             let mut request = Vec::new();
@@ -363,7 +375,7 @@ fn spawn_mock_homeserver(
                             "join": {
                                 "!beta:example": {
                                     "summary": {
-                                        "m.joined_member_count": 1,
+                                        "m.joined_member_count": 2,
                                         "m.invited_member_count": 0
                                     },
                                     "state": {
@@ -380,6 +392,20 @@ fn spawn_mock_homeserver(
                                                 "type": "m.room.create"
                                             },
                                             alice_member,
+                                            bob_member,
+                                            {
+                                                "content": {
+                                                    "users": {
+                                                        "@alice:example": 100,
+                                                        "@bob:example": 50
+                                                    }
+                                                },
+                                                "event_id": "$power",
+                                                "origin_server_ts": 1700000000005u64,
+                                                "sender": "@alice:example",
+                                                "state_key": "",
+                                                "type": "m.room.power_levels"
+                                            },
                                             {
                                                 "content": {
                                                     "name": "Beta"
@@ -497,7 +523,7 @@ fn spawn_mock_homeserver(
                     &mut stream,
                     200,
                     &serde_json::json!({
-                        "chunk": [alice_member]
+                        "chunk": [alice_member, bob_member]
                     }),
                 );
                 continue;
@@ -3755,6 +3781,98 @@ fn automation_driver_power_level_change_renders_mode_line() -> Result<(), Box<dy
 }
 
 #[test]
+fn automation_driver_member_list_shows_rank_prefixes_in_rank_order()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("member-ranks.json");
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            fixture_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!ranks:example")?;
+    let expected = [
+        "~Creator",
+        "&Admin",
+        "@Mod",
+        "+Voice",
+        "@ghost:example",
+        "Alan",
+        "Alice",
+        "Casey",
+        "Sam (@sam-one:example)",
+        "Sam (@sam-two:example)",
+    ];
+    assert_eq!(
+        unsafe { listbox_texts(active_room_member_list_hwnd(&app)) },
+        expected
+    );
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &room_identity("!ranks:example"));
+    assert_eq!(
+        view.members
+            .iter()
+            .map(|member| (member.label.as_str(), member.rank))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Creator", RoomMemberRank::Creator),
+            ("Admin", RoomMemberRank::Administrator),
+            ("Mod", RoomMemberRank::Moderator),
+            ("Voice", RoomMemberRank::Voiced),
+            ("@ghost:example", RoomMemberRank::Member),
+            ("Alan", RoomMemberRank::Member),
+            ("Alice", RoomMemberRank::Member),
+            ("Casey", RoomMemberRank::Member),
+            ("Sam (@sam-one:example)", RoomMemberRank::Member),
+            ("Sam (@sam-two:example)", RoomMemberRank::Member),
+        ]
+    );
+    assert!(view_contains(
+        view,
+        "[22:14] * Admin sets power level: Mod 0 -> 50, Voice 0 -> 10; default 10 -> 0"
+    ));
+    assert!(view_contains(
+        view,
+        "[22:15] * Admin changes room permissions"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn automation_driver_member_list_ranks_members_from_synced_power_levels()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+
+    assert_eq!(
+        unsafe { listbox_texts(active_room_member_list_hwnd(&app)) },
+        ["&Alice", "@Bob"]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_renders_every_membership_change_in_mirc_format()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -5330,6 +5448,24 @@ unsafe fn active_room_timeline_hwnd(app: &MirxApp) -> HWND {
 
 unsafe fn active_room_member_list_hwnd(app: &MirxApp) -> HWND {
     unsafe { child_window_with_class(active_mdi_content_hwnd(app), "ListBox") }
+}
+
+/// The entries the nick list control itself shows, read back with
+/// `LB_GETTEXT` rather than from the automation model.
+unsafe fn listbox_texts(hwnd: HWND) -> Vec<String> {
+    let count = unsafe { SendMessageW(hwnd, LB_GETCOUNT, 0, 0) };
+    assert!(count >= 0, "LB_GETCOUNT must succeed");
+    (0..count as usize)
+        .map(|index| {
+            let len = unsafe { SendMessageW(hwnd, LB_GETTEXTLEN, index, 0) };
+            assert!(len >= 0, "LB_GETTEXTLEN must succeed for item {index}");
+            let mut buffer = vec![0u16; len as usize + 1];
+            let copied =
+                unsafe { SendMessageW(hwnd, LB_GETTEXT, index, buffer.as_mut_ptr() as isize) };
+            assert_eq!(copied, len, "LB_GETTEXT must copy item {index}");
+            String::from_utf16_lossy(&buffer[..copied as usize])
+        })
+        .collect()
 }
 
 unsafe fn child_window_with_class(parent: HWND, expected_class_name: &str) -> HWND {

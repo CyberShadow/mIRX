@@ -1529,6 +1529,40 @@ configure_case_expectations() {
         --expect-no-navigation-text 'member list context line'
       )
       ;;
+    member-ranks)
+      expect_selected='!ranks:example'
+      expect_active_view='room:!ranks:example'
+      room_expect_args=(
+        --expect-room '!ranks:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ranks:example::Room: Ranks (!ranks:example)'
+        --expect-room-view '!ranks:example::[22:13] <Creator> ranks sort above names'
+        --expect-room-view '!ranks:example::[22:14] * Admin sets power level: Mod 0 -> 50, Voice 0 -> 10; default 10 -> 0'
+        --expect-room-view '!ranks:example::[22:15] * Admin changes room permissions'
+        --expect-room-view '!ranks:example::[22:16] <Sam (@sam-one:example)> shared names still show the user ID'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!ranks:example::Creator'
+        --expect-room-member '!ranks:example::Admin'
+        --expect-room-member '!ranks:example::Mod'
+        --expect-room-member '!ranks:example::Voice'
+        --expect-room-member '!ranks:example::@ghost:example'
+        --expect-room-member '!ranks:example::Sam (@sam-two:example)'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ranks:example::Ranks'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'room:!ranks:example'
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!ranks:example'
+      navigation_forbid_args=(
+        --expect-no-navigation-text 'ranks sort above names'
+      )
+      ;;
     member-list-narrow)
       expect_selected='!members:example'
       expect_active_view='room:!members:example'

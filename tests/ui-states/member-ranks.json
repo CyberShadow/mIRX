@@ -1,0 +1,230 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ranks:example",
+        "display_name": "Ranks",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ranks:example",
+      "activity_id": "event:$ranks-1",
+      "timestamp_ms": 1700000000000,
+      "kind": {
+        "type": "message",
+        "event_id": "$ranks-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@creator:example",
+          "display_name": "Creator",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "ranks sort above names",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ranks:example",
+      "activity_id": "state:$ranks-power-1",
+      "timestamp_ms": 1700000060000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$ranks-power-1",
+        "sender": {
+          "user_id": "@admin:example",
+          "display_name": "Admin",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "power_levels",
+          "changes": [
+            {
+              "target": {
+                "user_id": "@mod:example",
+                "display_name": "Mod",
+                "display_name_ambiguous": false
+              },
+              "old": 0,
+              "new": 50
+            },
+            {
+              "target": {
+                "user_id": "@voice:example",
+                "display_name": "Voice",
+                "display_name_ambiguous": false
+              },
+              "old": 0,
+              "new": 10
+            }
+          ],
+          "users_default": {
+            "old": 10,
+            "new": 0
+          },
+          "other_permissions_changed": false
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ranks:example",
+      "activity_id": "state:$ranks-power-2",
+      "timestamp_ms": 1700000120000,
+      "kind": {
+        "type": "state_notice",
+        "event_id": "$ranks-power-2",
+        "sender": {
+          "user_id": "@admin:example",
+          "display_name": "Admin",
+          "display_name_ambiguous": false
+        },
+        "content": {
+          "type": "power_levels",
+          "changes": [],
+          "users_default": null,
+          "other_permissions_changed": true
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ranks:example",
+      "activity_id": "event:$ranks-2",
+      "timestamp_ms": 1700000180000,
+      "kind": {
+        "type": "message",
+        "event_id": "$ranks-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@sam-one:example",
+          "display_name": "Sam",
+          "display_name_ambiguous": true
+        },
+        "presentation": "text",
+        "body": "shared names still show the user ID",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!ranks:example",
+      "members": [
+        {
+          "user_id": "@creator:example",
+          "display_name": "Creator",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "creator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@admin:example",
+          "display_name": "Admin",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "administrator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@mod:example",
+          "display_name": "Mod",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "moderator",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@voice:example",
+          "display_name": "Voice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "voiced",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@ghost:example",
+          "display_name": null,
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@alan:example",
+          "display_name": "Alan",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@casey:example",
+          "display_name": "Casey",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@sam-one:example",
+          "display_name": "Sam",
+          "display_name_ambiguous": true,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@sam-two:example",
+          "display_name": "Sam",
+          "display_name_ambiguous": true,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        }
+      ]
+    }
+  }
+]
