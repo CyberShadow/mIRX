@@ -138,8 +138,9 @@ mod timeline_text;
 use nick_completion::{NickCompletion, member_mention_text};
 
 use timeline_text::{
-    TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line, event_line, member_change_text, message_line,
-    nick_label, power_levels_change_text, rank_prefix, topic_change_text,
+    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line,
+    context_line, event_line, invited_text, member_change_text, message_line, nick_label,
+    now_talking_text, power_levels_change_text, rank_prefix, topic_change_text, topic_is_text,
 };
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
@@ -329,8 +330,10 @@ enum TimelineRowIdentity {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TimelineSyntheticRowLabel {
-    Header,
+    NowTalking,
     Topic,
+    Encryption,
+    Invite,
     Typing,
     Backfill,
     Context,
@@ -359,8 +362,6 @@ impl TimelineRowIdentity {
 
     fn default_for_row(kind: &TimelineRowKind, logical_text: &str) -> Self {
         let label = match kind {
-            TimelineRowKind::Header => TimelineSyntheticRowLabel::Header,
-            TimelineRowKind::Topic => TimelineSyntheticRowLabel::Topic,
             TimelineRowKind::Typing => TimelineSyntheticRowLabel::Typing,
             TimelineRowKind::Plain => TimelineSyntheticRowLabel::Plain,
             _ => TimelineSyntheticRowLabel::Context,
@@ -382,7 +383,7 @@ struct TimelineRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TimelineRowLayout {
-    /// Context rows (headers, topic, typing): one painted line per text line.
+    /// Context rows (typing, history backfill): one painted line per text line.
     FullWidth,
     /// mIRC log lines: wrapped to the view, continuation lines indented past
     /// the timestamp.
@@ -427,8 +428,10 @@ impl TimelineRow {
 /// Rows for lines other users wrote carry `highlight`: the user's push
 /// rules highlighted the line, so it is drawn in the highlight colour.
 enum TimelineRowKind {
-    Header,
-    Topic,
+    /// mIRC's green event lines, such as `* Now talking in` and `* Topic is`.
+    Event,
+    /// mIRC's navy info lines.
+    Info,
     Typing,
     ReactionSummary,
     Message {
@@ -4845,7 +4848,7 @@ fn timeline_history_backfill_anchor_row_index(
 fn timeline_row_is_fixed_room_context(row: &TimelineRow) -> bool {
     matches!(
         &row.kind,
-        TimelineRowKind::Header | TimelineRowKind::Topic | TimelineRowKind::Typing
+        TimelineRowKind::Event | TimelineRowKind::Info | TimelineRowKind::Typing
     )
 }
 
@@ -5045,6 +5048,7 @@ const MIRC_RED: u32 = rgb(255, 0, 0);
 const MIRC_BLUE: u32 = rgb(0, 0, 252);
 const MIRC_PURPLE: u32 = rgb(156, 0, 156);
 const MIRC_GREEN: u32 = rgb(0, 147, 0);
+const MIRC_NAVY: u32 = rgb(0, 0, 127);
 
 // mIRC's switchbar/treebar activity colours (Options > Display > Event,
 // Message, Highlight): an inactive window's button text takes the colour of
@@ -5076,8 +5080,9 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         | TimelineRowKind::Video { highlight: true }
         | TimelineRowKind::Unsupported { highlight: true }
         | TimelineRowKind::StateNotice { highlight: true } => ACTIVITY_HIGHLIGHT_COLOR,
-        TimelineRowKind::Header | TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
-        TimelineRowKind::Topic => rgb(0x4A, 0x42, 0x2A),
+        TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
+        TimelineRowKind::Event => MIRC_GREEN,
+        TimelineRowKind::Info => MIRC_NAVY,
         TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
         TimelineRowKind::ReactionSummary => rgb(0x6B, 0x6B, 0x6B),
         TimelineRowKind::Message {
@@ -8062,69 +8067,79 @@ fn append_room_read_state_tokens(label: &mut String, read_state: Option<&RoomRea
     label.push(']');
 }
 
-fn build_room_timeline_header(room: &RoomSummary) -> TimelineRow {
-    let mut header = format!("Room: {}", room.display_name);
-    append_room_label_markers(&mut header, room);
-    header.push_str(&format!(" ({})", room.room_id));
-    TimelineRow::full_width(TimelineRowKind::Header, header.clone()).with_identity(
-        TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Header, &header),
-    )
+fn room_context_row(
+    kind: TimelineRowKind,
+    label: TimelineSyntheticRowLabel,
+    body: &str,
+) -> TimelineRow {
+    let text = context_line(body);
+    TimelineRow::log(kind, text.clone()).with_identity(TimelineRowIdentity::synthetic(label, &text))
 }
 
 fn build_invite_timeline_rows(room: &RoomSummary) -> Vec<TimelineRow> {
-    let invite_header = format!("Invitation to {}", room.display_name);
     vec![
-        TimelineRow::full_width(TimelineRowKind::Header, invite_header.clone()).with_identity(
-            TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Header, &invite_header),
+        room_context_row(
+            TimelineRowKind::Info,
+            TimelineSyntheticRowLabel::Invite,
+            &invited_text(&room.display_name),
         ),
-        TimelineRow::full_width(
-            TimelineRowKind::Plain,
-            "Use /accept or /reject to respond.".to_owned(),
-        )
-        .with_identity(TimelineRowIdentity::synthetic(
-            TimelineSyntheticRowLabel::Context,
-            "Use /accept or /reject to respond.",
-        )),
+        room_context_row(
+            TimelineRowKind::Info,
+            TimelineSyntheticRowLabel::Invite,
+            INVITE_RESPONSE_TEXT,
+        ),
     ]
 }
 
+/// The lines mIRC prints when a channel window opens.
 fn push_room_context_rows(
     rows: &mut Vec<TimelineRow>,
     room: &RoomSummary,
     room_view: Option<&RoomViewModel>,
 ) {
-    rows.push(build_room_timeline_header(room));
-
+    rows.push(room_context_row(
+        TimelineRowKind::Event,
+        TimelineSyntheticRowLabel::NowTalking,
+        &now_talking_text(&room.display_name, &room.room_id),
+    ));
     if let Some(topic) = room_view.and_then(|view| view.topic.as_deref()) {
-        let logical_text = format!("Topic: {topic}");
-        rows.push(
-            TimelineRow::full_width(TimelineRowKind::Topic, logical_text.clone()).with_identity(
-                TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Topic, &logical_text),
-            ),
-        );
+        rows.push(room_context_row(
+            TimelineRowKind::Event,
+            TimelineSyntheticRowLabel::Topic,
+            &topic_is_text(topic),
+        ));
     }
+    if room.encrypted {
+        rows.push(room_context_row(
+            TimelineRowKind::Info,
+            TimelineSyntheticRowLabel::Encryption,
+            ENCRYPTED_ROOM_TEXT,
+        ));
+    }
+}
 
-    if let Some(room_view) = room_view
-        && !room_view.typing_user_ids.is_empty()
-    {
-        let users = room_view
-            .typing_user_ids
-            .iter()
-            .map(|user_id| room_view.member_nick(user_id))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let verb = if room_view.typing_user_ids.len() == 1 {
-            "is"
-        } else {
-            "are"
-        };
-        let logical_text = format!("* {users} {verb} typing");
-        rows.push(
-            TimelineRow::full_width(TimelineRowKind::Typing, logical_text.clone()).with_identity(
-                TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Typing, &logical_text),
-            ),
-        );
+/// Who is typing, below the newest line.
+fn push_room_typing_row(rows: &mut Vec<TimelineRow>, room_view: &RoomViewModel) {
+    if room_view.typing_user_ids.is_empty() {
+        return;
     }
+    let users = room_view
+        .typing_user_ids
+        .iter()
+        .map(|user_id| room_view.member_nick(user_id))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let verb = if room_view.typing_user_ids.len() == 1 {
+        "is"
+    } else {
+        "are"
+    };
+    let logical_text = context_line(&format!("{users} {verb} typing"));
+    rows.push(
+        TimelineRow::full_width(TimelineRowKind::Typing, logical_text.clone()).with_identity(
+            TimelineRowIdentity::synthetic(TimelineSyntheticRowLabel::Typing, &logical_text),
+        ),
+    );
 }
 
 fn push_room_history_backfill_row(rows: &mut Vec<TimelineRow>, history: &RoomHistoryBackfillState) {
@@ -8341,6 +8356,7 @@ fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> 
         for activity in &room_view.activities {
             push_room_activity_row(&mut rows, Some(room_view), activity);
         }
+        push_room_typing_row(&mut rows, room_view);
     }
 
     rows
@@ -8363,6 +8379,7 @@ fn build_thread_timeline_rows(
             push_room_activity_row(&mut rows, Some(room_view), activity);
         }
     }
+    push_room_typing_row(&mut rows, room_view);
     rows
 }
 
@@ -15846,8 +15863,8 @@ mod tests {
         apply_core_event(&mut state, Event::SyncedRooms(vec![summary.clone()])).unwrap();
         let initial =
             project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
-        assert!(initial.contains(&"Room: Ops (!ops:example)".to_owned()));
-        assert!(initial.contains(&"Topic: incident review".to_owned()));
+        assert!(initial.contains(&"* Now talking in Ops (!ops:example)".to_owned()));
+        assert!(initial.contains(&"* Topic is 'incident review'".to_owned()));
         assert!(
             !initial
                 .iter()
@@ -15857,19 +15874,19 @@ mod tests {
         apply_core_event(&mut state, topic_state("!ops:example", "deployment window")).unwrap();
         let updated =
             project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
-        assert!(updated.contains(&"Topic: deployment window".to_owned()));
+        assert!(updated.contains(&"* Topic is 'deployment window'".to_owned()));
         assert!(
             updated
                 .iter()
                 .any(|line| line.contains("changes topic to 'deployment window'"))
         );
-        assert!(!updated.contains(&"Topic: incident review".to_owned()));
+        assert!(!updated.contains(&"* Topic is 'incident review'".to_owned()));
 
         summary.topic = None;
         apply_core_event(&mut state, Event::SyncedRooms(vec![summary])).unwrap();
         let cleared =
             project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
-        assert!(!cleared.iter().any(|line| line.starts_with("Topic: ")));
+        assert!(!cleared.iter().any(|line| line.starts_with("* Topic is ''")));
     }
 
     fn member_state(
@@ -16717,7 +16734,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves (sending)".to_owned(),
             ]
         );
@@ -16769,7 +16786,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
             ]
         );
@@ -16823,7 +16840,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example edited body".to_owned(),
             ]
         );
@@ -17051,7 +17068,7 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Header,
+                TimelineRowKind::Event,
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
@@ -17063,7 +17080,7 @@ mod tests {
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x1".to_owned(),
             ]
@@ -17135,7 +17152,7 @@ mod tests {
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x1  eyes x1  heart x2".to_owned(),
             ]
@@ -17293,7 +17310,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x2  heart x1".to_owned(),
             ]
@@ -17314,7 +17331,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
                 "    reactions: +1 x1  heart x1".to_owned(),
             ]
@@ -17363,14 +17380,14 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Header,
+                TimelineRowKind::Event,
                 TimelineRowKind::StateNotice { highlight: false }
             ]
         );
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * message redacted".to_owned(),
             ]
         );
@@ -17516,7 +17533,7 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Header,
+                TimelineRowKind::Event,
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
@@ -17534,7 +17551,7 @@ mod tests {
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:14] <@alice:example> root msg".to_owned(),
                 "    reactions: heart x1".to_owned(),
                 "[22:15] <@alice:example> thread rep".to_owned(),
@@ -17709,7 +17726,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves".to_owned(),
             ]
         );
@@ -17787,7 +17804,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves".to_owned(),
             ]
         );
@@ -17847,7 +17864,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves (failed)".to_owned(),
             ]
         );
@@ -17887,7 +17904,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves (failed)".to_owned(),
             ]
         );
@@ -18359,9 +18376,9 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Header,
-                TimelineRowKind::Topic,
-                TimelineRowKind::Typing,
+                TimelineRowKind::Event,
+                TimelineRowKind::Event,
+                TimelineRowKind::Info,
                 TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
@@ -18394,6 +18411,7 @@ mod tests {
                 TimelineRowKind::Unsupported { highlight: false },
                 TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::Typing,
             ]
         );
         assert_eq!(
@@ -18403,9 +18421,9 @@ mod tests {
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
-                "Room: Ops [e2ee] (!ops:example)".to_owned(),
-                "Topic: incident review".to_owned(),
-                "* @alice:example.org, @bob:example.org are typing".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
+                "* Topic is 'incident review'".to_owned(),
+                "* Messages in this room are end-to-end encrypted".to_owned(),
                 "[22:14] * @alice:example changes topic to 'incident review'".to_owned(),
                 "[22:13] <@alice:example> <body>".to_owned(),
                 "[22:13] -@alice:example- maintenance window".to_owned(),
@@ -18422,10 +18440,12 @@ mod tests {
                     .to_owned(),
                 "[22:15] * Joins: carol (@carol:example)".to_owned(),
                 "[22:15] * Parts: @dave:example".to_owned(),
+                "* @alice:example.org, @bob:example.org are typing".to_owned(),
             ]
         );
-        assert_eq!(rows[0].layout, TimelineRowLayout::FullWidth);
-        for row in &rows[4..] {
+        let (typing, log_rows) = rows.split_last().expect("rows end with the typing row");
+        assert_eq!(typing.layout, TimelineRowLayout::FullWidth);
+        for row in log_rows {
             assert_eq!(row.layout, TimelineRowLayout::Log, "{}", row.logical_text);
         }
     }
@@ -18618,9 +18638,9 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops [e2ee] (!ops:example)".to_owned(),
-                "Topic: incident review".to_owned(),
-                "* @alice:example.org, @bob:example.org are typing".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
+                "* Topic is 'incident review'".to_owned(),
+                "* Messages in this room are end-to-end encrypted".to_owned(),
                 "[22:14] * @alice:example changes topic to 'incident review'".to_owned(),
                 "[22:13] <@alice:example> <body>".to_owned(),
                 "[22:13] -@alice:example- maintenance window".to_owned(),
@@ -18628,6 +18648,7 @@ mod tests {
                 "[22:15] * Joins: carol (@carol:example)".to_owned(),
                 "[22:15] * Parts: @dave:example".to_owned(),
                 "[22:15] * erin was banned by @alice:example".to_owned(),
+                "* @alice:example.org, @bob:example.org are typing".to_owned(),
             ]
         );
     }
@@ -18656,9 +18677,8 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Header,
-                TimelineRowKind::Topic,
-                TimelineRowKind::Typing,
+                TimelineRowKind::Event,
+                TimelineRowKind::Event,
                 TimelineRowKind::Plain,
                 TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::Message {
@@ -18666,9 +18686,10 @@ mod tests {
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
                 },
+                TimelineRowKind::Typing,
             ]
         );
-        assert_eq!(rows[3].logical_text, "* Loading older history...");
+        assert_eq!(rows[2].logical_text, "* Loading older history...");
     }
 
     #[test]
@@ -18695,9 +18716,9 @@ mod tests {
 
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
 
-        assert_eq!(rows[3].kind, TimelineRowKind::Plain);
+        assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(
-            rows[3].logical_text,
+            rows[2].logical_text,
             "* Unable to load older history: homeserver unavailable. Scroll to top to retry."
         );
     }
@@ -18723,8 +18744,8 @@ mod tests {
 
         let rows = build_room_timeline_rows(&state.model, "!ops:example");
 
-        assert_eq!(rows[3].kind, TimelineRowKind::Plain);
-        assert_eq!(rows[3].logical_text, "* No older history available.");
+        assert_eq!(rows[2].kind, TimelineRowKind::Plain);
+        assert_eq!(rows[2].logical_text, "* No older history available.");
     }
 
     #[test]
@@ -18744,15 +18765,15 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Header,
-                TimelineRowKind::Topic,
-                TimelineRowKind::Typing,
+                TimelineRowKind::Event,
+                TimelineRowKind::Event,
                 TimelineRowKind::StateNotice { highlight: false },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
                 },
+                TimelineRowKind::Typing,
             ]
         );
         assert!(
@@ -18946,29 +18967,24 @@ mod tests {
     }
 
     #[test]
-    fn render_room_lines_include_query_marker_for_direct_rooms() {
+    fn room_opening_lines_leave_label_markers_to_the_caption() {
         let mut state = test_state();
         let mut direct_room = room("!direct:example", "Direct", true);
         direct_room.is_direct = true;
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         state.model.rooms = vec![direct_room];
 
+        let rows = build_room_timeline_rows(&state.model, "!direct:example");
         assert_eq!(
-            render_room_lines(&state.model, "!direct:example"),
-            vec!["Room: Direct [query: @alice:example] [e2ee] (!direct:example)".to_owned()]
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![TimelineRowKind::Event, TimelineRowKind::Info]
         );
-    }
-
-    #[test]
-    fn render_room_lines_use_query_fallback_for_direct_rooms_without_user_ids() {
-        let mut state = test_state();
-        let mut direct_room = room("!direct:example", "Direct", true);
-        direct_room.is_direct = true;
-        state.model.rooms = vec![direct_room];
-
         assert_eq!(
-            render_room_lines(&state.model, "!direct:example"),
-            vec!["Room: Direct [query] [e2ee] (!direct:example)".to_owned()]
+            project_timeline_rows(&rows),
+            vec![
+                "* Now talking in Direct (!direct:example)".to_owned(),
+                "* Messages in this room are end-to-end encrypted".to_owned(),
+            ]
         );
     }
 
@@ -18992,7 +19008,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[16:00] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
             ]
@@ -19017,7 +19033,8 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops [e2ee] (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
+                "* Messages in this room are end-to-end encrypted".to_owned(),
                 "[16:00] * @alice:example.org sent an encrypted message that could not be decrypted"
                     .to_owned(),
             ]
@@ -19085,7 +19102,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)"
                     .to_owned(),
             ]
@@ -19114,7 +19131,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "[16:00] * @alice:example.org sent image: diagram.png".to_owned(),
             ]
         );
@@ -19753,6 +19770,40 @@ mod tests {
                 message: "unavailable".to_owned(),
             })
         );
+    }
+
+    #[test]
+    fn thread_rows_open_like_the_room_and_end_with_typing() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", true)];
+        apply_core_event(&mut state, topic_state("!ops:example", "incident review")).unwrap();
+        let mut event = video_message("!ops:example", "$thread-video:example.org");
+        let Event::RoomActivity(activity) = &mut event else {
+            unreachable!("video message must create a room activity");
+        };
+        activity.relation = Some(thread_relation("$thread-root:example.org"));
+        apply_core_event(&mut state, event).unwrap();
+        apply_core_event(
+            &mut state,
+            typing_event("!ops:example", &["@alice:example.org"]),
+        )
+        .unwrap();
+
+        let rows =
+            build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
+        let lines = project_timeline_rows(&rows);
+        assert_eq!(
+            lines[..3],
+            [
+                "* Now talking in Ops (!ops:example)".to_owned(),
+                "* Topic is 'incident review'".to_owned(),
+                "* Messages in this room are end-to-end encrypted".to_owned(),
+            ]
+        );
+        assert!(matches!(rows[3].kind, TimelineRowKind::Video { .. }));
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[4].kind, TimelineRowKind::Typing);
+        assert_eq!(lines[4], "* @alice:example.org is typing");
     }
 
     #[test]
@@ -20516,7 +20567,7 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!ops:example"),
             vec![
-                "Room: Ops (!ops:example)".to_owned(),
+                "* Now talking in Ops (!ops:example)".to_owned(),
                 "* @alice:example.org is typing".to_owned(),
             ]
         );
@@ -20734,8 +20785,11 @@ mod tests {
     #[test]
     fn history_backfill_anchor_skips_only_fixed_room_context() {
         let rows = vec![
-            TimelineRow::full_width(TimelineRowKind::Header, "Room: Beta".to_owned()),
-            TimelineRow::full_width(TimelineRowKind::Topic, "Topic: incident".to_owned()),
+            TimelineRow::log(
+                TimelineRowKind::Event,
+                "* Now talking in Beta (!beta:example)".to_owned(),
+            ),
+            TimelineRow::log(TimelineRowKind::Event, "* Topic is 'incident'".to_owned()),
             TimelineRow::full_width(
                 TimelineRowKind::ReactionSummary,
                 "    reactions: 👍 x1".to_owned(),
@@ -22433,12 +22487,12 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Room: Ops (!ops:example)"))
+                .any(|line| line.contains("* Now talking in Ops (!ops:example)"))
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("Topic: incident review"))
+                .any(|line| line.contains("* Topic is 'incident review'"))
         );
         assert!(lines.iter().any(|line| line.contains("root msg")));
         assert!(lines.iter().any(|line| line.contains("thread rep")));
@@ -26517,8 +26571,8 @@ mod tests {
         assert_eq!(
             render_room_lines(&state.model, "!room:example"),
             vec![
-                "Room: Room (!room:example)".to_owned(),
-                "Topic: existing topic".to_owned(),
+                "* Now talking in Room (!room:example)".to_owned(),
+                "* Topic is 'existing topic'".to_owned(),
                 "[22:14] * @alice:example changes topic to 'existing topic'".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
             ]

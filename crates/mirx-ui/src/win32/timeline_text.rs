@@ -83,6 +83,30 @@ pub(super) fn event_line(timestamp: &str, body: &str) -> String {
     format!("{timestamp} * {body}")
 }
 
+/// A line about the window itself rather than a timed event, such as the
+/// lines mIRC prints when a channel window opens: `* body`, no timestamp.
+pub(super) fn context_line(body: &str) -> String {
+    format!("* {body}")
+}
+
+/// mIRC's first line in a channel window, with the room ID standing in for
+/// the channel name a Matrix display name cannot uniquely give.
+pub(super) fn now_talking_text(display_name: &str, room_id: &str) -> String {
+    format!("Now talking in {display_name} ({room_id})")
+}
+
+pub(super) fn topic_is_text(topic: &str) -> String {
+    format!("Topic is '{topic}'")
+}
+
+pub(super) const ENCRYPTED_ROOM_TEXT: &str = "Messages in this room are end-to-end encrypted";
+
+pub(super) fn invited_text(display_name: &str) -> String {
+    format!("You are invited to join {display_name}")
+}
+
+pub(super) const INVITE_RESPONSE_TEXT: &str = "Use /accept or /reject to respond.";
+
 pub(super) fn topic_change_text(sender: &RoomUserProfile, topic: &str) -> String {
     format!("{} changes topic to '{topic}'", profile_nick(sender))
 }
@@ -216,6 +240,22 @@ mod tests {
         assert_eq!(
             event_line("[12:34]", &topic_change_text(&alice, "release day")),
             "[12:34] * Alice changes topic to 'release day'"
+        );
+    }
+
+    #[test]
+    fn window_opening_lines_follow_mirc() {
+        assert_eq!(
+            context_line(&now_talking_text("Ops", "!ops:example")),
+            "* Now talking in Ops (!ops:example)"
+        );
+        assert_eq!(
+            context_line(&topic_is_text("it's release day")),
+            "* Topic is 'it's release day'"
+        );
+        assert_eq!(
+            context_line(&invited_text("Lobby")),
+            "* You are invited to join Lobby"
         );
     }
 

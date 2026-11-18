@@ -269,8 +269,8 @@ configure_case_expectations() {
         --expect-room '!topic:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!topic:example::Room: Topic Room (!topic:example)'
-        --expect-room-view '!topic:example::Topic: incident review'
+        --expect-room-view '!topic:example::* Now talking in Topic Room (!topic:example)'
+        --expect-room-view "!topic:example::* Topic is 'incident review'"
       )
       mdi_title_expect_args=(
         --expect-mdi-title 'room:!topic:example::Topic Room: incident review'
@@ -293,8 +293,9 @@ configure_case_expectations() {
         --expect-room-activity '!ops:example::deploy window opens'
       )
       room_view_expect_args=(
-        --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
-        --expect-room-view '!ops:example::Topic: incident review'
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
+        --expect-room-view "!ops:example::* Topic is 'incident review'"
+        --expect-room-view '!ops:example::* Messages in this room are end-to-end encrypted'
         --expect-room-view "!ops:example::[22:13] * Alice changes topic to 'incident review'"
         --expect-room-view '!ops:example::[22:14] * Joins: Carol (@carol:example)'
         --expect-room-view '!ops:example::[22:15] <Alice> ops topic: incident review'
@@ -339,7 +340,7 @@ configure_case_expectations() {
         --expect-room-membership '!invite:example::invite'
       )
       room_view_expect_args=(
-        --expect-room-view '!invite:example::Invitation to Lobby'
+        --expect-room-view '!invite:example::* You are invited to join Lobby'
         --expect-room-view '!invite:example::Use /accept or /reject to respond.'
       )
       status_bar_expect_args=(
@@ -379,7 +380,7 @@ configure_case_expectations() {
         --expect-direct-room '!invite-direct:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!invite-direct:example::Invitation to Daria'
+        --expect-room-view '!invite-direct:example::* You are invited to join Daria'
         --expect-room-view '!invite-direct:example::Use /accept or /reject to respond.'
       )
       status_bar_expect_args=(
@@ -417,7 +418,7 @@ configure_case_expectations() {
         --expect-room-membership '!invite:example::join'
       )
       room_view_expect_args=(
-        --expect-room-view '!invite:example::Room: Lobby (!invite:example)'
+        --expect-room-view '!invite:example::* Now talking in Lobby (!invite:example)'
       )
       view_forbid_args=(
         --expect-no-view 'room:!invite:example::Use /accept or /reject to respond.'
@@ -458,7 +459,7 @@ configure_case_expectations() {
         --expect-no-room '!invite:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!beta:example::Room: Beta (!beta:example)'
+        --expect-room-view '!beta:example::* Now talking in Beta (!beta:example)'
         --expect-room-view '!beta:example::beta latest'
       )
       switchbar_item_expect_args=(
@@ -494,8 +495,8 @@ configure_case_expectations() {
         --expect-room '!direct:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!ops:example::Room: Ops [e2ee] (!ops:example)'
-        --expect-room-view '!direct:example::Room: Direct [query: @alice:example] [e2ee] (!direct:example)'
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
+        --expect-room-view '!direct:example::* Now talking in Direct (!direct:example)'
       )
       room_direct_expect_args=(
         --expect-direct-room '!direct:example'
@@ -863,7 +864,7 @@ configure_case_expectations() {
         --expect-room-activity '!ops:example::"type":"thread"'
       )
       room_view_expect_args=(
-        --expect-room-view '!ops:example::Room: Ops (!ops:example)'
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
         --expect-room-view '!ops:example::lobby edited'
         --expect-room-view '!ops:example::root msg edited'
         --expect-room-view '!ops:example::thread reply'
@@ -916,7 +917,7 @@ configure_case_expectations() {
         --expect-room-activity '!reactions:example::"type":"thread"'
       )
       room_view_expect_args=(
-        --expect-room-view '!reactions:example::Room: Reactions (!reactions:example)'
+        --expect-room-view '!reactions:example::* Now talking in Reactions (!reactions:example)'
         --expect-room-view '!reactions:example::normal reaction target'
         --expect-room-view '!reactions:example::reactions: +1 x1'
       )
@@ -958,7 +959,7 @@ configure_case_expectations() {
         --expect-room-activity '!redactions:example::"type":"thread"'
       )
       room_view_expect_args=(
-        --expect-room-view '!redactions:example::Room: Redactions (!redactions:example)'
+        --expect-room-view '!redactions:example::* Now talking in Redactions (!redactions:example)'
         --expect-room-view '!redactions:example::message redacted'
       )
       view_expect_args=(
@@ -1010,7 +1011,7 @@ configure_case_expectations() {
         --expect-room-activity '!verify:example::waiting for confirmation'
       )
       room_view_expect_args=(
-        --expect-room-view '!verify:example::Room: Verify [e2ee] (!verify:example)'
+        --expect-room-view '!verify:example::* Now talking in Verify (!verify:example)'
         --expect-room-view '!verify:example::[22:14] <@alice:example> verification requested by @alice:example'
         --expect-room-view '!verify:example::[22:15] <@alice:example> sas emoji ready'
         --expect-room-view '!verify:example::[22:16] <@alice:example> waiting for confirmation'
@@ -1330,8 +1331,8 @@ configure_case_expectations() {
         --expect-room-activity '!mixed:example::"state":"failed"'
       )
       room_view_expect_args=(
-        --expect-room-view '!mixed:example::Room: Mixed [e2ee] (!mixed:example)'
-        --expect-room-view '!mixed:example::Topic: mixed room topic'
+        --expect-room-view '!mixed:example::* Now talking in Mixed (!mixed:example)'
+        --expect-room-view "!mixed:example::* Topic is 'mixed room topic'"
         --expect-room-view '!mixed:example::[22:13] <Alice> synced hello'
         --expect-room-view "!mixed:example::[22:14] * Alice changes topic to 'mixed room topic'"
         --expect-room-view '!mixed:example::[22:15] * Joins: Bob (@bob:example)'
@@ -1387,8 +1388,8 @@ configure_case_expectations() {
         --expect-room-activity '!dense:example::dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
       )
       room_view_expect_args=(
-        --expect-room-view '!dense:example::Room: Dense (!dense:example)'
-        --expect-room-view '!dense:example::Topic: dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::* Now talking in Dense (!dense:example)'
+        --expect-room-view "!dense:example::* Topic is 'dense topic alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'"
         --expect-room-view '!dense:example::[22:13] <@dense.sender.with.a.very.long.mxid:example.org> dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view '!dense:example::[22:14] -Server- dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
         --expect-room-view '!dense:example::[22:15] * Alice dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
@@ -1432,7 +1433,7 @@ configure_case_expectations() {
         --expect-room-activity '!history:example::current room line two'
       )
       room_view_expect_args=(
-        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* Now talking in History (!history:example)'
         --expect-room-view '!history:example::older room line one'
         --expect-room-view '!history:example::older room line two'
         --expect-room-view '!history:example::current room line one'
@@ -1467,7 +1468,7 @@ configure_case_expectations() {
         --expect-room-activity '!history:example::current room line two'
       )
       room_view_expect_args=(
-        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* Now talking in History (!history:example)'
         --expect-room-view '!history:example::* Loading older history...'
         --expect-room-view '!history:example::current room line one'
         --expect-room-view '!history:example::current room line two'
@@ -1503,7 +1504,7 @@ configure_case_expectations() {
         --expect-room-activity '!history:example::current room line two'
       )
       room_view_expect_args=(
-        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* Now talking in History (!history:example)'
         --expect-room-view '!history:example::* Unable to load older history: homeserver unavailable. Scroll to top to retry.'
         --expect-room-view '!history:example::current room line one'
         --expect-room-view '!history:example::current room line two'
@@ -1538,7 +1539,7 @@ configure_case_expectations() {
         --expect-room-activity '!history:example::current room line two'
       )
       room_view_expect_args=(
-        --expect-room-view '!history:example::Room: History (!history:example)'
+        --expect-room-view '!history:example::* Now talking in History (!history:example)'
         --expect-room-view '!history:example::* No older history available.'
         --expect-room-view '!history:example::current room line one'
         --expect-room-view '!history:example::current room line two'
@@ -1567,7 +1568,7 @@ configure_case_expectations() {
         --expect-room '!members:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!members:example::Room: Members (!members:example)'
+        --expect-room-view '!members:example::* Now talking in Members (!members:example)'
         --expect-room-view '!members:example::[22:13] <Alice> member list context line'
         --expect-room-view '!members:example::[22:14] <Casey> timeline stays visible beside the list'
         --expect-room-view '!members:example::[22:15] <Sam (@sam-one:example)> shared names show the user ID'
@@ -1597,7 +1598,7 @@ configure_case_expectations() {
         --expect-room '!ranks:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!ranks:example::Room: Ranks (!ranks:example)'
+        --expect-room-view '!ranks:example::* Now talking in Ranks (!ranks:example)'
         --expect-room-view '!ranks:example::[22:13] <Creator> ranks sort above names'
         --expect-room-view '!ranks:example::[22:14] * Admin sets power level: Mod 0 -> 50, Voice 0 -> 10; default 10 -> 0'
         --expect-room-view '!ranks:example::[22:15] * Admin changes room permissions'
@@ -1632,7 +1633,7 @@ configure_case_expectations() {
         --expect-room '!members:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!members:example::Room: Members (!members:example)'
+        --expect-room-view '!members:example::* Now talking in Members (!members:example)'
         --expect-room-view '!members:example::[22:13] <Alice> member list context line'
         --expect-room-view '!members:example::[22:14] <Casey> timeline stays visible beside the list'
         --expect-room-view '!members:example::[22:15] <Sam (@sam-one:example)> shared names show the user ID'
@@ -1669,7 +1670,7 @@ configure_case_expectations() {
         --expect-room-read-target '!beta:example::$beta-activity'
       )
       room_view_expect_args=(
-        --expect-room-view '!alpha:example::Room: Alpha (!alpha:example)'
+        --expect-room-view '!alpha:example::* Now talking in Alpha (!alpha:example)'
         --expect-room-view '!alpha:example::alpha parent room content'
       )
       switchbar_item_expect_args=(
@@ -1747,7 +1748,7 @@ configure_case_expectations() {
         --expect-room '!docs:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!focus:example::Room: Focus (!focus:example)'
+        --expect-room-view '!focus:example::* Now talking in Focus (!focus:example)'
         --expect-room-view '!focus:example::long visible timeline line for the 900x620 shell frame so the MDI content remains obvious'
       )
       room_member_expect_args=(
@@ -1785,8 +1786,8 @@ configure_case_expectations() {
         --expect-direct-room '!query:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!focus:example::Room: Focus (!focus:example)'
-        --expect-room-view '!focus:example::Topic: dense shell review'
+        --expect-room-view '!focus:example::* Now talking in Focus (!focus:example)'
+        --expect-room-view "!focus:example::* Topic is 'dense shell review'"
         --expect-room-view '!focus:example::active room remains readable among many switchbar views'
       )
       status_bar_expect_args=(
@@ -1836,8 +1837,8 @@ configure_case_expectations() {
         --expect-direct-room '!long-query:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!long-focus:example::Room: Extremely Long Focus Room Name For Native Shell Layout Review (!long-focus:example)'
-        --expect-room-view '!long-focus:example::Topic: A deliberately long active-room topic'
+        --expect-room-view '!long-focus:example::* Now talking in Extremely Long Focus Room Name For Native Shell Layout Review (!long-focus:example)'
+        --expect-room-view "!long-focus:example::* Topic is 'A deliberately long active-room topic"
         --expect-room-view '!long-focus:example::A deliberately long timeline message body checks'
       )
       status_bar_expect_args=(
@@ -1875,7 +1876,7 @@ configure_case_expectations() {
         --expect-room '!mentions:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!active:example::Room: Active Focus (!active:example)'
+        --expect-room-view '!active:example::* Now talking in Active Focus (!active:example)'
         --expect-room-view '!active:example::active room keeps the compose and status shell visible'
       )
       status_bar_expect_args=(
@@ -1926,7 +1927,7 @@ configure_case_expectations() {
         --expect-room-activity '!membership:example::flooding'
       )
       room_view_expect_args=(
-        --expect-room-view '!membership:example::Room: Membership (!membership:example)'
+        --expect-room-view '!membership:example::* Now talking in Membership (!membership:example)'
         --expect-room-view '!membership:example::[22:13] * Joins: Carol (@carol:example)'
         --expect-room-view '!membership:example::[22:14] * Parts: @dave:example'
         --expect-room-view '!membership:example::[22:15] * Eve was kicked by Op (flooding)'
@@ -1957,7 +1958,7 @@ configure_case_expectations() {
         --expect-room '!typing:example'
       )
       room_view_expect_args=(
-        --expect-room-view '!typing:example::Room: Typing (!typing:example)'
+        --expect-room-view '!typing:example::* Now talking in Typing (!typing:example)'
         --expect-room-view '!typing:example::* @alice:example, @bob:example are typing'
       )
       switchbar_no_activity_expect_args=(
@@ -2048,7 +2049,7 @@ configure_case_expectations() {
         --expect-room-activity '!media:example.org::custom payload'
       )
       room_view_expect_args=(
-        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* Now talking in Media (!media:example.org)'
         --expect-room-view '!media:example.org::[16:00] * @alice:example.org sent unsupported com.example.custom: custom payload'
       )
       status_bar_expect_args=(
@@ -2089,7 +2090,7 @@ configure_case_expectations() {
         --expect-room-activity '!encrypted:example.org::"session_id":"SESSIONID"'
       )
       room_view_expect_args=(
-        --expect-room-view '!encrypted:example.org::Room: Encrypted [e2ee] (!encrypted:example.org)'
+        --expect-room-view '!encrypted:example.org::* Now talking in Encrypted (!encrypted:example.org)'
         --expect-room-view '!encrypted:example.org::[16:00] * @alice:example.org sent an encrypted message that could not be decrypted'
       )
       status_bar_expect_args=(
@@ -2124,7 +2125,7 @@ configure_case_expectations() {
         --expect-room-activity '!media:example.org::45678'
       )
       room_view_expect_args=(
-        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* Now talking in Media (!media:example.org)'
         --expect-room-view '!media:example.org::[16:00] * @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)'
       )
       status_bar_expect_args=(
@@ -2162,7 +2163,7 @@ configure_case_expectations() {
         --expect-room-activity '!media:example.org::12000'
       )
       room_view_expect_args=(
-        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* Now talking in Media (!media:example.org)'
         --expect-room-view '!media:example.org::[16:01] * @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
@@ -2215,7 +2216,7 @@ configure_case_expectations() {
         )
       fi
       room_view_expect_args=(
-        --expect-room-view '!media:example.org::Room: Media (!media:example.org)'
+        --expect-room-view '!media:example.org::* Now talking in Media (!media:example.org)'
         --expect-room-view '!media:example.org::[16:02] * @alice:example.org sent video: clip.mp4 (video/mp4, 1920x1080, 34567 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
@@ -2254,7 +2255,7 @@ configure_case_expectations() {
         --expect-room-activity '!images:example.org::12345'
       )
       room_view_expect_args=(
-        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* Now talking in Images (!images:example.org)'
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
@@ -2287,7 +2288,7 @@ configure_case_expectations() {
         --expect-room-activity '!images:example.org::image/png'
       )
       room_view_expect_args=(
-        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* Now talking in Images (!images:example.org)'
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
@@ -2320,7 +2321,7 @@ configure_case_expectations() {
         --expect-room-activity '!images:example.org::image/png'
       )
       room_view_expect_args=(
-        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* Now talking in Images (!images:example.org)'
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
@@ -2358,7 +2359,7 @@ configure_case_expectations() {
         --expect-room-activity '!images:example.org::12345'
       )
       room_view_expect_args=(
-        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* Now talking in Images (!images:example.org)'
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
@@ -2395,7 +2396,7 @@ configure_case_expectations() {
         --expect-room-activity '!images:example.org::480'
       )
       room_view_expect_args=(
-        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* Now talking in Images (!images:example.org)'
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
@@ -2432,7 +2433,7 @@ configure_case_expectations() {
         --expect-room-activity '!images:example.org::480'
       )
       room_view_expect_args=(
-        --expect-room-view '!images:example.org::Room: Images (!images:example.org)'
+        --expect-room-view '!images:example.org::* Now talking in Images (!images:example.org)'
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(

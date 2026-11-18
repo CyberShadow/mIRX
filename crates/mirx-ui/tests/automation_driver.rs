@@ -3633,8 +3633,11 @@ fn room_pane_renders_header_metadata_and_system_state() -> Result<(), Box<dyn st
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, room_identity("!ops:example"));
     let ops_view = find_view(&ui_state, &room_identity("!ops:example"));
-    assert!(view_contains(ops_view, "Room: Ops [e2ee] (!ops:example)"));
-    assert!(view_contains(ops_view, "Topic: incident review"));
+    assert!(view_contains(
+        ops_view,
+        "* Now talking in Ops (!ops:example)"
+    ));
+    assert!(view_contains(ops_view, "* Topic is 'incident review'"));
     assert!(view_contains(
         ops_view,
         "[22:15] <Alice> ops topic: incident review"
@@ -4868,7 +4871,8 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
         "timeline child must advertise WS_VSCROLL"
     );
     assert!(
-        unsafe { read_window_text(timeline_hwnd) }.contains("Room: Beta [e2ee] (!beta:example)"),
+        unsafe { read_window_text(timeline_hwnd) }
+            .contains("* Now talking in Beta (!beta:example)"),
         "timeline window text must expose the rendered room header via WM_GETTEXT"
     );
     assert!(
@@ -6217,7 +6221,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert!(
         find_view(&initial_state, &room_identity("!direct:example"))
             .lines
-            .contains(&"Room: Direct [query: @alice:example] [e2ee] (!direct:example)".to_owned())
+            .contains(&"* Now talking in Direct (!direct:example)".to_owned())
     );
     assert_eq!(
         find_switchbar_item(&initial_state, &room_identity("!direct:example")).title,
@@ -6262,7 +6266,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert!(
         find_view(&work_state, &room_identity("!direct:example"))
             .lines
-            .contains(&"Room: Direct [query: @alice:example] [e2ee] (!direct:example)".to_owned())
+            .contains(&"* Now talking in Direct (!direct:example)".to_owned())
     );
     assert_eq!(
         find_switchbar_item(&work_state, &room_identity("!direct:example")).title,
@@ -9944,7 +9948,10 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
     );
     let invite_view = find_view(&invite_state, &room_identity("!invite:example"));
     assert_eq!(invite_view.title, "Lobby [invite]");
-    assert!(view_contains(invite_view, "Invitation to Lobby"));
+    assert!(view_contains(
+        invite_view,
+        "* You are invited to join Lobby"
+    ));
     assert!(view_contains(
         invite_view,
         "Use /accept or /reject to respond."
@@ -10083,7 +10090,10 @@ fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
     );
     let invite_view = find_view(&state, &room_identity("!invite:example"));
     assert_eq!(invite_view.title, "Lobby [invite]");
-    assert!(view_contains(invite_view, "Invitation to Lobby"));
+    assert!(view_contains(
+        invite_view,
+        "* You are invited to join Lobby"
+    ));
     assert!(view_contains(
         invite_view,
         "Use /accept or /reject to respond."
@@ -10147,7 +10157,10 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
     );
     let invite_view = find_view(&state, &room_identity("!invite-direct:example"));
     assert!(invite_view.title.contains("Daria [invite]"));
-    assert!(view_contains(invite_view, "Invitation to Daria"));
+    assert!(view_contains(
+        invite_view,
+        "* You are invited to join Daria"
+    ));
     assert!(view_contains(
         invite_view,
         "Use /accept or /reject to respond."
@@ -10206,7 +10219,10 @@ fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joine
     );
     let joined_view = find_view(&state, &room_identity("!invite:example"));
     assert_eq!(joined_view.title, "Lobby");
-    assert!(view_contains(joined_view, "Room: Lobby (!invite:example)"));
+    assert!(view_contains(
+        joined_view,
+        "* Now talking in Lobby (!invite:example)"
+    ));
     assert!(!view_contains(
         joined_view,
         "Use /accept or /reject to respond."
@@ -11208,7 +11224,7 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
 
     let before_topic_state = app.dump_ui_state()?;
     let beta_view = find_view(&before_topic_state, &room_identity("!beta:example"));
-    assert!(!view_contains(beta_view, "Topic: incident review"));
+    assert!(!view_contains(beta_view, "* Topic is 'incident review'"));
     assert!(!view_contains(
         beta_view,
         "[22:16] * @alice:example changes topic to 'incident review'"
@@ -11250,7 +11266,7 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
 
     let after_topic_state = app.dump_ui_state()?;
     let beta_view = find_view(&after_topic_state, &room_identity("!beta:example"));
-    assert!(view_contains(beta_view, "Topic: incident review"));
+    assert!(view_contains(beta_view, "* Topic is 'incident review'"));
     assert!(view_contains(
         beta_view,
         "[22:16] * @alice:example changes topic to 'incident review'"
@@ -11281,7 +11297,7 @@ fn automation_driver_renders_synced_topic_without_topic_notice()
 
     let state = app.dump_ui_state()?;
     let beta_view = find_view(&state, &room_identity("!beta:example"));
-    assert!(view_contains(beta_view, "Topic: incident review"));
+    assert!(view_contains(beta_view, "* Topic is 'incident review'"));
     assert!(!view_contains(
         beta_view,
         "changes topic to 'incident review'"
@@ -11297,12 +11313,12 @@ fn automation_driver_renders_synced_topic_without_topic_notice()
     app.wait_idle(Duration::from_secs(5))?;
     let state = app.dump_ui_state()?;
     let beta_view = find_view(&state, &room_identity("!beta:example"));
-    assert!(view_contains(beta_view, "Topic: deployment window"));
+    assert!(view_contains(beta_view, "* Topic is 'deployment window'"));
     assert!(view_contains(
         beta_view,
         "changes topic to 'deployment window'"
     ));
-    assert!(!view_contains(beta_view, "Topic: incident review"));
+    assert!(!view_contains(beta_view, "* Topic is 'incident review'"));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
