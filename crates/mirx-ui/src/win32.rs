@@ -80,9 +80,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW,
     DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
     DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
-    ES_WANTRETURN, EnableMenuItem, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect,
-    GetMessageW, GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild,
-    IsWindow, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT,
+    ES_WANTRETURN, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
+    GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetForegroundWindow, GetMessageW,
+    GetParent, GetScrollInfo, GetWindowLongPtrW, HMENU, HideCaret, IDC_ARROW, IsChild, IsWindow,
+    KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT,
     LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK,
     MDICREATESTRUCTW, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
     MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
@@ -2032,20 +2033,37 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
         .insert_preview_media(activity_id, next_state);
 }
 
-fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
+/// mIRC flashes the frame for highlights and for query messages.
+fn activity_wants_attention(level: ViewActivityLevel, room_is_direct: bool) -> bool {
+    match level {
+        ViewActivityLevel::Highlight => true,
+        ViewActivityLevel::Message => room_is_direct,
+        ViewActivityLevel::Event => false,
+    }
+}
+
+/// Returns whether the activity should flash the frame. The active view gets
+/// no activity colour, but it can still want attention while mIRC is in the
+/// background.
+fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) -> bool {
     let clears_last_activity = matches!(activity.kind, RoomActivityKind::Redacted(_));
     let target_view_id = room_activity_target_view_id(&activity);
+    let mut wants_attention = false;
     if let Some(level) = activity_level_for(&activity)
-        && state.active_view != target_view_id
-        && sendable_room_by_id(&state.model.rooms, &activity.room_id).is_some()
+        && let Some(room_is_direct) =
+            sendable_room_by_id(&state.model.rooms, &activity.room_id).map(|room| room.is_direct)
     {
-        raise_view_activity(state, target_view_id.clone(), level);
-        if !state.synthetic_load_in_progress
-            && let Some(event_id) = read_target_for_room_activity(&activity)
-        {
-            state
-                .room_activity_read_targets
-                .insert(target_view_id, event_id.to_owned());
+        wants_attention =
+            !state.synthetic_load_in_progress && activity_wants_attention(level, room_is_direct);
+        if state.active_view != target_view_id {
+            raise_view_activity(state, target_view_id.clone(), level);
+            if !state.synthetic_load_in_progress
+                && let Some(event_id) = read_target_for_room_activity(&activity)
+            {
+                state
+                    .room_activity_read_targets
+                    .insert(target_view_id, event_id.to_owned());
+            }
         }
     }
     state.model.status = format!("timeline update from {}", activity.room_id);
@@ -2062,6 +2080,7 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) {
     } else if clears_last_activity {
         state.model.last_activity = None;
     }
+    wants_attention
 }
 
 fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivityUpdate) {
@@ -7790,7 +7809,8 @@ unsafe fn handle_core_events(hwnd: HWND) {
     }
 }
 
-fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String> {
+/// Returns whether the event should flash the frame.
+fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, String> {
     match event {
         Event::Started => {
             if matches!(
@@ -7864,7 +7884,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             }
             state.model.rooms = rooms;
         }
-        Event::RoomActivity(activity) => apply_room_activity_event(state, *activity),
+        Event::RoomActivity(activity) => return Ok(apply_room_activity_event(state, *activity)),
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
         Event::RoomMedia(media) => apply_room_media_event(state, media),
@@ -7930,7 +7950,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<(), String>
             state.model.last_error = Some(error);
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 fn preserves_submission_status(status: &str, operation: Operation) -> bool {
@@ -12316,6 +12336,7 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
 
     let mut history_backfill_anchor = None;
     let mut history_backfill_views = Vec::new();
+    let mut wants_attention = false;
     for event in events {
         if let Event::E2eeRecoverySetupSucceeded(result) = &event {
             show_e2ee_recovery_key(hwnd, &result.recovery_key)?;
@@ -12344,11 +12365,14 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
         ) {
             history_backfill_views.extend(pending_timeline_find_history_views(state));
         }
-        apply_core_event(state, event)?;
+        wants_attention |= apply_core_event(state, event)?;
         state.event_generation += 1;
     }
 
     sync_views_and_tree(hwnd)?;
+    if wants_attention {
+        request_frame_attention(hwnd);
+    }
     if let Some(anchor) = history_backfill_anchor {
         restore_room_history_backfill_anchor(hwnd, anchor);
     }
@@ -12358,6 +12382,23 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
         continue_timeline_find_history_search_after_refresh(hwnd, &view_id)?;
     }
     Ok(())
+}
+
+/// Flashes the taskbar button until the user brings mIRC to the foreground;
+/// Windows stops the flash on activation.
+unsafe fn request_frame_attention(hwnd: HWND) {
+    if GetForegroundWindow() == hwnd {
+        return;
+    }
+    let info = FLASHWINFO {
+        cbSize: size_of::<FLASHWINFO>() as u32,
+        hwnd,
+        dwFlags: FLASHW_TRAY | FLASHW_TIMERNOFG,
+        uCount: 0,
+        dwTimeout: 0,
+    };
+    // The return value is the window's previous active state, not an error.
+    FlashWindowEx(&info);
 }
 
 unsafe fn apply_synthetic_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(), String> {
@@ -22775,6 +22816,57 @@ mod tests {
 
         handle_room_activation(&mut state, "!room:example").unwrap();
         assert!(state.room_activity.is_empty());
+    }
+
+    #[test]
+    fn highlights_and_query_messages_want_attention() {
+        for (level, room_is_direct, expected) in [
+            (ViewActivityLevel::Event, false, false),
+            (ViewActivityLevel::Event, true, false),
+            (ViewActivityLevel::Message, false, false),
+            (ViewActivityLevel::Message, true, true),
+            (ViewActivityLevel::Highlight, false, true),
+            (ViewActivityLevel::Highlight, true, true),
+        ] {
+            assert_eq!(
+                activity_wants_attention(level, room_is_direct),
+                expected,
+                "{level:?} direct={room_is_direct}"
+            );
+        }
+    }
+
+    #[test]
+    fn room_activity_wants_attention_even_in_the_active_view_but_not_during_loads() {
+        let mut state = test_state();
+        let mut query = room("!query:example", "Casey", false);
+        query.is_direct = true;
+        state.model.rooms = vec![room("!room:example", "Room", false), query];
+        state.active_view = room_view_id("!query:example");
+        let ping = || {
+            Event::RoomActivity(Box::new(highlighted(sent_message_activity(
+                "!room:example",
+                "$ping",
+                None,
+                "Alice: ping",
+                1,
+            ))))
+        };
+
+        assert!(!apply_core_event(&mut state, timeline("!room:example", "hello")).unwrap());
+        assert!(!apply_core_event(&mut state, topic_state("!query:example", "topic")).unwrap());
+        assert!(apply_core_event(&mut state, timeline("!query:example", "hi")).unwrap());
+        assert!(
+            !state
+                .room_activity
+                .contains_key(&room_view_id("!query:example"))
+        );
+        assert!(apply_core_event(&mut state, ping()).unwrap());
+        assert!(!apply_core_event(&mut state, Event::SyncStarted).unwrap());
+
+        state.synthetic_load_in_progress = true;
+        assert!(!apply_core_event(&mut state, ping()).unwrap());
+        assert!(!apply_core_event(&mut state, timeline("!query:example", "loaded")).unwrap());
     }
 
     #[test]
