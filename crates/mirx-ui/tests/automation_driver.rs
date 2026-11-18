@@ -1781,47 +1781,42 @@ fn assert_no_non_history_submitted_commands(model: &Model) {
     assert!(model.submitted_verification_actions.is_empty());
 }
 
-fn assert_find_result(
-    result: &FindActiveViewResult,
-    active: &ViewIdentity,
-    query: &str,
+struct ExpectedFind<'a> {
+    active: &'a ViewIdentity,
+    query: &'a str,
     matched: bool,
     match_count: usize,
     current_match_index: Option<usize>,
-    selected_text: Option<&str>,
+    selected_text: Option<&'a str>,
     history_search: UiFindHistorySearchState,
-) {
-    assert_eq!(result.active, active.clone());
-    assert_eq!(result.query, query);
-    assert_eq!(result.matched, matched);
-    assert_eq!(result.match_count, match_count);
-    assert_eq!(result.current_match_index, current_match_index);
-    assert_eq!(result.selected_text.as_deref(), selected_text);
-    assert_eq!(result.history_search, history_search);
 }
 
-fn assert_ui_active_find(
-    ui_state: &UiState,
-    active: &ViewIdentity,
-    query: &str,
-    matched: bool,
-    match_count: usize,
-    current_match_index: Option<usize>,
-    selected_text: Option<&str>,
-    history_search: UiFindHistorySearchState,
-) {
-    assert_eq!(
-        ui_state.active_find,
-        Some(UiFindState {
-            active: active.clone(),
-            query: query.to_owned(),
-            matched,
-            match_count,
-            current_match_index,
-            selected_text: selected_text.map(str::to_owned),
-            history_search,
-        })
-    );
+impl ExpectedFind<'_> {
+    fn into_ui_find_state(self) -> UiFindState {
+        UiFindState {
+            active: self.active.clone(),
+            query: self.query.to_owned(),
+            matched: self.matched,
+            match_count: self.match_count,
+            current_match_index: self.current_match_index,
+            selected_text: self.selected_text.map(str::to_owned),
+            history_search: self.history_search,
+        }
+    }
+}
+
+fn assert_find_result(result: &FindActiveViewResult, expected: ExpectedFind<'_>) {
+    assert_eq!(result.active, expected.active.clone());
+    assert_eq!(result.query, expected.query);
+    assert_eq!(result.matched, expected.matched);
+    assert_eq!(result.match_count, expected.match_count);
+    assert_eq!(result.current_match_index, expected.current_match_index);
+    assert_eq!(result.selected_text.as_deref(), expected.selected_text);
+    assert_eq!(result.history_search, expected.history_search);
+}
+
+fn assert_ui_active_find(ui_state: &UiState, expected: ExpectedFind<'_>) {
+    assert_eq!(ui_state.active_find, Some(expected.into_ui_find_state()));
 }
 
 fn activate_switchbar_item_by_command(
@@ -4326,13 +4321,15 @@ fn render_state_room_find_backfill_records_loading_and_matches_older_history()
     );
     assert_ui_active_find(
         &ui_state,
-        &room_identity("!history:example"),
-        "older needle",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!history:example"),
+            query: "older needle",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         ui_state
@@ -4636,13 +4633,15 @@ fn render_state_thread_find_backfill_matches_older_thread_reply()
     let selected_text = only_view_line_containing(thread_view, "older thread needle");
     assert_ui_active_find(
         &ui_state,
-        &view_id,
-        "older thread needle",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &view_id,
+            query: "older thread needle",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(view_contains(thread_view, "older thread needle"));
     assert!(!view_contains(thread_view, "older room-only needle"));
@@ -11704,13 +11703,15 @@ fn automation_driver_slash_find_updates_active_room_without_sending_text()
     assert_active_switchbar_item(&ui_state, &beta_view_identity);
     assert_ui_active_find(
         &ui_state,
-        &room_identity("!beta:example"),
-        "beta second",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!beta:example"),
+            query: "beta second",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         ui_state
@@ -11779,50 +11780,58 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
     let first = app.find_active_view("needle")?;
     assert_find_result(
         &first,
-        &search_view_identity,
-        "needle",
-        true,
-        2,
-        Some(0),
-        Some(matching_lines[0]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &search_view_identity,
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(0),
+            selected_text: Some(matching_lines[0]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     let first_state = app.dump_ui_state()?;
     assert_eq!(first_state.mdi.active, search_view_identity);
     assert_ui_active_find(
         &first_state,
-        &room_identity("!search:example"),
-        "needle",
-        true,
-        2,
-        Some(0),
-        Some(matching_lines[0]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!search:example"),
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(0),
+            selected_text: Some(matching_lines[0]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(first_state.status_bar.text.contains("find: 1/2 \"needle\""));
 
     let second = app.find_active_view("needle")?;
     assert_find_result(
         &second,
-        &search_view_identity,
-        "needle",
-        true,
-        2,
-        Some(1),
-        Some(matching_lines[1]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &search_view_identity,
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(1),
+            selected_text: Some(matching_lines[1]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     let second_state = app.dump_ui_state()?;
     assert_eq!(second_state.mdi.active, search_view_identity);
     assert_ui_active_find(
         &second_state,
-        &room_identity("!search:example"),
-        "needle",
-        true,
-        2,
-        Some(1),
-        Some(matching_lines[1]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!search:example"),
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(1),
+            selected_text: Some(matching_lines[1]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         second_state
@@ -11834,25 +11843,29 @@ fn automation_driver_find_active_room_timeline_matches_advances_and_wraps()
     let wrapped = app.find_active_view("needle")?;
     assert_find_result(
         &wrapped,
-        &search_view_identity,
-        "needle",
-        true,
-        2,
-        Some(0),
-        Some(matching_lines[0]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &search_view_identity,
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(0),
+            selected_text: Some(matching_lines[0]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     let wrapped_state = app.dump_ui_state()?;
     assert_eq!(wrapped_state.mdi.active, search_view_identity);
     assert_ui_active_find(
         &wrapped_state,
-        &room_identity("!search:example"),
-        "needle",
-        true,
-        2,
-        Some(0),
-        Some(matching_lines[0]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!search:example"),
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(0),
+            selected_text: Some(matching_lines[0]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         wrapped_state
@@ -11903,25 +11916,29 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
     let positive = app.find_active_view("thread rep")?;
     assert_find_result(
         &positive,
-        &thread_view_identity,
-        "thread rep",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &thread_view_identity,
+            query: "thread rep",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     let positive_state = app.dump_ui_state()?;
     assert_eq!(positive_state.mdi.active, thread_view_identity);
     assert_ui_active_find(
         &positive_state,
-        &thread_identity("!ops:example", "$thread-root"),
-        "thread rep",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &thread_identity("!ops:example", "$thread-root"),
+            query: "thread rep",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         positive_state
@@ -11933,25 +11950,29 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
     let scoped_miss = app.find_active_view("lobby")?;
     assert_find_result(
         &scoped_miss,
-        &thread_view_identity,
-        "lobby",
-        false,
-        0,
-        None,
-        None,
-        UiFindHistorySearchState::Loading,
+        ExpectedFind {
+            active: &thread_view_identity,
+            query: "lobby",
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+            history_search: UiFindHistorySearchState::Loading,
+        },
     );
     let miss_state = app.dump_ui_state()?;
     assert_eq!(miss_state.mdi.active, thread_view_identity);
     assert_ui_active_find(
         &miss_state,
-        &thread_identity("!ops:example", "$thread-root"),
-        "lobby",
-        false,
-        0,
-        None,
-        None,
-        UiFindHistorySearchState::Loading,
+        ExpectedFind {
+            active: &thread_identity("!ops:example", "$thread-root"),
+            query: "lobby",
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+            history_search: UiFindHistorySearchState::Loading,
+        },
     );
     assert!(
         miss_state
@@ -12000,13 +12021,15 @@ fn automation_driver_find_active_status_view_matches_status_lines()
     let result = app.find_active_view("cross-signing")?;
     assert_find_result(
         &result,
-        &ViewIdentity::Status,
-        "cross-signing",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &ViewIdentity::Status,
+            query: "cross-signing",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
 
     let ui_state = app.dump_ui_state()?;
@@ -12014,13 +12037,15 @@ fn automation_driver_find_active_status_view_matches_status_lines()
     assert_active_switchbar_item(&ui_state, &ViewIdentity::Status);
     assert_ui_active_find(
         &ui_state,
-        &ViewIdentity::Status,
-        "cross-signing",
-        true,
-        1,
-        Some(0),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &ViewIdentity::Status,
+            query: "cross-signing",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         ui_state
@@ -12060,13 +12085,15 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
     let result = app.find_active_view("missing search term")?;
     assert_find_result(
         &result,
-        &beta_view_identity,
-        "missing search term",
-        false,
-        0,
-        None,
-        None,
-        UiFindHistorySearchState::Loading,
+        ExpectedFind {
+            active: &beta_view_identity,
+            query: "missing search term",
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+            history_search: UiFindHistorySearchState::Loading,
+        },
     );
 
     let ui_state = app.dump_ui_state()?;
@@ -12078,13 +12105,15 @@ fn automation_driver_find_active_view_reports_no_match_without_changing_view()
     ));
     assert_ui_active_find(
         &ui_state,
-        &room_identity("!beta:example"),
-        "missing search term",
-        false,
-        0,
-        None,
-        None,
-        UiFindHistorySearchState::Loading,
+        ExpectedFind {
+            active: &room_identity("!beta:example"),
+            query: "missing search term",
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+            history_search: UiFindHistorySearchState::Loading,
+        },
     );
     assert!(
         ui_state
@@ -12148,13 +12177,15 @@ fn automation_driver_find_active_view_empty_query_matches_slash_find_validation(
     let result = app.find_active_view("")?;
     assert_find_result(
         &result,
-        &beta_view_identity,
-        "",
-        false,
-        0,
-        None,
-        None,
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &beta_view_identity,
+            query: "",
+            matched: false,
+            match_count: 0,
+            current_match_index: None,
+            selected_text: None,
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
 
     let automation_ui_state = app.dump_ui_state()?;
@@ -12233,13 +12264,15 @@ fn automation_driver_find_active_view_preserves_per_view_state()
     let alpha_result = app.find_active_view("alpha needle")?;
     assert_find_result(
         &alpha_result,
-        &alpha_view_identity,
-        "alpha needle",
-        true,
-        1,
-        Some(0),
-        Some(alpha_line),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &alpha_view_identity,
+            query: "alpha needle",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(alpha_line),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
 
     app.select_room("!beta:example")?;
@@ -12254,13 +12287,15 @@ fn automation_driver_find_active_view_preserves_per_view_state()
     let beta_result = app.find_active_view("beta needle")?;
     assert_find_result(
         &beta_result,
-        &beta_view_identity,
-        "beta needle",
-        true,
-        2,
-        Some(1),
-        Some(beta_lines[1]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &beta_view_identity,
+            query: "beta needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(1),
+            selected_text: Some(beta_lines[1]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
 
     app.select_room("!alpha:example")?;
@@ -12268,13 +12303,15 @@ fn automation_driver_find_active_view_preserves_per_view_state()
     assert_eq!(restored_alpha_state.mdi.active, alpha_view_identity);
     assert_ui_active_find(
         &restored_alpha_state,
-        &room_identity("!alpha:example"),
-        "alpha needle",
-        true,
-        1,
-        Some(0),
-        Some(alpha_line),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!alpha:example"),
+            query: "alpha needle",
+            matched: true,
+            match_count: 1,
+            current_match_index: Some(0),
+            selected_text: Some(alpha_line),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         restored_alpha_state
@@ -12288,13 +12325,15 @@ fn automation_driver_find_active_view_preserves_per_view_state()
     assert_eq!(restored_beta_state.mdi.active, beta_view_identity);
     assert_ui_active_find(
         &restored_beta_state,
-        &room_identity("!beta:example"),
-        "beta needle",
-        true,
-        2,
-        Some(1),
-        Some(beta_lines[1]),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!beta:example"),
+            query: "beta needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(1),
+            selected_text: Some(beta_lines[1]),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(
         restored_beta_state
@@ -12352,13 +12391,15 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
     let before_rebuild = app.find_active_view("needle")?;
     assert_find_result(
         &before_rebuild,
-        &rebuild_view_identity,
-        "needle",
-        true,
-        2,
-        Some(1),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &rebuild_view_identity,
+            query: "needle",
+            matched: true,
+            match_count: 2,
+            current_match_index: Some(1),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
 
     app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
@@ -12379,13 +12420,15 @@ fn automation_driver_find_active_view_recomputes_after_timeline_rebuild()
     assert_eq!(ui_state.mdi.active, rebuild_view_identity);
     assert_ui_active_find(
         &ui_state,
-        &room_identity("!rebuild:example"),
-        "needle",
-        true,
-        3,
-        Some(2),
-        Some(selected_text),
-        UiFindHistorySearchState::LocalOnly,
+        ExpectedFind {
+            active: &room_identity("!rebuild:example"),
+            query: "needle",
+            matched: true,
+            match_count: 3,
+            current_match_index: Some(2),
+            selected_text: Some(selected_text),
+            history_search: UiFindHistorySearchState::LocalOnly,
+        },
     );
     assert!(ui_state.status_bar.text.contains("find: 3/3 \"needle\""));
     assert_eq!(

@@ -1770,7 +1770,7 @@ mod windows_main {
         config
             .expect_selected
             .as_deref()
-            .or_else(|| match config.expect_active_view.as_ref() {
+            .or(match config.expect_active_view.as_ref() {
                 Some(ViewIdentity::Room { room_id }) => Some(room_id.as_str()),
                 _ => None,
             })
@@ -1885,7 +1885,7 @@ mod windows_main {
             crate::assert_room_membership(
                 &model.rooms,
                 &expectation.room_id,
-                expectation.membership.clone(),
+                expectation.membership,
             )?;
             println!(
                 "PASS room membership {} {}",

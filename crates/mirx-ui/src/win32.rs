@@ -4241,7 +4241,7 @@ unsafe fn select_timeline_event_at_client_y(hwnd: HWND, y: i32) {
 }
 
 unsafe fn context_menu_screen_point_for_lparam(lparam: LPARAM) -> Option<(i32, i32)> {
-    (lparam != -1).then(|| (((lparam as i16) as i32), (((lparam >> 16) as i16) as i32)))
+    (lparam != -1).then_some((((lparam as i16) as i32), (((lparam >> 16) as i16) as i32)))
 }
 
 unsafe fn default_context_point_for_window(hwnd: HWND) -> Result<(i32, i32), String> {
@@ -4299,10 +4299,10 @@ unsafe fn show_timeline_message_context_menu(
     }) {
         return Err("message context menu action is disabled".to_owned());
     }
-    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)? {
-        if let Some(result) = handle_menu_command(frame, command) {
-            result?;
-        }
+    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)?
+        && let Some(result) = handle_menu_command(frame, command)
+    {
+        result?;
     }
     Ok(())
 }
@@ -4347,10 +4347,10 @@ unsafe fn show_member_context_menu(
     }) {
         return Err("member context menu action is disabled".to_owned());
     }
-    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)? {
-        if let Some(result) = handle_menu_command(frame, command) {
-            result?;
-        }
+    if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)?
+        && let Some(result) = handle_menu_command(frame, command)
+    {
+        result?;
     }
     Ok(())
 }
@@ -6350,12 +6350,10 @@ unsafe fn save_selected_message_attachment(hwnd: HWND) -> Result<(), String> {
 }
 
 unsafe fn handle_menu_command(hwnd: HWND, wparam: WPARAM) -> Option<Result<(), String>> {
-    let Some((title, result)) = menu_command_result(hwnd, wparam) else {
-        return None;
-    };
+    let (title, result) = menu_command_result(hwnd, wparam)?;
 
     if let Err(message) = &result {
-        show_error_message(hwnd, title, &message);
+        show_error_message(hwnd, title, message);
     }
 
     Some(
@@ -11669,10 +11667,10 @@ unsafe fn show_navigation_room_context_menu(
     }) {
         return Err("room context menu action is disabled".to_owned());
     }
-    if let Some(command) = show_context_menu(frame, menu, point.0, point.1, requested_command)? {
-        if let Some(result) = handle_menu_command(frame, command) {
-            result?;
-        }
+    if let Some(command) = show_context_menu(frame, menu, point.0, point.1, requested_command)?
+        && let Some(result) = handle_menu_command(frame, command)
+    {
+        result?;
     }
     Ok(())
 }
@@ -12181,7 +12179,7 @@ fn continue_timeline_find_history_search_after_refresh_state(
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id,
         ViewId::Status => unreachable!("status find does not use room history"),
     };
-    let Some(find_state) = state.find_states.get(&view_id) else {
+    let Some(find_state) = state.find_states.get(view_id) else {
         return Ok(false);
     };
     if find_state.history_search != RoomFindHistorySearch::Loading && find_state.matches.is_empty()
@@ -14295,17 +14293,19 @@ fn verification_menu_action_enabled(
         return false;
     };
 
-    match (&event.state, action) {
-        (VerificationState::Requested, VerificationAction::Accept) => true,
-        (VerificationState::Requested, VerificationAction::Cancel) => true,
-        (VerificationState::Accepted, VerificationAction::Cancel) => true,
-        (VerificationState::Ready, VerificationAction::Cancel) => true,
-        (VerificationState::SasReady { .. }, VerificationAction::Cancel) => true,
-        (VerificationState::SasReady { .. }, VerificationAction::Confirm) => true,
-        (VerificationState::SasReady { .. }, VerificationAction::Reject) => true,
-        (VerificationState::Confirmed, VerificationAction::Cancel) => true,
-        _ => false,
-    }
+    matches!(
+        (&event.state, action),
+        (
+            VerificationState::Requested,
+            VerificationAction::Accept | VerificationAction::Cancel
+        ) | (
+            VerificationState::Accepted | VerificationState::Ready | VerificationState::Confirmed,
+            VerificationAction::Cancel
+        ) | (
+            VerificationState::SasReady { .. },
+            VerificationAction::Cancel | VerificationAction::Confirm | VerificationAction::Reject
+        )
+    )
 }
 
 fn verification_actions_text(

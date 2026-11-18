@@ -3418,7 +3418,8 @@ mod imp {
                         ("result", &result_path),
                     ]
                     .into_iter()
-                    .filter_map(|(name, path)| path.exists().then(|| name))
+                    .filter(|(_, path)| path.exists())
+                    .map(|(name, _)| name)
                     .collect::<Vec<_>>();
                     let _ = fs::remove_file(&request_path);
                     return Err(TestkitError::Timeout(format!(
