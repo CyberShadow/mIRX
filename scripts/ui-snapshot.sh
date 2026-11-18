@@ -304,7 +304,7 @@ configure_case_expectations() {
         --expect-mdi-title 'room:!ops:example::Ops [e2ee]: incident review'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !random:example'
+        --expect-status-bar 'synced 3 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1760,7 +1760,7 @@ configure_case_expectations() {
         --expect-room-member '!focus:example::Casey'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !inbox:example'
+        --expect-status-bar 'synced 3 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1795,7 +1795,7 @@ configure_case_expectations() {
         --expect-room-view '!focus:example::active room remains readable among many switchbar views'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !focus:example'
+        --expect-status-bar 'synced 10 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1846,7 +1846,7 @@ configure_case_expectations() {
         --expect-room-view '!long-focus:example::A deliberately long timeline message body checks'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !long-inbox:example'
+        --expect-status-bar 'synced 3 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1884,7 +1884,7 @@ configure_case_expectations() {
         --expect-room-view '!active:example::active room keeps the compose and status shell visible'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !active:example'
+        --expect-status-bar 'synced 4 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2057,7 +2057,7 @@ configure_case_expectations() {
         --expect-room-view '!media:example.org::[16:00] * @alice:example.org sent unsupported com.example.custom: custom payload'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !media:example.org'
+        --expect-status-bar 'synced 2 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2098,7 +2098,7 @@ configure_case_expectations() {
         --expect-room-view '!encrypted:example.org::[16:00] * @alice:example.org sent an encrypted message that could not be decrypted'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !encrypted:example.org'
+        --expect-status-bar 'synced 2 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2133,7 +2133,7 @@ configure_case_expectations() {
         --expect-room-view '!media:example.org::[16:00] * @alice:example.org sent file: report.pdf (application/pdf, 45678 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !media:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2171,7 +2171,7 @@ configure_case_expectations() {
         --expect-room-view '!media:example.org::[16:01] * @alice:example.org sent audio: voice-note.ogg (audio/ogg, 23456 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !media:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2224,7 +2224,7 @@ configure_case_expectations() {
         --expect-room-view '!media:example.org::[16:02] * @alice:example.org sent video: clip.mp4 (video/mp4, 1920x1080, 34567 bytes, 12000 ms)'
       )
       status_bar_expect_args=(
-        --expect-status-bar "$([[ "$case_name" == video-message ]] && echo 'timeline update from !media:example.org' || echo 'preview media update from !media:example.org')"
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2263,7 +2263,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !images:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2296,7 +2296,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'preview media update from !images:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2329,7 +2329,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'preview media update from !images:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2367,7 +2367,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'timeline update from !images:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2404,7 +2404,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'preview media update from !images:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -2441,7 +2441,7 @@ configure_case_expectations() {
         --expect-room-view '!images:example.org::[16:00] * @alice:example.org sent image: diagram.png (image/png, 640x480, 12345 bytes)'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'preview media update from !images:example.org'
+        --expect-status-bar 'synced 1 room(s)'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'

@@ -2440,12 +2440,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
     assert!(!ui_state.status_bar.text.is_empty());
-    assert!(
-        ui_state
-            .status_bar
-            .text
-            .contains("timeline update from !beta:example")
-    );
+    assert!(ui_state.status_bar.text.contains("synced 2 room(s)"));
     assert_eq!(
         ui_state
             .switchbar
@@ -8379,12 +8374,7 @@ fn automation_driver_renders_shell_constrained_layout_fixture()
     ));
     assert!(view_members_contain(focus_view, "Alice"));
     assert!(view_members_contain(focus_view, "Casey"));
-    assert!(
-        ui_state
-            .status_bar
-            .text
-            .contains("timeline update from !inbox:example")
-    );
+    assert!(ui_state.status_bar.text.contains("synced 3 room(s)"));
 
     Ok(())
 }

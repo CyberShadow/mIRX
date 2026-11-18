@@ -2037,7 +2037,6 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
         }
     };
 
-    state.model.status = format!("preview media update from {room_id}");
     state
         .model
         .room_views
@@ -2079,7 +2078,6 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
             }
         }
     }
-    state.model.status = format!("timeline update from {}", activity.room_id);
     let room_id = activity.room_id.clone();
     let last_activity = last_activity_from_room_activity(&activity);
     state
@@ -2105,7 +2103,6 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
     {
         raise_view_activity(state, target_view_id, ViewActivityLevel::Message);
     }
-    state.model.status = format!("timeline update from {}", update.room_id);
     let room_id = update.room_id.clone();
     let refresh_last_activity = state
         .model
@@ -2281,7 +2278,6 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
 
 fn apply_room_history_backfill_event(state: &mut WindowState, backfill: RoomHistoryBackfill) {
     let room_id = backfill.room_id.clone();
-    state.model.status = format!("timeline update from {room_id}");
     let end = backfill.end.clone();
     let room_view = state.model.room_views.entry(room_id.clone()).or_default();
     room_view.apply_history_backfill(&room_id, backfill);
