@@ -4,6 +4,7 @@
       "room_id": "!beta:example",
       "activity_id": "event:$beta-activity",
       "timestamp_ms": 1700000240000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$beta-activity",
@@ -23,6 +24,7 @@
       "room_id": "!alpha:example",
       "activity_id": "event:$alpha-thread-activity",
       "timestamp_ms": 1700000300000,
+      "highlight": false,
       "relation": {
         "type": "thread",
         "thread_root_event_id": "$alpha-thread-root",

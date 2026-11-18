@@ -20,6 +20,7 @@
       "room_id": "!find-room:example",
       "activity_id": "event:$find-room-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-room-1",
@@ -39,6 +40,7 @@
       "room_id": "!find-room:example",
       "activity_id": "event:$find-room-2",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-room-2",
@@ -58,6 +60,7 @@
       "room_id": "!find-room:example",
       "activity_id": "event:$find-room-3",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-room-3",
@@ -77,6 +80,7 @@
       "room_id": "!find-room:example",
       "activity_id": "event:$find-room-4",
       "timestamp_ms": 1700000180000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-room-4",

@@ -282,6 +282,7 @@ fn sample_room_history_activity() -> RoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$message:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Redacted(RoomRedactedActivity {
@@ -295,6 +296,7 @@ fn sample_core_room_history_activity() -> CoreRoomActivity {
         room_id: "!ops:example.org".to_owned(),
         activity_id: "event:$message:example.org".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        highlight: false,
         relation: None,
         kind: CoreRoomActivityKind::Redacted(mirx_core::RoomRedactedActivity {
             event_id: "$message:example.org".to_owned(),
@@ -1240,6 +1242,7 @@ fn room_activity_sent_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -1258,6 +1261,7 @@ fn room_activity_sent_message_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-1",
             "timestamp_ms": 1700000000000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [],
             "kind": {
@@ -1286,6 +1290,7 @@ fn room_activity_pending_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-2".to_owned(),
         timestamp_ms: 1_700_000_060_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -1304,6 +1309,7 @@ fn room_activity_pending_message_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-2",
             "timestamp_ms": 1700000060000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [],
             "kind": {
@@ -1332,6 +1338,7 @@ fn room_activity_failed_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-3".to_owned(),
         timestamp_ms: 1_700_000_120_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -1353,6 +1360,7 @@ fn room_activity_failed_message_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-3",
             "timestamp_ms": 1700000120000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [],
             "kind": {
@@ -1383,6 +1391,7 @@ fn room_activity_notice_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-notice".to_owned(),
         timestamp_ms: 1_700_000_150_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -1399,6 +1408,7 @@ fn room_activity_notice_message_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "activity-notice",
         "timestamp_ms": 1700000150000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1430,6 +1440,7 @@ fn room_activity_emote_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-emote".to_owned(),
         timestamp_ms: 1_700_000_165_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -1446,6 +1457,7 @@ fn room_activity_emote_message_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "activity-emote",
         "timestamp_ms": 1700000165000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1477,6 +1489,7 @@ fn room_activity_topic_state_notice_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-4".to_owned(),
         timestamp_ms: 1_700_000_180_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
@@ -1495,6 +1508,7 @@ fn room_activity_topic_state_notice_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-4",
             "timestamp_ms": 1700000180000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [],
             "kind": {
@@ -1522,6 +1536,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-5".to_owned(),
         timestamp_ms: 1_700_000_240_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
@@ -1545,6 +1560,7 @@ fn room_activity_member_state_notice_round_trips_through_json() {
             "room_id": "!room:example",
             "activity_id": "activity-5",
             "timestamp_ms": 1700000240000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [],
             "kind": {
@@ -1578,6 +1594,7 @@ fn room_activity_power_levels_state_notice_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "state:$power:example".to_owned(),
         timestamp_ms: 1_700_000_250_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
@@ -1599,6 +1616,7 @@ fn room_activity_power_levels_state_notice_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "state:$power:example",
         "timestamp_ms": 1700000250000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1655,6 +1673,7 @@ fn room_activity_unsupported_message_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$custom1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
@@ -1669,6 +1688,7 @@ fn room_activity_unsupported_message_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$custom1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1697,6 +1717,7 @@ fn room_activity_unable_to_decrypt_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "$encrypted1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
@@ -1708,7 +1729,7 @@ fn room_activity_unable_to_decrypt_round_trips_through_json() {
     };
     let json = serde_json::json!({
         "room_id":"!room:example", "activity_id":"$encrypted1:example.org",
-        "timestamp_ms":1710000000000u64, "relation":null, "reactions":[],
+        "timestamp_ms":1710000000000u64, "highlight":false, "relation":null, "reactions":[],
         "kind":{"type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
         "sender":"@alice:example.org", "session_id":"SESSIONID",
         "reason":"missing_megolm_session"}
@@ -1725,7 +1746,7 @@ fn room_activity_unable_to_decrypt_round_trips_through_json() {
 fn room_activity_unable_to_decrypt_rejects_unknown_fields() {
     let json = serde_json::json!({
         "room_id":"!room:example", "activity_id":"$encrypted1:example.org",
-        "timestamp_ms":1710000000000u64, "relation":null, "reactions":[],
+        "timestamp_ms":1710000000000u64, "highlight":false, "relation":null, "reactions":[],
         "kind":{"type":"unable_to_decrypt", "event_id":"$encrypted1:example.org",
         "sender":"@alice:example.org", "session_id":"SESSIONID",
         "reason":"missing_megolm_session", "unexpected":true}
@@ -1741,6 +1762,7 @@ fn room_activity_image_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(None))),
@@ -1750,6 +1772,7 @@ fn room_activity_image_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1790,6 +1813,7 @@ fn room_activity_file_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$file1:example.org".to_owned(),
         timestamp_ms: 1_710_000_010_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::File(Box::new(sample_room_file_activity())),
@@ -1799,6 +1823,7 @@ fn room_activity_file_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$file1:example.org",
         "timestamp_ms": 1710000010000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1834,6 +1859,7 @@ fn room_activity_audio_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$audio1:example.org".to_owned(),
         timestamp_ms: 1_710_000_020_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Audio(Box::new(sample_room_audio_activity())),
@@ -1843,6 +1869,7 @@ fn room_activity_audio_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$audio1:example.org",
         "timestamp_ms": 1710000020000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -1891,6 +1918,7 @@ fn room_activity_video_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$custom1:example.org".to_owned(),
         timestamp_ms: 1_710_000_030_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Video(Box::new(sample_room_video_activity(None))),
@@ -1967,6 +1995,7 @@ fn room_activity_image_pending_media_state_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
@@ -1978,6 +2007,7 @@ fn room_activity_image_pending_media_state_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -2021,6 +2051,7 @@ fn room_activity_image_loaded_media_state_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
@@ -2035,6 +2066,7 @@ fn room_activity_image_loaded_media_state_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -2080,6 +2112,7 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(Some(
@@ -2093,6 +2126,7 @@ fn room_activity_image_failed_media_state_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$image1:example.org",
         "timestamp_ms": 1710000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -2137,6 +2171,7 @@ fn room_activity_redacted_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$redacted:example.org".to_owned(),
         timestamp_ms: 1_710_000_060_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Redacted(RoomRedactedActivity {
@@ -2148,6 +2183,7 @@ fn room_activity_redacted_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$redacted:example.org",
         "timestamp_ms": 1710000060000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -2169,6 +2205,7 @@ fn room_activity_redacted_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "event:$redacted:example.org",
         "timestamp_ms": 1710000060000u64,
+        "highlight": false,
         "relation": null,
         "kind": {
             "type": "redacted",
@@ -2181,6 +2218,7 @@ fn room_activity_redacted_round_trips_through_json() {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$redacted:example.org".to_owned(),
             timestamp_ms: 1_710_000_060_000,
+            highlight: false,
             relation: None,
             kind: CoreRoomActivityKind::Redacted(mirx_core::RoomRedactedActivity {
                 event_id: "$redacted:example.org".to_owned(),
@@ -2196,6 +2234,7 @@ fn room_activity_redacted_round_trips_through_json() {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$redacted:example.org".to_owned(),
             timestamp_ms: 1_710_000_060_000,
+            highlight: false,
             relation: None,
             kind: CoreRoomActivityKind::Redacted(mirx_core::RoomRedactedActivity {
                 event_id: "$redacted:example.org".to_owned(),
@@ -2272,6 +2311,7 @@ fn room_activity_omitted_relation_defaults_to_none() {
         "room_id": "!room:example",
         "activity_id": "activity-omitted-relation",
         "timestamp_ms": 1700000000000u64,
+        "highlight": false,
         "kind": {
             "type": "message",
             "event_id": "$event:example",
@@ -2292,6 +2332,7 @@ fn room_activity_omitted_relation_defaults_to_none() {
             room_id: "!room:example".to_owned(),
             activity_id: "activity-omitted-relation".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            highlight: false,
             relation: None,
             reactions: Vec::new(),
             kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -2312,6 +2353,7 @@ fn room_activity_thread_relation_round_trips_through_json() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-thread".to_owned(),
         timestamp_ms: 1_700_000_300_000,
+        highlight: false,
         relation: Some(RoomActivityRelation::Thread {
             thread_root_event_id: "$thread-root:example".to_owned(),
             in_reply_to_event_id: Some("$reply:example".to_owned()),
@@ -2331,6 +2373,7 @@ fn room_activity_thread_relation_round_trips_through_json() {
         "room_id": "!room:example",
         "activity_id": "activity-thread",
         "timestamp_ms": 1700000300000u64,
+        "highlight": false,
         "relation": {
             "type": "thread",
             "thread_root_event_id": "$thread-root:example",
@@ -2367,6 +2410,7 @@ fn room_activity_dump_reaction_summaries_round_trip_and_default() {
         "room_id": "!room:example",
         "activity_id": "event:$event:example",
         "timestamp_ms": 1700000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [
             {
@@ -2392,6 +2436,7 @@ fn room_activity_dump_reaction_summaries_round_trip_and_default() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$event:example".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        highlight: false,
         relation: None,
         reactions: vec![RoomReactionSummary {
             key: "+1".to_owned(),
@@ -2424,6 +2469,7 @@ fn room_activity_dump_reaction_summaries_round_trip_and_default() {
             "room_id": "!room:example",
             "activity_id": "event:$event:example",
             "timestamp_ms": 1700000000000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [
                 {
@@ -2451,6 +2497,7 @@ fn room_activity_dump_reaction_summaries_round_trip_and_default() {
         "room_id": "!room:example",
         "activity_id": "event:$event:example",
         "timestamp_ms": 1700000000000u64,
+        "highlight": false,
         "kind": {
             "type": "message",
             "event_id": "$event:example",
@@ -2473,6 +2520,7 @@ fn room_activity_dump_reaction_summaries_round_trip_and_default() {
             "room_id": "!room:example",
             "activity_id": "event:$event:example",
             "timestamp_ms": 1700000000000u64,
+            "highlight": false,
             "relation": null,
             "reactions": [],
             "kind": {
@@ -3293,6 +3341,7 @@ fn room_history_backfill_event_activity_ingests_core_json_and_defaults_reactions
         "room_id": "!ops:example.org",
         "activity_id": "event:$message:example.org",
         "timestamp_ms": 1700000000000u64,
+        "highlight": false,
         "relation": null,
         "kind": {
             "type": "redacted",
@@ -3305,6 +3354,7 @@ fn room_history_backfill_event_activity_ingests_core_json_and_defaults_reactions
         "room_id": "!ops:example.org",
         "activity_id": "event:$message:example.org",
         "timestamp_ms": 1700000000000u64,
+        "highlight": false,
         "relation": null,
         "reactions": [],
         "kind": {
@@ -3463,6 +3513,7 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
                 "room_id": "!ops:example.org",
                 "activity_id": "event:$message:example.org",
                 "timestamp_ms": 1700000000000u64,
+                "highlight": false,
                 "relation": null,
                 "reactions": [],
                 "kind": {
@@ -3497,6 +3548,7 @@ fn room_history_backfill_with_activity_ingests_core_json_and_defaults_reactions(
                 "room_id": "!ops:example.org",
                 "activity_id": "event:$message:example.org",
                 "timestamp_ms": 1700000000000u64,
+                "highlight": false,
                 "relation": null,
                 "kind": {
                     "type": "redacted",
@@ -3828,6 +3880,7 @@ fn room_activity_contains_matches_identity_and_send_state_fields() {
         room_id: "!room:example".to_owned(),
         activity_id: "activity-1".to_owned(),
         timestamp_ms: 1_700_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Message(RoomMessageActivity {
@@ -3862,6 +3915,7 @@ fn room_activity_contains_matches_unsupported_message_fields() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$custom1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
@@ -3883,6 +3937,7 @@ fn room_activity_contains_matches_image_fields() {
         room_id: "!room:example".to_owned(),
         activity_id: "event:$image1:example.org".to_owned(),
         timestamp_ms: 1_710_000_000_000,
+        highlight: false,
         relation: None,
         reactions: Vec::new(),
         kind: RoomActivityKind::Image(Box::new(sample_room_image_activity(None))),
@@ -5205,6 +5260,7 @@ fn data_models_reject_unknown_fields() {
             "room_id":"!room:example",
             "activity_id":"activity-1",
             "timestamp_ms":1700000000000,
+            "highlight":false,
             "kind":{
                 "type":"message",
                 "event_id":"$event:example",

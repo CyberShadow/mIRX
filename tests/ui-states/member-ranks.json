@@ -21,6 +21,7 @@
       "room_id": "!ranks:example",
       "activity_id": "event:$ranks-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ranks-1",
@@ -44,6 +45,7 @@
       "room_id": "!ranks:example",
       "activity_id": "state:$ranks-power-1",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$ranks-power-1",
@@ -89,6 +91,7 @@
       "room_id": "!ranks:example",
       "activity_id": "state:$ranks-power-2",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$ranks-power-2",
@@ -112,6 +115,7 @@
       "room_id": "!ranks:example",
       "activity_id": "event:$ranks-2",
       "timestamp_ms": 1700000180000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ranks-2",

@@ -110,6 +110,7 @@ fn sent_message_activity(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{event_id}"),
         timestamp_ms,
+        highlight: false,
         relation: None,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: Some(event_id.to_owned()),

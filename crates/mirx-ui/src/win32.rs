@@ -11986,6 +11986,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             room_id: "!one:example".to_owned(),
             activity_id: "event:$one-first".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$one-first".to_owned()),
@@ -12004,6 +12005,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             room_id: "!one:example".to_owned(),
             activity_id: "event:$one-second".to_owned(),
             timestamp_ms: 1_700_000_060_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$one-second".to_owned()),
@@ -12022,6 +12024,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
             room_id: "!two:example".to_owned(),
             activity_id: "event:$two-third".to_owned(),
             timestamp_ms: 1_700_000_120_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$two-third".to_owned()),
@@ -12085,6 +12088,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                         "room_id":"!one:example",
                         "activity_id":"event:$one-first",
                         "timestamp_ms":1700000000000u64,
+                        "highlight":false,
                         "reactions":[],
                         "relation":null,
                         "kind":{
@@ -12101,6 +12105,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                         "room_id":"!one:example",
                         "activity_id":"event:$one-second",
                         "timestamp_ms":1700000060000u64,
+                        "highlight":false,
                         "reactions":[],
                         "relation":null,
                         "kind":{
@@ -15011,6 +15016,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some(event_id.to_owned()),
@@ -15212,6 +15218,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("txn:{transaction_id}"),
             timestamp_ms: 1_700_000_000_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: None,
@@ -15438,6 +15445,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("txn:{transaction_id}"),
             timestamp_ms: 1_700_000_000_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: None,
@@ -15484,6 +15492,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("state:$topic:{room_id}:{topic}"),
             timestamp_ms: 1_700_000_060_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                 event_id: format!("$topic:{room_id}:{topic}"),
@@ -15540,6 +15549,7 @@ mod tests {
         Event::RoomActivity(Box::new(RoomActivity {
             room_id: room_id.to_owned(),
             timestamp_ms: 1_700_000_120_000,
+            highlight: false,
             activity_id: format!("state:{event_id}"),
             relation: None,
             kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
@@ -15570,6 +15580,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(mirx_core::UnsupportedRoomMessageActivity {
                 event_id: event_id.to_owned(),
@@ -15608,6 +15619,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: event_id.to_owned(),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::UnableToDecrypt(mirx_core::RoomUnableToDecryptActivity {
                 event_id: event_id.to_owned(),
@@ -15631,6 +15643,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Image(Box::new(mirx_core::RoomImageActivity {
                 event_id: event_id.to_owned(),
@@ -15658,6 +15671,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::File(Box::new(mirx_core::RoomFileActivity {
                 event_id: event_id.to_owned(),
@@ -15685,6 +15699,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Audio(Box::new(mirx_core::RoomAudioActivity {
                 event_id: event_id.to_owned(),
@@ -15728,6 +15743,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms: 1_710_000_000_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Video(Box::new(mirx_core::RoomVideoActivity {
                 event_id: event_id.to_owned(),
@@ -15763,6 +15779,7 @@ mod tests {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{event_id}"),
             timestamp_ms,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Image(Box::new(mirx_core::RoomImageActivity {
                 event_id: event_id.to_owned(),

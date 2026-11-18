@@ -42,6 +42,7 @@
       "room_id": "!lobby:example",
       "activity_id": "event:$lobby-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$lobby-1",
@@ -61,6 +62,7 @@
       "room_id": "!lobby:example",
       "activity_id": "event:$lobby-2",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$lobby-2",
@@ -80,6 +82,7 @@
       "room_id": "!ops:example",
       "activity_id": "state:$ops-topic-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$ops-topic-1",
@@ -97,6 +100,7 @@
       "room_id": "!ops:example",
       "activity_id": "state:$ops-member-1",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$ops-member-1",
@@ -116,6 +120,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$ops-1",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ops-1",
@@ -135,6 +140,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$ops-2",
       "timestamp_ms": 1700000180000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ops-2",
@@ -154,6 +160,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$ops-3",
       "timestamp_ms": 1700000240000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ops-3",
@@ -173,6 +180,7 @@
       "room_id": "!random:example",
       "activity_id": "event:$random-1",
       "timestamp_ms": 1700000300000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$random-1",

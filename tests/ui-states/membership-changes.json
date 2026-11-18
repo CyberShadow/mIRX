@@ -21,6 +21,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-1",
@@ -50,6 +51,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-2",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-2",
@@ -79,6 +81,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-3",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-3",
@@ -108,6 +111,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-4",
       "timestamp_ms": 1700000180000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-4",
@@ -137,6 +141,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-5",
       "timestamp_ms": 1700000240000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-5",
@@ -166,6 +171,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-6",
       "timestamp_ms": 1700000300000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-6",
@@ -195,6 +201,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-7",
       "timestamp_ms": 1700000360000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-7",
@@ -224,6 +231,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-8",
       "timestamp_ms": 1700000420000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-8",
@@ -253,6 +261,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-9",
       "timestamp_ms": 1700000480000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-9",
@@ -282,6 +291,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-10",
       "timestamp_ms": 1700000540000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-10",
@@ -311,6 +321,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-11",
       "timestamp_ms": 1700000600000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-11",
@@ -340,6 +351,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-12",
       "timestamp_ms": 1700000660000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-12",
@@ -369,6 +381,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-13",
       "timestamp_ms": 1700000720000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-13",
@@ -398,6 +411,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-14",
       "timestamp_ms": 1700000780000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-14",
@@ -427,6 +441,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-15",
       "timestamp_ms": 1700000840000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-15",
@@ -458,6 +473,7 @@
       "room_id": "!membership:example",
       "activity_id": "state:$membership-16",
       "timestamp_ms": 1700000900000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$membership-16",

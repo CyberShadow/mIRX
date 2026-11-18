@@ -20,6 +20,7 @@
       "room_id": "!redactions:example",
       "activity_id": "event:$redact-text",
       "timestamp_ms": 1700100000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$redact-text",
@@ -39,6 +40,7 @@
       "room_id": "!redactions:example",
       "activity_id": "event:$redact-edited",
       "timestamp_ms": 1700100060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$redact-edited",
@@ -58,6 +60,7 @@
       "room_id": "!redactions:example",
       "activity_id": "event:$redact-image",
       "timestamp_ms": 1700100120000,
+      "highlight": false,
       "kind": {
         "type": "image",
         "event_id": "$redact-image",
@@ -84,6 +87,7 @@
       "room_id": "!redactions:example",
       "activity_id": "event:$redact-unsupported",
       "timestamp_ms": 1700100180000,
+      "highlight": false,
       "kind": {
         "type": "unsupported_message",
         "event_id": "$redact-unsupported",
@@ -99,6 +103,7 @@
       "room_id": "!redactions:example",
       "activity_id": "event:$redact-thread-root",
       "timestamp_ms": 1700100240000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$redact-thread-root",
@@ -118,6 +123,7 @@
       "room_id": "!redactions:example",
       "activity_id": "event:$redact-thread-reply",
       "timestamp_ms": 1700100300000,
+      "highlight": false,
       "relation": {
         "type": "thread",
         "thread_root_event_id": "$redact-thread-root",
@@ -142,6 +148,7 @@
       "room_id": "!redactions:example",
       "activity_id": "state:$redact-topic-notice",
       "timestamp_ms": 1700100360000,
+      "highlight": false,
       "kind": {
         "type": "state_notice",
         "event_id": "$redact-topic-notice",

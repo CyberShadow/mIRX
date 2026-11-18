@@ -37,6 +37,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$ops-room-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ops-room-1",
@@ -56,6 +57,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$thread-root",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$thread-root",
@@ -75,6 +77,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$thread-1",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "relation": {
         "type": "thread",
         "thread_root_event_id": "$thread-root",

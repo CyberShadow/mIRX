@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 26;
+pub(crate) const PROTOCOL_VERSION: u32 = 27;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1387,6 +1387,7 @@ pub(crate) struct DumpRoomActivity {
     pub(crate) room_id: String,
     pub(crate) activity_id: String,
     pub(crate) timestamp_ms: u64,
+    pub(crate) highlight: bool,
     pub(crate) relation: Option<DumpRoomActivityRelation>,
     pub(crate) reactions: Vec<DumpRoomReactionSummary>,
     pub(crate) kind: DumpRoomActivityKind,
@@ -1729,6 +1730,7 @@ pub(crate) fn dump_room_activity_from_activity(activity: &RoomActivity) -> DumpR
         room_id: activity.room_id.clone(),
         activity_id: activity.activity_id.clone(),
         timestamp_ms: activity.timestamp_ms,
+        highlight: activity.highlight,
         relation: activity
             .relation
             .as_ref()
@@ -2609,8 +2611,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_26() {
-        assert_eq!(PROTOCOL_VERSION, 26);
+    fn protocol_version_is_27() {
+        assert_eq!(PROTOCOL_VERSION, 27);
     }
 
     #[test]
@@ -2955,7 +2957,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -2979,6 +2981,7 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "event:$event:example".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
+                            highlight: false,
                             relation: None,
                             kind: RoomActivityKind::Message(RoomMessageActivity {
                                 event_id: Some("$event:example".to_owned()),
@@ -4292,7 +4295,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":26,
+                    "protocol_version":27,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4432,6 +4435,7 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "txn:txn-1".to_owned(),
                             timestamp_ms: 1_700_000_000_000,
+                            highlight: false,
                             relation: Some(DumpRoomActivityRelation::Thread {
                                 thread_root_event_id: "$thread-root:example".to_owned(),
                                 in_reply_to_event_id: Some("$reply:example".to_owned()),
@@ -4454,6 +4458,7 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "event:$image:example".to_owned(),
                             timestamp_ms: 1_700_000_030_000,
+                            highlight: false,
                             relation: None,
                             reactions: Vec::new(),
                             kind: DumpRoomActivityKind::Image(Box::new(DumpRoomImageActivity {
@@ -4479,6 +4484,7 @@ mod tests {
                             room_id: "!room:example".to_owned(),
                             activity_id: "state:$state-1".to_owned(),
                             timestamp_ms: 1_700_000_060_000,
+                            highlight: false,
                             relation: None,
                             reactions: Vec::new(),
                             kind: DumpRoomActivityKind::StateNotice(DumpRoomStateNoticeActivity {
@@ -4504,6 +4510,7 @@ mod tests {
                             "room_id":"!room:example",
                             "activity_id":"txn:txn-1",
                             "timestamp_ms":1700000000000u64,
+                            "highlight":false,
                             "relation":{
                                 "type":"thread",
                                 "thread_root_event_id":"$thread-root:example",
@@ -4525,6 +4532,7 @@ mod tests {
                             "room_id":"!room:example",
                             "activity_id":"event:$image:example",
                             "timestamp_ms":1700000030000u64,
+                            "highlight":false,
                             "relation":null,
                             "reactions":[],
                             "kind":{
@@ -4552,6 +4560,7 @@ mod tests {
                             "room_id":"!room:example",
                             "activity_id":"state:$state-1",
                             "timestamp_ms":1700000060000u64,
+                            "highlight":false,
                             "relation":null,
                             "reactions":[],
                             "kind":{
@@ -5776,6 +5785,7 @@ mod tests {
             room_id: "!plain:example".to_owned(),
             activity_id: "event:$plain:example".to_owned(),
             timestamp_ms: 1_700_000_000_100,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some("$plain:example".to_owned()),
@@ -5792,6 +5802,7 @@ mod tests {
                 room_id: "!plain:example".to_owned(),
                 activity_id: "event:$plain:example".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
+                highlight: false,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Message(DumpRoomMessageActivity {
@@ -5808,6 +5819,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$event:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            highlight: false,
             relation: Some(RoomActivityRelation::Thread {
                 thread_root_event_id: "$thread-root:example".to_owned(),
                 in_reply_to_event_id: Some("$reply:example".to_owned()),
@@ -5828,6 +5840,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$event:example".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: Some(DumpRoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example".to_owned(),
                     in_reply_to_event_id: Some("$reply:example".to_owned()),
@@ -5862,6 +5875,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$event:example".to_owned(),
             timestamp_ms: 1_700_000_000_000,
+            highlight: false,
             relation: None,
             reactions: vec![
                 DumpRoomReactionSummary {
@@ -5893,6 +5907,7 @@ mod tests {
             "room_id":"!room:example",
             "activity_id":"event:$event:example",
             "timestamp_ms":1700000000000u64,
+            "highlight":false,
             "relation":null,
             "reactions":[
                 {
@@ -5942,6 +5957,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$custom1:example.org".to_owned(),
             timestamp_ms: 1_710_000_000_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                 event_id: "$custom1:example.org".to_owned(),
@@ -5956,6 +5972,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$custom1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_000_000,
+                highlight: false,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::UnsupportedMessage(
@@ -5977,6 +5994,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$custom1:example.org",
                 "timestamp_ms":1710000000000u64,
+                "highlight":false,
                 "relation":null,
                 "reactions":[],
                 "kind":{
@@ -5996,6 +6014,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$image1:example.org".to_owned(),
             timestamp_ms: 1_710_000_010_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                 event_id: "$image1:example.org".to_owned(),
@@ -6021,6 +6040,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$image1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_010_000,
+                highlight: false,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Image(Box::new(DumpRoomImageActivity {
@@ -6050,6 +6070,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$image1:example.org",
                 "timestamp_ms":1710000010000u64,
+                "highlight":false,
                 "relation":null,
                 "reactions":[],
                 "kind":{
@@ -6109,6 +6130,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$file1:example.org".to_owned(),
             timestamp_ms: 1_710_000_015_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                 event_id: "$file1:example.org".to_owned(),
@@ -6128,6 +6150,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$file1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_015_000,
+                highlight: false,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::File(Box::new(DumpRoomFileActivity {
@@ -6150,6 +6173,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$file1:example.org",
                 "timestamp_ms":1710000015000u64,
+                "highlight":false,
                 "relation":null,
                 "reactions":[],
                 "kind":{
@@ -6185,6 +6209,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$audio2:example.org".to_owned(),
             timestamp_ms: 1_710_000_016_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                 event_id: "$audio2:example.org".to_owned(),
@@ -6205,6 +6230,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$audio2:example.org".to_owned(),
                 timestamp_ms: 1_710_000_016_000,
+                highlight: false,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Audio(Box::new(DumpRoomAudioActivity {
@@ -6228,6 +6254,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$audio2:example.org",
                 "timestamp_ms":1710000016000u64,
+                "highlight":false,
                 "relation":null,
                 "reactions":[],
                 "kind":{
@@ -6264,6 +6291,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$video1:example.org".to_owned(),
             timestamp_ms: 1_710_000_018_000,
+            highlight: false,
             relation: None,
             kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                 event_id: "$video1:example.org".to_owned(),
@@ -6291,6 +6319,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$video1:example.org".to_owned(),
                 timestamp_ms: 1_710_000_018_000,
+                highlight: false,
                 relation: None,
                 reactions: Vec::new(),
                 kind: DumpRoomActivityKind::Video(Box::new(DumpRoomVideoActivity {
@@ -6322,6 +6351,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$video1:example.org",
                 "timestamp_ms":1710000018000u64,
+                "highlight":false,
                 "relation":null,
                 "reactions":[],
                 "kind":{
@@ -6347,6 +6377,7 @@ mod tests {
             room_id: "!room:example".to_owned(),
             activity_id: "event:$redacted:example.org".to_owned(),
             timestamp_ms: 1_710_000_020_000,
+            highlight: false,
             relation: Some(RoomActivityRelation::Thread {
                 thread_root_event_id: "$redact-thread-root".to_owned(),
                 in_reply_to_event_id: Some("$redact-thread-root".to_owned()),
@@ -6362,6 +6393,7 @@ mod tests {
                 room_id: "!room:example".to_owned(),
                 activity_id: "event:$redacted:example.org".to_owned(),
                 timestamp_ms: 1_710_000_020_000,
+                highlight: false,
                 relation: Some(DumpRoomActivityRelation::Thread {
                     thread_root_event_id: "$redact-thread-root".to_owned(),
                     in_reply_to_event_id: Some("$redact-thread-root".to_owned()),
@@ -6382,6 +6414,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$redacted:example.org",
                 "timestamp_ms":1710000020000u64,
+                "highlight":false,
                 "relation":{
                     "type":"thread",
                     "thread_root_event_id":"$redact-thread-root",
@@ -6429,6 +6462,7 @@ mod tests {
                 "room_id":"!room:example",
                 "activity_id":"event:$event:example",
                 "timestamp_ms":1700000000000u64,
+                "highlight":false,
                 "reactions":[],
                 "kind":{
                     "type":"message",
@@ -6519,6 +6553,7 @@ mod tests {
                 "room_id":"!ops:example",
                 "activity_id":"state:$state-1",
                 "timestamp_ms":1700000000000u64,
+                "highlight":false,
                 "reactions":[],
                 "kind":{
                     "type":"state_notice",
@@ -6540,6 +6575,7 @@ mod tests {
                 "room_id":"!ops:example",
                 "activity_id":"state:$state-1",
                 "timestamp_ms":1700000000000u64,
+                "highlight":false,
                 "reactions":[],
                 "kind":{
                     "type":"state_notice",
@@ -6560,6 +6596,7 @@ mod tests {
                 "room_id":"!ops:example",
                 "activity_id":"event:$redacted-1",
                 "timestamp_ms":1700000000000u64,
+                "highlight":false,
                 "reactions":[],
                 "kind":{
                     "type":"redacted",

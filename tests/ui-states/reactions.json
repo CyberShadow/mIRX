@@ -20,6 +20,7 @@
       "room_id": "!reactions:example",
       "activity_id": "event:$react-normal",
       "timestamp_ms": 1700200000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$react-normal",
@@ -39,6 +40,7 @@
       "room_id": "!reactions:example",
       "activity_id": "event:$react-thread-root",
       "timestamp_ms": 1700200060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$react-thread-root",
@@ -58,6 +60,7 @@
       "room_id": "!reactions:example",
       "activity_id": "event:$react-thread-reply",
       "timestamp_ms": 1700200120000,
+      "highlight": false,
       "relation": {
         "type": "thread",
         "thread_root_event_id": "$react-thread-root",

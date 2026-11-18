@@ -20,6 +20,7 @@
       "room_id": "!find-thread:example",
       "activity_id": "event:$find-thread-root",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-thread-root",
@@ -39,6 +40,7 @@
       "room_id": "!find-thread:example",
       "activity_id": "event:$find-thread-room-only",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-thread-room-only",
@@ -58,6 +60,7 @@
       "room_id": "!find-thread:example",
       "activity_id": "event:$find-thread-1",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "relation": {
         "type": "thread",
         "thread_root_event_id": "$find-thread-root",
@@ -82,6 +85,7 @@
       "room_id": "!find-thread:example",
       "activity_id": "event:$find-thread-2",
       "timestamp_ms": 1700000180000,
+      "highlight": false,
       "relation": {
         "type": "thread",
         "thread_root_event_id": "$find-thread-root",

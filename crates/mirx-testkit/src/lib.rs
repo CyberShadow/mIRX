@@ -555,6 +555,8 @@ pub struct RoomActivity {
     pub room_id: String,
     pub activity_id: String,
     pub timestamp_ms: u64,
+    /// The user's push rules highlight the event, e.g. it mentions them.
+    pub highlight: bool,
     #[serde(default)]
     pub relation: Option<RoomActivityRelation>,
     #[serde(default)]

@@ -20,6 +20,7 @@
       "room_id": "!images:example.org",
       "activity_id": "event:$image-typed:example.org",
       "timestamp_ms": 1710000000000,
+      "highlight": false,
       "kind": {
         "type": "image",
         "event_id": "$image-typed:example.org",

@@ -31,6 +31,7 @@
       "room_id": "!beta:example",
       "activity_id": "event:$beta-latest",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "relation": null,
       "kind": {
         "type": "message",

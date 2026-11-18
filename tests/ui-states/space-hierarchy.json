@@ -108,6 +108,7 @@
       "room_id": "!ops:example",
       "activity_id": "event:$ops-space-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$ops-space-1",
@@ -127,6 +128,7 @@
       "room_id": "!shared:example",
       "activity_id": "event:$shared-space-1",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$shared-space-1",
@@ -146,6 +148,7 @@
       "room_id": "!random:example",
       "activity_id": "event:$random-space-1",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$random-space-1",

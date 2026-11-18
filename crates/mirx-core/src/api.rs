@@ -347,6 +347,11 @@ pub struct RoomActivity {
     pub room_id: String,
     pub activity_id: String,
     pub timestamp_ms: u64,
+    /// The user's push rules mark the event as a highlight
+    /// (`set_tweak: highlight`), e.g. it mentions them. Never set for the
+    /// user's own events or local echoes. Fixed when the event arrives: an
+    /// edit does not change it.
+    pub highlight: bool,
     pub relation: Option<RoomActivityRelation>,
     pub kind: RoomActivityKind,
 }

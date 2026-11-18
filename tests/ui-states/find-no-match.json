@@ -20,6 +20,7 @@
       "room_id": "!find-miss:example",
       "activity_id": "event:$find-miss-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-miss-1",
@@ -39,6 +40,7 @@
       "room_id": "!find-miss:example",
       "activity_id": "event:$find-miss-2",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$find-miss-2",

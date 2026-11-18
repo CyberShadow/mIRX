@@ -42,6 +42,7 @@
       "room_id": "!focus:example",
       "activity_id": "event:$focus-1",
       "timestamp_ms": 1700000000000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$focus-1",
@@ -61,6 +62,7 @@
       "room_id": "!focus:example",
       "activity_id": "event:$focus-2",
       "timestamp_ms": 1700000060000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$focus-2",
@@ -80,6 +82,7 @@
       "room_id": "!focus:example",
       "activity_id": "event:$focus-3",
       "timestamp_ms": 1700000120000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$focus-3",
@@ -99,6 +102,7 @@
       "room_id": "!focus:example",
       "activity_id": "event:$focus-4",
       "timestamp_ms": 1700000180000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$focus-4",
@@ -118,6 +122,7 @@
       "room_id": "!inbox:example",
       "activity_id": "event:$inbox-1",
       "timestamp_ms": 1700000240000,
+      "highlight": false,
       "kind": {
         "type": "message",
         "event_id": "$inbox-1",

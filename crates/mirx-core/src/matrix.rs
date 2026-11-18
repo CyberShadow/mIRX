@@ -61,6 +61,7 @@ use matrix_sdk::{
             tag::{TagEvent, TagEventContent, Tags},
             typing::SyncTypingEvent,
         },
+        push::Action,
     },
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
@@ -1204,29 +1205,35 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     });
 
     let timeline_events = events.clone();
-    client.add_event_handler(move |event: OriginalSyncRoomMessageEvent, room: Room| {
-        let events = timeline_events.clone();
-        async move {
-            let room_id = room.room_id().as_str();
-            if let Some(replacement) = sync_message_replacement(&event) {
-                if let Some(update) =
-                    room_activity_update_from_sync_message_replacement(room_id, &event, replacement)
-                {
-                    emit_event(&events, Event::RoomActivityUpdate(update));
-                }
-                return;
-            }
-            match room_user_profile(&room, &event.sender).await {
-                Ok(sender) => {
-                    if let Some(activity) = room_activity_from_sync_message(room_id, &event, sender)
-                    {
-                        emit_event(&events, Event::RoomActivity(Box::new(activity)));
+    client.add_event_handler(
+        move |event: OriginalSyncRoomMessageEvent, room: Room, actions: Vec<Action>| {
+            let events = timeline_events.clone();
+            async move {
+                let room_id = room.room_id().as_str();
+                if let Some(replacement) = sync_message_replacement(&event) {
+                    if let Some(update) = room_activity_update_from_sync_message_replacement(
+                        room_id,
+                        &event,
+                        replacement,
+                    ) {
+                        emit_event(&events, Event::RoomActivityUpdate(update));
                     }
+                    return;
                 }
-                Err(err) => emit_sync_error(&events, err),
+                let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
+                match room_user_profile(&room, &event.sender).await {
+                    Ok(sender) => {
+                        if let Some(activity) =
+                            room_activity_from_sync_message(room_id, &event, sender, highlight)
+                        {
+                            emit_event(&events, Event::RoomActivity(Box::new(activity)));
+                        }
+                    }
+                    Err(err) => emit_sync_error(&events, err),
+                }
             }
-        }
-    });
+        },
+    );
 
     let reaction_index = Arc::new(Mutex::new(ReactionEventIndex::default()));
 
@@ -1303,77 +1310,89 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     });
 
     let topic_events = events.clone();
-    client.add_event_handler(move |event: SyncRoomTopicEvent, room: Room| {
-        let events = topic_events.clone();
-        async move {
-            if let SyncRoomTopicEvent::Original(event) = event {
-                match room_user_profile(&room, &event.sender).await {
-                    Ok(sender) => emit_event(
-                        &events,
-                        Event::RoomActivity(Box::new(room_activity_from_sync_topic(
-                            room.room_id().as_str(),
-                            &event,
-                            sender,
-                        ))),
-                    ),
-                    Err(err) => emit_sync_error(&events, err),
+    client.add_event_handler(
+        move |event: SyncRoomTopicEvent, room: Room, actions: Vec<Action>| {
+            let events = topic_events.clone();
+            async move {
+                if let SyncRoomTopicEvent::Original(event) = event {
+                    let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
+                    match room_user_profile(&room, &event.sender).await {
+                        Ok(sender) => emit_event(
+                            &events,
+                            Event::RoomActivity(Box::new(room_activity_from_sync_topic(
+                                room.room_id().as_str(),
+                                &event,
+                                sender,
+                                highlight,
+                            ))),
+                        ),
+                        Err(err) => emit_sync_error(&events, err),
+                    }
                 }
             }
-        }
-    });
+        },
+    );
 
     let member_events = events.clone();
     let member_client = client.clone();
-    client.add_event_handler(move |event: SyncRoomMemberEvent, room: Room| {
-        let events = member_events.clone();
-        let client = member_client.clone();
-        async move {
-            if let SyncRoomMemberEvent::Original(event) = event {
-                match room_activity_from_member_event(
-                    &room,
-                    &event,
-                    &mut SenderProfileCache::new(&room),
-                )
-                .await
-                {
-                    Ok(Some(activity)) => {
-                        emit_event(&events, Event::RoomActivity(Box::new(activity)))
+    client.add_event_handler(
+        move |event: SyncRoomMemberEvent, room: Room, actions: Vec<Action>| {
+            let events = member_events.clone();
+            let client = member_client.clone();
+            async move {
+                if let SyncRoomMemberEvent::Original(event) = event {
+                    let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
+                    match room_activity_from_member_event(
+                        &room,
+                        &event,
+                        &mut SenderProfileCache::new(&room),
+                        highlight,
+                    )
+                    .await
+                    {
+                        Ok(Some(activity)) => {
+                            emit_event(&events, Event::RoomActivity(Box::new(activity)))
+                        }
+                        Ok(None) => {}
+                        Err(err) => emit_sync_error(&events, err),
                     }
-                    Ok(None) => {}
-                    Err(err) => emit_sync_error(&events, err),
                 }
-            }
 
-            emit_joined_room_members_after_state_change(&client, &room, &events).await;
-        }
-    });
+                emit_joined_room_members_after_state_change(&client, &room, &events).await;
+            }
+        },
+    );
 
     let power_level_events = events.clone();
     let power_level_client = client.clone();
-    client.add_event_handler(move |event: SyncRoomPowerLevelsEvent, room: Room| {
-        let events = power_level_events.clone();
-        let client = power_level_client.clone();
-        async move {
-            if let SyncRoomPowerLevelsEvent::Original(event) = event {
-                match room_activity_from_power_levels_event(
-                    &room,
-                    &event,
-                    &mut SenderProfileCache::new(&room),
-                )
-                .await
-                {
-                    Ok(Some(activity)) => {
-                        emit_event(&events, Event::RoomActivity(Box::new(activity)))
+    client.add_event_handler(
+        move |event: SyncRoomPowerLevelsEvent, room: Room, actions: Vec<Action>| {
+            let events = power_level_events.clone();
+            let client = power_level_client.clone();
+            async move {
+                if let SyncRoomPowerLevelsEvent::Original(event) = event {
+                    let highlight = activity_highlight(room.own_user_id(), &event.sender, &actions);
+                    match room_activity_from_power_levels_event(
+                        &room,
+                        &event,
+                        &mut SenderProfileCache::new(&room),
+                        highlight,
+                    )
+                    .await
+                    {
+                        Ok(Some(activity)) => {
+                            emit_event(&events, Event::RoomActivity(Box::new(activity)))
+                        }
+                        Ok(None) => {}
+                        Err(err) => emit_sync_error(&events, err),
                     }
-                    Ok(None) => {}
-                    Err(err) => emit_sync_error(&events, err),
                 }
-            }
 
-            // Levels decide every member's rank and our moderation rights.
-            emit_joined_room_members_after_state_change(&client, &room, &events).await;
-        }
-    });
+                // Levels decide every member's rank and our moderation rights.
+                emit_joined_room_members_after_state_change(&client, &room, &events).await;
+            }
+        },
+    );
 
     let typing_events = events.clone();
     client.add_event_handler(move |event: SyncTypingEvent, room: Room| {
@@ -1408,6 +1427,13 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     );
 }
 
+/// Whether the user's push rules highlight an event. The spec forbids
+/// notifying for the user's own events, which push rule evaluation alone
+/// does not exclude.
+fn activity_highlight(own_user_id: &UserId, sender: &UserId, actions: &[Action]) -> bool {
+    sender != own_user_id && actions.iter().any(Action::is_highlight)
+}
+
 type MessageReplacement =
     matrix_sdk::ruma::events::relation::Replacement<RoomMessageEventContentWithoutRelation>;
 
@@ -1423,6 +1449,7 @@ fn room_activity_from_sync_message(
     room_id: &str,
     event: &OriginalSyncRoomMessageEvent,
     sender: RoomUserProfile,
+    highlight: bool,
 ) -> Option<RoomActivity> {
     let relation = room_activity_relation_from_message(event);
 
@@ -1433,6 +1460,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            highlight,
             relation,
             kind: RoomActivityKind::Message(RoomMessageActivity {
                 event_id: Some(event.event_id.to_string()),
@@ -1454,6 +1482,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            highlight,
             relation: relation.clone(),
             kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                 event_id: event.event_id.to_string(),
@@ -1471,6 +1500,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            highlight,
             relation: relation.clone(),
             kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                 event_id: event.event_id.to_string(),
@@ -1488,6 +1518,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            highlight,
             relation: relation.clone(),
             kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                 event_id: event.event_id.to_string(),
@@ -1505,6 +1536,7 @@ fn room_activity_from_sync_message(
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
             timestamp_ms: event.origin_server_ts.get().into(),
+            highlight,
             relation: relation.clone(),
             kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                 event_id: event.event_id.to_string(),
@@ -1523,6 +1555,7 @@ fn room_activity_from_sync_message(
         room_id: room_id.to_owned(),
         activity_id: format!("event:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        highlight,
         relation,
         kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
             event_id: event.event_id.to_string(),
@@ -1744,11 +1777,13 @@ fn room_activity_from_sync_topic(
     room_id: &str,
     event: &OriginalSyncRoomTopicEvent,
     sender: RoomUserProfile,
+    highlight: bool,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("state:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        highlight,
         relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
@@ -1827,11 +1862,13 @@ fn room_activity_from_sync_member(
     change: RoomMemberChange,
     sender: RoomUserProfile,
     target: RoomUserProfile,
+    highlight: bool,
 ) -> RoomActivity {
     RoomActivity {
         room_id: room_id.to_owned(),
         activity_id: format!("state:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        highlight,
         relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
@@ -1849,6 +1886,7 @@ async fn room_activity_from_member_event(
     room: &Room,
     event: &OriginalSyncRoomMemberEvent,
     senders: &mut SenderProfileCache<'_>,
+    highlight: bool,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(change) = room_member_change_from_sync_member(event) else {
         return Ok(None);
@@ -1862,6 +1900,7 @@ async fn room_activity_from_member_event(
         change,
         sender,
         target,
+        highlight,
     )))
 }
 
@@ -1946,6 +1985,7 @@ async fn room_activity_from_power_levels_event(
     room: &Room,
     event: &OriginalSyncRoomPowerLevelsEvent,
     profiles: &mut SenderProfileCache<'_>,
+    highlight: bool,
 ) -> Result<Option<RoomActivity>, MatrixCoreError> {
     let Some(old) = event.unsigned.prev_content.as_ref() else {
         return Ok(None);
@@ -1966,6 +2006,7 @@ async fn room_activity_from_power_levels_event(
         room_id: room.room_id().to_string(),
         activity_id: format!("state:{}", event.event_id),
         timestamp_ms: event.origin_server_ts.get().into(),
+        highlight,
         relation: None,
         kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
             event_id: event.event_id.to_string(),
@@ -2902,6 +2943,8 @@ fn map_local_message_activity(
         room_id,
         activity_id: format!("txn:{transaction_id}"),
         timestamp_ms: created_at.get().into(),
+        // Our own pending message: never a highlight.
+        highlight: false,
         relation,
         kind: RoomActivityKind::Message(RoomMessageActivity {
             event_id: None,
@@ -3315,6 +3358,7 @@ fn room_activity_from_unable_to_decrypt_timeline_event(
     event: &TimelineEvent,
     utd_info: &UnableToDecryptInfo,
     sender: RoomUserProfile,
+    highlight: bool,
 ) -> Option<RoomActivity> {
     let event_id = event.event_id()?.to_string();
 
@@ -3322,6 +3366,7 @@ fn room_activity_from_unable_to_decrypt_timeline_event(
         room_id: room_id.to_owned(),
         activity_id: event_id.clone(),
         timestamp_ms: event.timestamp()?.get().into(),
+        highlight,
         relation: None,
         kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
             event_id,
@@ -3369,14 +3414,20 @@ async fn room_history_backfill_event_from_timeline_event(
     senders: &mut SenderProfileCache<'_>,
 ) -> Result<Option<RoomHistoryBackfillEvent>, MatrixCoreError> {
     let room_id = room.room_id().as_str();
+    // The SDK has no push actions for an event it could not evaluate the
+    // rules for: an undecryptable one, or any when the room lacks the state
+    // the rules need. Such an event is no highlight.
+    let push_actions = event.push_actions().unwrap_or_default();
+    let highlight = |sender: &UserId| activity_highlight(room.own_user_id(), sender, push_actions);
 
     if let TimelineEventKind::UnableToDecrypt { utd_info, .. } = &event.kind {
         let Some(sender) = event.sender() else {
             return Ok(None);
         };
+        let highlight = highlight(&sender);
         let sender = senders.get(&sender).await?;
         return Ok(room_activity_from_unable_to_decrypt_timeline_event(
-            room_id, event, utd_info, sender,
+            room_id, event, utd_info, sender, highlight,
         )
         .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
@@ -3393,8 +3444,13 @@ async fn room_history_backfill_event_from_timeline_event(
             .map(RoomHistoryBackfillEvent::ActivityUpdate));
         }
         let sender = senders.get(&event.sender).await?;
-        return Ok(room_activity_from_sync_message(room_id, &event, sender)
-            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        return Ok(room_activity_from_sync_message(
+            room_id,
+            &event,
+            sender,
+            highlight(&event.sender),
+        )
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncReactionEvent>() {
@@ -3431,14 +3487,19 @@ async fn room_history_backfill_event_from_timeline_event(
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomTopicEvent>() {
         let sender = senders.get(&event.sender).await?;
         return Ok(Some(RoomHistoryBackfillEvent::Activity(Box::new(
-            room_activity_from_sync_topic(room_id, &event, sender),
+            room_activity_from_sync_topic(room_id, &event, sender, highlight(&event.sender)),
         ))));
     }
 
     if let Ok(event) = raw.deserialize_as_unchecked::<OriginalSyncRoomMemberEvent>() {
-        return Ok(room_activity_from_member_event(room, &event, senders)
-            .await?
-            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        return Ok(room_activity_from_member_event(
+            room,
+            &event,
+            senders,
+            highlight(&event.sender),
+        )
+        .await?
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
     // Every power-level field has a default, so any state event would
@@ -3451,9 +3512,14 @@ async fn room_history_backfill_event_from_timeline_event(
                     "failed to decode Matrix power levels event in {room_id}: {err}"
                 ))
             })?;
-        return Ok(room_activity_from_power_levels_event(room, &event, senders)
-            .await?
-            .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
+        return Ok(room_activity_from_power_levels_event(
+            room,
+            &event,
+            senders,
+            highlight(&event.sender),
+        )
+        .await?
+        .map(|activity| RoomHistoryBackfillEvent::Activity(Box::new(activity))));
     }
 
     Ok(None)
@@ -3484,13 +3550,14 @@ mod tests {
 
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
-        ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, attach_reply_relation,
-        attach_thread_relation, attach_thread_reply_relation, backfill_room_history,
-        ban_room_member, cancelled_state, direct_user_ids_by_room_from_content, fetch_room_media,
-        insert_pending_outgoing_kind, joined_room_members, joined_room_members_no_sync,
-        kick_room_member, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
-        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
-        map_local_message_activity, map_send_queue_update, member_target_display_name,
+        ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
+        attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
+        backfill_room_history, ban_room_member, cancelled_state,
+        direct_user_ids_by_room_from_content, fetch_room_media, insert_pending_outgoing_kind,
+        joined_room_members, joined_room_members_no_sync, kick_room_member,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, restore_session,
@@ -4250,6 +4317,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "$encrypted1:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
                     event_id: "$encrypted1:example.org".to_owned(),
@@ -4295,6 +4363,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "$encrypted-vector:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::UnableToDecrypt(RoomUnableToDecryptActivity {
                     event_id: "$encrypted-vector:example.org".to_owned(),
@@ -5153,12 +5222,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
@@ -5190,12 +5261,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
@@ -5227,12 +5300,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$event:example.org".to_owned()),
@@ -5466,6 +5541,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$history:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: Some("$history:example.org".to_owned()),
@@ -5598,6 +5674,7 @@ mod tests {
                     room_id: "!room:example.org".to_owned(),
                     activity_id: "event:$older:example.org".to_owned(),
                     timestamp_ms: 1_700_000_000_100,
+                    highlight: false,
                     relation: None,
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: Some("$older:example.org".to_owned()),
@@ -5612,6 +5689,7 @@ mod tests {
                     room_id: "!room:example.org".to_owned(),
                     activity_id: "event:$newer:example.org".to_owned(),
                     timestamp_ms: 1_700_000_000_200,
+                    highlight: false,
                     relation: None,
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: Some("$newer:example.org".to_owned()),
@@ -5995,12 +6073,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$threaded:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_005,
+                highlight: false,
                 relation: Some(RoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example.org".to_owned(),
                     in_reply_to_event_id: Some("$reply-target:example.org".to_owned()),
@@ -6041,12 +6121,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$reply:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_010,
+                highlight: false,
                 relation: Some(RoomActivityRelation::Reply {
                     in_reply_to_event_id: "$parent:example.org".to_owned(),
                 }),
@@ -6086,12 +6168,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image-thread:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_015,
+                highlight: false,
                 relation: Some(RoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example.org".to_owned(),
                     in_reply_to_event_id: None,
@@ -6137,12 +6221,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$event:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_000,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$event:example.org".to_owned(),
@@ -6185,12 +6271,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_050,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image:example.org".to_owned(),
@@ -6256,12 +6344,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$encrypted:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_060,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$encrypted:example.org".to_owned(),
@@ -6332,12 +6422,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$image-thumb:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_070,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Image(Box::new(RoomImageActivity {
                     event_id: "$image-thumb:example.org".to_owned(),
@@ -6387,12 +6479,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$audio:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_100,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Audio(Box::new(RoomAudioActivity {
                     event_id: "$audio:example.org".to_owned(),
@@ -6436,12 +6530,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$file:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_200,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::File(Box::new(RoomFileActivity {
                     event_id: "$file:example.org".to_owned(),
@@ -6488,12 +6584,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$video:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_300,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Video(Box::new(RoomVideoActivity {
                     event_id: "$video:example.org".to_owned(),
@@ -6537,7 +6635,8 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             None
         );
@@ -6566,12 +6665,14 @@ mod tests {
             room_activity_from_sync_message(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             Some(RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "event:$custom:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_450,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::UnsupportedMessage(UnsupportedRoomMessageActivity {
                     event_id: "$custom:example.org".to_owned(),
@@ -6601,12 +6702,14 @@ mod tests {
             room_activity_from_sync_topic(
                 "!room:example.org",
                 &event,
-                profile("@alice:example.org")
+                profile("@alice:example.org"),
+                false,
             ),
             RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "state:$topic:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_001,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                     event_id: "$topic:example.org".to_owned(),
@@ -6850,11 +6953,13 @@ mod tests {
                 room_member_change_from_sync_member(&event).expect("kick changes membership"),
                 profile("@alice:example.org"),
                 target,
+                false,
             ),
             RoomActivity {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "state:$member:example.org".to_owned(),
                 timestamp_ms: 1_700_000_000_002,
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                     event_id: "$member:example.org".to_owned(),
@@ -7161,6 +7266,157 @@ mod tests {
                         reason: Some("flooding".to_owned()),
                     },
                 })
+            );
+        });
+    }
+
+    #[test]
+    fn activity_highlight_requires_highlight_tweak_from_another_sender() {
+        use matrix_sdk::ruma::push::{Action, HighlightTweakValue, Tweak};
+
+        let own = OwnedUserId::try_from("@me:example.org").expect("own user id");
+        let other = OwnedUserId::try_from("@bob:example.org").expect("other user id");
+        let highlight = [
+            Action::Notify,
+            Action::SetTweak(Tweak::Highlight(HighlightTweakValue::Yes)),
+        ];
+
+        assert!(activity_highlight(&own, &other, &highlight));
+        assert!(!activity_highlight(&own, &other, &[Action::Notify]));
+        assert!(!activity_highlight(&own, &other, &[]));
+        assert!(!activity_highlight(&own, &own, &highlight));
+    }
+
+    fn mention_message_json(event_id: &str, sender: &str, mentioned: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.room.message",
+            "content": {
+                "msgtype": "m.text",
+                "body": "ping",
+                "m.mentions": { "user_ids": [mentioned] }
+            },
+            "event_id": event_id,
+            "sender": sender,
+            "origin_server_ts": 1700000000000u64
+        })
+    }
+
+    #[test]
+    fn live_activity_highlight_follows_push_rules_except_for_own_events() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events);
+            let state_events = profile_test_state_events();
+
+            // No `m.push_rules` account data: the SDK applies the server
+            // default rules, which highlight a user mention.
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events))
+                        .add_timeline_event(raw_sync_timeline_event(mention_message_json(
+                            "$mention:localhost",
+                            "@bob:localhost",
+                            "@example:localhost",
+                        )))
+                        .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                            "$plain:localhost",
+                            "@bob:localhost",
+                            "hi",
+                        )))
+                        .add_timeline_event(raw_sync_timeline_event(mention_message_json(
+                            "$own-mention:localhost",
+                            "@example:localhost",
+                            "@example:localhost",
+                        ))),
+                )
+                .await;
+            let events = drain_events(&event_rx);
+
+            let highlight_of = |activity_id| {
+                let activities = room_activity_by_id(&events, activity_id);
+                assert_eq!(activities.len(), 1, "{activity_id} in {events:?}");
+                activities[0].highlight
+            };
+            assert!(highlight_of("event:$mention:localhost"));
+            assert!(!highlight_of("event:$plain:localhost"));
+            assert!(!highlight_of("event:$own-mention:localhost"));
+        });
+    }
+
+    #[test]
+    fn backfill_activity_highlight_follows_push_rules() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let state_events = profile_test_state_events();
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&state_events)),
+                )
+                .await;
+            let mut mention = mention_message_json(
+                "$old-mention:localhost",
+                "@bob:localhost",
+                "@example:localhost",
+            );
+            mention["room_id"] = serde_json::json!(room_id().as_str());
+            let mut plain = text_message_json("$old-plain:localhost", "@bob:localhost", "old");
+            plain["room_id"] = serde_json::json!(room_id().as_str());
+            mock_server
+                .mock_room_messages()
+                .ok(RoomMessagesResponseTemplate::default().events(vec![
+                    Raw::<AnyTimelineEvent>::from_json_string(plain.to_string())
+                        .expect("raw plain message"),
+                    Raw::<AnyTimelineEvent>::from_json_string(mention.to_string())
+                        .expect("raw mention"),
+                ]))
+                .mock_once()
+                .mount()
+                .await;
+
+            let backfill = backfill_room_history(
+                &client,
+                BackfillRoomHistoryRequest {
+                    room_id: room_id().to_string(),
+                    from: None,
+                    limit: 10,
+                },
+            )
+            .await
+            .expect("backfill room history");
+
+            let highlights = backfill
+                .events
+                .iter()
+                .map(|event| match event {
+                    RoomHistoryBackfillEvent::Activity(activity) => {
+                        (activity.activity_id.as_str(), activity.highlight)
+                    }
+                    update => panic!("unexpected backfill update {update:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                highlights,
+                vec![
+                    ("event:$old-mention:localhost", true),
+                    ("event:$old-plain:localhost", false),
+                ]
             );
         });
     }
@@ -7491,6 +7747,7 @@ mod tests {
                     room_id: room_id().to_string(),
                     activity_id: "state:$power:localhost".to_owned(),
                     timestamp_ms: 1700000000002,
+                    highlight: false,
                     relation: None,
                     kind: RoomActivityKind::StateNotice(RoomStateNoticeActivity {
                         event_id: "$power:localhost".to_owned(),
@@ -7870,6 +8127,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
@@ -7908,6 +8166,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
@@ -7945,6 +8204,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
@@ -8047,6 +8307,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: Some(RoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example.org".to_owned(),
                     in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
@@ -8095,6 +8356,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: Some(RoomActivityRelation::Reply {
                     in_reply_to_event_id: "$parent:example.org".to_owned(),
                 }),
@@ -8456,6 +8718,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: None,
                 kind: RoomActivityKind::Message(RoomMessageActivity {
                     event_id: None,
@@ -8503,6 +8766,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: Some(RoomActivityRelation::Thread {
                     thread_root_event_id: "$thread-root:example.org".to_owned(),
                     in_reply_to_event_id: Some("$thread-1:example.org".to_owned()),
@@ -8553,6 +8817,7 @@ mod tests {
                 room_id: "!room:example.org".to_owned(),
                 activity_id: "txn:txn-1".to_owned(),
                 timestamp_ms: created_at.get().into(),
+                highlight: false,
                 relation: Some(RoomActivityRelation::Reply {
                     in_reply_to_event_id: "$parent:example.org".to_owned(),
                 }),
@@ -8595,6 +8860,7 @@ mod tests {
                     room_id: "!room:example.org".to_owned(),
                     activity_id: "txn:txn-1".to_owned(),
                     timestamp_ms: created_at.get().into(),
+                    highlight: false,
                     relation: None,
                     kind: RoomActivityKind::Message(RoomMessageActivity {
                         event_id: None,

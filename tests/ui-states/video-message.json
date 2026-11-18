@@ -20,6 +20,7 @@
       "room_id": "!media:example.org",
       "activity_id": "event:$video1:example.org",
       "timestamp_ms": 1710000120000,
+      "highlight": false,
       "kind": {
         "type": "video",
         "event_id": "$video1:example.org",
