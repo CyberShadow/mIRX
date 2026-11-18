@@ -14790,7 +14790,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use mirx_core::{RoomMemberChange, RoomStateNoticeActivity};
+    use mirx_core::{RoomMemberChange, RoomMemberRank, RoomStateNoticeActivity};
 
     use super::*;
 
@@ -17944,6 +17944,8 @@ mod tests {
             user_id: user_id.to_owned(),
             display_name: display_name.map(str::to_owned),
             display_name_ambiguous,
+            is_own_user: false,
+            rank: RoomMemberRank::Member,
             can_kick: false,
             can_ban: false,
         }

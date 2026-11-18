@@ -1238,8 +1238,8 @@ mod tests {
     };
     use crate::api::CoreConfig;
     use crate::api::{
-        BanRoomMemberRequest, Command, Event, KickRoomMemberRequest, Operation, RoomMemberSummary,
-        RoomMembers, RoomMembership, RoomReadState, RoomSummary,
+        BanRoomMemberRequest, Command, Event, KickRoomMemberRequest, Operation, RoomMemberRank,
+        RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState, RoomSummary,
     };
     use matrix_sdk::{
         ruma::{
@@ -1541,6 +1541,8 @@ mod tests {
                     user_id: (*user_id).to_owned(),
                     display_name: display_name.map(str::to_owned),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 })

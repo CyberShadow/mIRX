@@ -666,8 +666,31 @@ pub struct RoomMemberSummary {
     pub user_id: String,
     pub display_name: Option<String>,
     pub display_name_ambiguous: bool,
+    /// Whether this member is the authenticated user.
+    pub is_own_user: bool,
+    pub rank: RoomMemberRank,
     pub can_kick: bool,
     pub can_ban: bool,
+}
+
+/// A member's standing in a room, derived from their power level. Variants
+/// are declared highest first, so the derived order sorts higher ranks
+/// before lower ones.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMemberRank {
+    /// A room creator, whose power level is infinite (room version 12+).
+    Creator,
+    /// Power level 100 or more.
+    Administrator,
+    /// Power level 50 or more.
+    Moderator,
+    /// A power level above the room's default for users, but below 50.
+    Voiced,
+    /// The room's default power level for users, or less.
+    Member,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

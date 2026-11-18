@@ -12,11 +12,11 @@ use mirx_core::{
     RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
     RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile,
-    SendFileRequest, SendMessageRequest, SendReactionRequest, SetRoomTopicRequest,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
+    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
     VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
     VerificationState, VerificationStateEvent, start,
@@ -2177,6 +2177,8 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
                 user_id: "@alice:example.org".to_owned(),
                 display_name: Some("Alice".to_owned()),
                 display_name_ambiguous: true,
+                is_own_user: true,
+                rank: RoomMemberRank::Moderator,
                 can_kick: true,
                 can_ban: false,
             },
@@ -2184,6 +2186,8 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
                 user_id: "@bob:example.org".to_owned(),
                 display_name: None,
                 display_name_ambiguous: false,
+                is_own_user: false,
+                rank: RoomMemberRank::Voiced,
                 can_kick: false,
                 can_ban: true,
             },
@@ -2193,7 +2197,7 @@ fn room_members_event_round_trips_multiple_members_and_allows_empty_members() {
     let populated_json = serde_json::to_string(&populated_event).expect("serialize room members");
     assert_eq!(
         populated_json,
-        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":true,"can_kick":true,"can_ban":false},{"user_id":"@bob:example.org","display_name":null,"display_name_ambiguous":false,"can_kick":false,"can_ban":true}]}}"#
+        r#"{"RoomMembers":{"room_id":"!ops:example.org","members":[{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":true,"is_own_user":true,"rank":"moderator","can_kick":true,"can_ban":false},{"user_id":"@bob:example.org","display_name":null,"display_name_ambiguous":false,"is_own_user":false,"rank":"voiced","can_kick":false,"can_ban":true}]}}"#
     );
 
     let restored: Event =
@@ -2860,6 +2864,36 @@ fn room_activity_dtos_reject_unknown_fields() {
             "room member summary must require each moderation capability"
         );
     }
+
+    let complete_member = serde_json::json!({
+        "user_id": "@alice:example.org",
+        "display_name": "Alice",
+        "display_name_ambiguous": false,
+        "is_own_user": false,
+        "rank": "creator",
+        "can_kick": false,
+        "can_ban": false
+    });
+    assert_eq!(
+        serde_json::from_value::<RoomMemberSummary>(complete_member.clone())
+            .expect("complete room member summary")
+            .rank,
+        RoomMemberRank::Creator
+    );
+    for field in ["is_own_user", "rank"] {
+        let mut member = complete_member.clone();
+        member.as_object_mut().expect("member object").remove(field);
+        assert!(
+            serde_json::from_value::<RoomMemberSummary>(member).is_err(),
+            "room member summary must require {field}"
+        );
+    }
+    let mut unknown_rank = complete_member;
+    unknown_rank["rank"] = serde_json::json!("op");
+    assert!(
+        serde_json::from_value::<RoomMemberSummary>(unknown_rank).is_err(),
+        "room member summary must reject unknown ranks"
+    );
 
     assert!(
         serde_json::from_str::<RoomMembers>(

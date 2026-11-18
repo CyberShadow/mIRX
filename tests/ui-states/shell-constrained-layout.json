@@ -139,24 +139,28 @@
         {
           "user_id": "@alice:example",
           "display_name": "Alice", "display_name_ambiguous": false,
+          "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@bob:example",
           "display_name": "Bob", "display_name_ambiguous": false,
+          "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@casey:example",
           "display_name": "Casey", "display_name_ambiguous": false,
+          "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         },
         {
           "user_id": "@dana:example",
           "display_name": "Dana", "display_name_ambiguous": false,
+          "is_own_user": false, "rank": "member",
           "can_kick": false,
           "can_ban": false
         }

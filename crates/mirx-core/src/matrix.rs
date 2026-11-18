@@ -26,9 +26,9 @@ use matrix_sdk::{
     },
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
     room::edit::EditedContent,
-    room::{MessagesOptions, Receipts},
+    room::{MessagesOptions, Receipts, RoomMemberRole},
     ruma::{
-        EventId, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
+        EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
         RoomId, RoomOrAliasId, UInt, UserId,
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
@@ -50,6 +50,7 @@ use matrix_sdk::{
                     Relation as MessageContentRelation, Relation as MessageRelation,
                     RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
                 },
+                power_levels::UserPowerLevel,
                 redaction::OriginalSyncRoomRedactionEvent,
                 topic::{OriginalSyncRoomTopicEvent, SyncRoomTopicEvent},
             },
@@ -78,10 +79,10 @@ use crate::api::{
     RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
     RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberSummary,
-    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
-    RoomMessageSendState, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
+    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
@@ -630,6 +631,8 @@ fn sorted_room_member_summaries_from_parts(
             user_id,
             display_name,
             display_name_ambiguous: false,
+            is_own_user: false,
+            rank: RoomMemberRank::Member,
             can_kick: false,
             can_ban: false,
         })
@@ -645,11 +648,17 @@ fn room_members_from_parts(room_id: &str, members: Vec<(String, Option<String>)>
     }
 }
 
+/// Orders members as the nick list shows them: highest rank first, then by
+/// label, with the user ID breaking ties between equal labels.
 fn room_members_from_summaries(room_id: &str, mut members: Vec<RoomMemberSummary>) -> RoomMembers {
     members.sort_by(|left, right| {
-        room_member_display_label(left)
-            .to_lowercase()
-            .cmp(&room_member_display_label(right).to_lowercase())
+        left.rank
+            .cmp(&right.rank)
+            .then_with(|| {
+                room_member_display_label(left)
+                    .to_lowercase()
+                    .cmp(&room_member_display_label(right).to_lowercase())
+            })
             .then_with(|| left.user_id.cmp(&right.user_id))
     });
     RoomMembers {
@@ -673,9 +682,25 @@ fn moderation_capabilities<T: PartialOrd>(
     )
 }
 
+/// Ranks a power level. Creator, administrator and moderator are the SDK's
+/// suggested roles (infinite, 100 and 50); a lower level that still exceeds
+/// the room's default for users is voiced.
+fn room_member_rank(power_level: UserPowerLevel, users_default: Int) -> RoomMemberRank {
+    match RoomMemberRole::suggested_role_for_power_level(power_level) {
+        RoomMemberRole::Creator => RoomMemberRank::Creator,
+        RoomMemberRole::Administrator => RoomMemberRank::Administrator,
+        RoomMemberRole::Moderator => RoomMemberRank::Moderator,
+        RoomMemberRole::User if power_level > users_default => RoomMemberRank::Voiced,
+        RoomMemberRole::User => RoomMemberRank::Member,
+    }
+}
+
+/// Summarizes `members`. `users_default` must come from the same power
+/// levels the SDK used for the members' own levels.
 fn room_members_from_matrix_members(
     room_id: &str,
     authenticated_user_id: &UserId,
+    users_default: Int,
     members: Vec<matrix_sdk::room::RoomMember>,
 ) -> Result<RoomMembers, MatrixCoreError> {
     let actor = members
@@ -707,6 +732,8 @@ fn room_members_from_matrix_members(
                     user_id: member.user_id().to_string(),
                     display_name: member.display_name().map(str::to_owned),
                     display_name_ambiguous: member.name_ambiguous(),
+                    is_own_user: member.user_id() == authenticated_user_id,
+                    rank: room_member_rank(member.power_level(), users_default),
                     can_kick,
                     can_ban,
                 }
@@ -722,7 +749,12 @@ async fn joined_room_members(
     let members = room.members(RoomMemberships::JOIN).await.map_err(|err| {
         MatrixCoreError::new(format!("failed to read joined Matrix room members: {err}"))
     })?;
-    room_members_from_matrix_members(room.room_id().as_str(), authenticated_user_id, members)
+    room_members_from_matrix_members(
+        room.room_id().as_str(),
+        authenticated_user_id,
+        room_users_default_power_level(room).await,
+        members,
+    )
 }
 
 async fn joined_room_members_no_sync(
@@ -737,7 +769,20 @@ async fn joined_room_members_no_sync(
                 "failed to read cached joined Matrix room members: {err}"
             ))
         })?;
-    room_members_from_matrix_members(room.room_id().as_str(), authenticated_user_id, members)
+    room_members_from_matrix_members(
+        room.room_id().as_str(),
+        authenticated_user_id,
+        room_users_default_power_level(room).await,
+        members,
+    )
+}
+
+/// The room's default power level for users. The SDK computes every
+/// member's level from `power_levels_or_default`, which applies the spec
+/// defaults when the room has no readable `m.room.power_levels` state, so
+/// ranks compare against the same levels.
+async fn room_users_default_power_level(room: &Room) -> Int {
+    room.power_levels_or_default().await.users_default
 }
 
 pub(crate) async fn summarize_joined_room_members(
@@ -3300,7 +3345,7 @@ mod tests {
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
         room_history_backfill_events_from_timeline, room_list_update_is_relevant,
-        room_media_request_parameters, room_member_change_from_sync_member,
+        room_media_request_parameters, room_member_change_from_sync_member, room_member_rank,
         room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
@@ -3394,6 +3439,8 @@ mod tests {
                         user_id: "@example:localhost".to_owned(),
                         display_name: Some("Actor".to_owned()),
                         display_name_ambiguous: false,
+                        is_own_user: true,
+                        rank: RoomMemberRank::Moderator,
                         can_kick: false,
                         can_ban: false,
                     },
@@ -3401,6 +3448,8 @@ mod tests {
                         user_id: "@bob:localhost".to_owned(),
                         display_name: Some("Bob".to_owned()),
                         display_name_ambiguous: false,
+                        is_own_user: false,
+                        rank: RoomMemberRank::Member,
                         can_kick: true,
                         can_ban: false,
                     },
@@ -3760,9 +3809,29 @@ mod tests {
                     room_id: "!room:example.org".to_owned(),
                     members: vec![
                         RoomMemberSummary {
+                            user_id: "@higher:example.org".to_owned(),
+                            display_name: Some("Higher".to_owned()),
+                            display_name_ambiguous: false,
+                            is_own_user: false,
+                            rank: RoomMemberRank::Administrator,
+                            can_kick: false,
+                            can_ban: false
+                        },
+                        RoomMemberSummary {
                             user_id: "@alice:example.org".to_owned(),
                             display_name: Some("Actor".to_owned()),
                             display_name_ambiguous: false,
+                            is_own_user: true,
+                            rank: RoomMemberRank::Moderator,
+                            can_kick: false,
+                            can_ban: false
+                        },
+                        RoomMemberSummary {
+                            user_id: "@equal:example.org".to_owned(),
+                            display_name: Some("Equal".to_owned()),
+                            display_name_ambiguous: false,
+                            is_own_user: false,
+                            rank: RoomMemberRank::Moderator,
                             can_kick: false,
                             can_ban: false
                         },
@@ -3770,27 +3839,202 @@ mod tests {
                             user_id: "@default:example.org".to_owned(),
                             display_name: Some("Default".to_owned()),
                             display_name_ambiguous: false,
+                            is_own_user: false,
+                            rank: RoomMemberRank::Member,
                             can_kick: false,
                             can_ban: true
-                        },
-                        RoomMemberSummary {
-                            user_id: "@equal:example.org".to_owned(),
-                            display_name: Some("Equal".to_owned()),
-                            display_name_ambiguous: false,
-                            can_kick: false,
-                            can_ban: false
-                        },
-                        RoomMemberSummary {
-                            user_id: "@higher:example.org".to_owned(),
-                            display_name: Some("Higher".to_owned()),
-                            display_name_ambiguous: false,
-                            can_kick: false,
-                            can_ban: false
                         },
                     ],
                 }
             );
         });
+    }
+
+    fn joined_member_state_events(
+        room_version: &str,
+        power_levels: serde_json::Value,
+        members: &[(&str, &str)],
+    ) -> serde_json::Value {
+        let mut events = vec![
+            serde_json::json!({
+                "type": "m.room.create", "state_key": "",
+                "sender": "@alice:example.org", "event_id": "$create:example.org",
+                "origin_server_ts": 1u64,
+                "content": { "creator": "@alice:example.org", "room_version": room_version }
+            }),
+            serde_json::json!({
+                "type": "m.room.power_levels", "state_key": "",
+                "sender": "@alice:example.org", "event_id": "$power:example.org",
+                "origin_server_ts": 2u64,
+                "content": power_levels
+            }),
+        ];
+        events.extend(members.iter().enumerate().map(|(index, (user_id, name))| {
+            serde_json::json!({
+                "type": "m.room.member", "state_key": user_id,
+                "sender": user_id, "event_id": format!("$member{index}:example.org"),
+                "origin_server_ts": 3u64 + index as u64,
+                "content": { "membership": "join", "displayname": name }
+            })
+        }));
+        serde_json::Value::Array(events)
+    }
+
+    async fn joined_member_ranks(
+        member_events: serde_json::Value,
+    ) -> Vec<(String, RoomMemberRank)> {
+        let client = client_with_joined_members(member_events).await;
+        let room = client
+            .get_room(room_id().as_ref())
+            .expect("joined room from sync response");
+        joined_room_members_no_sync(client.user_id().expect("authenticated user"), &room)
+            .await
+            .expect("ranked members")
+            .members
+            .into_iter()
+            .map(|member| (member.user_id, member.rank))
+            .collect()
+    }
+
+    #[test]
+    fn joined_member_snapshots_rank_members_by_power_level_then_sort_by_rank_and_name() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let ranks = joined_member_ranks(joined_member_state_events(
+                "10",
+                serde_json::json!({
+                    "users_default": 0,
+                    "users": {
+                        "@alice:example.org": 100,
+                        "@mod:example.org": 50,
+                        "@voice:example.org": 10,
+                        "@bmod:example.org": 99
+                    }
+                }),
+                &[
+                    ("@alice:example.org", "Zed"),
+                    ("@aaron:example.org", "Aaron"),
+                    ("@voice:example.org", "Voice"),
+                    ("@mod:example.org", "Mod"),
+                    ("@bmod:example.org", "Bmod"),
+                ],
+            ))
+            .await;
+
+            assert_eq!(
+                ranks,
+                vec![
+                    (
+                        "@alice:example.org".to_owned(),
+                        RoomMemberRank::Administrator
+                    ),
+                    ("@bmod:example.org".to_owned(), RoomMemberRank::Moderator),
+                    ("@mod:example.org".to_owned(), RoomMemberRank::Moderator),
+                    ("@voice:example.org".to_owned(), RoomMemberRank::Voiced),
+                    ("@aaron:example.org".to_owned(), RoomMemberRank::Member),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn joined_member_snapshots_voice_only_levels_above_the_users_default() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let ranks = joined_member_ranks(joined_member_state_events(
+                "10",
+                serde_json::json!({
+                    "users_default": 10,
+                    "users": {
+                        "@alice:example.org": 10,
+                        "@voice:example.org": 20,
+                        "@muted:example.org": 0
+                    }
+                }),
+                &[
+                    ("@alice:example.org", "Alice"),
+                    ("@default:example.org", "Default"),
+                    ("@muted:example.org", "Muted"),
+                    ("@voice:example.org", "Voice"),
+                ],
+            ))
+            .await;
+
+            assert_eq!(
+                ranks,
+                vec![
+                    ("@voice:example.org".to_owned(), RoomMemberRank::Voiced),
+                    ("@alice:example.org".to_owned(), RoomMemberRank::Member),
+                    ("@default:example.org".to_owned(), RoomMemberRank::Member),
+                    ("@muted:example.org".to_owned(), RoomMemberRank::Member),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn joined_member_snapshots_rank_room_version_12_creators_above_administrators() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let ranks = joined_member_ranks(joined_member_state_events(
+                "12",
+                serde_json::json!({ "users": { "@admin:example.org": 100 } }),
+                &[
+                    ("@admin:example.org", "Admin"),
+                    ("@alice:example.org", "Zed"),
+                ],
+            ))
+            .await;
+
+            assert_eq!(
+                ranks,
+                vec![
+                    ("@alice:example.org".to_owned(), RoomMemberRank::Creator),
+                    (
+                        "@admin:example.org".to_owned(),
+                        RoomMemberRank::Administrator
+                    ),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn room_member_rank_maps_sdk_roles_and_voice() {
+        let rank = |level: i64, users_default: i64| {
+            room_member_rank(
+                UserPowerLevel::Int(Int::new(level).expect("power level")),
+                Int::new(users_default).expect("users default"),
+            )
+        };
+        assert_eq!(
+            room_member_rank(
+                UserPowerLevel::Infinite,
+                Int::new(0).expect("users default")
+            ),
+            RoomMemberRank::Creator
+        );
+        assert_eq!(rank(150, 0), RoomMemberRank::Administrator);
+        assert_eq!(rank(100, 0), RoomMemberRank::Administrator);
+        assert_eq!(rank(99, 0), RoomMemberRank::Moderator);
+        assert_eq!(rank(50, 50), RoomMemberRank::Moderator);
+        assert_eq!(rank(49, 0), RoomMemberRank::Voiced);
+        assert_eq!(rank(1, 0), RoomMemberRank::Voiced);
+        assert_eq!(rank(0, 0), RoomMemberRank::Member);
+        assert_eq!(rank(10, 10), RoomMemberRank::Member);
+        assert_eq!(rank(-5, 0), RoomMemberRank::Member);
     }
 
     #[test]
@@ -3935,7 +4179,7 @@ mod tests {
         RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
         RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfillEvent,
         RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-        RoomMemberChange, RoomMemberSummary, RoomMembers, RoomMessageActivity,
+        RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMessageActivity,
         RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomStateNoticeActivity,
         RoomStateNoticeContent, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
         RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo,
@@ -3953,8 +4197,8 @@ mod tests {
         },
         media::{MediaFormat, MediaThumbnailSettings},
         ruma::{
-            MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId, OwnedUserId,
-            UInt,
+            Int, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
+            OwnedUserId, UInt,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent,
@@ -3963,6 +4207,7 @@ mod tests {
                 key::verification::request::ToDeviceKeyVerificationRequestEventContent,
                 reaction::OriginalSyncReactionEvent,
                 room::MediaSource,
+                room::power_levels::UserPowerLevel,
                 room::{
                     member::{OriginalSyncRoomMemberEvent, RoomMemberEvent},
                     message::{
@@ -4639,6 +4884,8 @@ mod tests {
                     user_id: "@beta:example.org".to_owned(),
                     display_name: Some(String::new()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4646,6 +4893,8 @@ mod tests {
                     user_id: "@charlie:example.org".to_owned(),
                     display_name: None,
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4653,6 +4902,8 @@ mod tests {
                     user_id: "@alpha:example.org".to_owned(),
                     display_name: Some("ALICE".to_owned()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4660,6 +4911,8 @@ mod tests {
                     user_id: "@echo:example.org".to_owned(),
                     display_name: Some("alice".to_owned()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4667,6 +4920,8 @@ mod tests {
                     user_id: "@delta:example.org".to_owned(),
                     display_name: Some("beta".to_owned()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4691,6 +4946,8 @@ mod tests {
                     user_id: "@alpha:example.org".to_owned(),
                     display_name: Some("same".to_owned()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4698,6 +4955,8 @@ mod tests {
                     user_id: "@mike:example.org".to_owned(),
                     display_name: Some("same".to_owned()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -4705,6 +4964,8 @@ mod tests {
                     user_id: "@zulu:example.org".to_owned(),
                     display_name: Some("Same".to_owned()),
                     display_name_ambiguous: false,
+                    is_own_user: false,
+                    rank: RoomMemberRank::Member,
                     can_kick: false,
                     can_ban: false,
                 },
@@ -6585,8 +6846,9 @@ mod tests {
                     .map(|member| (member.user_id.as_str(), member.display_name_ambiguous))
                     .collect::<Vec<_>>(),
                 vec![
-                    ("@bob:localhost", false),
+                    // Without power levels the creator has 100, so ranks first.
                     ("@example:localhost", false),
+                    ("@bob:localhost", false),
                     ("@sam1:localhost", true),
                     ("@sam2:localhost", true),
                 ]
