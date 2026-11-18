@@ -138,19 +138,27 @@
       "members": [
         {
           "user_id": "@alice:example",
-          "display_name": "Alice"
+          "display_name": "Alice",
+          "can_kick": false,
+          "can_ban": false
         },
         {
           "user_id": "@bob:example",
-          "display_name": "Bob"
+          "display_name": "Bob",
+          "can_kick": false,
+          "can_ban": false
         },
         {
           "user_id": "@casey:example",
-          "display_name": "Casey"
+          "display_name": "Casey",
+          "can_kick": false,
+          "can_ban": false
         },
         {
           "user_id": "@dana:example",
-          "display_name": "Dana"
+          "display_name": "Dana",
+          "can_kick": false,
+          "can_ban": false
         }
       ]
     }
