@@ -1338,9 +1338,9 @@ configure_case_expectations() {
         --expect-room-view '!dense:example::[22:18] * Alice sent unsupported com.example.custom: dense custom payload alpha beta gamma delta epsilon zeta'
         --expect-room-view '!dense:example::[22:19] <Alice> dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (sending)'
         --expect-room-view '!dense:example::[22:20] <Alice> dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu (failed)'
-        --expect-room-view '!dense:example::[22:21] * @alice:example sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
-        --expect-room-view '!dense:example::[22:22] <@bob:example> dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
-        --expect-room-view '!dense:example::[22:23] <@carol:example> dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:21] * Alice sent image: dense-diagram-alpha-beta-gamma-delta.png (image/png, 640x480, 12345 bytes)'
+        --expect-room-view '!dense:example::[22:22] <Bob> dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
+        --expect-room-view '!dense:example::[22:23] <Carol> dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
