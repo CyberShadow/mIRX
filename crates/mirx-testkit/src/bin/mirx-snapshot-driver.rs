@@ -47,6 +47,7 @@ mod cli {
         pub(crate) expect_no_switchbar_items: Vec<ViewIdentity>,
         pub(crate) expect_switchbar_active: Option<ViewIdentity>,
         pub(crate) expect_switchbar_rows: Option<u32>,
+        pub(crate) expect_frame_bars_hidden: Vec<FrameBar>,
         pub(crate) expect_switchbar_activity: Vec<SwitchbarActivityExpectation>,
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
         pub(crate) expect_navigation_texts: Vec<String>,
@@ -59,6 +60,22 @@ mod cli {
         pub(crate) expect_room_unreads: Vec<RoomUnreadExpectation>,
         pub(crate) expect_mdi_placements: Vec<MdiPlacementExpectation>,
         pub(crate) expect_mdi_titles: Vec<MdiTitleExpectation>,
+    }
+
+    /// A frame bar that View shows and hides.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum FrameBar {
+        Switchbar,
+        Treebar,
+    }
+
+    impl FrameBar {
+        pub(crate) fn name(self) -> &'static str {
+            match self {
+                Self::Switchbar => "switchbar",
+                Self::Treebar => "treebar",
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -481,6 +498,20 @@ mod cli {
                             )
                         })?);
                 }
+                "--expect-frame-bar-hidden" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-frame-bar-hidden".to_owned())?;
+                    let bar = [FrameBar::Switchbar, FrameBar::Treebar]
+                        .into_iter()
+                        .find(|bar| bar.name() == value)
+                        .ok_or_else(|| {
+                            format!(
+                                "invalid --expect-frame-bar-hidden value {value:?}; expected switchbar or treebar"
+                            )
+                        })?;
+                    config.expect_frame_bars_hidden.push(bar);
+                }
                 "--expect-switchbar-activity" => {
                     let value = args.next().ok_or_else(|| {
                         "missing value for --expect-switchbar-activity".to_owned()
@@ -618,6 +649,7 @@ mod cli {
             "  --expect-no-switchbar-item <identity>",
             "  --expect-switchbar-active <identity>",
             "  --expect-switchbar-rows <count>",
+            "  --expect-frame-bar-hidden <switchbar|treebar>",
             "  --expect-switchbar-activity <identity>::<event|message|highlight>",
             "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
@@ -866,11 +898,11 @@ mod cli {
     #[cfg(test)]
     mod tests {
         use super::{
-            Action, MdiPlacementExpectation, MdiTitleExpectation, NavigationActivityExpectation,
-            RoomMembershipExpectation, RoomReadTargetExpectation, RoomTagExpectation,
-            RoomUnreadExpectation, SwitchbarActivityExpectation, ViewExpectation,
-            format_view_identity, parse_args, parse_view_expectation, parse_view_identity_arg,
-            usage,
+            Action, FrameBar, MdiPlacementExpectation, MdiTitleExpectation,
+            NavigationActivityExpectation, RoomMembershipExpectation, RoomReadTargetExpectation,
+            RoomTagExpectation, RoomUnreadExpectation, SwitchbarActivityExpectation,
+            ViewExpectation, format_view_identity, parse_args, parse_view_expectation,
+            parse_view_identity_arg, usage,
         };
         use mirx_core::RoomMembership;
         use mirx_testkit::{MdiArrangement, MdiWindowState, ViewActivityLevel, ViewIdentity};
@@ -1121,7 +1153,7 @@ mod cli {
         }
 
         #[test]
-        fn parse_args_rejects_bad_switchbar_rows() {
+        fn parse_args_rejects_bad_switchbar_rows_and_bars() {
             for value in ["0", "-1", "two"] {
                 assert!(
                     parse_args(
@@ -1133,6 +1165,14 @@ mod cli {
                     "{value:?} must be rejected"
                 );
             }
+            assert!(
+                parse_args(
+                    ["--expect-frame-bar-hidden", "toolbar"]
+                        .into_iter()
+                        .map(str::to_owned)
+                )
+                .is_err()
+            );
         }
 
         #[test]
@@ -1247,6 +1287,10 @@ mod cli {
                     "room:!ops:example",
                     "--expect-switchbar-rows",
                     "2",
+                    "--expect-frame-bar-hidden",
+                    "treebar",
+                    "--expect-frame-bar-hidden",
+                    "switchbar",
                     "--expect-switchbar-activity",
                     "thread:!ops:example|$thread-root::highlight",
                     "--expect-no-switchbar-activity",
@@ -1327,6 +1371,10 @@ mod cli {
                 })
             );
             assert_eq!(config.expect_switchbar_rows, Some(2));
+            assert_eq!(
+                config.expect_frame_bars_hidden,
+                vec![FrameBar::Treebar, FrameBar::Switchbar]
+            );
             assert_eq!(
                 config.expect_switchbar_activity,
                 vec![SwitchbarActivityExpectation {
@@ -1867,7 +1915,7 @@ mod windows_main {
         UiState, Verification, VerificationState, ViewIdentity,
     };
 
-    use crate::cli::{Action, Config, ViewExpectation, format_view_identity, parse_args};
+    use crate::cli::{Action, Config, FrameBar, ViewExpectation, format_view_identity, parse_args};
 
     impl Config {
         fn requires_ui_state(&self) -> bool {
@@ -1884,6 +1932,7 @@ mod windows_main {
                 || !self.expect_no_switchbar_items.is_empty()
                 || self.expect_switchbar_active.is_some()
                 || self.expect_switchbar_rows.is_some()
+                || !self.expect_frame_bars_hidden.is_empty()
                 || !self.expect_switchbar_activity.is_empty()
                 || !self.expect_no_switchbar_activity.is_empty()
                 || !self.expect_navigation_texts.is_empty()
@@ -2414,6 +2463,21 @@ mod windows_main {
                     ));
                 }
                 println!("PASS switchbar rows {expected_rows}");
+            }
+
+            for bar in &config.expect_frame_bars_hidden {
+                let layout = &ui_state.frame_layout;
+                let rect = match bar {
+                    FrameBar::Switchbar => layout.switchbar,
+                    FrameBar::Treebar => layout.treebar,
+                };
+                if let Some(rect) = rect {
+                    return Err(format!(
+                        "frame bar assertion failed: the {} is shown at {rect:?}",
+                        bar.name()
+                    ));
+                }
+                println!("PASS {} hidden", bar.name());
             }
 
             if let Some(expected_identity) = config.expect_switchbar_active.as_ref() {

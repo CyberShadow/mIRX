@@ -196,6 +196,7 @@ configure_case_expectations() {
   case_frame_size=
   expect_switchbar_active=
   expect_switchbar_rows=
+  frame_bar_hidden_expect_args=()
   verification_text_expect_args=()
   mdi_placement_expect_args=()
   mdi_title_expect_args=()
@@ -1772,6 +1773,33 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    view-bars-hidden)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # The multi-room fixture with both bars hidden: the maximized room
+      # fills the frame from the menubar to the status bar.
+      ordered_actions=(
+        'input:/switchbar off'
+        'input:/treebar off'
+      )
+      room_expect_args=(
+        --expect-room '!lobby:example'
+        --expect-room '!ops:example'
+        --expect-room '!random:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
+        --expect-room-view "!ops:example::[22:13] * Alice changes topic to 'incident review'"
+        --expect-room-view '!ops:example::[22:15] <Alice> ops topic: incident review'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'treebar: off'
+      )
+      frame_bar_hidden_expect_args=(
+        --expect-frame-bar-hidden switchbar
+        --expect-frame-bar-hidden treebar
+      )
+      ;;
     member-ranks)
       expect_selected='!ranks:example'
       expect_active_view='room:!ranks:example'
@@ -2741,6 +2769,7 @@ run_case() {
   if [[ -n "${expect_switchbar_rows:-}" ]]; then
     driver_args+=(--expect-switchbar-rows "$expect_switchbar_rows")
   fi
+  driver_args+=("${frame_bar_hidden_expect_args[@]}")
 
   ui_args=(--render-state "$state_path_win" --automation)
   if [[ -n "${case_frame_size:-}" ]]; then

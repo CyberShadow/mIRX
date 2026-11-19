@@ -1,5 +1,5 @@
-//! The frame's menubar, laid out as mIRC's: File, Tools, Commands, Window
-//! and Help. View and Favorites come with the settings they show.
+//! The frame's menubar, laid out as mIRC's: File, View, Tools, Commands,
+//! Window and Help. Favorites comes with the rooms it lists.
 //!
 //! Pure tables and the rules for which items apply; `create_frame_menu`
 //! builds the Win32 menus from them. The Room, Message and Member menus are
@@ -8,6 +8,7 @@
 use mirx_core::{VerificationState, VerificationStateEvent};
 
 use super::commands::VerificationAction;
+use super::settings::{Bar, Settings};
 use crate::automation::ConnectionState;
 
 pub(super) const MENU_ID_LOGOUT: usize = 40004;
@@ -41,6 +42,8 @@ pub(super) const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
 pub(super) const MENU_ID_FILE_EXIT: usize = 40033;
 pub(super) const MENU_ID_HELP_TOPICS: usize = 40034;
 pub(super) const MENU_ID_HELP_ABOUT: usize = 40035;
+pub(super) const MENU_ID_VIEW_SWITCHBAR: usize = 40036;
+pub(super) const MENU_ID_VIEW_TREEBAR: usize = 40037;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
@@ -79,6 +82,36 @@ pub(super) const FILE_MENU: &[MenuEntry] = &[
         label: "E&xit",
     },
 ];
+
+/// The bars View shows and hides, with their items.
+pub(super) const VIEW_MENU_BARS: [(Bar, usize); 2] = [
+    (Bar::Switchbar, MENU_ID_VIEW_SWITCHBAR),
+    (Bar::Treebar, MENU_ID_VIEW_TREEBAR),
+];
+
+pub(super) const VIEW_MENU: &[MenuEntry] = &[
+    Item {
+        id: MENU_ID_VIEW_SWITCHBAR,
+        label: "&Switchbar",
+    },
+    Item {
+        id: MENU_ID_VIEW_TREEBAR,
+        label: "&Treebar",
+    },
+];
+
+/// The View items' check marks: each is checked while its bar is shown.
+pub(super) fn view_menu_checks(settings: &Settings) -> [(usize, bool); 2] {
+    VIEW_MENU_BARS.map(|(bar, id)| (id, settings.bar_shown(bar)))
+}
+
+/// The bar a View item shows and hides.
+pub(super) fn view_menu_bar(id: usize) -> Option<Bar> {
+    VIEW_MENU_BARS
+        .iter()
+        .find(|(_, item)| *item == id)
+        .map(|(bar, _)| *bar)
+}
 
 pub(super) const TOOLS_MENU: &[MenuEntry] = &[
     Item {
@@ -139,19 +172,21 @@ pub(super) const HELP_MENU: &[MenuEntry] = &[
     },
 ];
 
-/// The menubar's menus, left to right. No mnemonic is `E`: Alt+E is Select
-/// Server, as in mIRC.
+/// The menubar's menus, left to right. No mnemonic is `E` or `L`: Alt+E
+/// is Select Server and Alt+L List rooms, as in mIRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BarMenu {
     File,
+    View,
     Tools,
     Commands,
     Window,
     Help,
 }
 
-pub(super) const MENU_BAR: [(BarMenu, &str); 5] = [
+pub(super) const MENU_BAR: [(BarMenu, &str); 6] = [
     (BarMenu::File, "&File"),
+    (BarMenu::View, "&View"),
     (BarMenu::Tools, "&Tools"),
     (BarMenu::Commands, "&Commands"),
     (BarMenu::Window, "&Window"),
@@ -405,15 +440,47 @@ mod tests {
     }
 
     #[test]
-    fn no_top_level_mnemonic_takes_alt_e() {
-        for (_, label) in MENU_BAR {
-            assert!(!label.to_ascii_lowercase().contains("&e"), "{label}");
+    fn bar_mnemonics_are_unique_and_leave_the_accelerators_free() {
+        let mnemonics = MENU_BAR
+            .iter()
+            .map(|(_, label)| {
+                let (_, rest) = label
+                    .split_once('&')
+                    .expect("every bar menu has a mnemonic");
+                rest.chars().next().unwrap().to_ascii_uppercase()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(mnemonics, ['F', 'V', 'T', 'C', 'W', 'H']);
+    }
+
+    #[test]
+    fn view_items_check_the_shown_bars() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            view_menu_checks(&settings),
+            [(MENU_ID_VIEW_SWITCHBAR, true), (MENU_ID_VIEW_TREEBAR, true)]
+        );
+        settings.treebar.show = false;
+        assert_eq!(
+            view_menu_checks(&settings),
+            [
+                (MENU_ID_VIEW_SWITCHBAR, true),
+                (MENU_ID_VIEW_TREEBAR, false)
+            ]
+        );
+        assert_eq!(view_menu_bar(MENU_ID_VIEW_TREEBAR), Some(Bar::Treebar));
+        assert_eq!(view_menu_bar(MENU_ID_FIND), None);
+        for entry in VIEW_MENU {
+            let Item { id, .. } = entry else {
+                panic!("View has no separator");
+            };
+            assert!(view_menu_bar(*id).is_some());
         }
     }
 
     #[test]
     fn menu_ids_are_unique() {
-        let mut ids = [FILE_MENU, TOOLS_MENU, WINDOW_MENU, HELP_MENU]
+        let mut ids = [FILE_MENU, VIEW_MENU, TOOLS_MENU, WINDOW_MENU, HELP_MENU]
             .into_iter()
             .flatten()
             .filter_map(|entry| match entry {

@@ -101,31 +101,32 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
-    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu,
-    CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow,
-    DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD,
-    ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
-    GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
-    GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo, GetSystemMenu,
-    GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsChild, IsIconic,
-    IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
+    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CheckMenuItem, CreateMenu,
+    CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu,
+    DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE,
+    ES_PASSWORD, ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO,
+    FlashWindowEx, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem,
+    GetForegroundWindow, GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo,
+    GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsChild,
+    IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
+    LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
     LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
     MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
-    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
-    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
-    SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
-    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
-    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
-    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
-    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
-    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
-    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
+    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SendMessageW,
+    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
+    WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY,
+    WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_MEASUREITEM,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT,
+    WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -180,8 +181,9 @@ mod timeline_text;
 mod timestamp;
 
 use commands::{
-    CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand, SlashCommand,
-    TimestampCommand, VerificationAction, local_command_history_entry, parse_compose_submission,
+    BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,
+    SlashCommand, TimestampCommand, VerificationAction, local_command_history_entry,
+    parse_compose_submission,
 };
 use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
@@ -194,10 +196,11 @@ use menus::{
     MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
     MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
     MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
-    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_WINDOW_ARRANGE_ICONS,
-    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
-    MenuEntry, TOOLS_MENU, WINDOW_MENU, commands_menu_item, commands_menu_line,
-    commands_menu_title, file_menu_state, verification_menu_action_enabled,
+    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VIEW_SWITCHBAR,
+    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU, VIEW_MENU,
+    WINDOW_MENU, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    verification_menu_action_enabled, view_menu_bar, view_menu_checks,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
@@ -205,7 +208,7 @@ use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
 use status_log::{StatusLineKind, StatusLog};
 use switchbar::SWITCHBAR_BUTTON_WIDTH;
 
-use settings::{FontSetting, SETTINGS_FILE_NAME, SettingsStore};
+use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use timeline_text::{
     ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
     member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
@@ -324,9 +327,10 @@ struct Controls {
     mdi_client: HWND,
     status_bar: HWND,
     switchbar: HWND,
-    /// The menubar's File and Tools menus, which `refresh_menu_popup`
-    /// updates before they open.
+    /// The menubar's File, View and Tools menus, which
+    /// `refresh_menu_popup` updates before they open.
     file_menu: HMENU,
+    view_menu: HMENU,
     tools_menu: HMENU,
     /// Right-click menus. They hang in no menubar, so `WM_DESTROY`
     /// destroys them.
@@ -6320,12 +6324,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         // edge, painting over it whenever the switchbar repaints. Its
         // buttons wrap onto more rows on its own WM_SIZE (TBSTYLE_WRAPABLE),
         // and `layout_controls` sizes it to them.
-        WS_CHILD
-            | WS_VISIBLE
-            | TBSTYLE_FLAT
-            | TBSTYLE_WRAPABLE
-            | CCS_NORESIZE as u32
-            | CCS_NOPARENTALIGN as u32,
+        // `layout_controls` shows it, as the settings say.
+        WS_CHILD | TBSTYLE_FLAT | TBSTYLE_WRAPABLE | CCS_NORESIZE as u32 | CCS_NOPARENTALIGN as u32,
         0,
         0,
         0,
@@ -6361,11 +6361,12 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         text_flags as LPARAM,
     );
 
+    // `layout_controls` shows it, as the settings say.
     state.controls.tree = create_child_window(
         hwnd,
         TREE_CLASS_NAME,
         "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER,
+        WS_CHILD | WS_BORDER,
         0,
         TREE_ID,
         instance,
@@ -6498,12 +6499,16 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     if frame_menu.is_null() {
         return Err(last_os_error("CreateMenu"));
     }
-    let (mut file_menu, mut tools_menu) = (null_mut(), null_mut());
+    let (mut file_menu, mut view_menu, mut tools_menu) = (null_mut(), null_mut(), null_mut());
     for (bar_menu, label) in MENU_BAR {
         let popup = match bar_menu {
             BarMenu::File => {
                 file_menu = create_menu_from_entries(FILE_MENU)?;
                 file_menu
+            }
+            BarMenu::View => {
+                view_menu = create_menu_from_entries(VIEW_MENU)?;
+                view_menu
             }
             BarMenu::Tools => {
                 tools_menu = create_menu_from_entries(TOOLS_MENU)?;
@@ -6552,6 +6557,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     }
     let controls = &mut state_mut(hwnd).controls;
     controls.file_menu = file_menu;
+    controls.view_menu = view_menu;
     controls.tools_menu = tools_menu;
     controls.room_menu = room_menu;
     controls.message_menu = message_menu;
@@ -6916,6 +6922,8 @@ unsafe fn refresh_menu_popup(hwnd: HWND, popup_menu: HMENU) -> Result<(), String
     let controls = &state_ref(hwnd).controls;
     if popup_menu == controls.file_menu {
         refresh_file_menu_state(hwnd, popup_menu)
+    } else if popup_menu == controls.view_menu {
+        refresh_view_menu_checks(hwnd, popup_menu)
     } else if popup_menu == controls.tools_menu {
         refresh_tools_menu_state(hwnd, popup_menu)
     } else if popup_menu == controls.room_menu {
@@ -6938,6 +6946,16 @@ unsafe fn refresh_file_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), S
         let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
         if EnableMenuItem(popup_menu, item as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
+        }
+    }
+    Ok(())
+}
+
+unsafe fn refresh_view_menu_checks(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    for (item, checked) in view_menu_checks(state_ref(hwnd).settings.settings()) {
+        let flags = MF_BYCOMMAND | if checked { MF_CHECKED } else { MF_UNCHECKED };
+        if CheckMenuItem(popup_menu, item as u32, flags) == u32::MAX {
+            return Err(format!("CheckMenuItem: menu item {item} does not exist"));
         }
     }
     Ok(())
@@ -7156,6 +7174,18 @@ unsafe fn menu_command_result(
             run_local_command(hwnd, SlashCommand::Help { topic: None }).map(|_| Some(())),
         ),
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
+        MENU_ID_VIEW_SWITCHBAR | MENU_ID_VIEW_TREEBAR => {
+            let bar = view_menu_bar(command_id).expect("View items show and hide a bar");
+            let command = if state_ref(hwnd).settings.settings().bar_shown(bar) {
+                BarCommand::Off
+            } else {
+                BarCommand::On
+            };
+            (
+                "View",
+                run_local_command(hwnd, SlashCommand::Bar { bar, command }).map(|_| Some(())),
+            )
+        }
         MENU_ID_RECOVER_E2EE => (
             "Tools",
             show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -8762,24 +8792,38 @@ unsafe fn layout_controls(hwnd: HWND) {
 
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
-    let tree_width = TREE_WIDTH.min(width);
-    // The switchbar wraps its buttons on its own WM_SIZE, so it gets the
-    // frame's width first and its height from the rows that gives.
-    let mut switchbar_rect = RECT::default();
-    GetWindowRect(state.controls.switchbar, &mut switchbar_rect);
-    MoveWindow(
-        state.controls.switchbar,
-        0,
-        0,
-        width,
-        switchbar_rect.bottom - switchbar_rect.top,
-        1,
-    );
-    let rows = u32::try_from(SendMessageW(state.controls.switchbar, TB_GETROWS, 0, 0))
-        .expect("a toolbar's row count is positive");
-    let button_height =
-        (SendMessageW(state.controls.switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32;
-    let switchbar_height = switchbar::switchbar_height(rows, button_height).min(height);
+    // The bars are shown as the settings say. A hidden one is laid out
+    // with no size, and the MDI client takes its place.
+    let settings = state.settings.settings();
+    let (show_switchbar, show_treebar) = (settings.switchbar.show, settings.treebar.show);
+    ShowWindow(state.controls.switchbar, show_or_hide(show_switchbar));
+    ShowWindow(state.controls.tree, show_or_hide(show_treebar));
+    let tree_width = if show_treebar {
+        TREE_WIDTH.min(width)
+    } else {
+        0
+    };
+    let switchbar_height = if show_switchbar {
+        // The switchbar wraps its buttons on its own WM_SIZE, so it gets
+        // the frame's width first and its height from the rows that gives.
+        let mut switchbar_rect = RECT::default();
+        GetWindowRect(state.controls.switchbar, &mut switchbar_rect);
+        MoveWindow(
+            state.controls.switchbar,
+            0,
+            0,
+            width,
+            switchbar_rect.bottom - switchbar_rect.top,
+            1,
+        );
+        let rows = u32::try_from(SendMessageW(state.controls.switchbar, TB_GETROWS, 0, 0))
+            .expect("a toolbar's row count is positive");
+        let button_height =
+            (SendMessageW(state.controls.switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32;
+        switchbar::switchbar_height(rows, button_height).min(height)
+    } else {
+        0
+    };
     MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
     // A status bar sizes and places itself at the bottom of its parent, so
     // the controls above it are laid out against its real height. Sizing it
@@ -8809,6 +8853,10 @@ unsafe fn layout_controls(hwnd: HWND) {
         mdi_height,
         1,
     );
+}
+
+fn show_or_hide(show: bool) -> SHOW_WINDOW_CMD {
+    if show { SW_SHOW } else { SW_HIDE }
 }
 
 unsafe fn handle_core_events(hwnd: HWND) {
@@ -15074,6 +15122,22 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 Ok(Some(status))
             }
         },
+        SlashCommand::Bar { bar, command } => {
+            let show = match command {
+                BarCommand::Show => {
+                    let shown = state_ref(hwnd).settings.settings().bar_shown(bar);
+                    echo_in_active_view(hwnd, [bar_is_line(bar, shown)])?;
+                    return Ok(None);
+                }
+                BarCommand::On => true,
+                BarCommand::Off => false,
+            };
+            state_mut(hwnd)
+                .settings
+                .update(|settings| settings.set_bar_shown(bar, show))?;
+            layout_controls(hwnd);
+            Ok(Some(format!("{}: {}", bar.name(), on_off(show))))
+        }
         SlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
             match action {
@@ -15104,6 +15168,11 @@ unsafe fn change_timestamp_setting(
 
 fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
+}
+
+/// `* Switchbar is on`, what `/switchbar` alone prints.
+fn bar_is_line(bar: Bar, shown: bool) -> String {
+    format!("* {} is {}", bar.title(), on_off(shown))
 }
 
 /// A typed command's error, printed in the window it was typed in; the
@@ -17051,6 +17120,7 @@ mod tests {
     };
 
     use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_WRAP};
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 
     use super::menus::verification_actions_text;
 
@@ -31563,5 +31633,76 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn hidden_bars_give_their_place_to_the_mdi_client() {
+        unsafe {
+            with_test_frame(800, 600, |hwnd| {
+                let bar_command = |bar, command| {
+                    run_slash_command(hwnd, SlashCommand::Bar { bar, command }).unwrap()
+                };
+                let mut client = RECT::default();
+                GetClientRect(hwnd, &mut client);
+                let controls = &state_ref(hwnd).controls;
+                let (switchbar, tree, mdi_client) =
+                    (controls.switchbar, controls.tree, controls.mdi_client);
+                let shown = dump_frame_layout(hwnd);
+
+                assert_eq!(
+                    bar_command(Bar::Switchbar, BarCommand::Off),
+                    Some("switchbar: off".to_owned())
+                );
+                assert!(!state_ref(hwnd).settings.settings().switchbar.show);
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout.switchbar, None);
+                assert_eq!(layout.mdi_client.y, 0);
+                assert_eq!(layout.treebar.unwrap().y, 0);
+
+                // A hidden switchbar still mirrors the views.
+                state_mut(hwnd)
+                    .model
+                    .rooms
+                    .push(room("!room:example", "Room", false));
+                sync_views_and_tree(hwnd).unwrap();
+                assert_eq!(
+                    SendMessageW(switchbar, TB_BUTTONCOUNT, 0, 0) as usize,
+                    state_ref(hwnd).switchbar_views.len()
+                );
+                assert_eq!(state_ref(hwnd).switchbar_views.len(), 2);
+
+                assert_eq!(
+                    bar_command(Bar::Treebar, BarCommand::Off),
+                    Some("treebar: off".to_owned())
+                );
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout.treebar, None);
+                assert_eq!(
+                    layout.mdi_client,
+                    UiRect {
+                        x: 0,
+                        y: 0,
+                        width: client.right,
+                        height: layout.mdi_client.height,
+                    }
+                );
+                assert_eq!(IsWindowVisible(tree), 0);
+
+                bar_command(Bar::Switchbar, BarCommand::On);
+                bar_command(Bar::Treebar, BarCommand::On);
+                let layout = dump_frame_layout(hwnd);
+                assert_eq!(layout, shown);
+                assert_eq!(
+                    frame_child_layout(hwnd, mdi_client).y,
+                    layout.switchbar.unwrap().height
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn bar_lines_name_the_bar() {
+        assert_eq!(bar_is_line(Bar::Switchbar, true), "* Switchbar is on");
+        assert_eq!(bar_is_line(Bar::Treebar, false), "* Treebar is off");
     }
 }

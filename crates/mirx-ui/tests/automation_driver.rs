@@ -4844,7 +4844,10 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
     );
     assert_eq!(
         fs::read_to_string(settings_file_path(&local_app_data))?,
-        "[fonts]\r\ntext=Fixedsys,9\r\n[timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n"
+        "[fonts]\r\ntext=Fixedsys,9\r\n\
+         [timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n\
+         [switchbar]\r\nshow=on\r\n\
+         [treebar]\r\nshow=on\r\n"
     );
     drop(app);
 
@@ -11661,6 +11664,21 @@ fn menu(label: &str, items: &[(&str, bool)]) -> UiMenu {
     }
 }
 
+/// View, with each bar's item checked while the bar is shown.
+fn view_menu(switchbar: bool, treebar: bool) -> UiMenu {
+    UiMenu {
+        label: "&View".to_owned(),
+        items: [("&Switchbar", switchbar), ("&Treebar", treebar)]
+            .into_iter()
+            .map(|(label, checked)| UiMenuItem {
+                label: label.to_owned(),
+                enabled: true,
+                checked,
+            })
+            .collect(),
+    }
+}
+
 fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
     let [connect, disconnect, select_server, log_out] = file;
     vec![
@@ -11674,6 +11692,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("E&xit", true),
             ],
         ),
+        view_menu(true, true),
         menu(
             "&Tools",
             &[
@@ -11743,6 +11762,72 @@ fn menu_bar_is_mirc_shaped() -> Result<(), Box<dyn std::error::Error>> {
         expected_menu_bar([true, false, true, false])
     );
 
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const MENU_ID_VIEW_SWITCHBAR: usize = 40036;
+
+#[test]
+fn view_menu_hides_and_shows_the_bars_and_persists_them() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let launch = || {
+        launch_app_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            launch_options(Some(local_app_data.clone())),
+        )
+    };
+
+    let app = launch()?;
+    let shown = app.dump_ui_state()?.frame_layout;
+    let frame_width = unsafe { client_rect(app.automation_frame_hwnd() as HWND) }.right;
+    invoke_account_menu_command(&app, MENU_ID_VIEW_SWITCHBAR)?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.frame_layout.switchbar, None);
+    assert_eq!(ui_state.frame_layout.mdi_client.y, 0);
+    assert_eq!(ui_state.status_bar.text, "switchbar: off");
+    assert!(ui_state.menu_bar.contains(&view_menu(false, true)));
+    // Its buttons still follow the windows.
+    assert_eq!(ui_state.switchbar.items.len(), 1);
+
+    type_commands(&app, &["/treebar off", "/treebar"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.frame_layout.treebar, None);
+    let mdi_client = ui_state.frame_layout.mdi_client;
+    assert_eq!((mdi_client.x, mdi_client.width), (0, frame_width));
+    assert!(ui_state.menu_bar.contains(&view_menu(false, false)));
+    assert!(status_view_contains(&app, "* Treebar is off")?);
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(ini.contains("[switchbar]\r\nshow=off\r\n"), "{ini}");
+    assert!(ini.contains("[treebar]\r\nshow=off\r\n"), "{ini}");
+    drop(app);
+
+    let app = launch()?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        (
+            ui_state.frame_layout.switchbar,
+            ui_state.frame_layout.treebar
+        ),
+        (None, None)
+    );
+    type_commands(&app, &["/switchbar on", "/treebar maybe", "/TREEBAR ON"])?;
+    assert!(status_view_contains(
+        &app,
+        "* /treebar: usage: /treebar [on|off]"
+    )?);
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.frame_layout, shown);
+    assert_eq!(
+        ui_state.frame_layout.mdi_client.y,
+        shown.switchbar.expect("the switchbar is shown").bottom()
+    );
+    assert!(ui_state.menu_bar.contains(&view_menu(true, true)));
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

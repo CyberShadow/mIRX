@@ -86,12 +86,80 @@ pub(super) fn parse_points(text: &str) -> Result<u8, String> {
 pub(super) struct Settings {
     pub(super) text_font: FontSetting,
     pub(super) timestamp: TimestampSetting,
+    pub(super) switchbar: SwitchbarSetting,
+    pub(super) treebar: TreebarSetting,
+}
+
+impl Settings {
+    pub(super) fn bar_shown(&self, bar: Bar) -> bool {
+        match bar {
+            Bar::Switchbar => self.switchbar.show,
+            Bar::Treebar => self.treebar.show,
+        }
+    }
+
+    pub(super) fn set_bar_shown(&mut self, bar: Bar, show: bool) {
+        match bar {
+            Bar::Switchbar => self.switchbar.show = show,
+            Bar::Treebar => self.treebar.show = show,
+        }
+    }
+}
+
+/// The frame's bars the View menu shows and hides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Bar {
+    Switchbar,
+    Treebar,
+}
+
+impl Bar {
+    /// Its command's name, without the `/`.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Switchbar => "switchbar",
+            Self::Treebar => "treebar",
+        }
+    }
+
+    pub(super) fn title(self) -> &'static str {
+        match self {
+            Self::Switchbar => "Switchbar",
+            Self::Treebar => "Treebar",
+        }
+    }
+}
+
+/// The switchbar, mIRC's View > Switchbar and `/switchbar`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SwitchbarSetting {
+    pub(super) show: bool,
+}
+
+impl Default for SwitchbarSetting {
+    fn default() -> Self {
+        Self { show: true }
+    }
+}
+
+/// The treebar, mIRC's View > Treebar and `/treebar`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TreebarSetting {
+    pub(super) show: bool,
+}
+
+impl Default for TreebarSetting {
+    fn default() -> Self {
+        Self { show: true }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Fonts,
     Timestamp,
+    Switchbar,
+    Treebar,
 }
 
 /// Parses `mirx.ini`. Missing keys keep their defaults.
@@ -112,6 +180,8 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             section = Some(match name.to_ascii_lowercase().as_str() {
                 "fonts" => Section::Fonts,
                 "timestamp" => Section::Timestamp,
+                "switchbar" => Section::Switchbar,
+                "treebar" => Section::Treebar,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
             continue;
@@ -133,20 +203,31 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 settings.text_font = parse_font_value(value.trim_end()).map_err(error)?;
             }
             (Section::Timestamp, "show") => {
-                settings.timestamp.show = match value.trim_end().to_ascii_lowercase().as_str() {
-                    "on" => true,
-                    "off" => false,
-                    _ => return Err(error("show must be on or off".to_owned())),
-                };
+                settings.timestamp.show = parse_on_off(value, "show").map_err(error)?;
             }
             (Section::Timestamp, "format") => {
                 settings.timestamp.format = TimestampFormat::parse(value).map_err(error)?;
+            }
+            (Section::Switchbar, "show") => {
+                settings.switchbar.show = parse_on_off(value, "show").map_err(error)?;
+            }
+            (Section::Treebar, "show") => {
+                settings.treebar.show = parse_on_off(value, "show").map_err(error)?;
             }
             _ => return Err(error(format!("unknown key {key}"))),
         }
         seen.push((section, key));
     }
     Ok(settings)
+}
+
+/// `on` or `off`, in any case.
+fn parse_on_off(value: &str, key: &str) -> Result<bool, String> {
+    match value.trim_end().to_ascii_lowercase().as_str() {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        _ => Err(format!("{key} must be on or off")),
+    }
 }
 
 /// `<face>,<points>[,bold]`.
@@ -164,11 +245,22 @@ fn parse_font_value(value: &str) -> Result<FontSetting, String> {
 pub(super) fn to_ini(settings: &Settings) -> String {
     let font = &settings.text_font;
     let bold = if font.bold { ",bold" } else { "" };
-    let show = if settings.timestamp.show { "on" } else { "off" };
     format!(
-        "[fonts]\r\ntext={},{}{bold}\r\n[timestamp]\r\nshow={show}\r\nformat={}\r\n",
-        font.face, font.points, settings.timestamp.format
+        "[fonts]\r\ntext={},{}{bold}\r\n\
+         [timestamp]\r\nshow={}\r\nformat={}\r\n\
+         [switchbar]\r\nshow={}\r\n\
+         [treebar]\r\nshow={}\r\n",
+        font.face,
+        font.points,
+        on_off(settings.timestamp.show),
+        settings.timestamp.format,
+        on_off(settings.switchbar.show),
+        on_off(settings.treebar.show),
     )
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 /// The settings and the file they are saved in. Every change is saved at
@@ -236,8 +328,10 @@ fn save(path: &Path, settings: &Settings) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    const DEFAULT_INI: &str =
-        "[fonts]\r\ntext=Fixedsys,9\r\n[timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n";
+    const DEFAULT_INI: &str = "[fonts]\r\ntext=Fixedsys,9\r\n\
+        [timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n\
+        [switchbar]\r\nshow=on\r\n\
+        [treebar]\r\nshow=on\r\n";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -254,6 +348,35 @@ mod tests {
         assert_eq!(to_ini(&Settings::default()), DEFAULT_INI);
         assert_eq!(parse_ini(DEFAULT_INI), Ok(Settings::default()));
         assert_eq!(parse_ini(""), Ok(Settings::default()));
+        // A file from before the bars had settings.
+        assert_eq!(
+            parse_ini("[fonts]\r\ntext=Fixedsys,9\r\n[timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n"),
+            Ok(Settings::default())
+        );
+    }
+
+    #[test]
+    fn each_bar_has_its_own_setting() {
+        let mut settings = Settings::default();
+        settings.set_bar_shown(Bar::Treebar, false);
+        assert!(settings.bar_shown(Bar::Switchbar));
+        assert!(!settings.bar_shown(Bar::Treebar));
+        assert!(!settings.treebar.show);
+        settings.set_bar_shown(Bar::Switchbar, false);
+        assert!(!settings.switchbar.show);
+    }
+
+    #[test]
+    fn hidden_bars_round_trip() {
+        let settings = Settings {
+            switchbar: SwitchbarSetting { show: false },
+            treebar: TreebarSetting { show: false },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains("[switchbar]\r\nshow=off\r\n"));
+        assert!(text.contains("[treebar]\r\nshow=off\r\n"));
+        assert_eq!(parse_ini(&text), Ok(settings));
     }
 
     #[test]
@@ -264,6 +387,7 @@ mod tests {
                 show: false,
                 format: TimestampFormat::parse("[HH:nn] ").unwrap(),
             },
+            ..Settings::default()
         };
         let text = to_ini(&settings);
         assert!(text.contains("text=Courier New,12,bold\r\n"));
@@ -310,6 +434,10 @@ mod tests {
                 "line 2: text must be <font name>,<size>[,bold]",
             ),
             ("[timestamp]\nshow=maybe", "line 2: show must be on or off"),
+            ("[switchbar]\nshow=x", "line 2: show must be on or off"),
+            ("[treebar]\n\nshow=1", "line 3: show must be on or off"),
+            ("[treebar]\nshow=on\nshow=off", "line 3: duplicate key show"),
+            ("[switchbar]\nwidth=9", "line 2: unknown key width"),
             ("[timestamp]\nformat=", "line 2: format cannot be empty"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");

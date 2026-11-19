@@ -11,7 +11,7 @@ use std::fmt;
 use mirx_core::{MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind};
 
 use super::nick_completion::member_mention_text;
-use super::settings::{FontSetting, parse_points};
+use super::settings::{Bar, FontSetting, parse_points};
 use super::timeline_text::rank_prefix;
 use super::timestamp::TimestampFormat;
 
@@ -139,6 +139,20 @@ pub(super) enum SlashCommand {
     },
     Timestamp(TimestampCommand),
     Font(FontCommand),
+    /// `/switchbar` and `/treebar`.
+    Bar {
+        bar: Bar,
+        command: BarCommand,
+    },
+}
+
+/// `/switchbar [on|off]`, `/treebar [on|off]`: show the setting, or show or
+/// hide the bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BarCommand {
+    Show,
+    On,
+    Off,
 }
 
 /// `/font [-b] <size> <font name>`, mIRC's `/font -z`: one font for every
@@ -234,6 +248,7 @@ impl SlashCommand {
             Self::Help { .. } => "help",
             Self::Timestamp(_) => "timestamp",
             Self::Font(_) => "font",
+            Self::Bar { bar, .. } => bar.name(),
         }
     }
 }
@@ -444,6 +459,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "activate the Status window",
     },
     CommandSpec {
+        name: "switchbar",
+        usage: "[on|off]",
+        summary: "show or hide the switchbar",
+    },
+    CommandSpec {
         name: "timestamp",
         usage: "[on|off|-f format]",
         summary: "show, turn on or off, or format line timestamps",
@@ -452,6 +472,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "topic",
         usage: "<text>",
         summary: "set this room's topic",
+    },
+    CommandSpec {
+        name: "treebar",
+        usage: "[on|off]",
+        summary: "show or hide the treebar",
     },
     CommandSpec {
         name: "unban",
@@ -690,6 +715,8 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         }),
         "timestamp" => parse_timestamp(argument).map(SlashCommand::Timestamp),
         "font" => parse_font(argument).map(SlashCommand::Font),
+        "switchbar" => parse_bar(Bar::Switchbar, argument),
+        "treebar" => parse_bar(Bar::Treebar, argument),
         _ => Err(CommandError::unknown(name)),
     }
 }
@@ -880,6 +907,21 @@ fn parse_timestamp(argument: &str) -> Result<TimestampCommand, CommandError> {
             "usage: /timestamp [on|off|-f format]",
         )),
     }
+}
+
+fn parse_bar(bar: Bar, argument: &str) -> Result<SlashCommand, CommandError> {
+    let command = match argument.to_ascii_lowercase().as_str() {
+        "" => BarCommand::Show,
+        "on" => BarCommand::On,
+        "off" => BarCommand::Off,
+        _ => {
+            return Err(CommandError::new(
+                bar.name(),
+                format!("usage: /{} [on|off]", bar.name()),
+            ));
+        }
+    };
+    Ok(SlashCommand::Bar { bar, command })
 }
 
 fn parse_verify(argument: &str) -> Result<SlashCommand, CommandError> {
@@ -1666,6 +1708,32 @@ mod tests {
                     .to_owned()
             ])
         );
+    }
+
+    #[test]
+    fn bars_show_or_toggle() {
+        for (name, bar) in [("switchbar", Bar::Switchbar), ("treebar", Bar::Treebar)] {
+            let command = |command| Ok(SlashCommand::Bar { bar, command });
+            assert_eq!(parse(&format!("/{name}")), command(BarCommand::Show));
+            assert_eq!(parse(&format!("/{name} on")), command(BarCommand::On));
+            assert_eq!(
+                parse(&format!("/{} OFF", name.to_ascii_uppercase())),
+                command(BarCommand::Off)
+            );
+            for argument in ["maybe", "on now"] {
+                assert_eq!(
+                    parse(&format!("/{name} {argument}")),
+                    error(name, &format!("usage: /{name} [on|off]")),
+                    "{argument}"
+                );
+            }
+            assert_eq!(
+                help_lines(Some(name)),
+                Ok(vec![format!(
+                    "* /{name} [on|off] — show or hide the {name}"
+                )])
+            );
+        }
     }
 
     #[test]
