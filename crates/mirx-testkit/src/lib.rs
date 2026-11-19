@@ -1141,6 +1141,9 @@ pub struct UiTextFont {
     pub line_height: i32,
     /// The active editbox's height in pixels.
     pub edit_height: i32,
+    /// The fallback faces, in order, that draw characters the text font
+    /// has no glyph for.
+    pub fallback_faces: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

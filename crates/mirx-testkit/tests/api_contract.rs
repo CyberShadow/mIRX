@@ -805,6 +805,7 @@ fn data_models_round_trip_through_json() {
             bold: false,
             line_height: 15,
             edit_height: 25,
+            fallback_faces: vec!["Tahoma".to_owned(), "Noto Emoji".to_owned()],
         },
         timestamp: UiTimestamp {
             show: true,
@@ -1079,6 +1080,7 @@ fn data_models_round_trip_through_json() {
                 "bold": false,
                 "line_height": 15,
                 "edit_height": 25,
+                "fallback_faces": ["Tahoma", "Noto Emoji"],
             },
             "timestamp": {"show": true, "format": "[HH:nn]"},
             "active_system_menu_items": ["&Restore", "&Font..."],
@@ -6215,6 +6217,7 @@ fn switchbar_helpers_find_items_and_active_item() {
             bold: false,
             line_height: 15,
             edit_height: 25,
+            fallback_faces: vec!["Tahoma".to_owned(), "Noto Emoji".to_owned()],
         },
         timestamp: UiTimestamp {
             show: true,

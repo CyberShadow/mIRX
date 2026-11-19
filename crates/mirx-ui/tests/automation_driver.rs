@@ -2669,7 +2669,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 32);
+    assert_eq!(version.protocol_version, 33);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4282,6 +4282,8 @@ fn default_text_font_is_fixedsys_in_every_window() -> Result<(), Box<dyn std::er
         assert_eq!((font.points, font.bold), (9, false));
         assert!((12..=18).contains(&font.line_height), "{font:?}");
         assert!(font.edit_height < 28, "{font:?}");
+        // The harness prefix has Wine's Tahoma and the installed Noto Emoji.
+        assert_eq!(font.fallback_faces, ["Tahoma", "Noto Emoji"]);
         assert!(
             ui_state
                 .active_system_menu_items
@@ -4325,6 +4327,8 @@ fn font_command_changes_and_persists_the_text_font() -> Result<(), Box<dyn std::
     assert_eq!(font.face, "Courier");
     assert_eq!((font.points, font.bold), (12, true));
     assert_ne!(font.line_height, before.line_height);
+    // The fallback chain is rebuilt for the new font.
+    assert_eq!(font.fallback_faces, before.fallback_faces);
     assert_eq!(ui_state.status_bar.text, "font: Courier 12 bold");
     assert!(
         fs::read_to_string(settings_file_path(&local_app_data))?

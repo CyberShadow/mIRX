@@ -38,15 +38,14 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use windows_sys::Win32::Foundation::{
     CloseHandle, FILETIME, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
-    LRESULT, POINT, RECT, SIZE, SYSTEMTIME, WPARAM,
+    LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush,
-    DEFAULT_CHARSET, DT_NOPREFIX, DT_SINGLELINE, DeleteObject, DrawTextW, EndPaint, FW_BOLD,
-    FW_NORMAL, FillRect, FrameRect, GetDC, GetDeviceCaps, GetTextExtentPoint32W, GetTextFaceW,
-    GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints,
-    PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW,
-    TRANSPARENT, TextOutW,
+    DEFAULT_CHARSET, DeleteObject, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC,
+    GetDeviceCaps, GetTextFaceW, GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW,
+    LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode,
+    SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -109,6 +108,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
+use self::glyph_fonts::GlyphFonts;
 use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
     automation::{
@@ -140,8 +140,11 @@ use crate::{
     },
 };
 
+mod cmap;
 mod commands;
 mod echo;
+mod glyph_fonts;
+mod glyph_runs;
 mod mdi;
 mod nick_completion;
 mod settings;
@@ -4363,62 +4366,30 @@ where
     paint_lines
 }
 
-unsafe fn timeline_measure_text_width(
-    hdc: windows_sys::Win32::Graphics::Gdi::HDC,
-    text: &str,
-) -> i32 {
-    if text.is_empty() {
-        return 0;
-    }
-
-    let wide = wide_null(text);
-    let mut size = SIZE { cx: 0, cy: 0 };
-    let result = GetTextExtentPoint32W(hdc, wide.as_ptr(), wide.len() as i32 - 1, &mut size);
-    assert!(
-        result != 0,
-        "GetTextExtentPoint32W must succeed for timeline text"
-    );
-    size.cx
-}
-
-unsafe fn timeline_measurement_hdc(
-    hwnd: HWND,
-) -> (
-    windows_sys::Win32::Graphics::Gdi::HDC,
-    *mut c_void,
-    *mut c_void,
-) {
-    let hdc = GetDC(hwnd);
-    assert!(
-        !hdc.is_null(),
-        "GetDC must succeed for timeline measurement"
-    );
-    let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as *mut c_void;
-    let previous = if font.is_null() {
-        null_mut()
-    } else {
-        SelectObject(hdc, font)
-    };
-    (hdc, font, previous)
-}
-
 unsafe fn timeline_row_paint_lines(
     hwnd: HWND,
     rows: &[TimelineRow],
     client_width: i32,
 ) -> Vec<TimelinePaintLine> {
-    let (hdc, font, previous) = timeline_measurement_hdc(hwnd);
     let state = timeline_state_ref(hwnd);
+    let glyphs = &state_ref(frame_window_for(hwnd)).text_font.glyphs;
+    assert_eq!(
+        state.font,
+        glyphs.hfont(),
+        "a timeline lays out in the frame's text font"
+    );
+    let hdc = GetDC(hwnd);
+    assert!(
+        !hdc.is_null(),
+        "GetDC must succeed for timeline measurement"
+    );
     let paint_lines = timeline_row_paint_lines_with_measure(
         rows,
         client_width,
         state.line_height,
         &state.indent_sample,
-        &|text| unsafe { timeline_measure_text_width(hdc, text) },
+        &|text| unsafe { glyphs.measure(hdc, text) },
     );
-    if !font.is_null() && !previous.is_null() {
-        SelectObject(hdc, previous);
-    }
     ReleaseDC(hwnd, hdc);
     paint_lines
 }
@@ -4435,10 +4406,10 @@ impl Drop for OwnedFont {
     }
 }
 
-/// The text font of every window (`/font`), with the heights laid out
-/// from it.
+/// The text font of every window (`/font`) with its fallback chain, and the
+/// heights laid out from it.
 struct TextFont {
-    font: OwnedFont,
+    glyphs: GlyphFonts,
     /// The height of an editbox showing one line in the font.
     edit_height: i32,
 }
@@ -4478,25 +4449,25 @@ impl TextFont {
         if font.is_null() {
             return Err(last_os_error("CreateFontIndirectW"));
         }
-        let font = OwnedFont(font);
+        let glyphs = GlyphFonts::create(OwnedFont(font), setting.bold())?;
 
         let mut edit_rect = RECT {
             left: 0,
             top: 0,
             right: 0,
-            bottom: font_metrics(font.0).tmHeight + EDIT_TEXT_MARGIN,
+            bottom: glyphs.metrics().tmHeight + EDIT_TEXT_MARGIN,
         };
         if AdjustWindowRectEx(&mut edit_rect, COMPOSE_EDIT_STYLE, 0, COMPOSE_EDIT_EX_STYLE) == 0 {
             return Err(last_os_error("AdjustWindowRectEx editbox"));
         }
         Ok(Self {
-            font,
+            glyphs,
             edit_height: edit_rect.bottom - edit_rect.top,
         })
     }
 
     fn hfont(&self) -> HFONT {
-        self.font.0
+        self.glyphs.hfont()
     }
 }
 
@@ -5349,17 +5320,19 @@ unsafe fn paint_timeline(hwnd: HWND) {
     SetBkMode(hdc, TRANSPARENT as i32);
     let mut client_rect = RECT::default();
     GetClientRect(hwnd, &mut client_rect);
-    let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as *mut c_void;
-    let previous = if font.is_null() {
-        null_mut()
-    } else {
-        SelectObject(hdc, font)
-    };
+    let frame_state = state_ref(frame_window_for(hwnd));
+    let glyphs = &frame_state.text_font.glyphs;
+    let state = timeline_state_ref(hwnd);
+    assert_eq!(
+        state.font,
+        glyphs.hfont(),
+        "a timeline paints in the frame's text font"
+    );
+    let previous = SelectObject(hdc, state.font);
     let find_highlight_brush = CreateSolidBrush(TIMELINE_FIND_HIGHLIGHT_COLOR);
     let selection_brush = CreateSolidBrush(TIMELINE_SELECTION_COLOR);
 
-    let state = timeline_state_ref(hwnd);
-    let selected_event_id = selected_timeline_event_id(state_ref(frame_window_for(hwnd)));
+    let selected_event_id = selected_timeline_event_id(frame_state);
     let visible_rows = timeline_visible_rows(hwnd);
     for (row, line) in state
         .paint_lines
@@ -5404,21 +5377,14 @@ unsafe fn paint_timeline(hwnd: HWND) {
         SetTextColor(hdc, timeline_row_color(&line.kind));
         match &line.visual {
             TimelinePaintLineVisual::Text { text, indent } => {
-                let wide = wide_null(text);
                 let left = TIMELINE_LEFT_PADDING + indent;
-                let mut rect = RECT {
+                let rect = RECT {
                     left,
                     top: line_y,
                     right: (client_rect.right - TIMELINE_RIGHT_PADDING).max(left + 1),
                     bottom: line_y + state.line_height,
                 };
-                DrawTextW(
-                    hdc,
-                    wide.as_ptr(),
-                    wide.len() as i32 - 1,
-                    &mut rect,
-                    DT_SINGLELINE | DT_NOPREFIX,
-                );
+                glyphs.draw(hdc, left, line_y + glyphs.metrics().tmAscent, &rect, text);
             }
             TimelinePaintLineVisual::ImageSlot => {}
         }
@@ -5426,9 +5392,7 @@ unsafe fn paint_timeline(hwnd: HWND) {
 
     DeleteObject(find_highlight_brush);
     DeleteObject(selection_brush);
-    if !font.is_null() && !previous.is_null() {
-        SelectObject(hdc, previous);
-    }
+    SelectObject(hdc, previous);
 
     EndPaint(hwnd, &paint);
 }
@@ -12423,6 +12387,13 @@ unsafe fn dump_text_font(state: &WindowState, view: &MdiViewState) -> UiTextFont
         bold: setting.bold(),
         line_height: timeline_state.line_height,
         edit_height: edit_rect.bottom - edit_rect.top,
+        fallback_faces: state
+            .text_font
+            .glyphs
+            .faces()
+            .skip(1)
+            .map(str::to_owned)
+            .collect(),
     }
 }
 
@@ -16830,6 +16801,18 @@ mod tests {
             .get_mut(&active_view)
             .expect("the test compose window must track the active view")
             .content = content;
+        set_test_timeline_font(hwnd, &active_view, content);
+    }
+
+    /// Gives the stand-in view's timeline the frame's text font, as
+    /// creating a real window does.
+    unsafe fn set_test_timeline_font(hwnd: HWND, view_id: &ViewId, content: HWND) {
+        SendMessageW(
+            view_timeline(view_id, content),
+            WM_SETFONT,
+            state_ref(hwnd).text_font.hfont() as WPARAM,
+            0,
+        );
     }
 
     /// Types `input` into the active editbox and presses Return.
@@ -16863,6 +16846,7 @@ mod tests {
             .get_mut(&active_view)
             .expect("the test compose window must track the active view")
             .content = content;
+        set_test_timeline_font(hwnd, &active_view, content);
         set_timeline_rows(
             room_content_timeline(content),
             &[TimelineRow::log(

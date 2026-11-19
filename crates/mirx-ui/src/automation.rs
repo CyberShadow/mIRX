@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 32;
+pub(crate) const PROTOCOL_VERSION: u32 = 33;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -955,6 +955,9 @@ pub(crate) struct UiTextFont {
     pub(crate) line_height: i32,
     /// The active editbox's height in pixels.
     pub(crate) edit_height: i32,
+    /// The fallback faces, in order, that draw characters the text font
+    /// has no glyph for.
+    pub(crate) fallback_faces: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2848,8 +2851,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_32() {
-        assert_eq!(PROTOCOL_VERSION, 32);
+    fn protocol_version_is_33() {
+        assert_eq!(PROTOCOL_VERSION, 33);
     }
 
     #[test]
@@ -3825,7 +3828,7 @@ mod tests {
             "switchbar":{"items":[]},
             "active_find":null,
             "rooms":[],
-            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25},
+            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
             "active_system_menu_items":[]
         }))
@@ -3847,7 +3850,7 @@ mod tests {
                 "history_search":{"state":"loading"}
             },
             "rooms":[],
-            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25},
+            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
             "active_system_menu_items":[]
         }))
@@ -4652,7 +4655,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":32,
+                    "protocol_version":33,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5192,6 +5195,7 @@ mod tests {
                         bold: false,
                         line_height: 15,
                         edit_height: 25,
+                        fallback_faces: vec!["Tahoma".to_owned(), "Noto Emoji".to_owned()],
                     },
                     timestamp: super::UiTimestamp {
                         show: true,
@@ -5321,7 +5325,8 @@ mod tests {
                         "points":9,
                         "bold":false,
                         "line_height":15,
-                        "edit_height":25
+                        "edit_height":25,
+                        "fallback_faces":["Tahoma","Noto Emoji"]
                     },
                     "timestamp":{"show":true,"format":"[HH:nn]"},
                     "active_system_menu_items":["&Restore","&Font..."]
