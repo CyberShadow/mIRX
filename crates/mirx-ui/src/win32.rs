@@ -117,12 +117,12 @@ use crate::{
     automation::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberMenuState,
-        DumpMemberModerationAction, DumpMemberPowerRole, DumpMembershipCommandAction,
-        DumpMessageMenuState, DumpModel, DumpRoomActivity, DumpRoomActivityKind,
-        DumpRoomActivityResponse, DumpRoomMenuState, DumpRoomMessageActivityLine,
-        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
-        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
+        ComposeTextResponse, ConnectionState, ContextMenuCommand, DumpE2eeRecoverySetupResult,
+        DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
+        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
+        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
+        DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
+        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
         DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
@@ -145,6 +145,7 @@ use crate::{
 
 mod cmap;
 mod commands;
+mod connection;
 mod echo;
 mod glyph_fonts;
 mod glyph_runs;
@@ -159,6 +160,7 @@ use commands::{
     CommandError, ComposeSubmission, E2eeSlashCommand, FontCommand, SlashCommand, TimestampCommand,
     VerificationAction, local_command_history_entry, parse_compose_submission,
 };
+use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
@@ -205,9 +207,6 @@ const SYSMENU_ID_FONT: usize = 0x0110;
 const SYSMENU_FONT_LABEL: &str = "&Font...";
 const COMPOSE_EDIT_STYLE: WINDOW_STYLE = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL as u32;
 const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
-const MENU_ID_LOGIN: usize = 40001;
-const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
-const MENU_ID_START_SYNC: usize = 40003;
 const MENU_ID_LOGOUT: usize = 40004;
 const MENU_ID_RECOVER_E2EE: usize = 40005;
 const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
@@ -234,6 +233,9 @@ const MENU_ID_WINDOW_CASCADE: usize = 40026;
 const MENU_ID_WINDOW_TILE_HORIZONTAL: usize = 40027;
 const MENU_ID_WINDOW_TILE_VERTICAL: usize = 40028;
 const MENU_ID_WINDOW_ARRANGE_ICONS: usize = 40029;
+const MENU_ID_FILE_CONNECT: usize = 40030;
+const MENU_ID_FILE_DISCONNECT: usize = 40031;
+const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -256,6 +258,9 @@ const FIND_DIALOG_OK_ID: usize = 5011;
 const FIND_DIALOG_CANCEL_ID: usize = 5012;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
+/// Posted at startup without a saved session, so Select Server opens once
+/// the frame is shown, as mIRC opens its connect options on a first run.
+const WM_CONNECT_AT_STARTUP: u32 = WM_APP + 3;
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
@@ -659,6 +664,7 @@ struct UiModel {
     /// Kept across logouts, as mIRC keeps Status text across disconnects.
     status_log: StatusLog,
     lifecycle_state: LifecycleState,
+    connection: ConnectionState,
     rooms: Vec<RoomSummary>,
     room_read_states: BTreeMap<String, RoomReadState>,
     selected_room: Option<String>,
@@ -2492,6 +2498,8 @@ struct LoginForm {
 }
 
 struct LoginDialogState {
+    /// `/server <server>` fills the Server field.
+    initial_server: String,
     result: Arc<Mutex<Option<LoginForm>>>,
     server_label: HWND,
     server_edit: HWND,
@@ -2909,9 +2917,21 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
             let bridge = start_core_bridge(hwnd, Arc::clone(&event_queue))?;
             unsafe {
                 state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
-                if session_path()?.is_file() {
-                    submit_restore_saved_session(state_mut(hwnd))?;
+                let session_saved = session_path()?.is_file();
+                if session_saved {
+                    submit_restore_saved_session(state_mut(hwnd), true)?;
                     refresh_status_bar(hwnd)?;
+                } else {
+                    log_status(
+                        state_mut(hwnd),
+                        StatusLineKind::Info,
+                        status_log::CONNECT_HINT.to_owned(),
+                    );
+                }
+                if opens_connect_dialog_at_startup(&command, session_saved)
+                    && PostMessageW(hwnd, WM_CONNECT_AT_STARTUP, 0, 0) == 0
+                {
+                    return Err(last_os_error("PostMessageW WM_CONNECT_AT_STARTUP"));
                 }
             }
             Some(bridge)
@@ -3015,6 +3035,17 @@ fn should_start_core_bridge(command: &AppCommand) -> bool {
         AppCommand::Run(options) => options.render_state.is_none(),
         AppCommand::AutoClose => true,
         AppCommand::SelfTest | AppCommand::Help => false,
+    }
+}
+
+/// Only an interactive run without a saved session opens Select Server by
+/// itself; automation, `--auto-close` and `--self-test` never open a modal.
+fn opens_connect_dialog_at_startup(command: &AppCommand, session_saved: bool) -> bool {
+    match command {
+        AppCommand::Run(options) => {
+            !options.automation && options.render_state.is_none() && !session_saved
+        }
+        AppCommand::SelfTest | AppCommand::AutoClose | AppCommand::Help => false,
     }
 }
 
@@ -3747,6 +3778,12 @@ unsafe extern "system" fn window_proc(
         }
         WM_CORE_EVENT => {
             handle_core_events(hwnd);
+            0
+        }
+        WM_CONNECT_AT_STARTUP => {
+            if let Err(message) = connect(hwnd, None) {
+                show_error_message(hwnd, "Connect", &message);
+            }
             0
         }
         WM_COPYDATA => handle_copydata(hwnd, lparam),
@@ -6226,14 +6263,19 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     if account_menu.is_null() {
         return Err(last_os_error("CreatePopupMenu"));
     }
-    append_menu_text(account_menu, MF_STRING, MENU_ID_LOGIN, "Login")?;
+    append_menu_text(account_menu, MF_STRING, MENU_ID_FILE_CONNECT, "Connect")?;
     append_menu_text(
         account_menu,
         MF_STRING,
-        MENU_ID_RESTORE_SAVED_SESSION,
-        "Restore Saved Session",
+        MENU_ID_FILE_DISCONNECT,
+        "Disconnect",
     )?;
-    append_menu_text(account_menu, MF_STRING, MENU_ID_START_SYNC, "Start Sync")?;
+    append_menu_text(
+        account_menu,
+        MF_STRING,
+        MENU_ID_FILE_SELECT_SERVER,
+        "Select Server...",
+    )?;
     append_menu_text(
         account_menu,
         MF_STRING,
@@ -6842,19 +6884,14 @@ unsafe fn menu_command_result(
             "Member",
             submit_selected_member_moderation(hwnd, false).map(|_| Some(())),
         ),
-        MENU_ID_LOGIN => (
+        MENU_ID_FILE_CONNECT => (
             "Account",
-            show_login_menu_dialog(hwnd).map(|handled| handled.then_some(())),
+            connect(hwnd, None).map(|performed| performed.then_some(())),
         ),
-        MENU_ID_RESTORE_SAVED_SESSION => (
+        MENU_ID_FILE_DISCONNECT => ("Account", disconnect(hwnd).map(|_| Some(()))),
+        MENU_ID_FILE_SELECT_SERVER => (
             "Account",
-            submit_restore_saved_session(state_mut(hwnd))
-                .and_then(|_| refresh_status_bar(hwnd))
-                .map(|_| Some(())),
-        ),
-        MENU_ID_START_SYNC => (
-            "Account",
-            submit_start_sync(state_mut(hwnd)).map(|_| Some(())),
+            show_select_server_dialog(hwnd, "").map(|performed| performed.then_some(())),
         ),
         MENU_ID_RECOVER_E2EE => (
             "Account",
@@ -7202,8 +7239,10 @@ unsafe fn handle_switchbar_command(hwnd: HWND, wparam: WPARAM) -> bool {
     true
 }
 
-unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
-    let Some(form) = show_login_dialog(hwnd)? else {
+/// Returns whether the user logged in rather than cancelled.
+unsafe fn show_select_server_dialog(hwnd: HWND, server: &str) -> Result<bool, String> {
+    connection::check_sign_in(state_ref(hwnd).model.connection)?;
+    let Some(form) = show_login_dialog(hwnd, server)? else {
         return Ok(false);
     };
     submit_login(
@@ -7212,9 +7251,34 @@ unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
         form.username,
         form.password,
         form.device_display_name,
+        true,
     )?;
     refresh_status_bar(hwnd)?;
     Ok(true)
+}
+
+/// File > Connect and `/server [server]`: the step that brings the account
+/// online from where it is. Returns whether it ran rather than the user
+/// cancelling Select Server.
+unsafe fn connect(hwnd: HWND, server: Option<&str>) -> Result<bool, String> {
+    let action = connection::connect_action(
+        state_ref(hwnd).model.connection,
+        server,
+        session_path()?.is_file(),
+    )?;
+    match action {
+        ConnectAction::RestoreSavedSession => submit_restore_saved_session(state_mut(hwnd), true)?,
+        ConnectAction::SelectServer { server } => return show_select_server_dialog(hwnd, &server),
+        ConnectAction::StartSync => submit_start_sync(state_mut(hwnd))?,
+    }
+    refresh_status_bar(hwnd)?;
+    Ok(true)
+}
+
+/// File > Disconnect and `/quit`: stop syncing, keep the session.
+unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
+    connection::check_disconnect(state_ref(hwnd).model.connection)?;
+    enqueue_command(state_mut(hwnd), Command::StopSync)
 }
 
 unsafe fn show_join_room_menu_dialog(hwnd: HWND) -> Result<bool, String> {
@@ -7321,10 +7385,11 @@ unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
         0,
         instance,
     )?;
+    let initial_server = state.initial_server.clone();
     state.server_edit = create_login_dialog_control(
         hwnd,
         EDIT_CLASS_NAME,
-        "",
+        &initial_server,
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
         WS_EX_CLIENTEDGE,
         LOGIN_DIALOG_HOME_SERVER_ID,
@@ -7702,10 +7767,11 @@ unsafe fn layout_login_dialog(hwnd: HWND) {
     );
 }
 
-unsafe fn show_login_dialog(owner: HWND) -> Result<Option<LoginForm>, String> {
+unsafe fn show_login_dialog(owner: HWND, server: &str) -> Result<Option<LoginForm>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
     let dialog_state = Box::new(LoginDialogState {
+        initial_server: server.to_owned(),
         result: Arc::clone(&result),
         server_label: null_mut(),
         server_edit: null_mut(),
@@ -7720,7 +7786,7 @@ unsafe fn show_login_dialog(owner: HWND) -> Result<Option<LoginForm>, String> {
     });
     let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
-    let title = wide_null("Login");
+    let title = wide_null("Select Server");
     let dialog = CreateWindowExW(
         0,
         class_name.as_ptr(),
@@ -8316,6 +8382,7 @@ unsafe fn handle_core_events(hwnd: HWND) {
 
 /// Returns whether the event should flash the frame.
 fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, String> {
+    state.model.connection = connection::after_event(state.model.connection, &event);
     match event {
         Event::Started => {
             if matches!(
@@ -11623,6 +11690,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 args.username,
                 args.password,
                 args.device_display_name,
+                false,
             )
             .map_err(|message| failure_response(Some(id.clone()), "login_failed", message))?;
             refresh_status_bar(hwnd)
@@ -11630,14 +11698,14 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::RestoreSession { id, args } => {
-            submit_restore_session(state_mut(hwnd), args.homeserver_url, args.session)
+            submit_restore_session(state_mut(hwnd), args.homeserver_url, args.session, false)
                 .map_err(|message| failure_response(Some(id.clone()), "restore_failed", message))?;
             refresh_status_bar(hwnd)
                 .map_err(|message| failure_response(Some(id.clone()), "restore_failed", message))?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::RestoreSavedSession { id } => {
-            submit_restore_saved_session(state_mut(hwnd)).map_err(|message| {
+            submit_restore_saved_session(state_mut(hwnd), false).map_err(|message| {
                 failure_response(Some(id.clone()), "restore_saved_failed", message)
             })?;
             refresh_status_bar(hwnd).map_err(|message| {
@@ -13625,6 +13693,14 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             )?;
             Ok(Some(format!("nick change submitted: {display_name}")))
         }
+        SlashCommand::Server { server } => {
+            connect(hwnd, server.as_deref())?;
+            Ok(None)
+        }
+        SlashCommand::Quit => {
+            disconnect(hwnd)?;
+            Ok(None)
+        }
         SlashCommand::Exit => {
             if PostMessageW(hwnd, WM_CLOSE, 0, 0) == 0 {
                 return Err(last_os_error("PostMessageW WM_CLOSE"));
@@ -14301,7 +14377,9 @@ fn submit_login(
     username: String,
     password: String,
     device_display_name: String,
+    start_sync: bool,
 ) -> Result<(), String> {
+    connection::check_sign_in(state.model.connection)?;
     let server = login_server(&server, &username)?;
     if username.is_empty() {
         return Err("username must not be empty".to_owned());
@@ -14327,12 +14405,13 @@ fn submit_login(
             username,
             password,
             device_display_name,
-            start_sync: false,
+            start_sync,
         }))
         .map_err(|err| format!("failed to enqueue login command: {err}"))?;
 
     log_status(state, StatusLineKind::Info, connecting);
 
+    state.model.connection = ConnectionState::SigningIn;
     state.model.status = "logging in".to_owned();
     state.model.lifecycle_state = LifecycleState::LoggingIn;
     Ok(())
@@ -14342,7 +14421,9 @@ fn submit_restore_session(
     state: &mut WindowState,
     homeserver_url: String,
     session: StoredSession,
+    start_sync: bool,
 ) -> Result<(), String> {
+    connection::check_sign_in(state.model.connection)?;
     if homeserver_url.is_empty() {
         return Err("homeserver URL must not be empty".to_owned());
     }
@@ -14365,7 +14446,7 @@ fn submit_restore_session(
         .send(Command::RestoreSession(RestoreSessionRequest {
             homeserver_url: homeserver_url.clone(),
             session,
-            start_sync: false,
+            start_sync,
         }))
         .map_err(|err| format!("failed to enqueue restore session command: {err}"))?;
 
@@ -14376,14 +14457,15 @@ fn submit_restore_session(
     );
     state.model.own_user_id = Some(user_id);
     state.current_session_homeserver_url = Some(homeserver_url);
+    state.model.connection = ConnectionState::SigningIn;
     state.model.status = "restoring saved session".to_owned();
     state.model.lifecycle_state = LifecycleState::Restoring;
     Ok(())
 }
 
-fn submit_restore_saved_session(state: &mut WindowState) -> Result<(), String> {
+fn submit_restore_saved_session(state: &mut WindowState, start_sync: bool) -> Result<(), String> {
     let saved = load_saved_session()?;
-    submit_restore_session(state, saved.homeserver_url, saved.session)
+    submit_restore_session(state, saved.homeserver_url, saved.session, start_sync)
 }
 
 fn submit_start_sync(state: &mut WindowState) -> Result<(), String> {
@@ -14921,6 +15003,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
     DumpModel {
         status: model.status.clone(),
         lifecycle_state: model.lifecycle_state,
+        connection: model.connection,
         rooms: model.rooms.iter().map(dump_room_from_summary).collect(),
         last_activity: model
             .last_activity
@@ -15875,6 +15958,79 @@ mod tests {
             in_reply_to_event_id: Some(thread_root_event_id.to_owned()),
             is_falling_back: false,
         }
+    }
+
+    #[test]
+    fn only_an_interactive_run_without_a_session_opens_select_server_at_startup() {
+        let run = |automation, render_state: Option<&str>| {
+            AppCommand::Run(RunOptions {
+                automation,
+                render_state: render_state.map(PathBuf::from),
+                frame_size: None,
+            })
+        };
+        assert!(opens_connect_dialog_at_startup(&run(false, None), false));
+        assert!(!opens_connect_dialog_at_startup(&run(false, None), true));
+        assert!(!opens_connect_dialog_at_startup(&run(true, None), false));
+        assert!(!opens_connect_dialog_at_startup(
+            &run(false, Some("state.json")),
+            false
+        ));
+        for command in [
+            AppCommand::AutoClose,
+            AppCommand::SelfTest,
+            AppCommand::Help,
+        ] {
+            assert!(!opens_connect_dialog_at_startup(&command, false));
+        }
+    }
+
+    #[test]
+    fn core_events_move_the_connection_state() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            let handle = start_test_core();
+            state.command_sender = Some(handle.command_sender().clone());
+            submit_restore_session(
+                &mut state,
+                "https://matrix.example/".to_owned(),
+                stored_session(),
+                true,
+            )
+            .unwrap();
+            assert_eq!(state.model.connection, ConnectionState::SigningIn);
+            for (event, connection) in [
+                (Event::RestoredSession, ConnectionState::SignedIn),
+                (
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::RestoreSession,
+                        message: "initial Matrix sync failed".to_owned(),
+                    }),
+                    ConnectionState::SignedIn,
+                ),
+                (Event::SyncStarted, ConnectionState::Syncing),
+                (
+                    Event::Error(CoreErrorEvent {
+                        operation: Operation::StartSync,
+                        message: "continuous sync is already running".to_owned(),
+                    }),
+                    ConnectionState::Syncing,
+                ),
+                (
+                    Event::SyncStopped(SyncStopReason::Requested),
+                    ConnectionState::SignedIn,
+                ),
+                (Event::LoggedOut, ConnectionState::SignedOut),
+            ] {
+                apply_core_event(&mut state, event.clone()).unwrap();
+                assert_eq!(state.model.connection, connection, "{event:?}");
+            }
+            handle
+                .command_sender()
+                .send(Command::Shutdown)
+                .expect("shutdown command must enqueue");
+            handle.join().expect("test core must stop cleanly");
+        });
     }
 
     #[test]
@@ -28939,18 +29095,32 @@ mod tests {
             "@alice:example".to_owned(),
             "secret".to_owned(),
             String::new(),
+            false,
         )
         .unwrap();
         assert_eq!(state.model.lifecycle_state, LifecycleState::LoggingIn);
+        assert_eq!(state.model.connection, ConnectionState::SigningIn);
         assert_eq!(
             status_log_lines(&state).last().map(String::as_str),
             Some("[22:12] * Connecting to https://matrix.example as @alice:example")
         );
+        assert_eq!(
+            submit_restore_session(
+                &mut state,
+                "https://matrix.example".to_owned(),
+                stored_session(),
+                false,
+            ),
+            Err("already connecting".to_owned())
+        );
 
+        // The login failed.
+        state.model.connection = ConnectionState::SignedOut;
         submit_restore_session(
             &mut state,
             "https://matrix.example".to_owned(),
             stored_session(),
+            true,
         )
         .unwrap();
         assert_eq!(
@@ -28958,8 +29128,23 @@ mod tests {
             Some("https://matrix.example".to_owned())
         );
         assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
+        assert_eq!(state.model.connection, ConnectionState::SigningIn);
         assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
 
+        state.model.connection = ConnectionState::SignedIn;
+        assert_eq!(
+            submit_login(
+                &mut state,
+                "https://matrix.example".to_owned(),
+                "alice".to_owned(),
+                "secret".to_owned(),
+                String::new(),
+                true,
+            ),
+            Err("already signed in; log out first".to_owned())
+        );
+
+        state.model.connection = ConnectionState::SignedOut;
         assert_eq!(
             submit_login(
                 &mut state,
@@ -28967,11 +29152,12 @@ mod tests {
                 "alice".to_owned(),
                 "secret".to_owned(),
                 String::new(),
+                true,
             ),
             Err("enter a server, or a full user ID like @alice:matrix.org".to_owned())
         );
         assert_eq!(
-            submit_restore_session(&mut state, String::new(), stored_session()),
+            submit_restore_session(&mut state, String::new(), stored_session(), true),
             Err("homeserver URL must not be empty".to_owned())
         );
 
@@ -28987,8 +29173,8 @@ mod tests {
         with_local_app_data(|_| {
             let mut state = test_state();
 
-            let restore_error =
-                submit_restore_saved_session(&mut state).expect_err("missing session must fail");
+            let restore_error = submit_restore_saved_session(&mut state, false)
+                .expect_err("missing session must fail");
             assert!(restore_error.contains("failed to read saved session"));
             assert!(restore_error.contains(SESSION_FILE_NAME));
             assert_eq!(
@@ -29004,7 +29190,7 @@ mod tests {
             state.command_sender = Some(handle.command_sender().clone());
             save_session("https://matrix.example", &stored_session()).unwrap();
 
-            submit_restore_saved_session(&mut state).unwrap();
+            submit_restore_saved_session(&mut state, false).unwrap();
             assert_eq!(state.model.status, "restoring saved session");
             assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
 
@@ -29027,7 +29213,7 @@ mod tests {
             state.command_sender = Some(handle.command_sender().clone());
             save_session("https://matrix.example", &stored_session()).unwrap();
 
-            submit_restore_saved_session(&mut state).unwrap();
+            submit_restore_saved_session(&mut state, false).unwrap();
             assert_eq!(state.model.status, "restoring saved session");
             assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
 

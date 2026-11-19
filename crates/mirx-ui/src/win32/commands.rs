@@ -55,6 +55,12 @@ pub(super) enum SlashCommand {
     },
     Close,
     Exit,
+    /// `/server [server]`: connect, as File > Connect does.
+    Server {
+        server: Option<String>,
+    },
+    /// Disconnect without logging out, as File > Disconnect does.
+    Quit,
     Kick {
         nick: String,
         reason: Option<String>,
@@ -188,6 +194,8 @@ impl SlashCommand {
             Self::Whois { .. } => "whois",
             Self::Close => "close",
             Self::Exit => "exit",
+            Self::Server { .. } => "server",
+            Self::Quit => "quit",
             Self::Kick { .. } => "kick",
             Self::Ban { .. } => "ban",
             Self::Unban { .. } => "unban",
@@ -375,6 +383,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "open a query with a user, and send a message there",
     },
     CommandSpec {
+        name: "quit",
+        usage: "",
+        summary: "disconnect (stop syncing) without logging out",
+    },
+    CommandSpec {
         name: "react",
         usage: "<event-id> <key>",
         summary: "react to a message",
@@ -398,6 +411,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "sendfile",
         usage: "<path>",
         summary: "send a file to this room",
+    },
+    CommandSpec {
+        name: "server",
+        usage: "[server]",
+        summary: "connect to the homeserver",
     },
     CommandSpec {
         name: "status",
@@ -564,6 +582,12 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         }),
         "close" => no_parameters(SlashCommand::Close),
         "exit" => no_parameters(SlashCommand::Exit),
+        "server" => Ok(SlashCommand::Server {
+            server: optional(argument),
+        }),
+        // IRC's /quit takes a message; Matrix has none to send.
+        "quit" if argument.is_empty() => Ok(SlashCommand::Quit),
+        "quit" => Err(CommandError::new("quit", "Matrix has no quit message")),
         "kick" | "ban" | "unban" | "invite" => {
             required(argument)?;
             let (nick, rest) = split_word(argument);
@@ -987,6 +1011,34 @@ mod tests {
             presentation: RoomMessagePresentationKind::Text,
             body: Cow::Owned(body.to_owned()),
         }
+    }
+
+    #[test]
+    fn server_and_quit_parse_like_mirc() {
+        assert_eq!(parse("/server"), Ok(SlashCommand::Server { server: None }));
+        assert_eq!(
+            parse("/server matrix.org"),
+            Ok(SlashCommand::Server {
+                server: Some("matrix.org".to_owned())
+            })
+        );
+        assert_eq!(parse("/quit"), Ok(SlashCommand::Quit));
+        assert_eq!(
+            parse("/quit bye").unwrap_err().to_string(),
+            "* /quit: Matrix has no quit message"
+        );
+        assert_eq!(
+            help_lines(Some("server")),
+            Ok(vec![
+                "* /server [server] — connect to the homeserver".to_owned()
+            ])
+        );
+        assert_eq!(
+            help_lines(Some("quit")),
+            Ok(vec![
+                "* /quit — disconnect (stop syncing) without logging out".to_owned()
+            ])
+        );
     }
 
     #[test]

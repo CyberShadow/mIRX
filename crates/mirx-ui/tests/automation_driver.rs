@@ -239,7 +239,10 @@ fn core_stored_session() -> CoreStoredSession {
     }
 }
 
-fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn write_saved_session(
+    local_app_data: &Path,
+    homeserver_url: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = session_file_path(local_app_data);
     let parent = path
         .parent()
@@ -247,7 +250,7 @@ fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::er
     fs::create_dir_all(parent)?;
     let payload = serde_json::to_vec(&serde_json::json!({
         "version": 1,
-        "homeserver_url": "https://matrix.example",
+        "homeserver_url": homeserver_url,
         "session": {
             "user_id": "@alice:example",
             "device_id": "DEVICE",
@@ -261,6 +264,22 @@ fn write_saved_session(local_app_data: &Path) -> Result<PathBuf, Box<dyn std::er
     bytes.extend_from_slice(&protected);
     fs::write(&path, bytes)?;
     Ok(path)
+}
+
+/// The homeserver URL the app saved with its session.
+fn saved_session_homeserver_url(
+    local_app_data: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let bytes = fs::read(session_file_path(local_app_data))?;
+    let protected = bytes
+        .strip_prefix(PROTECTED_SESSION_MAGIC)
+        .ok_or("saved session is not protected")?;
+    let payload: serde_json::Value =
+        serde_json::from_slice(&dpapi::unprotect(protected, SESSION_DPAPI_ENTROPY)?)?;
+    Ok(payload["homeserver_url"]
+        .as_str()
+        .ok_or("saved session has no homeserver_url")?
+        .to_owned())
 }
 
 fn assert_bytes_do_not_contain(bytes: &[u8], needle: &str) {
@@ -361,9 +380,43 @@ fn spawn_mock_homeserver(
                 }
             }
 
+            // Read the body too: closing with unread bytes resets the
+            // connection before the client reads the response.
+            let header_end = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map_or(request.len(), |position| position + 4);
+            let content_length = String::from_utf8_lossy(&request[..header_end])
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => request.extend_from_slice(&buffer[..read]),
+                }
+            }
+
             let request = String::from_utf8_lossy(&request);
             let request_line = request.lines().next().unwrap_or_default();
             let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+            if path == "/_matrix/client/v3/login" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "user_id": "@alice:example",
+                        "access_token": "secret-token",
+                        "device_id": "DEVICE"
+                    }),
+                );
+                continue;
+            }
 
             if path == "/_matrix/client/versions" {
                 respond_json(
@@ -377,6 +430,11 @@ fn spawn_mock_homeserver(
             }
 
             if path.contains("/sync") {
+                // A continuous sync loop polls with `since`; idle like a
+                // long-poll instead of spinning.
+                if path.contains("since=") {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
                 respond_json(
                     &mut stream,
                     200,
@@ -2670,7 +2728,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 33);
+    assert_eq!(version.protocol_version, 34);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -2886,13 +2944,13 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
 }
 
 #[test]
-fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
+fn automation_driver_lifecycle_commands_are_submitted_in_render_state_mode()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
     let state_path = write_state_file(&base_events())?;
     let local_app_data = unique_local_app_data_path();
-    let session_path = write_saved_session(&local_app_data)?;
+    let session_path = write_saved_session(&local_app_data, "https://matrix.example")?;
     let raw_session_bytes = fs::read(&session_path)?;
     assert_bytes_do_not_contain(&raw_session_bytes, "secret-token");
     assert_bytes_do_not_contain(&raw_session_bytes, "refresh-token");
@@ -2911,16 +2969,201 @@ fn automation_driver_lifecycle_commands_are_accepted_in_render_state_mode()
 
     for result in [
         app.login("https://matrix.example", "@alice:example", "secret", None),
-        app.restore_session("https://matrix.example", stored_session()),
-        app.restore_saved_session(),
         app.start_sync(),
         app.logout(),
     ] {
         result?;
     }
+    // The inert core never answers, so the login stays in flight and a
+    // second sign-in is refused before it reaches the core.
+    assert_eq!(app.dump_model()?.connection, "signing_in");
+    assert!(
+        app.restore_session("https://matrix.example", stored_session())
+            .is_err()
+    );
+    assert!(app.restore_saved_session().is_err());
 
     let _ = fs::remove_file(&state_path);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const MENU_ID_FILE_CONNECT: usize = 40030;
+const MENU_ID_FILE_DISCONNECT: usize = 40031;
+const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
+const LOGIN_DIALOG_SERVER_ID: i32 = 5001;
+const LOGIN_DIALOG_USER_ID: i32 = 5002;
+const LOGIN_DIALOG_PASSWORD_ID: i32 = 5003;
+const LOGIN_DIALOG_OK_ID: usize = 5005;
+const CONNECT_HINT: &str = "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver";
+
+fn launch_automation_app(local_app_data: &Path) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.to_path_buf())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    Ok(app)
+}
+
+fn status_view_contains(app: &MirxApp, line: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    Ok(view_contains(
+        find_view(&app.dump_ui_state()?, &ViewIdentity::Status),
+        line,
+    ))
+}
+
+#[test]
+fn startup_without_session_logs_connect_hint() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+
+    assert_eq!(app.dump_model()?.connection, "signed_out");
+    assert!(status_view_contains(&app, CONNECT_HINT)?);
+    // Automation runs never open Select Server by themselves.
+    let class_name = wide_null("mirxWin32LoginDialog");
+    assert!(unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) }.is_null());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn startup_with_saved_session_restores_and_syncs() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    // Not launch_automation_app: the restore starts before the core reports
+    // Started, so the lifecycle never shows core_started.
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    assert!(status_view_contains(&app, "* Syncing with the homeserver")?);
+    assert!(!status_view_contains(&app, CONNECT_HINT)?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn file_disconnect_and_connect_toggle_sync() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    app.wait_for_connection("signed_in", Duration::from_secs(30))?;
+    assert!(status_view_contains(&app, "] * Disconnected")?);
+
+    app.select_status_view()?;
+    type_commands(&app, &["/server"])?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    type_commands(&app, &["/server"])?;
+    assert!(status_view_contains(&app, "* /server: already connected")?);
+    type_commands(&app, &["/quit"])?;
+    app.wait_for_connection("signed_in", Duration::from_secs(30))?;
+    type_commands(&app, &["/quit", "/quit see you"])?;
+    assert!(status_view_contains(&app, "* /quit: not connected")?);
+    assert!(status_view_contains(
+        &app,
+        "* /quit: Matrix has no quit message"
+    )?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn select_server_dialog_logs_in_and_syncs() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    assert_eq!(app.dump_model()?.connection, "signed_out");
+
+    let frame = app.automation_frame_hwnd() as HWND;
+    let frame_value = frame as isize;
+    let menu_thread = std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            MENU_ID_FILE_SELECT_SERVER as WPARAM,
+            0,
+        );
+    });
+    let class_name = wide_null("mirxWin32LoginDialog");
+    let dialog = wait_for_window(&class_name, "Select Server dialog")?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "Select Server");
+    // A user ID's server part cannot name the http://127.0.0.1 mock, so the
+    // server is typed; the empty-server path is a login_server unit test.
+    for (control_id, text) in [
+        (LOGIN_DIALOG_SERVER_ID, server.base_url.as_str()),
+        (LOGIN_DIALOG_USER_ID, "alice"),
+        (LOGIN_DIALOG_PASSWORD_ID, "secret"),
+    ] {
+        let edit = unsafe { GetDlgItem(dialog, control_id) };
+        assert!(!edit.is_null(), "login dialog control {control_id}");
+        let text = wide_null(text);
+        assert_ne!(unsafe { SetWindowTextW(edit, text.as_ptr()) }, 0);
+    }
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_OK_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Select Server dialog")?;
+    menu_thread
+        .join()
+        .expect("Select Server menu command thread must not panic");
+
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    assert_eq!(
+        saved_session_homeserver_url(&local_app_data)?,
+        format!("{}/", server.base_url)
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+fn wait_for_window(class_name: &[u16], what: &str) -> Result<HWND, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let window = unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) };
+        if !window.is_null() {
+            return Ok(window);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{what} did not appear within five seconds").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn wait_for_window_gone(window: HWND, what: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { IsWindow(window) } != 0 {
+        if Instant::now() >= deadline {
+            return Err(format!("{what} did not close within five seconds").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
     Ok(())
 }
 

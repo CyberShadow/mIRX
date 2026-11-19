@@ -68,6 +68,8 @@ pub(super) fn logged_in(user_id: &str, device_id: &str) -> String {
     format!("Logged in as {user_id} (device {device_id})")
 }
 
+/// Logged at startup without a saved session.
+pub(super) const CONNECT_HINT: &str = "Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver";
 pub(super) const SESSION_RESTORED: &str = "Session restored";
 pub(super) const SYNC_STARTED: &str = "Syncing with the homeserver";
 pub(super) const LOGGED_OUT: &str = "Logged out";

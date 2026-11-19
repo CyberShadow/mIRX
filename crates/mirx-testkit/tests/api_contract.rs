@@ -514,6 +514,7 @@ fn data_models_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![
             mirx_testkit::Room {
                 room_id: "!space:example".to_owned(),
@@ -4055,6 +4056,7 @@ fn model_last_activity_round_trips_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: Some(RoomMessageActivityLine {
             room_id: "!room:example".to_owned(),
@@ -4093,6 +4095,7 @@ fn model_last_activity_round_trips_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": {
                 "room_id": "!room:example",
@@ -4125,6 +4128,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4162,6 +4166,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4184,6 +4189,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4264,6 +4270,7 @@ fn model_submitted_member_moderation_commands_round_trip_and_default_to_empty() 
     let value = serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -4298,6 +4305,7 @@ fn model_submitted_member_moderation_commands_round_trip_and_default_to_empty() 
     let model = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -4314,6 +4322,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4347,6 +4356,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4370,6 +4380,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4398,6 +4409,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4434,6 +4446,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4463,6 +4476,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4497,6 +4511,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4529,6 +4544,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4548,6 +4564,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4572,6 +4589,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4605,6 +4623,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4624,6 +4643,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4648,6 +4668,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4684,6 +4705,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4707,6 +4729,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4735,6 +4758,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4766,6 +4790,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4784,6 +4809,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4807,6 +4833,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
     let input_json = serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -4851,6 +4878,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
         Model {
             status: "synced".to_owned(),
             lifecycle_state: "ready".to_owned(),
+            connection: "syncing".to_owned(),
             rooms: vec![],
             last_activity: None,
             e2ee_status: None,
@@ -4894,6 +4922,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4933,6 +4962,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
     let model = Model {
         status: "synced".to_owned(),
         lifecycle_state: "ready".to_owned(),
+        connection: "syncing".to_owned(),
         rooms: vec![],
         last_activity: None,
         e2ee_status: None,
@@ -4972,6 +5002,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -4996,6 +5027,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         serde_json::from_value::<Model>(serde_json::json!({
             "status": "synced",
             "lifecycle_state": "ready",
+            "connection": "syncing",
             "rooms": [],
             "last_activity": null,
             "e2ee_status": null,
@@ -5025,6 +5057,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
     let model = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5039,6 +5072,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
         Model {
             status: "synced".to_owned(),
             lifecycle_state: "ready".to_owned(),
+            connection: "syncing".to_owned(),
             rooms: vec![],
             last_activity: None,
             e2ee_status: None,
@@ -5069,6 +5103,7 @@ fn model_submitted_membership_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5095,6 +5130,7 @@ fn model_submitted_reply_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5125,6 +5161,7 @@ fn model_submitted_reply_command_threads_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5159,6 +5196,7 @@ fn model_submitted_direct_room_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5185,6 +5223,7 @@ fn model_submitted_room_topic_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5213,6 +5252,7 @@ fn model_submitted_reaction_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5242,6 +5282,7 @@ fn model_submitted_redaction_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5270,6 +5311,7 @@ fn model_submitted_history_commands_reject_unknown_nested_fields() {
     let error = serde_json::from_value::<Model>(serde_json::json!({
         "status": "synced",
         "lifecycle_state": "ready",
+        "connection": "syncing",
         "rooms": [],
         "last_activity": null,
         "e2ee_status": null,
@@ -5301,6 +5343,7 @@ fn data_models_reject_unknown_fields() {
             r#"{
             "status":"synced",
             "lifecycle_state":"ready",
+            "connection":"syncing",
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -5980,6 +6023,7 @@ fn model_last_verification_round_trips_typed_state_json() {
     let model = serde_json::from_value::<Model>(serde_json::json!({
         "status":"verification sas ready with @alice:example",
         "lifecycle_state":"ready",
+        "connection":"syncing",
         "rooms":[],
         "last_activity":null,
         "e2ee_status":null,
@@ -6016,6 +6060,7 @@ fn model_last_verification_round_trips_typed_state_json() {
         serde_json::json!({
             "status":"verification sas ready with @alice:example",
             "lifecycle_state":"ready",
+            "connection":"syncing",
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -6040,6 +6085,7 @@ fn model_e2ee_status_round_trips_typed_state_json() {
     let model = serde_json::from_value::<Model>(serde_json::json!({
         "status":"e2ee status updated",
         "lifecycle_state":"ready",
+        "connection":"syncing",
         "rooms":[],
         "last_activity":null,
         "e2ee_status":{
@@ -6069,6 +6115,7 @@ fn model_e2ee_status_round_trips_typed_state_json() {
         serde_json::json!({
             "status":"e2ee status updated",
             "lifecycle_state":"ready",
+            "connection":"syncing",
             "rooms":[],
             "last_activity":null,
             "e2ee_status":{
@@ -6098,6 +6145,7 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
         serde_json::json!({
             "status":"e2ee status updated",
             "lifecycle_state":"ready",
+            "connection":"syncing",
             "rooms":[],
             "last_activity":null,
             "e2ee_status":{
@@ -6113,6 +6161,7 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
         serde_json::json!({
             "status":"e2ee status updated",
             "lifecycle_state":"ready",
+            "connection":"syncing",
             "rooms":[],
             "last_activity":null,
             "e2ee_status":{
@@ -6127,6 +6176,7 @@ fn model_e2ee_status_rejects_unknown_nested_fields() {
         serde_json::json!({
             "status":"e2ee status updated",
             "lifecycle_state":"ready",
+            "connection":"syncing",
             "rooms":[],
             "last_activity":null,
             "e2ee_status":{

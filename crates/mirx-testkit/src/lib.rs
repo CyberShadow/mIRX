@@ -349,6 +349,8 @@ pub struct FindActiveViewResult {
 pub struct Model {
     pub status: String,
     pub lifecycle_state: String,
+    /// `signed_out`, `signing_in`, `signed_in` or `syncing`.
+    pub connection: String,
     pub rooms: Vec<Room>,
     pub last_activity: Option<RoomMessageActivityLine>,
     pub e2ee_status: Option<E2eeStatus>,
@@ -2043,6 +2045,27 @@ impl MirxApp {
             if std::time::Instant::now() >= deadline {
                 return Err(TestkitError::Timeout(format!(
                     "lifecycle state never reached {expected:?}"
+                )));
+            }
+            std::thread::sleep(DEFAULT_POLL_INTERVAL);
+        }
+    }
+
+    pub fn wait_for_connection(
+        &self,
+        expected: &str,
+        timeout: Duration,
+    ) -> Result<(), TestkitError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            self.wait_idle(remaining)?;
+            if self.dump_model()?.connection == expected {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(TestkitError::Timeout(format!(
+                    "connection never reached {expected:?}"
                 )));
             }
             std::thread::sleep(DEFAULT_POLL_INTERVAL);
