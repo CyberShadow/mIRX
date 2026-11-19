@@ -40,6 +40,7 @@ pub(super) const MENU_ID_FILE_DISCONNECT: usize = 40031;
 pub(super) const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
 pub(super) const MENU_ID_FILE_EXIT: usize = 40033;
 pub(super) const MENU_ID_HELP_TOPICS: usize = 40034;
+pub(super) const MENU_ID_HELP_ABOUT: usize = 40035;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
@@ -124,10 +125,17 @@ pub(super) const WINDOW_MENU: &[MenuEntry] = &[
     },
 ];
 
-pub(super) const HELP_MENU: &[MenuEntry] = &[Item {
-    id: MENU_ID_HELP_TOPICS,
-    label: "&Help Topics",
-}];
+pub(super) const HELP_MENU: &[MenuEntry] = &[
+    Item {
+        id: MENU_ID_HELP_TOPICS,
+        label: "&Help Topics",
+    },
+    Separator,
+    Item {
+        id: MENU_ID_HELP_ABOUT,
+        label: "&About mirx",
+    },
+];
 
 /// The menubar's menus, left to right. No mnemonic is `E`: Alt+E is Select
 /// Server, as in mIRC.

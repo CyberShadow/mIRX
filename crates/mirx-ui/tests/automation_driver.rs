@@ -10972,6 +10972,9 @@ const COMMANDS_MENU_JOIN: usize = 0;
 const COMMANDS_MENU_PART: usize = 1;
 const COMMANDS_MENU_QUERY: usize = 2;
 const MENU_ID_HELP_TOPICS: usize = 40034;
+const MENU_ID_HELP_ABOUT: usize = 40035;
+const ABOUT_DIALOG_VERSION_ID: i32 = 5019;
+const ABOUT_DIALOG_OK_ID: usize = 5024;
 const FIND_DIALOG_QUERY_ID: i32 = 5010;
 const FIND_DIALOG_OK_ID: usize = 5011;
 const FIND_DIALOG_CANCEL_ID: usize = 5012;
@@ -11106,7 +11109,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("Arrange Icons", true),
             ],
         ),
-        menu("&Help", &[("&Help Topics", true)]),
+        menu("&Help", &[("&Help Topics", true), ("&About mirx", true)]),
     ]
 }
 
@@ -11153,6 +11156,42 @@ fn help_topics_echoes_command_list() -> Result<(), Box<dyn std::error::Error>> {
     invoke_account_menu_command(&app, MENU_ID_HELP_TOPICS)?;
     assert!(status_view_contains(&app, "* Commands: /accept /ban")?);
     assert!(status_view_contains(&app, " /join ")?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn help_about_dialog_shows_version_and_closes() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    let frame_value = app.automation_frame_hwnd();
+    let menu_thread = std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            MENU_ID_HELP_ABOUT as WPARAM,
+            0,
+        );
+    });
+    let class_name = wide_null("mirxWin32AboutDialog");
+    let dialog = wait_for_window(&class_name, "About dialog")?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "About mirx");
+    let version = unsafe { GetDlgItem(dialog, ABOUT_DIALOG_VERSION_ID) };
+    assert!(!version.is_null(), "About dialog version line must exist");
+    assert_eq!(
+        unsafe { read_window_text(version) },
+        format!("mirx {}", env!("CARGO_PKG_VERSION"))
+    );
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, ABOUT_DIALOG_OK_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "About dialog")?;
+    menu_thread
+        .join()
+        .expect("About menu command thread must not panic");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

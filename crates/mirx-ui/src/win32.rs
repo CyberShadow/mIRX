@@ -171,15 +171,16 @@ use echo::{EchoLine, EchoLog};
 use menus::{
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MENU_BAR, MENU_ID_COMMANDS_FIRST,
     MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER,
-    MENU_ID_FIND, MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_KICK,
-    MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_REACT,
-    MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
-    MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_PART,
-    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_VERIFY_ACCEPT,
-    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
-    MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL,
-    MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU, WINDOW_MENU, commands_menu_item,
-    commands_menu_line, commands_menu_title, file_menu_state, verification_menu_action_enabled,
+    MENU_ID_FIND, MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN,
+    MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT,
+    MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY,
+    MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
+    MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY,
+    MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS,
+    MENU_ID_VERIFY_REJECT_SAS, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU,
+    WINDOW_MENU, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    verification_menu_action_enabled,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
@@ -203,6 +204,7 @@ const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
 const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
 const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
 const FIND_DIALOG_CLASS_NAME: &str = "mirxWin32FindDialog";
+const ABOUT_DIALOG_CLASS_NAME: &str = "mirxWin32AboutDialog";
 const FRAME_TITLE: &str = "mirx";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
     width: 1024,
@@ -249,6 +251,15 @@ const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
 const FIND_DIALOG_QUERY_ID: u16 = 5010;
 const FIND_DIALOG_OK_ID: usize = 5011;
 const FIND_DIALOG_CANCEL_ID: usize = 5012;
+/// The About box's lines, top to bottom, with the control ids tests read.
+const ABOUT_DIALOG_LINES: [(u16, &str); 5] = [
+    (5019, concat!("mirx ", env!("CARGO_PKG_VERSION"))),
+    (5020, "mIRC, but Matrix."),
+    (5021, "A native Win32 Matrix client"),
+    (5022, "End-to-end encryption by matrix-rust-sdk"),
+    (5023, "Licensed under the Apache License 2.0"),
+];
+const ABOUT_DIALOG_OK_ID: usize = 5024;
 const WM_CORE_EVENT: u32 = WM_APP + 1;
 const WM_SELF_TEST: u32 = WM_APP + 2;
 /// Posted at startup without a saved session, so Select Server opens once
@@ -2853,6 +2864,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     register_setup_e2ee_dialog_class(instance)?;
     register_recovery_key_handoff_dialog_class(instance)?;
     register_find_dialog_class(instance)?;
+    register_about_dialog_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -3655,6 +3667,34 @@ fn register_find_dialog_class(instance: *mut c_void) -> Result<(), String> {
         let error = unsafe { GetLastError() };
         if error != 1410 {
             return Err(last_os_error("RegisterClassExW find dialog"));
+        }
+    }
+
+    Ok(())
+}
+
+fn register_about_dialog_class(instance: *mut c_void) -> Result<(), String> {
+    let class_name = wide_null(ABOUT_DIALOG_CLASS_NAME);
+    let window_class = WNDCLASSEXW {
+        cbSize: size_of::<WNDCLASSEXW>() as u32,
+        style: 0,
+        lpfnWndProc: Some(about_dialog_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: instance,
+        hIcon: null_mut(),
+        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        lpszMenuName: null(),
+        lpszClassName: class_name.as_ptr(),
+        hIconSm: null_mut(),
+    };
+
+    let atom = unsafe { RegisterClassExW(&window_class) };
+    if atom == 0 {
+        let error = unsafe { GetLastError() };
+        if error != 1410 {
+            return Err(last_os_error("RegisterClassExW about dialog"));
         }
     }
 
@@ -6084,6 +6124,29 @@ unsafe extern "system" fn find_dialog_window_proc(
     }
 }
 
+/// The About box keeps no state: DefWindowProcW destroys it on WM_CLOSE.
+unsafe extern "system" fn about_dialog_window_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match message {
+        WM_CREATE => match create_about_dialog_controls(hwnd) {
+            Ok(()) => 0,
+            Err(message) => {
+                eprintln!("{message}");
+                -1
+            }
+        },
+        WM_COMMAND if wparam & 0xffff == ABOUT_DIALOG_OK_ID => {
+            DestroyWindow(hwnd);
+            0
+        }
+        _ => DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+}
+
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
     let state = state_mut(hwnd);
@@ -6875,6 +6938,7 @@ unsafe fn menu_command_result(
             "Help",
             run_local_command(hwnd, SlashCommand::Help { topic: None }).map(|_| Some(())),
         ),
+        MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_RECOVER_E2EE => (
             "Tools",
             show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
@@ -7659,6 +7723,54 @@ unsafe fn create_recovery_key_handoff_dialog_controls(hwnd: HWND) -> Result<(), 
     Ok(())
 }
 
+unsafe fn create_about_dialog_controls(hwnd: HWND) -> Result<(), String> {
+    let instance = GetModuleHandleW(null());
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+    let width = rect.right - rect.left;
+    let line_height = 18;
+    let line_spacing = 24;
+    for (index, (control_id, text)) in ABOUT_DIALOG_LINES.into_iter().enumerate() {
+        let line = create_login_dialog_control(
+            hwnd,
+            STATIC_CLASS_NAME,
+            text,
+            WS_CHILD | WS_VISIBLE,
+            0,
+            control_id,
+            instance,
+        )?;
+        MoveWindow(
+            line,
+            16,
+            16 + index as i32 * line_spacing,
+            width - 32,
+            line_height,
+            1,
+        );
+    }
+    let ok_button = create_login_dialog_control(
+        hwnd,
+        BUTTON_CLASS_NAME,
+        "OK",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        0,
+        ABOUT_DIALOG_OK_ID as u16,
+        instance,
+    )?;
+    let button_width = 96;
+    let button_height = 28;
+    MoveWindow(
+        ok_button,
+        (width - button_width) / 2,
+        rect.bottom - button_height - 16,
+        button_width,
+        button_height,
+        1,
+    );
+    Ok(())
+}
+
 unsafe fn create_login_dialog_control(
     parent: HWND,
     class_name: &str,
@@ -8223,6 +8335,51 @@ unsafe fn show_single_field_dialog(
         .lock()
         .expect("find dialog result mutex poisoned")
         .clone())
+}
+
+/// Help > About mirx: modal over `owner`; OK, Enter and Esc close it.
+unsafe fn show_about_dialog(owner: HWND) -> Result<(), String> {
+    let class_name = wide_null(ABOUT_DIALOG_CLASS_NAME);
+    let title = wide_null("About mirx");
+    let dialog = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        380,
+        230,
+        owner,
+        null_mut(),
+        GetModuleHandleW(null()),
+        null(),
+    );
+    if dialog.is_null() {
+        return Err(last_os_error("CreateWindowExW about dialog"));
+    }
+
+    EnableWindow(owner, 0);
+    SetFocus(GetDlgItem(dialog, ABOUT_DIALOG_OK_ID as i32));
+
+    let mut message = MSG::default();
+    while IsWindow(dialog) != 0 {
+        if GetMessageW(&mut message, null_mut(), 0, 0) <= 0 {
+            break;
+        }
+        if message.message == WM_KEYDOWN
+            && matches!(message.wParam, VK_RETURN_KEY | VK_ESCAPE_KEY)
+            && (message.hwnd == dialog || IsChild(dialog, message.hwnd) != 0)
+        {
+            DestroyWindow(dialog);
+            continue;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+
+    EnableWindow(owner, 1);
+    Ok(())
 }
 
 unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
