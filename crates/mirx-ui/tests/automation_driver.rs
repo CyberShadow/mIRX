@@ -5020,26 +5020,29 @@ fn automation_driver_irc_moderation_commands_submit_core_commands()
         }]
     );
 
-    // The unauthenticated core answers each one, which proves they reached it.
+    // The unauthenticated core answers each one, which proves they reached
+    // it: the room's errors in its window, the account's in Status.
     let ui_state = app.dump_ui_state()?;
+    let beta = find_view(&ui_state, &room_identity("!beta:example"));
     let status = find_view(&ui_state, &ViewIdentity::Status);
-    for operation in [
-        "kick room member",
-        "ban room member",
-        "unban room member",
-        "invite room member",
-        "set room member power level",
-        "set display name",
+    for (view, operation) in [
+        (beta, "kick room member"),
+        (beta, "ban room member"),
+        (beta, "unban room member"),
+        (beta, "invite room member"),
+        (beta, "set room member power level"),
+        (status, "set display name"),
     ] {
         assert!(
             view_contains(
-                status,
+                view,
                 &format!("{operation} requires an authenticated session")
             ),
             "{operation}: {:?}",
-            status.lines
+            view.lines
         );
     }
+    assert!(!view_contains(status, "room member"), "{:?}", status.lines);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -14332,6 +14335,52 @@ fn slash_topic_shows_and_names_rooms_by_alias() -> Result<(), Box<dyn std::error
             room_id: "!lobby:example".to_owned(),
             topic: "deploy at noon".to_owned(),
         }]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn room_error_prints_in_room_window() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    let alpha = room_identity("!alpha:example");
+    app.select_view(beta.clone())?;
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::Error(
+        mirx_core::CoreErrorEvent {
+            operation: mirx_core::Operation::SetRoomMemberPowerLevel,
+            room_id: Some("!alpha:example".to_owned()),
+            message: "not allowed".to_owned(),
+        },
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let line = "* Error during set room member power level: not allowed";
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, beta);
+    assert!(
+        only_view_line_containing(find_view(&ui_state, &alpha), line).ends_with(line),
+        "{:?}",
+        find_view(&ui_state, &alpha).lines
+    );
+    assert!(!view_contains(find_view(&ui_state, &beta), line));
+    assert!(!view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        line
+    ));
+    assert_eq!(
+        app.dump_model()?.status,
+        "error during set room member power level"
     );
 
     drop(app);

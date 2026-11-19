@@ -170,6 +170,7 @@ mod cmap;
 mod commands;
 mod connection;
 mod echo;
+mod errors;
 mod glyph_fonts;
 mod glyph_runs;
 mod mdi;
@@ -197,6 +198,7 @@ use commands::{
 };
 use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
+use errors::{ErrorDestination, error_destination};
 use menus::{
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MENU_BAR, MENU_ID_COMMANDS_FIRST,
     MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT,
@@ -2524,17 +2526,14 @@ fn apply_room_history_backfill_event(state: &mut WindowState, backfill: RoomHist
     prune_decoded_images(state);
 }
 
-fn apply_backfill_room_history_error(state: &mut WindowState, message: String) {
-    let Some(room_id) = loading_room_history_room_id(&state.model.room_views) else {
+/// The room's history load failed. An error for a room that is not loading
+/// (it was left, or the user cleared it meanwhile) changes nothing.
+fn apply_backfill_room_history_error(state: &mut WindowState, room_id: &str, message: String) {
+    let Some(room_view) = state.model.room_views.get_mut(room_id) else {
         return;
     };
-    let room_view = state
-        .model
-        .room_views
-        .get_mut(&room_id)
-        .expect("loading room history state must resolve to an existing room view");
     let RoomHistoryBackfillStatus::Loading { from } = &room_view.history.status else {
-        panic!("loading room history room must stay loading until backfill completion");
+        return;
     };
     let from = from.clone();
     room_view.history.status = RoomHistoryBackfillStatus::Failed {
@@ -9222,13 +9221,23 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         }
         Event::Error(error) => {
             if error.operation == Operation::BackfillRoomHistory {
-                apply_backfill_room_history_error(state, error.message.clone());
+                let room_id = error
+                    .room_id
+                    .as_deref()
+                    .expect("a backfill error names its room");
+                apply_backfill_room_history_error(state, room_id, error.message.clone());
             }
-            log_status(
-                state,
-                StatusLineKind::Error,
-                status_log::error(operation_name(error.operation), &error.message),
-            );
+            let line = status_log::error(operation_name(error.operation), &error.message);
+            let now = state.clock.now_ms();
+            let room_view = match error_destination(&error) {
+                ErrorDestination::Room(room_id) => state.model.room_views.get_mut(room_id),
+                ErrorDestination::Status => None,
+            };
+            match room_view {
+                Some(room_view) => room_view.echo.push(now, None, context_line(&line)),
+                // Status, or a room that was left or never synced.
+                None => log_status(state, StatusLineKind::Error, line),
+            }
             if !preserves_submission_status(&state.model.status, error.operation) {
                 state.model.status = format!("error during {}", operation_name(error.operation));
             }
@@ -14526,30 +14535,31 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
             history_backfill_anchor =
                 capture_room_history_backfill_anchor(state, &backfill.room_id);
         }
-        if let Event::RoomHistoryBackfill(backfill) = &event {
+        let backfilled_room_id = match &event {
+            Event::RoomHistoryBackfill(backfill) => Some(backfill.room_id.clone()),
+            Event::Error(error) if error.operation == Operation::BackfillRoomHistory => {
+                let room_id = error
+                    .room_id
+                    .clone()
+                    .expect("a backfill error names its room");
+                failed_backfill_room_id = Some(room_id.clone());
+                Some(room_id)
+            }
+            _ => None,
+        };
+        if let Some(backfilled_room_id) = &backfilled_room_id {
             history_backfill_views.extend(
                 pending_timeline_find_history_views(state)
                     .into_iter()
                     .filter(|view_id| match view_id {
                         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => {
-                            room_id == &backfill.room_id
+                            room_id == backfilled_room_id
                         }
                         ViewId::Status | ViewId::RoomList => false,
                     }),
             );
-        } else if matches!(
-            &event,
-            Event::Error(error) if error.operation == Operation::BackfillRoomHistory
-        ) {
-            history_backfill_views.extend(pending_timeline_find_history_views(state));
-            // The error names no room: it is the one request in flight's.
-            failed_backfill_room_id = loading_room_history_room_id(&state.model.room_views);
         }
-        backfill_result |= matches!(&event, Event::RoomHistoryBackfill(_))
-            || matches!(
-                &event,
-                Event::Error(error) if error.operation == Operation::BackfillRoomHistory
-            );
+        backfill_result |= backfilled_room_id.is_some();
         wants_attention |= apply_core_event(state, event)?;
         state.event_generation += 1;
     }
@@ -29716,6 +29726,133 @@ mod tests {
                 from: Some("token-2".to_owned()),
                 limit: ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
             }))
+        );
+
+        stop_test_core(handle);
+    }
+
+    fn status_log_texts(state: &WindowState) -> Vec<&str> {
+        state
+            .model
+            .status_log
+            .lines()
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect()
+    }
+
+    fn room_echo_texts<'s>(state: &'s WindowState, room_id: &str) -> Vec<&'s str> {
+        state.model.room_views[room_id]
+            .echo
+            .lines_for(None)
+            .map(|line| line.text.as_str())
+            .collect()
+    }
+
+    fn room_error(operation: Operation, room_id: &str, message: &str) -> Event {
+        Event::Error(CoreErrorEvent {
+            operation,
+            room_id: Some(room_id.to_owned()),
+            message: message.to_owned(),
+        })
+    }
+
+    #[test]
+    fn a_rooms_error_prints_in_its_window_or_status_when_it_has_none() {
+        let mut state = test_state();
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                room("!ops:example", "Ops", false),
+                room("!lobby:example", "Lobby", false),
+            ]),
+        )
+        .unwrap();
+        let status_lines = state.model.status_log.lines().len();
+
+        apply_core_event(
+            &mut state,
+            room_error(Operation::KickRoomMember, "!lobby:example", "not an op"),
+        )
+        .unwrap();
+        assert_eq!(
+            room_echo_texts(&state, "!lobby:example"),
+            vec!["* Error during kick room member: not an op"]
+        );
+        assert!(room_echo_texts(&state, "!ops:example").is_empty());
+        assert_eq!(state.model.status_log.lines().len(), status_lines);
+        assert_eq!(state.model.status, "error during kick room member");
+
+        apply_core_event(
+            &mut state,
+            room_error(Operation::SendMessage, "!left:example", "gone"),
+        )
+        .unwrap();
+        assert_eq!(
+            status_log_texts(&state).last(),
+            Some(&"* Error during send text: gone")
+        );
+
+        // Room loads show their failure in the window themselves.
+        apply_core_event(
+            &mut state,
+            room_error(Operation::FetchRoomEvent, "!ops:example", "offline"),
+        )
+        .unwrap();
+        assert!(room_echo_texts(&state, "!ops:example").is_empty());
+        assert_eq!(
+            status_log_texts(&state).last(),
+            Some(&"* Error during fetch message: offline")
+        );
+    }
+
+    #[test]
+    fn a_backfill_error_fails_the_named_rooms_load_only() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![
+            room("!room:example", "Room", false),
+            room("!other:example", "Other", false),
+        ];
+        for room_id in ["!room:example", "!other:example"] {
+            state
+                .model
+                .room_views
+                .entry(room_id.to_owned())
+                .or_default()
+                .history
+                .next_token = Some("token-2".to_owned());
+        }
+        assert_eq!(
+            submit_backfill_room_history_for_room(&mut state, "!room:example"),
+            Ok(true)
+        );
+
+        // A late error for a room that is not loading changes nothing.
+        apply_core_event(
+            &mut state,
+            room_error(Operation::BackfillRoomHistory, "!other:example", "late"),
+        )
+        .unwrap();
+        assert_eq!(
+            state.model.room_views["!other:example"].history.status,
+            RoomHistoryBackfillStatus::Idle
+        );
+        assert!(matches!(
+            state.model.room_views["!room:example"].history.status,
+            RoomHistoryBackfillStatus::Loading { .. }
+        ));
+
+        apply_core_event(
+            &mut state,
+            room_error(Operation::BackfillRoomHistory, "!room:example", "offline"),
+        )
+        .unwrap();
+        assert_eq!(
+            state.model.room_views["!room:example"].history.status,
+            RoomHistoryBackfillStatus::Failed {
+                from: Some("token-2".to_owned()),
+                message: "offline".to_owned(),
+            }
         );
 
         stop_test_core(handle);
