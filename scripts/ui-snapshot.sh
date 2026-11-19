@@ -1700,7 +1700,7 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] * Alice on Ops Alice'
         --expect-room-view '!ops:example::[22:12] * Alice End of /WHOIS list'
         --expect-room-view '!ops:example::[22:12] -> *Alice* hi there'
-        --expect-room-view '!ops:example::[22:12] * /kick <nick> [reason] — kick a member from this room'
+        --expect-room-view '!ops:example::[22:12] * /kick <nick> [reason] - kick a member from this room'
       )
       # The status bar keeps the last command error.
       status_bar_expect_args=(

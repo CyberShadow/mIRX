@@ -4636,7 +4636,7 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
         "] * Alice is @alice:example",
         "] * Alice on Beta Alpha",
         "] * Alice End of /WHOIS list",
-        "] * /names [room] — list this room's members, or the named room's",
+        "] * /names [room] - list this room's members, or the named room's",
         "] -> *alice* hi there",
     ] {
         assert!(

@@ -28956,7 +28956,7 @@ mod tests {
                 let echo = &lines[lines.len() - 4..];
                 assert!(echo[0].starts_with("[22:12] * Commands: /accept /ban /clear /close "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
-                assert_eq!(echo[2], "[22:12] * /clear — clear this window");
+                assert_eq!(echo[2], "[22:12] * /clear - clear this window");
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");
             });
         }

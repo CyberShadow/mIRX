@@ -968,7 +968,7 @@ pub(super) fn help_lines(topic: Option<&str>) -> Result<Vec<String>, String> {
     } else {
         format!(" {}", spec.usage)
     };
-    Ok(vec![format!("* /{}{usage} — {}", spec.name, spec.summary)])
+    Ok(vec![format!("* /{}{usage} - {}", spec.name, spec.summary)])
 }
 
 /// The member a nick names, resolved as IRC users expect: an exact user ID,
@@ -1188,13 +1188,13 @@ mod tests {
         assert_eq!(
             help_lines(Some("server")),
             Ok(vec![
-                "* /server [server] — connect to the homeserver".to_owned()
+                "* /server [server] - connect to the homeserver".to_owned()
             ])
         );
         assert_eq!(
             help_lines(Some("quit")),
             Ok(vec![
-                "* /quit — disconnect (stop syncing) without logging out".to_owned()
+                "* /quit - disconnect (stop syncing) without logging out".to_owned()
             ])
         );
     }
@@ -1707,7 +1707,7 @@ mod tests {
         assert_eq!(
             help_lines(Some("font")),
             Ok(vec![
-                "* /font [[-b] <size> <font name>] — set the text font, or choose it in a dialog"
+                "* /font [[-b] <size> <font name>] - set the text font, or choose it in a dialog"
                     .to_owned()
             ])
         );
@@ -1733,7 +1733,7 @@ mod tests {
             assert_eq!(
                 help_lines(Some(name)),
                 Ok(vec![format!(
-                    "* /{name} [on|off] — show or hide the {name}"
+                    "* /{name} [on|off] - show or hide the {name}"
                 )])
             );
         }
@@ -1762,7 +1762,7 @@ mod tests {
         assert_eq!(
             help_lines(Some("timestamp")),
             Ok(vec![
-                "* /timestamp [on|off|-f format] — show, turn on or off, or format line timestamps"
+                "* /timestamp [on|off|-f format] - show, turn on or off, or format line timestamps"
                     .to_owned()
             ])
         );
@@ -1780,18 +1780,18 @@ mod tests {
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
             help_lines(Some("join")),
-            Ok(vec!["* /join <room-id-or-alias> — join a room".to_owned()])
+            Ok(vec!["* /join <room-id-or-alias> - join a room".to_owned()])
         );
         assert_eq!(
             help_lines(Some("create")),
             Ok(vec![
-                "* /create [-public #alias] <name> — create a room: private and encrypted, or public and listed"
+                "* /create [-public #alias] <name> - create a room: private and encrypted, or public and listed"
                     .to_owned()
             ])
         );
         assert_eq!(
             help_lines(Some("/CLEAR")),
-            Ok(vec!["* /clear — clear this window".to_owned()])
+            Ok(vec!["* /clear - clear this window".to_owned()])
         );
         assert_eq!(
             help_lines(Some("nope")),
