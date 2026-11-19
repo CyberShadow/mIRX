@@ -11,13 +11,14 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 
 use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
-    CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
-    E2eeRecoverySucceeded, EditMessageRequest, Event, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
-    RoomJoined, RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
+    CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest, E2eeRecoveryOperation,
+    E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
+    RoomReadState, RoomSummary, SendReactionRequest, SetDisplayNameRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SyncStopReason,
+    UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, HomeserverSpec, MatrixCoreError};
 
@@ -201,6 +202,7 @@ async fn handle_command(
         Command::CreateDirectRoom(request) => {
             handle_create_direct_room(event_tx, state, request).await
         }
+        Command::CreateRoom(request) => handle_create_room(event_tx, state, request).await,
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
         Command::KickRoomMember(request) => handle_kick_room_member(event_tx, state, request).await,
         Command::BanRoomMember(request) => handle_ban_room_member(event_tx, state, request).await,
@@ -582,6 +584,31 @@ async fn handle_create_direct_room(
             .await
         }
         Err(err) => emit_matrix_error(event_tx, Operation::CreateDirectRoom, err),
+    }
+
+    false
+}
+
+async fn handle_create_room(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: CreateRoomRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::CreateRoom,
+            "create room requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::create_room(client, &request).await {
+        Ok(room_id) => {
+            emit_snapshot_then_room_joined(client, event_tx, Operation::CreateRoom, room_id.into())
+                .await
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::CreateRoom, err),
     }
 
     false
@@ -1475,10 +1502,10 @@ mod tests {
     };
     use crate::api::CoreConfig;
     use crate::api::{
-        AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest, Event,
-        JoinRoomRequest, KickRoomMemberRequest, LoginRequest, Operation, RoomJoined,
-        RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState, RoomSummary,
-        SyncStopReason,
+        AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
+        CreateRoomRequest, CreateRoomVisibility, Event, JoinRoomRequest, KickRoomMemberRequest,
+        LoginRequest, Operation, RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers,
+        RoomMembership, RoomReadState, RoomSummary, SyncStopReason,
     };
     use matrix_sdk::{
         ruma::{
@@ -1935,6 +1962,26 @@ mod tests {
                 client,
                 Command::CreateDirectRoom(CreateDirectRoomRequest {
                     user_id: "@friend:example.org".to_owned(),
+                }),
+                "!room:example.org",
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn create_room_emits_snapshot_then_room_joined() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server.mock_create_room().ok().expect(1).mount().await;
+
+            assert_join_emits_snapshot_then_room_joined(
+                &mock_server,
+                client,
+                Command::CreateRoom(CreateRoomRequest {
+                    name: "Team room".to_owned(),
+                    visibility: CreateRoomVisibility::Private,
                 }),
                 "!room:example.org",
             )

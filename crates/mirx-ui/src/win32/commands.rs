@@ -36,6 +36,8 @@ pub(super) enum SlashCommand {
     Join {
         target: String,
     },
+    /// `/create <name>` or `/create -public <#alias> [name]`.
+    Create(CreateRoomArgs),
     /// `/list [-s <server>] [match text]`: the Rooms List.
     List {
         server: Option<String>,
@@ -191,6 +193,7 @@ impl SlashCommand {
             Self::Find { .. } => "find",
             Self::Window { .. } => "window",
             Self::Join { .. } => "join",
+            Self::Create(_) => "create",
             Self::List { .. } => "list",
             Self::Query { .. } => "query",
             Self::Msg {
@@ -294,6 +297,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "close",
         usage: "",
         summary: "close this window",
+    },
+    CommandSpec {
+        name: "create",
+        usage: "[-public #alias] <name>",
+        summary: "create a room: private and encrypted, or public and listed",
     },
     CommandSpec {
         name: "deop",
@@ -563,6 +571,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "join" => Ok(SlashCommand::Join {
             target: required(argument)?,
         }),
+        "create" => parse_create(argument).map(SlashCommand::Create),
         "list" => parse_list(argument),
         "query" => {
             required(argument)?;
@@ -682,6 +691,57 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "timestamp" => parse_timestamp(argument).map(SlashCommand::Timestamp),
         "font" => parse_font(argument).map(SlashCommand::Font),
         _ => Err(CommandError::unknown(name)),
+    }
+}
+
+/// What `/create` asks for. The alias's server is checked against the
+/// user's own when the command runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum CreateRoomArgs {
+    Private {
+        name: String,
+    },
+    Public {
+        alias_localpart: String,
+        /// The server the alias named, if it named one.
+        alias_server: Option<String>,
+        /// `None` names the room after the alias.
+        name: Option<String>,
+    },
+}
+
+/// `<name>` or `-public <#alias> [name]`; the name is the rest of the line.
+fn parse_create(argument: &str) -> Result<CreateRoomArgs, CommandError> {
+    let (switch, rest) = split_word(argument);
+    match switch {
+        "" => Err(CommandError::insufficient_parameters("create")),
+        "-public" => {
+            let (alias, name) = split_word(rest);
+            if alias.is_empty() {
+                return Err(CommandError::insufficient_parameters("create"));
+            }
+            let invalid = || CommandError::new("create", format!("invalid alias {alias}"));
+            let body = alias.strip_prefix('#').ok_or_else(invalid)?;
+            let (localpart, server) = match body.split_once(':') {
+                Some((localpart, server)) => (localpart, Some(server)),
+                None => (body, None),
+            };
+            if localpart.is_empty() || server == Some("") {
+                return Err(invalid());
+            }
+            Ok(CreateRoomArgs::Public {
+                alias_localpart: localpart.to_owned(),
+                alias_server: server.map(str::to_owned),
+                name: (!name.is_empty()).then(|| name.to_owned()),
+            })
+        }
+        switch if switch.starts_with('-') => Err(CommandError::new(
+            "create",
+            format!("unknown switch {switch}"),
+        )),
+        _ => Ok(CreateRoomArgs::Private {
+            name: argument.to_owned(),
+        }),
     }
 }
 
@@ -1244,6 +1304,42 @@ mod tests {
     }
 
     #[test]
+    fn parse_create_takes_a_name_or_a_public_alias_and_name() {
+        let create = |args| Ok(SlashCommand::Create(args));
+        let public = |localpart: &str, server: Option<&str>, name: Option<&str>| {
+            create(CreateRoomArgs::Public {
+                alias_localpart: localpart.to_owned(),
+                alias_server: server.map(str::to_owned),
+                name: name.map(str::to_owned),
+            })
+        };
+        assert_eq!(
+            parse("/create Team room"),
+            create(CreateRoomArgs::Private {
+                name: "Team room".to_owned()
+            })
+        );
+        assert_eq!(parse("/create -public #foo"), public("foo", None, None));
+        assert_eq!(
+            parse("/create -public #foo:ex Foo Bar"),
+            public("foo", Some("ex"), Some("Foo Bar"))
+        );
+        assert_eq!(parse("/create"), insufficient("create"));
+        assert_eq!(parse("/create -public"), insufficient("create"));
+        for alias in ["foo", "#", "#:ex", "#foo:"] {
+            assert_eq!(
+                parse(&format!("/create -public {alias} Foo")),
+                error("create", &format!("invalid alias {alias}")),
+                "{alias}"
+            );
+        }
+        assert_eq!(
+            parse("/create -x Foo"),
+            error("create", "unknown switch -x")
+        );
+    }
+
+    #[test]
     fn parse_list_takes_a_server_switch_and_match_text() {
         let list = |server: Option<&str>, filter: Option<&str>| {
             Ok(SlashCommand::List {
@@ -1606,13 +1702,21 @@ mod tests {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
         assert!(
-            lines[0].starts_with("* Commands: /accept /ban /clear /close /deop /devoice /e2ee")
+            lines[0]
+                .starts_with("* Commands: /accept /ban /clear /close /create /deop /devoice /e2ee")
         );
         assert!(lines[0].contains(" /help "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
             help_lines(Some("join")),
             Ok(vec!["* /join <room-id-or-alias> — join a room".to_owned()])
+        );
+        assert_eq!(
+            help_lines(Some("create")),
+            Ok(vec![
+                "* /create [-public #alias] <name> — create a room: private and encrypted, or public and listed"
+                    .to_owned()
+            ])
         );
         assert_eq!(
             help_lines(Some("/CLEAR")),

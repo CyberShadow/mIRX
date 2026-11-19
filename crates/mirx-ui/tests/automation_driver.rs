@@ -641,6 +641,16 @@ fn spawn_mock_homeserver(
                 continue;
             }
 
+            // `/create` makes `!created:example`.
+            if path == "/_matrix/client/v3/createRoom" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({ "room_id": "!created:example" }),
+                );
+                continue;
+            }
+
             // The room directory, in two pages.
             if path == "/_matrix/client/v3/publicRooms" {
                 let page = if request.contains("\"since\":\"page2\"") {
@@ -11101,6 +11111,40 @@ fn automation_driver_slash_join_activates_the_joined_room() -> Result<(), Box<dy
     )?;
 
     find_view(&ui_state, &room_identity("!new:example"));
+    find_view(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(app.dump_model()?.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn slash_create_activates_the_created_room() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/create -public #team:elsewhere Team room")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(view_contains(
+        find_view(&app.dump_ui_state()?, &room_identity("!beta:example")),
+        "* /create: the alias must be on your server (example)"
+    ));
+
+    app.set_compose_text("/create Team room")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    let ui_state = app.wait_for_ui_state(
+        "the created room active",
+        Duration::from_secs(10),
+        |ui_state| ui_state.mdi.active == room_identity("!created:example"),
+    )?;
     find_view(&ui_state, &room_identity("!beta:example"));
     assert_eq!(app.dump_model()?.last_error, None);
 

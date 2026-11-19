@@ -3,25 +3,25 @@ use std::time::Duration;
 
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
-    CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
-    E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
-    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
-    PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason,
-    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
+    CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, E2eeBackupState,
+    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
+    E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event,
+    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
+    KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest,
+    MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
+    PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
+    RoomActivityKind, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary,
+    RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
+    SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
+    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, start,
 };
@@ -872,6 +872,46 @@ fn list_public_rooms_before_login_emits_list_public_rooms_error() {
         Operation::ListPublicRooms,
         "list public rooms requires an authenticated session",
     );
+}
+
+#[test]
+fn create_room_before_login_emits_create_room_error() {
+    assert_invalid_authenticated_command(
+        Command::CreateRoom(CreateRoomRequest {
+            name: "Team room".to_owned(),
+            visibility: CreateRoomVisibility::Private,
+        }),
+        Operation::CreateRoom,
+        "create room requires an authenticated session",
+    );
+}
+
+#[test]
+fn create_room_request_round_trips_through_serde() {
+    for (request, expected) in [
+        (
+            CreateRoomRequest {
+                name: "Team room".to_owned(),
+                visibility: CreateRoomVisibility::Private,
+            },
+            r#"{"name":"Team room","visibility":{"type":"private"}}"#,
+        ),
+        (
+            CreateRoomRequest {
+                name: "foo".to_owned(),
+                visibility: CreateRoomVisibility::Public {
+                    alias_localpart: "foo".to_owned(),
+                },
+            },
+            r#"{"name":"foo","visibility":{"type":"public","alias_localpart":"foo"}}"#,
+        ),
+    ] {
+        let json = serde_json::to_string(&request).expect("serialize create room request");
+        assert_eq!(json, expected);
+        let restored: CreateRoomRequest =
+            serde_json::from_str(&json).expect("deserialize create room request");
+        assert_eq!(restored, request);
+    }
 }
 
 #[test]

@@ -17,23 +17,23 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
-    E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
-    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo, RoomHistoryBackfill,
-    RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind,
-    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile, RoomVideoInfo,
-    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
-    SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession, UnbanRoomMemberRequest,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, login_server, start,
+    CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
+    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
+    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
+    Operation, PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo,
+    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat,
+    RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
+    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile,
+    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
+    UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -175,8 +175,8 @@ mod timeline_text;
 mod timestamp;
 
 use commands::{
-    CommandError, ComposeSubmission, E2eeSlashCommand, FontCommand, SlashCommand, TimestampCommand,
-    VerificationAction, local_command_history_entry, parse_compose_submission,
+    CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand, SlashCommand,
+    TimestampCommand, VerificationAction, local_command_history_entry, parse_compose_submission,
 };
 use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
@@ -9057,6 +9057,7 @@ fn preserves_submission_status(status: &str, operation: Operation) -> bool {
         Operation::JoinRoom => status.starts_with("join submitted: "),
         Operation::AcceptRoomInvite => status.starts_with("accept submitted: "),
         Operation::CreateDirectRoom => status.starts_with("query submitted: "),
+        Operation::CreateRoom => status.starts_with("create submitted: "),
         Operation::LeaveRoom => status.starts_with("part submitted: "),
         Operation::RejectRoomInvite => status.starts_with("reject submitted: "),
         Operation::SetRoomTopic => status.starts_with("topic change submitted for "),
@@ -10980,21 +10981,7 @@ unsafe fn ensure_status_view(hwnd: HWND) -> Result<HWND, String> {
 /// it.
 unsafe fn start_room_list(hwnd: HWND, query: RoomListQuery) -> Result<String, String> {
     let state = state_mut(hwnd);
-    if matches!(
-        state.model.connection,
-        ConnectionState::SignedOut | ConnectionState::SigningIn
-    ) {
-        return Err("not connected to server".to_owned());
-    }
-    let own_user_id = state
-        .model
-        .own_user_id
-        .as_deref()
-        .expect("a signed-in session knows its user");
-    let (_, own_server) = own_user_id
-        .split_once(':')
-        .expect("a Matrix user ID names its server");
-    let room_list = RoomListState::new(query, own_server);
+    let room_list = RoomListState::new(query, own_server(&state.model)?);
     enqueue_command(state, Command::ListPublicRooms(room_list.first_request()))?;
     state.model.room_list = Some(room_list);
     sync_views_and_tree(hwnd)?;
@@ -14639,6 +14626,7 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
         SlashCommand::List { server, filter } => {
             start_room_list(hwnd, RoomListQuery { server, filter }).map(Some)
         }
+        SlashCommand::Create(args) => submit_create_room(state_mut(hwnd), args).map(Some),
         SlashCommand::Query { target, message } => {
             let user_id =
                 commands::resolve_user(all_room_members(&state_ref(hwnd).model), &target)?.user_id;
@@ -15278,6 +15266,52 @@ fn resolve_invite_command_room_id(
     }
 
     Err(format!("{action} failed: invited room not found: {target}"))
+}
+
+/// The user's homeserver name, for commands that need a session.
+fn own_server(model: &UiModel) -> Result<&str, String> {
+    if matches!(
+        model.connection,
+        ConnectionState::SignedOut | ConnectionState::SigningIn
+    ) {
+        return Err("not connected to server".to_owned());
+    }
+    let own_user_id = model
+        .own_user_id
+        .as_deref()
+        .expect("a signed-in session knows its user");
+    let (_, server) = own_user_id
+        .split_once(':')
+        .expect("a Matrix user ID names its server");
+    Ok(server)
+}
+
+/// `/create`: a public room's alias must be on the user's own server, the
+/// only one that can publish it.
+fn submit_create_room(state: &mut WindowState, args: CreateRoomArgs) -> Result<String, String> {
+    let own_server = own_server(&state.model)?;
+    let request = match args {
+        CreateRoomArgs::Private { name } => CreateRoomRequest {
+            name,
+            visibility: CreateRoomVisibility::Private,
+        },
+        CreateRoomArgs::Public {
+            alias_localpart,
+            alias_server,
+            name,
+        } => {
+            if alias_server.is_some_and(|server| server != own_server) {
+                return Err(format!("the alias must be on your server ({own_server})"));
+            }
+            CreateRoomRequest {
+                name: name.unwrap_or_else(|| alias_localpart.clone()),
+                visibility: CreateRoomVisibility::Public { alias_localpart },
+            }
+        }
+    };
+    let status = format!("create submitted: {}", request.name);
+    enqueue_command(state, Command::CreateRoom(request))?;
+    Ok(status)
 }
 
 fn submit_join_room(
@@ -16762,6 +16796,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::JoinRoom => "join room",
         Operation::AcceptRoomInvite => "accept room invitation",
         Operation::CreateDirectRoom => "create direct room",
+        Operation::CreateRoom => "create room",
         Operation::LeaveRoom => "leave room",
         Operation::RejectRoomInvite => "reject room invitation",
         Operation::KickRoomMember => "kick room member",
@@ -28541,6 +28576,85 @@ mod tests {
         );
 
         stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_create_room_records_a_private_or_public_room_and_returns_status() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.connection = ConnectionState::Syncing;
+        state.model.own_user_id = Some("@me:example.org".to_owned());
+
+        let private = CreateRoomArgs::Private {
+            name: "Team room".to_owned(),
+        };
+        let public = |server: Option<&str>, name: Option<&str>| CreateRoomArgs::Public {
+            alias_localpart: "foo".to_owned(),
+            alias_server: server.map(str::to_owned),
+            name: name.map(str::to_owned),
+        };
+        assert_eq!(
+            submit_create_room(&mut state, private),
+            Ok("create submitted: Team room".to_owned())
+        );
+        assert_eq!(
+            submit_create_room(&mut state, public(None, None)),
+            Ok("create submitted: foo".to_owned())
+        );
+        assert_eq!(
+            submit_create_room(&mut state, public(Some("example.org"), Some("Foo Bar"))),
+            Ok("create submitted: Foo Bar".to_owned())
+        );
+        assert_eq!(
+            submit_create_room(&mut state, public(Some("other.example"), None)),
+            Err("the alias must be on your server (example.org)".to_owned())
+        );
+
+        let public_request = |name: &str| {
+            Command::CreateRoom(CreateRoomRequest {
+                name: name.to_owned(),
+                visibility: CreateRoomVisibility::Public {
+                    alias_localpart: "foo".to_owned(),
+                },
+            })
+        };
+        assert_eq!(
+            state.recorded_commands,
+            vec![
+                Command::CreateRoom(CreateRoomRequest {
+                    name: "Team room".to_owned(),
+                    visibility: CreateRoomVisibility::Private,
+                }),
+                public_request("foo"),
+                public_request("Foo Bar"),
+            ]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn submit_create_room_while_signed_out_records_nothing() {
+        let mut state = test_state();
+
+        assert_eq!(
+            submit_create_room(
+                &mut state,
+                CreateRoomArgs::Private {
+                    name: "Team room".to_owned()
+                }
+            ),
+            Err("not connected to server".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn create_room_errors_keep_the_submission_status() {
+        assert!(preserves_submission_status(
+            "create submitted: Team room",
+            Operation::CreateRoom
+        ));
+        assert_eq!(operation_name(Operation::CreateRoom), "create room");
     }
 
     #[test]

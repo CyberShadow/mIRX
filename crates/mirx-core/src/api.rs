@@ -19,6 +19,7 @@ pub enum Command {
     JoinRoom(JoinRoomRequest),
     AcceptRoomInvite(AcceptRoomInviteRequest),
     CreateDirectRoom(CreateDirectRoomRequest),
+    CreateRoom(CreateRoomRequest),
     LeaveRoom(LeaveRoomRequest),
     KickRoomMember(KickRoomMemberRequest),
     BanRoomMember(BanRoomMemberRequest),
@@ -175,6 +176,24 @@ pub struct ListPublicRoomsRequest {
 #[serde(deny_unknown_fields)]
 pub struct CreateDirectRoomRequest {
     pub user_id: String,
+}
+
+/// A new room the user creates and joins.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateRoomRequest {
+    pub name: String,
+    pub visibility: CreateRoomVisibility,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CreateRoomVisibility {
+    /// Invite-only, encrypted and unlisted.
+    Private,
+    /// Anyone may join; listed in the room directory under
+    /// `#<alias_localpart>:<the user's server>`.
+    Public { alias_localpart: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1142,6 +1161,7 @@ pub enum Operation {
     JoinRoom,
     AcceptRoomInvite,
     CreateDirectRoom,
+    CreateRoom,
     LeaveRoom,
     KickRoomMember,
     BanRoomMember,

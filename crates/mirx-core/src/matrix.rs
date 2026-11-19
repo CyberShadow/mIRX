@@ -32,12 +32,17 @@ use matrix_sdk::{
         EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedRoomId,
         OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt, UserId,
         api::client::{
-            directory::get_public_rooms_filtered, media::get_content_thumbnail::v3::Method,
+            directory::get_public_rooms_filtered,
+            media::get_content_thumbnail::v3::Method,
+            room::{
+                Visibility,
+                create_room::v3::{Request as CreateRoomHttpRequest, RoomPreset},
+            },
         },
         directory::Filter,
         events::{
-            AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, Mentions,
-            SyncStateEvent, TimelineEventType, ToDeviceEvent,
+            AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, InitialStateEvent,
+            Mentions, SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
@@ -46,6 +51,7 @@ use matrix_sdk::{
             relation::{Annotation, Reply, Thread},
             room::{
                 EncryptedFile, ImageInfo, MediaSource,
+                encryption::RoomEncryptionEventContent,
                 member::{MembershipChange, MembershipState, OriginalSyncRoomMemberEvent},
                 message::{
                     AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
@@ -80,9 +86,10 @@ use serde::Deserialize;
 use tokio::task::JoinHandle;
 
 use crate::api::{
-    BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent, E2eeBackupState,
-    E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
+    BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
+    CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
+    E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
+    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
     KickRoomMemberRequest, ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest,
     MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
@@ -528,6 +535,40 @@ pub(crate) async fn create_direct_room(
     let room = client.create_dm(user_id).await.map_err(|err| {
         MatrixCoreError::new(format!("failed to create Matrix direct room: {err}"))
     })?;
+
+    Ok(room.room_id().to_owned())
+}
+
+/// Creates the room and returns its ID. A private room is encrypted from
+/// the start, as Element creates them.
+pub(crate) async fn create_room(
+    client: &Client,
+    request: &CreateRoomRequest,
+) -> Result<OwnedRoomId, MatrixCoreError> {
+    let mut create = CreateRoomHttpRequest::new();
+    create.name = Some(request.name.clone());
+    match &request.visibility {
+        CreateRoomVisibility::Private => {
+            create.preset = Some(RoomPreset::PrivateChat);
+            create.visibility = Visibility::Private;
+            create.initial_state = vec![
+                InitialStateEvent::with_empty_state_key(
+                    RoomEncryptionEventContent::with_recommended_defaults(),
+                )
+                .to_raw_any(),
+            ];
+        }
+        CreateRoomVisibility::Public { alias_localpart } => {
+            create.preset = Some(RoomPreset::PublicChat);
+            create.visibility = Visibility::Public;
+            create.room_alias_name = Some(alias_localpart.clone());
+        }
+    }
+
+    let room = client
+        .create_room(create)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to create Matrix room: {err}")))?;
 
     Ok(room.room_id().to_owned())
 }
@@ -3916,7 +3957,7 @@ mod tests {
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
         ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
         attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
-        backfill_room_history, ban_room_member, cancelled_state,
+        backfill_room_history, ban_room_member, cancelled_state, create_room,
         direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
         fetch_room_media, insert_pending_outgoing_kind, invite_room_member, joined_room_members,
         joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
@@ -3941,7 +3982,10 @@ mod tests {
         sync_message_replacement, unban_room_member, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
-    use crate::api::{ListPublicRoomsRequest, PublicRoom, PublicRoomsPage, PublicRoomsResult};
+    use crate::api::{
+        CreateRoomRequest, CreateRoomVisibility, ListPublicRoomsRequest, PublicRoom,
+        PublicRoomsPage, PublicRoomsResult,
+    };
 
     #[test]
     fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
@@ -8644,6 +8688,84 @@ mod tests {
                 "{message}"
             );
         });
+    }
+
+    /// Creates a room through a mocked `/createRoom` and returns the request
+    /// body the client sent.
+    fn created_room_body(request: CreateRoomRequest) -> serde_json::Value {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server.mock_create_room().ok().expect(1).mount().await;
+
+            assert_eq!(
+                create_room(&client, &request).await.expect("create room"),
+                "!room:example.org"
+            );
+
+            let requests = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled");
+            let create_requests = requests
+                .iter()
+                .filter(|request| request.url.path() == "/_matrix/client/v3/createRoom")
+                .collect::<Vec<_>>();
+            assert_eq!(create_requests.len(), 1);
+            create_requests[0]
+                .body_json::<serde_json::Value>()
+                .expect("createRoom JSON body")
+        })
+    }
+
+    #[test]
+    fn create_room_private_is_an_encrypted_unlisted_private_chat() {
+        let body = created_room_body(CreateRoomRequest {
+            name: "Team room".to_owned(),
+            visibility: CreateRoomVisibility::Private,
+        });
+
+        assert_eq!(body["name"], "Team room");
+        assert_eq!(body["preset"], "private_chat");
+        assert_eq!(body.get("visibility"), None, "private is the default");
+        assert_eq!(body.get("room_alias_name"), None);
+        assert_eq!(
+            body["initial_state"],
+            serde_json::json!([{
+                "type": "m.room.encryption",
+                "state_key": "",
+                "content": {
+                    "algorithm": "m.megolm.v1.aes-sha2",
+                    "rotation_period_ms": 604800000,
+                    "rotation_period_msgs": 100
+                }
+            }])
+        );
+    }
+
+    #[test]
+    fn create_room_public_is_a_listed_public_chat_with_an_alias() {
+        let body = created_room_body(CreateRoomRequest {
+            name: "Foo Bar".to_owned(),
+            visibility: CreateRoomVisibility::Public {
+                alias_localpart: "foo".to_owned(),
+            },
+        });
+
+        assert_eq!(body["name"], "Foo Bar");
+        assert_eq!(body["preset"], "public_chat");
+        assert_eq!(body["visibility"], "public");
+        assert_eq!(body["room_alias_name"], "foo");
+        assert_eq!(
+            body.get("initial_state"),
+            None,
+            "a public room is not encrypted"
+        );
     }
 
     #[test]

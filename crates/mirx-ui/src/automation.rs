@@ -1872,6 +1872,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::JoinRoom => "join_room",
         Operation::AcceptRoomInvite => "accept_room_invite",
         Operation::CreateDirectRoom => "create_direct_room",
+        Operation::CreateRoom => "create_room",
         Operation::LeaveRoom => "leave_room",
         Operation::RejectRoomInvite => "reject_room_invite",
         Operation::KickRoomMember => "kick_room_member",
