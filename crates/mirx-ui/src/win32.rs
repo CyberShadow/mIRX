@@ -41,10 +41,11 @@ use windows_sys::Win32::Foundation::{
     LRESULT, POINT, RECT, SIZE, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_WINDOW, ClientToScreen, CreateSolidBrush, DT_NOPREFIX, DT_SINGLELINE,
-    DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect, GetDC, GetTextExtentPoint32W, HBRUSH,
-    InvalidateRect, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject,
-    SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+    BeginPaint, COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush,
+    DEFAULT_CHARSET, DT_NOPREFIX, DT_SINGLELINE, DeleteObject, DrawTextW, EndPaint, FW_BOLD,
+    FW_NORMAL, FillRect, FrameRect, GetDC, GetDeviceCaps, GetTextExtentPoint32W, GetTextMetricsW,
+    HBRUSH, HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC,
+    ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -76,15 +77,15 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CLIENTCREATESTRUCT,
-    CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu, CreateWindowExW,
-    DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW,
-    DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY,
-    EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx, GWL_STYLE,
-    GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow, GetMessageW,
-    GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret,
-    IDC_ARROW, IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
-    LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
+    AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
+    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CreateMenu, CreatePopupMenu,
+    CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow,
+    DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD,
+    ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
+    GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
+    GetMessageW, GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU,
+    HideCaret, IDC_ARROW, IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING,
+    LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
     LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO,
     MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED,
     MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
@@ -92,14 +93,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
     SIF_TRACKPOS, SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
     SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETTEXT, WM_SIZE,
-    WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE, WS_VSCROLL,
+    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR,
+    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE,
+    WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE,
+    WM_MDIRESTORE, WM_MDITILE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
+    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED,
+    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -137,6 +138,7 @@ mod commands;
 mod echo;
 mod mdi;
 mod nick_completion;
+mod settings;
 mod status_log;
 mod timeline_text;
 mod timestamp;
@@ -149,6 +151,7 @@ use echo::{EchoLine, EchoLog};
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
 
+use settings::FontSetting;
 use timeline_text::{
     ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
     member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
@@ -182,6 +185,8 @@ const SWITCHBAR_ID: u16 = 1005;
 const VIEW_CONTENT_ID: u16 = 2001;
 /// Every MDI child's editbox; a sibling of its `VIEW_CONTENT_ID` window.
 const VIEW_EDIT_ID: u16 = 2002;
+const COMPOSE_EDIT_STYLE: WINDOW_STYLE = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL as u32;
+const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
 const MENU_ID_LOGIN: usize = 40001;
 const MENU_ID_RESTORE_SAVED_SESSION: usize = 40002;
 const MENU_ID_START_SYNC: usize = 40003;
@@ -238,15 +243,14 @@ const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
-const EDIT_HEIGHT: i32 = 28;
 const SWITCHBAR_HEIGHT: i32 = 28;
-const TIMELINE_ROW_HEIGHT: i32 = 20;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
 const TIMELINE_VERTICAL_PADDING: i32 = 6;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_WIDTH: i32 = 160;
 const TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT: i32 = 120;
-const TIMELINE_IMAGE_MEDIA_SLOT_LINES: usize = 7;
+/// Space around a thumbnail inside its slot, over the slot's lines.
+const TIMELINE_IMAGE_SLOT_PADDING: i32 = 20;
 const TIMELINE_IMAGE_LEFT_INDENT: i32 = 24;
 const TIMELINE_FIND_HIGHLIGHT_COLOR: u32 = 0x00f0f8d8;
 const TIMELINE_SELECTION_COLOR: u32 = 0x00f5e6cc;
@@ -533,6 +537,10 @@ struct TimelineState {
     paint_lines: Vec<TimelinePaintLine>,
     selected_find_source_row_index: Option<usize>,
     top_line: usize,
+    /// The `WM_SETFONT` font, borrowed from the frame's `TextFont`; null
+    /// draws in the system font.
+    font: HFONT,
+    /// The height of a line in `font`.
     line_height: i32,
     vertical_padding: i32,
     /// The timestamp prefix sample that log rows' continuation lines are
@@ -540,8 +548,8 @@ struct TimelineState {
     indent_sample: String,
 }
 
-impl Default for TimelineState {
-    fn default() -> Self {
+impl TimelineState {
+    fn new(line_height: i32) -> Self {
         Self {
             source_rows: Vec::new(),
             rendered_text: String::new(),
@@ -549,7 +557,8 @@ impl Default for TimelineState {
             paint_lines: Vec::new(),
             selected_find_source_row_index: None,
             top_line: 0,
-            line_height: TIMELINE_ROW_HEIGHT,
+            font: null_mut(),
+            line_height,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
             indent_sample: String::new(),
         }
@@ -2627,6 +2636,7 @@ struct WindowState {
     timestamp: TimestampSetting,
     /// The time zone timestamps are shown in.
     local_time: LocalTimeFn,
+    text_font: TextFont,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
@@ -2825,6 +2835,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
     let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
+    let text_font = unsafe { TextFont::create(&FontSetting::default())? };
 
     let state = Box::new(WindowState {
         controls: Controls::default(),
@@ -2840,6 +2851,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         },
         timestamp: TimestampSetting::default(),
         local_time: system_local_time,
+        text_font,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         last_idle_probe_generation: None,
@@ -3938,10 +3950,19 @@ unsafe extern "system" fn timeline_window_proc(
 ) -> LRESULT {
     match message {
         WM_CREATE => {
-            let state = Box::new(TimelineState::default());
+            let line_height = font_line_height(null_mut());
+            let state = Box::new(TimelineState::new(line_height));
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
+        WM_SETFONT => {
+            set_timeline_font(hwnd, wparam as HFONT);
+            if lparam != 0 {
+                InvalidateRect(hwnd, null(), 1);
+            }
+            0
+        }
+        WM_GETFONT => timeline_state_ref(hwnd).font as LRESULT,
         WM_SETTEXT => set_timeline_text(hwnd, lparam as *const u16),
         WM_GETTEXTLENGTH => timeline_text_len(hwnd),
         WM_GETTEXT => timeline_get_text(hwnd, wparam, lparam),
@@ -4263,6 +4284,7 @@ fn timeline_full_width_paint_lines(kind: &TimelineRowKind, text: &str) -> Vec<Ti
 fn timeline_row_paint_lines_with_measure<Measure>(
     rows: &[TimelineRow],
     client_width: i32,
+    line_height: i32,
     indent_sample: &str,
     measure: &Measure,
 ) -> Vec<TimelinePaintLine>
@@ -4296,7 +4318,7 @@ where
             }
         }
         if let Some(image_state) = &row.image_state {
-            for image_slot_index in 0..TIMELINE_IMAGE_MEDIA_SLOT_LINES {
+            for image_slot_index in 0..image_slot_lines(line_height) {
                 paint_lines.push(TimelinePaintLine {
                     kind: row.kind.clone(),
                     visual: TimelinePaintLineVisual::ImageSlot,
@@ -4355,16 +4377,145 @@ unsafe fn timeline_row_paint_lines(
     client_width: i32,
 ) -> Vec<TimelinePaintLine> {
     let (hdc, font, previous) = timeline_measurement_hdc(hwnd);
-    let indent_sample = &timeline_state_ref(hwnd).indent_sample;
-    let paint_lines =
-        timeline_row_paint_lines_with_measure(rows, client_width, indent_sample, &|text| unsafe {
-            timeline_measure_text_width(hdc, text)
-        });
+    let state = timeline_state_ref(hwnd);
+    let paint_lines = timeline_row_paint_lines_with_measure(
+        rows,
+        client_width,
+        state.line_height,
+        &state.indent_sample,
+        &|text| unsafe { timeline_measure_text_width(hdc, text) },
+    );
     if !font.is_null() && !previous.is_null() {
         SelectObject(hdc, previous);
     }
     ReleaseDC(hwnd, hdc);
     paint_lines
+}
+
+/// A GDI font the frame owns. Controls it is set on with `WM_SETFONT` only
+/// borrow it, so it must outlive them.
+struct OwnedFont(HFONT);
+
+impl Drop for OwnedFont {
+    fn drop(&mut self) {
+        unsafe {
+            DeleteObject(self.0);
+        }
+    }
+}
+
+/// The text font of every window (`/font`), with the heights laid out
+/// from it.
+struct TextFont {
+    font: OwnedFont,
+    /// The height of an editbox showing one line in the font.
+    edit_height: i32,
+}
+
+/// Text height plus room around it inside an editbox's client area.
+const EDIT_TEXT_MARGIN: i32 = 4;
+
+impl TextFont {
+    unsafe fn create(setting: &FontSetting) -> Result<Self, String> {
+        let screen = GetDC(null_mut());
+        assert!(!screen.is_null(), "GetDC must succeed for the screen");
+        let dpi = GetDeviceCaps(screen, LOGPIXELSY as i32);
+        ReleaseDC(null_mut(), screen);
+
+        let face = setting.face.encode_utf16().collect::<Vec<_>>();
+        let mut logfont = LOGFONTW {
+            // Negative: the character height, as points are measured.
+            lfHeight: -((i32::from(setting.points) * dpi + 36) / 72),
+            lfWeight: if setting.bold { FW_BOLD } else { FW_NORMAL } as i32,
+            lfCharSet: DEFAULT_CHARSET,
+            ..LOGFONTW::default()
+        };
+        assert!(
+            face.len() < logfont.lfFaceName.len(),
+            "a font setting's face must fit LOGFONTW"
+        );
+        logfont.lfFaceName[..face.len()].copy_from_slice(&face);
+        let font = CreateFontIndirectW(&logfont);
+        if font.is_null() {
+            return Err(last_os_error("CreateFontIndirectW"));
+        }
+        let font = OwnedFont(font);
+
+        let mut edit_rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: font_metrics(font.0).tmHeight + EDIT_TEXT_MARGIN,
+        };
+        if AdjustWindowRectEx(&mut edit_rect, COMPOSE_EDIT_STYLE, 0, COMPOSE_EDIT_EX_STYLE) == 0 {
+            return Err(last_os_error("AdjustWindowRectEx editbox"));
+        }
+        Ok(Self {
+            font,
+            edit_height: edit_rect.bottom - edit_rect.top,
+        })
+    }
+
+    fn hfont(&self) -> HFONT {
+        self.font.0
+    }
+}
+
+/// The metrics of `font`, or of the system font for null.
+unsafe fn font_metrics(font: HFONT) -> TEXTMETRICW {
+    let screen = GetDC(null_mut());
+    assert!(!screen.is_null(), "GetDC must succeed for the screen");
+    let previous = (!font.is_null()).then(|| SelectObject(screen, font));
+    let mut metrics = TEXTMETRICW::default();
+    let measured = GetTextMetricsW(screen, &mut metrics);
+    if let Some(previous) = previous {
+        SelectObject(screen, previous);
+    }
+    ReleaseDC(null_mut(), screen);
+    assert!(measured != 0, "GetTextMetricsW must succeed on the screen");
+    metrics
+}
+
+/// The distance between two lines of text in `font`.
+unsafe fn font_line_height(font: HFONT) -> i32 {
+    let metrics = font_metrics(font);
+    metrics.tmHeight + metrics.tmExternalLeading
+}
+
+/// `WM_SETFONT`: lines are as tall as the font's, so the rows rewrap.
+unsafe fn set_timeline_font(hwnd: HWND, font: HFONT) {
+    {
+        let state = timeline_state_mut(hwnd);
+        state.font = font;
+        state.line_height = font_line_height(font);
+    }
+    rebuild_timeline_paint_lines(hwnd);
+    clamp_timeline_top_line(hwnd);
+    update_timeline_scrollbar(hwnd);
+}
+
+/// Sets the text font on the controls of a view's window that draw text in
+/// it: the text area, the nick list and the editbox, as in mIRC.
+unsafe fn set_view_text_font(view_id: &ViewId, child: HWND, font: HFONT) {
+    let content = mdi_child_content(child);
+    SendMessageW(
+        view_timeline(view_id, content),
+        WM_SETFONT,
+        font as WPARAM,
+        1,
+    );
+    match view_id {
+        ViewId::Status => {}
+        ViewId::Room(_) | ViewId::Thread { .. } => {
+            SendMessageW(
+                room_content_member_list(content),
+                WM_SETFONT,
+                font as WPARAM,
+                1,
+            );
+        }
+    }
+    SendMessageW(mdi_child_edit(child), WM_SETFONT, font as WPARAM, 1);
 }
 
 unsafe fn timeline_client_width(hwnd: HWND) -> i32 {
@@ -5260,10 +5411,20 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
     }
 }
 
-fn timeline_image_slot_rect(line_y: i32, image_slot_index: usize) -> RECT {
-    let slot_height = TIMELINE_IMAGE_MEDIA_SLOT_LINES as i32 * TIMELINE_ROW_HEIGHT;
+/// How many lines an image's slot takes: enough for the thumbnail and its
+/// padding.
+fn image_slot_lines(line_height: i32) -> usize {
+    let slot_height = TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT + TIMELINE_IMAGE_SLOT_PADDING;
+    let line_height = u32::try_from(line_height).expect("a line height is positive");
+    (slot_height as u32).div_ceil(line_height) as usize
+}
+
+/// The thumbnail's rect, centred in its slot, from the slot line at
+/// `line_y` that is the slot's `image_slot_index`th.
+fn timeline_image_slot_rect(line_y: i32, image_slot_index: usize, line_height: i32) -> RECT {
+    let slot_height = image_slot_lines(line_height) as i32 * line_height;
     let top = line_y + (slot_height - TIMELINE_IMAGE_THUMBNAIL_MAX_HEIGHT) / 2
-        - image_slot_index as i32 * TIMELINE_ROW_HEIGHT;
+        - image_slot_index as i32 * line_height;
     let left = TIMELINE_LEFT_PADDING + TIMELINE_IMAGE_LEFT_INDENT;
     RECT {
         left,
@@ -5280,7 +5441,11 @@ unsafe fn paint_timeline_image_slot(
     image_slot_index: usize,
     image_state: &TimelineImageState,
 ) {
-    let rect = timeline_image_slot_rect(line_y, image_slot_index);
+    let rect = timeline_image_slot_rect(
+        line_y,
+        image_slot_index,
+        timeline_state_ref(hwnd).line_height,
+    );
     match image_state {
         TimelineImageState::Pending => {
             paint_timeline_image_placeholder(hdc, &rect, "loading image...");
@@ -9808,13 +9973,16 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
         child,
         EDIT_CLASS_NAME,
         "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL as u32,
-        WS_EX_CLIENTEDGE,
+        WS_VISIBLE | COMPOSE_EDIT_STYLE,
+        COMPOSE_EDIT_EX_STYLE,
         VIEW_EDIT_ID,
         instance,
         null_mut(),
     )?;
-    subclass_compose_edit(frame_window_for(child), edit)?;
+    let frame = frame_window_for(child);
+    subclass_compose_edit(frame, edit)?;
+    // Before any rows: the timeline wraps them in its font.
+    set_view_text_font(view_id, child, state_ref(frame).text_font.hfont());
 
     if matches!(view_id, ViewId::Status) {
         // As in mIRC, the Status window cannot be closed (see WM_CLOSE), so
@@ -9854,7 +10022,8 @@ unsafe fn subclass_compose_edit(frame: HWND, edit: HWND) -> Result<(), String> {
 unsafe fn layout_mdi_child(child: HWND) {
     let mut rect = RECT::default();
     GetClientRect(child, &mut rect);
-    let layout = mdi::child_layout(rect.right - rect.left, rect.bottom - rect.top, EDIT_HEIGHT);
+    let edit_height = state_ref(frame_window_for(child)).text_font.edit_height;
+    let layout = mdi::child_layout(rect.right - rect.left, rect.bottom - rect.top, edit_height);
     for (control, place) in [
         (mdi_child_content(child), layout.content),
         (mdi_child_edit(child), layout.edit),
@@ -16304,6 +16473,7 @@ mod tests {
             clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
             timestamp: TimestampSetting::default(),
             local_time: timestamp::utc_local_time,
+            text_font: unsafe { TextFont::create(&FontSetting::default()).unwrap() },
             exit_code: Arc::new(AtomicI32::new(0)),
             event_generation: 0,
             last_idle_probe_generation: None,
@@ -19151,6 +19321,7 @@ mod tests {
             timeline_row_paint_lines_with_measure(
                 &rows,
                 client_width_for_text(sample.len() as i32 + 10),
+                20,
                 &sample,
                 &measure_ascii_width,
             )
@@ -20513,7 +20684,7 @@ mod tests {
 
         let logical_lines = project_timeline_rows(&rows);
         let paint_lines =
-            timeline_row_paint_lines_with_measure(&rows, 360, "[00:00] ", &measure_ascii_width);
+            timeline_row_paint_lines_with_measure(&rows, 360, 20, "[00:00] ", &measure_ascii_width);
 
         assert_eq!(
             logical_lines,
@@ -20539,7 +20710,7 @@ mod tests {
                 .iter()
                 .filter(|line| line.image_slot_index.is_some())
                 .count(),
-            TIMELINE_IMAGE_MEDIA_SLOT_LINES
+            image_slot_lines(20)
         );
         assert_eq!(clamped_timeline_top_line(6, paint_lines.len(), 3), 6);
     }
@@ -20553,13 +20724,28 @@ mod tests {
             },
             text.to_owned(),
         )];
-        timeline_row_paint_lines_with_measure(&rows, client_width, "[00:00] ", &measure_ascii_width)
-            .into_iter()
-            .map(|line| match line.visual {
-                TimelinePaintLineVisual::Text { text, indent } => (text, indent),
-                TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
-            })
-            .collect()
+        timeline_row_paint_lines_with_measure(
+            &rows,
+            client_width,
+            20,
+            "[00:00] ",
+            &measure_ascii_width,
+        )
+        .into_iter()
+        .map(|line| match line.visual {
+            TimelinePaintLineVisual::Text { text, indent } => (text, indent),
+            TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+        })
+        .collect()
+    }
+
+    #[test]
+    fn image_slots_take_enough_lines_for_the_thumbnail() {
+        assert_eq!(image_slot_lines(20), 7);
+        assert_eq!(image_slot_lines(15), 10);
+        assert_eq!(image_slot_lines(140), 1);
+        assert_eq!(timeline_image_slot_rect(100, 0, 20).top, 110);
+        assert_eq!(timeline_image_slot_rect(115, 1, 15).top, 115);
     }
 
     /// A client width whose text area is `text_width` pixels wide.
@@ -20625,6 +20811,7 @@ mod tests {
         let paint_lines = timeline_row_paint_lines_with_measure(
             &[row],
             client_width_for_text(30),
+            20,
             "[00:00] ",
             &measure_ascii_width,
         );
@@ -20632,7 +20819,7 @@ mod tests {
             .iter()
             .take_while(|line| line.image_slot_index.is_none())
             .collect::<Vec<_>>();
-        let image_slot_lines = paint_lines
+        let slot_lines = paint_lines
             .iter()
             .skip(caption_lines.len())
             .collect::<Vec<_>>();
@@ -20641,9 +20828,9 @@ mod tests {
             caption_lines.len() > 1,
             "caption should wrap before image slots"
         );
-        assert_eq!(image_slot_lines.len(), TIMELINE_IMAGE_MEDIA_SLOT_LINES,);
+        assert_eq!(slot_lines.len(), image_slot_lines(20),);
         assert!(
-            image_slot_lines
+            slot_lines
                 .iter()
                 .all(|line| matches!(&line.visual, TimelinePaintLineVisual::ImageSlot))
         );
@@ -20666,6 +20853,7 @@ mod tests {
         let paint_lines = timeline_row_paint_lines_with_measure(
             &rows,
             client_width_for_text(30),
+            20,
             "[00:00] ",
             &measure_ascii_width,
         );
