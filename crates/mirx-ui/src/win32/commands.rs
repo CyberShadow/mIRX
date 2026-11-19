@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use mirx_core::{RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind};
+use mirx_core::{MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind};
 
 use super::nick_completion::member_mention_text;
 use super::timeline_text::rank_prefix;
@@ -53,6 +53,32 @@ pub(super) enum SlashCommand {
     },
     Close,
     Exit,
+    Kick {
+        nick: String,
+        reason: Option<String>,
+    },
+    Ban {
+        nick: String,
+        reason: Option<String>,
+    },
+    /// A banned user is no member, so the target is a user ID or a nick
+    /// known from another room.
+    Unban {
+        target: String,
+        reason: Option<String>,
+    },
+    Invite {
+        nick: String,
+        room: Option<String>,
+    },
+    /// `/op`, `/deop`, `/voice` and `/devoice`.
+    SetRank {
+        nick: String,
+        change: RankChange,
+    },
+    Nick {
+        display_name: String,
+    },
     Accept {
         target: Option<String>,
     },
@@ -108,6 +134,14 @@ pub(super) enum E2eeSlashCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RankChange {
+    Op,
+    Deop,
+    Voice,
+    Devoice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VerificationAction {
     Accept,
     Cancel,
@@ -133,6 +167,17 @@ impl SlashCommand {
             Self::Whois { .. } => "whois",
             Self::Close => "close",
             Self::Exit => "exit",
+            Self::Kick { .. } => "kick",
+            Self::Ban { .. } => "ban",
+            Self::Unban { .. } => "unban",
+            Self::Invite { .. } => "invite",
+            Self::SetRank { change, .. } => match change {
+                RankChange::Op => "op",
+                RankChange::Deop => "deop",
+                RankChange::Voice => "voice",
+                RankChange::Devoice => "devoice",
+            },
+            Self::Nick { .. } => "nick",
             Self::Accept { .. } => "accept",
             Self::Reject { .. } => "reject",
             Self::Part { .. } => "part",
@@ -197,6 +242,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "accept a room invite",
     },
     CommandSpec {
+        name: "ban",
+        usage: "<nick> [reason]",
+        summary: "ban a member from this room",
+    },
+    CommandSpec {
         name: "clear",
         usage: "",
         summary: "clear this window",
@@ -205,6 +255,16 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "close",
         usage: "",
         summary: "close this window",
+    },
+    CommandSpec {
+        name: "deop",
+        usage: "<nick>",
+        summary: "take a member's operator status",
+    },
+    CommandSpec {
+        name: "devoice",
+        usage: "<nick>",
+        summary: "take a member's voice",
     },
     CommandSpec {
         name: "e2ee",
@@ -232,9 +292,19 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "list the commands, or show one's usage",
     },
     CommandSpec {
+        name: "invite",
+        usage: "<nick> [room]",
+        summary: "invite a user to this room, or the named one",
+    },
+    CommandSpec {
         name: "join",
         usage: "<room-id-or-alias>",
         summary: "join a room",
+    },
+    CommandSpec {
+        name: "kick",
+        usage: "<nick> [reason]",
+        summary: "kick a member from this room",
     },
     CommandSpec {
         name: "me",
@@ -252,9 +322,19 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "list this room's members, or the named room's",
     },
     CommandSpec {
+        name: "nick",
+        usage: "<name>",
+        summary: "change your display name",
+    },
+    CommandSpec {
         name: "notice",
         usage: "<nick|room> <message>",
         summary: "send a notice",
+    },
+    CommandSpec {
+        name: "op",
+        usage: "<nick>",
+        summary: "make a member an operator (moderator)",
     },
     CommandSpec {
         name: "part",
@@ -302,6 +382,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "set this room's topic",
     },
     CommandSpec {
+        name: "unban",
+        usage: "<nick> [reason]",
+        summary: "lift a user's ban from this room",
+    },
+    CommandSpec {
         name: "unreact",
         usage: "<reaction-event-id>",
         summary: "remove your reaction",
@@ -310,6 +395,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "verify",
         usage: "<accept|cancel|confirm|reject>",
         summary: "answer a device verification",
+    },
+    CommandSpec {
+        name: "voice",
+        usage: "<nick>",
+        summary: "give a member voice",
     },
     CommandSpec {
         name: "whois",
@@ -441,6 +531,35 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         }),
         "close" => no_parameters(SlashCommand::Close),
         "exit" => no_parameters(SlashCommand::Exit),
+        "kick" | "ban" | "unban" | "invite" => {
+            required(argument)?;
+            let (nick, rest) = split_word(argument);
+            let (nick, rest) = (nick.to_owned(), optional(rest));
+            Ok(match name.as_str() {
+                "kick" => SlashCommand::Kick { nick, reason: rest },
+                "ban" => SlashCommand::Ban { nick, reason: rest },
+                "unban" => SlashCommand::Unban {
+                    target: nick,
+                    reason: rest,
+                },
+                _ => SlashCommand::Invite { nick, room: rest },
+            })
+        }
+        "op" | "deop" | "voice" | "devoice" => {
+            let change = match name.as_str() {
+                "op" => RankChange::Op,
+                "deop" => RankChange::Deop,
+                "voice" => RankChange::Voice,
+                _ => RankChange::Devoice,
+            };
+            Ok(SlashCommand::SetRank {
+                nick: single_word(&name, argument)?,
+                change,
+            })
+        }
+        "nick" => Ok(SlashCommand::Nick {
+            display_name: required(argument)?,
+        }),
         "accept" => Ok(SlashCommand::Accept {
             target: optional(argument),
         }),
@@ -721,6 +840,33 @@ pub(super) fn whois_lines(
     }
     lines.push(format!("* {nick} End of /WHOIS list"));
     lines
+}
+
+/// The power role a rank change gives the member, or why it would change
+/// nothing. Demoting yourself is refused: unlike an IRC op, a Matrix user
+/// cannot be given their level back by services.
+pub(super) fn rank_change_role(
+    change: RankChange,
+    member: &RoomMemberSummary,
+) -> Result<MemberPowerRole, String> {
+    let nick = member_nick(member);
+    let is_operator = member.rank <= RoomMemberRank::Moderator;
+    match change {
+        RankChange::Op if is_operator => Err(format!("{nick} is already an operator")),
+        RankChange::Op => Ok(MemberPowerRole::Moderator),
+        RankChange::Deop if member.rank == RoomMemberRank::Creator => {
+            Err(format!("{nick} is the room creator"))
+        }
+        RankChange::Deop if !is_operator => Err(format!("{nick} is not an operator")),
+        RankChange::Deop if member.is_own_user => Err("you cannot deop yourself".to_owned()),
+        RankChange::Deop => Ok(MemberPowerRole::Default),
+        RankChange::Voice if member.rank == RoomMemberRank::Member => Ok(MemberPowerRole::Voiced),
+        RankChange::Voice => Err(format!("{nick} already has voice")),
+        RankChange::Devoice if member.rank == RoomMemberRank::Voiced => {
+            Ok(MemberPowerRole::Default)
+        }
+        RankChange::Devoice => Err(format!("{nick} is not voiced")),
+    }
 }
 
 /// The echo of `/msg` (`-> *nick* text`) and `/notice` (`-> -nick- text`).
@@ -1156,6 +1302,15 @@ mod tests {
             "/whois x",
             "/close",
             "/exit",
+            "/kick x",
+            "/ban x",
+            "/unban x",
+            "/invite x",
+            "/op x",
+            "/deop x",
+            "/voice x",
+            "/devoice x",
+            "/nick x",
         ];
         for input in samples {
             let name = parse(input).expect(input).name();
@@ -1170,7 +1325,9 @@ mod tests {
     fn help_lists_every_command_or_shows_one() {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("* Commands: /accept /clear /close /e2ee"));
+        assert!(
+            lines[0].starts_with("* Commands: /accept /ban /clear /close /deop /devoice /e2ee")
+        );
         assert!(lines[0].contains(" /help "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
@@ -1372,6 +1529,153 @@ mod tests {
         assert_eq!(
             msg_echo(RoomMessagePresentationKind::Notice, "Alice", "hi"),
             "-> -Alice- hi"
+        );
+    }
+
+    #[test]
+    fn parse_accepts_moderation_commands() {
+        assert_eq!(
+            parse("/kick Bob  spamming the channel "),
+            Ok(SlashCommand::Kick {
+                nick: "Bob".to_owned(),
+                reason: Some("spamming the channel".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/ban Bob"),
+            Ok(SlashCommand::Ban {
+                nick: "Bob".to_owned(),
+                reason: None,
+            })
+        );
+        assert_eq!(
+            parse("/unban @bob:example sorry"),
+            Ok(SlashCommand::Unban {
+                target: "@bob:example".to_owned(),
+                reason: Some("sorry".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/invite Bob Lobby Room"),
+            Ok(SlashCommand::Invite {
+                nick: "Bob".to_owned(),
+                room: Some("Lobby Room".to_owned()),
+            })
+        );
+        for (input, change) in [
+            ("/op Bob", RankChange::Op),
+            ("/DEOP Bob", RankChange::Deop),
+            ("/voice Bob", RankChange::Voice),
+            ("/devoice Bob", RankChange::Devoice),
+        ] {
+            let command = parse(input).unwrap();
+            assert_eq!(
+                command,
+                SlashCommand::SetRank {
+                    nick: "Bob".to_owned(),
+                    change,
+                }
+            );
+            assert_eq!(
+                command.name(),
+                input[1..input.find(' ').unwrap()].to_ascii_lowercase()
+            );
+        }
+        assert_eq!(
+            parse("/nick New Name"),
+            Ok(SlashCommand::Nick {
+                display_name: "New Name".to_owned(),
+            })
+        );
+        for name in [
+            "kick", "ban", "unban", "invite", "op", "deop", "voice", "devoice", "nick",
+        ] {
+            assert_eq!(parse(&format!("/{name}")), insufficient(name), "{name}");
+        }
+        assert_eq!(parse("/op Bob Carol"), error("op", "too many parameters"));
+    }
+
+    #[test]
+    fn rank_changes_follow_the_member_rank() {
+        let mut own = member("@me:example", Some("Me"), RoomMemberRank::Moderator);
+        own.is_own_user = true;
+        let cases = [
+            (
+                RankChange::Op,
+                RoomMemberRank::Member,
+                Ok(MemberPowerRole::Moderator),
+            ),
+            (
+                RankChange::Op,
+                RoomMemberRank::Voiced,
+                Ok(MemberPowerRole::Moderator),
+            ),
+            (
+                RankChange::Op,
+                RoomMemberRank::Moderator,
+                Err("Bob is already an operator"),
+            ),
+            (
+                RankChange::Op,
+                RoomMemberRank::Creator,
+                Err("Bob is already an operator"),
+            ),
+            (
+                RankChange::Deop,
+                RoomMemberRank::Moderator,
+                Ok(MemberPowerRole::Default),
+            ),
+            (
+                RankChange::Deop,
+                RoomMemberRank::Administrator,
+                Ok(MemberPowerRole::Default),
+            ),
+            (
+                RankChange::Deop,
+                RoomMemberRank::Creator,
+                Err("Bob is the room creator"),
+            ),
+            (
+                RankChange::Deop,
+                RoomMemberRank::Voiced,
+                Err("Bob is not an operator"),
+            ),
+            (
+                RankChange::Voice,
+                RoomMemberRank::Member,
+                Ok(MemberPowerRole::Voiced),
+            ),
+            (
+                RankChange::Voice,
+                RoomMemberRank::Voiced,
+                Err("Bob already has voice"),
+            ),
+            (
+                RankChange::Voice,
+                RoomMemberRank::Moderator,
+                Err("Bob already has voice"),
+            ),
+            (
+                RankChange::Devoice,
+                RoomMemberRank::Voiced,
+                Ok(MemberPowerRole::Default),
+            ),
+            (
+                RankChange::Devoice,
+                RoomMemberRank::Member,
+                Err("Bob is not voiced"),
+            ),
+        ];
+        for (change, rank, expected) in cases {
+            assert_eq!(
+                rank_change_role(change, &member("@bob:example", Some("Bob"), rank)),
+                expected.map_err(str::to_owned),
+                "{change:?} {rank:?}"
+            );
+        }
+        assert_eq!(
+            rank_change_role(RankChange::Deop, &own),
+            Err("you cannot deop yourself".to_owned())
         );
     }
 }

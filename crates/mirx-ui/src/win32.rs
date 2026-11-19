@@ -18,9 +18,9 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomMediaRequest, JoinRoomRequest, KickRoomMemberRequest,
-    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    EditMessageRequest, Event, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
+    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
+    Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
     RoomAudioInfo, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo,
@@ -28,9 +28,10 @@ use mirx_core::{
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
     RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    StoredSession, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
+    SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
+    UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -106,13 +107,15 @@ use crate::{
         AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
         COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
         ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberMenuState,
-        DumpMemberModerationAction, DumpMembershipCommandAction, DumpMessageMenuState, DumpModel,
-        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
-        DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
-        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
+        DumpMemberModerationAction, DumpMemberPowerRole, DumpMembershipCommandAction,
+        DumpMessageMenuState, DumpModel, DumpRoomActivity, DumpRoomActivityKind,
+        DumpRoomActivityResponse, DumpRoomMenuState, DumpRoomMessageActivityLine,
+        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpSubmittedDirectRoomCommand,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
         DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
-        DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand,
-        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
         DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
         DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
@@ -4635,14 +4638,7 @@ unsafe fn submit_selected_member_moderation(hwnd: HWND, kick: bool) -> Result<()
             reason: None,
         })
     };
-    let sender = state_ref(hwnd)
-        .command_sender
-        .as_ref()
-        .ok_or_else(|| "core command sender is not available".to_owned())?;
-    sender
-        .send(command.clone())
-        .map_err(|err| format!("failed to enqueue member moderation command: {err}"))?;
-    state_mut(hwnd).recorded_commands.push(command);
+    enqueue_command(state_mut(hwnd), command)?;
     state_mut(hwnd).model.status = if kick {
         format!("kick submitted: {}", member.user_id)
     } else {
@@ -13008,13 +13004,7 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 let room_id = resolve_joined_room_target(state, target.as_deref())?;
                 let room = room_by_id(&state.model.rooms, &room_id)
                     .expect("a joined room target must exist");
-                let members = state
-                    .model
-                    .room_views
-                    .get(&room_id)
-                    .map(|view| view.members.as_slice())
-                    .unwrap_or_default();
-                commands::names_lines(&room.display_name, members)
+                commands::names_lines(&room.display_name, room_members(&state.model, &room_id))
             };
             echo_in_active_view(hwnd, lines)?;
             Ok(None)
@@ -13035,6 +13025,97 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 return Err(last_os_error("PostMessageW WM_CLOSE"));
             }
             Ok(None)
+        }
+        SlashCommand::Kick { nick, reason } => {
+            let state = state_mut(hwnd);
+            let (room_id, member) = room_member_target(state, &nick)?;
+            if !member.can_kick {
+                return Err(format!("you cannot kick {nick}"));
+            }
+            let user_id = member.user_id.clone();
+            enqueue_command(
+                state,
+                Command::KickRoomMember(KickRoomMemberRequest {
+                    room_id,
+                    user_id: user_id.clone(),
+                    reason,
+                }),
+            )?;
+            Ok(Some(format!("kick submitted: {user_id}")))
+        }
+        SlashCommand::Ban { nick, reason } => {
+            let state = state_mut(hwnd);
+            let (room_id, member) = room_member_target(state, &nick)?;
+            if !member.can_ban {
+                return Err(format!("you cannot ban {nick}"));
+            }
+            let user_id = member.user_id.clone();
+            enqueue_command(
+                state,
+                Command::BanRoomMember(BanRoomMemberRequest {
+                    room_id,
+                    user_id: user_id.clone(),
+                    reason,
+                }),
+            )?;
+            Ok(Some(format!("ban submitted: {user_id}")))
+        }
+        SlashCommand::Unban { target, reason } => {
+            let state = state_mut(hwnd);
+            let room_id = resolve_joined_room_target(state, None)?;
+            let user_id = commands::resolve_user(all_room_members(&state.model), &target)?.user_id;
+            enqueue_command(
+                state,
+                Command::UnbanRoomMember(UnbanRoomMemberRequest {
+                    room_id,
+                    user_id: user_id.clone(),
+                    reason,
+                }),
+            )?;
+            Ok(Some(format!("unban submitted: {user_id}")))
+        }
+        SlashCommand::Invite { nick, room } => {
+            let state = state_mut(hwnd);
+            let room_id = resolve_joined_room_target(state, room.as_deref())?;
+            let user_id = commands::resolve_user(all_room_members(&state.model), &nick)?.user_id;
+            if room_members(&state.model, &room_id)
+                .iter()
+                .any(|member| member.user_id == user_id)
+            {
+                return Err(format!("{nick} is already in this room"));
+            }
+            enqueue_command(
+                state,
+                Command::InviteRoomMember(InviteRoomMemberRequest {
+                    room_id,
+                    user_id: user_id.clone(),
+                }),
+            )?;
+            Ok(Some(format!("invite submitted: {user_id}")))
+        }
+        SlashCommand::SetRank { nick, change } => {
+            let state = state_mut(hwnd);
+            let (room_id, member) = room_member_target(state, &nick)?;
+            let role = commands::rank_change_role(change, member)?;
+            let user_id = member.user_id.clone();
+            enqueue_command(
+                state,
+                Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
+                    room_id,
+                    user_id: user_id.clone(),
+                    role,
+                }),
+            )?;
+            Ok(Some(format!("power level change submitted: {user_id}")))
+        }
+        SlashCommand::Nick { display_name } => {
+            enqueue_command(
+                state_mut(hwnd),
+                Command::SetDisplayName(SetDisplayNameRequest {
+                    display_name: display_name.clone(),
+                }),
+            )?;
+            Ok(Some(format!("nick change submitted: {display_name}")))
         }
         SlashCommand::Exit => {
             if PostMessageW(hwnd, WM_CLOSE, 0, 0) == 0 {
@@ -13249,6 +13330,38 @@ fn resolve_direct_room_query_target(model: &UiModel, user_id: &str) -> QueryTarg
         return QueryTargetResolution::Ambiguous;
     }
     QueryTargetResolution::Single(room.room_id.clone())
+}
+
+/// The members the client knows in a room, in nick list order.
+fn room_members<'m>(model: &'m UiModel, room_id: &str) -> &'m [RoomMemberSummary] {
+    model
+        .room_views
+        .get(room_id)
+        .map(|view| view.members.as_slice())
+        .unwrap_or_default()
+}
+
+/// The joined room a member command acts on, and the member the nick names
+/// there.
+fn room_member_target<'s>(
+    state: &'s WindowState,
+    nick: &str,
+) -> Result<(String, &'s RoomMemberSummary), String> {
+    let room_id = resolve_joined_room_target(state, None)?;
+    let member = commands::resolve_nick(room_members(&state.model, &room_id), nick)?;
+    Ok((room_id, member))
+}
+
+/// Enqueues a command for the core, recording it for the automation dump.
+fn enqueue_command(state: &mut WindowState, command: Command) -> Result<(), String> {
+    state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(())
 }
 
 /// Every known member of every room; a user in several rooms is listed
@@ -13969,14 +14082,62 @@ fn dump_submitted_member_moderation_command(
             action: DumpMemberModerationAction::Kick,
             room_id: request.room_id.clone(),
             user_id: request.user_id.clone(),
+            reason: request.reason.clone(),
         }),
         Command::BanRoomMember(request) => Some(DumpSubmittedMemberModerationCommand {
             action: DumpMemberModerationAction::Ban,
             room_id: request.room_id.clone(),
             user_id: request.user_id.clone(),
+            reason: request.reason.clone(),
+        }),
+        Command::UnbanRoomMember(request) => Some(DumpSubmittedMemberModerationCommand {
+            action: DumpMemberModerationAction::Unban,
+            room_id: request.room_id.clone(),
+            user_id: request.user_id.clone(),
+            reason: request.reason.clone(),
+        }),
+        Command::InviteRoomMember(request) => Some(DumpSubmittedMemberModerationCommand {
+            action: DumpMemberModerationAction::Invite,
+            room_id: request.room_id.clone(),
+            user_id: request.user_id.clone(),
+            reason: None,
         }),
         _ => None,
     }
+}
+
+fn submitted_power_level_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedPowerLevelCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::SetRoomMemberPowerLevel(request) => Some(DumpSubmittedPowerLevelCommand {
+                room_id: request.room_id.clone(),
+                user_id: request.user_id.clone(),
+                role: match request.role {
+                    MemberPowerRole::Moderator => DumpMemberPowerRole::Moderator,
+                    MemberPowerRole::Voiced => DumpMemberPowerRole::Voiced,
+                    MemberPowerRole::Default => DumpMemberPowerRole::Default,
+                },
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn submitted_profile_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedProfileCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::SetDisplayName(request) => Some(DumpSubmittedProfileCommand {
+                display_name: request.display_name.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 fn submitted_member_moderation_commands_from_state(
@@ -14231,6 +14392,8 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_member_moderation_commands: submitted_member_moderation_commands_from_state(
             state,
         ),
+        submitted_power_level_commands: submitted_power_level_commands_from_state(state),
+        submitted_profile_commands: submitted_profile_commands_from_state(state),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
@@ -25221,6 +25384,93 @@ mod tests {
     }
 
     #[test]
+    fn moderation_commands_check_the_member_and_submit_core_commands() {
+        let (mut state, handle) = irc_command_state();
+        let ops = state.model.room_views.get_mut("!ops:example").unwrap();
+        ops.members[0].can_kick = true;
+        ops.members[0].can_ban = true;
+        let mut me = member_summary("@me:example", Some("Me"), false);
+        me.rank = RoomMemberRank::Moderator;
+        me.is_own_user = true;
+        ops.members.push(me);
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                for input in [
+                    "/kick alice spamming links",
+                    "/kick Bob",
+                    "/ban Alice",
+                    "/kick",
+                    "/kick Nobody",
+                    "/unban @gone:example sorry",
+                    "/invite Bob",
+                    "/op Bob",
+                    "/op alice",
+                    "/voice Alice",
+                    "/devoice Alice",
+                    "/deop Bob",
+                    "/deop Me",
+                    "/nick New Name",
+                ] {
+                    type_compose_line(hwnd, input);
+                }
+                let room = || "!ops:example".to_owned();
+                let power = |user_id: &str, role| {
+                    Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
+                        room_id: room(),
+                        user_id: user_id.to_owned(),
+                        role,
+                    })
+                };
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        Command::KickRoomMember(KickRoomMemberRequest {
+                            room_id: room(),
+                            user_id: "@alice:example".to_owned(),
+                            reason: Some("spamming links".to_owned()),
+                        }),
+                        Command::BanRoomMember(BanRoomMemberRequest {
+                            room_id: room(),
+                            user_id: "@alice:example".to_owned(),
+                            reason: None,
+                        }),
+                        Command::UnbanRoomMember(UnbanRoomMemberRequest {
+                            room_id: room(),
+                            user_id: "@gone:example".to_owned(),
+                            reason: Some("sorry".to_owned()),
+                        }),
+                        power("@alice:example", MemberPowerRole::Moderator),
+                        power("@alice:example", MemberPowerRole::Voiced),
+                        power("@bob:example", MemberPowerRole::Default),
+                        Command::SetDisplayName(SetDisplayNameRequest {
+                            display_name: "New Name".to_owned(),
+                        }),
+                    ]
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "nick change submitted: New Name"
+                );
+                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 7..],
+                    [
+                        "[22:12] * /kick: you cannot kick Bob",
+                        "[22:12] * /kick: insufficient parameters",
+                        "[22:12] * /kick: no such nick: Nobody",
+                        "[22:12] * /invite: Bob is already in this room",
+                        "[22:12] * /op: Bob is already an operator",
+                        "[22:12] * /devoice: Alice is not voiced",
+                        "[22:12] * /deop: you cannot deop yourself",
+                    ]
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
     fn close_in_status_is_refused_in_the_window() {
         let state = test_state();
         unsafe {
@@ -25304,7 +25554,7 @@ mod tests {
                 type_compose_line(hwnd, "/help nope");
                 let lines = render_room_lines(&state_ref(hwnd).model, "!room:example");
                 let echo = &lines[lines.len() - 4..];
-                assert!(echo[0].starts_with("[22:12] * Commands: /accept /clear "));
+                assert!(echo[0].starts_with("[22:12] * Commands: /accept /ban /clear /close "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
                 assert_eq!(echo[2], "[22:12] * /clear — clear this window");
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");

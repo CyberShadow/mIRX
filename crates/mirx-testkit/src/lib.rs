@@ -360,6 +360,10 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_member_moderation_commands: Vec<SubmittedMemberModerationCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_power_level_commands: Vec<SubmittedPowerLevelCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_profile_commands: Vec<SubmittedProfileCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_direct_room_commands: Vec<SubmittedDirectRoomCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_topic_commands: Vec<SubmittedRoomTopicCommand>,
@@ -396,6 +400,8 @@ pub struct SubmittedMemberModerationCommand {
     pub action: MemberModerationAction,
     pub room_id: String,
     pub user_id: String,
+    /// Always `None` for invites, which take no reason.
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -403,6 +409,30 @@ pub struct SubmittedMemberModerationCommand {
 pub enum MemberModerationAction {
     Kick,
     Ban,
+    Unban,
+    Invite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedPowerLevelCommand {
+    pub room_id: String,
+    pub user_id: String,
+    pub role: MemberPowerRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberPowerRole {
+    Moderator,
+    Voiced,
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedProfileCommand {
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

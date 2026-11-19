@@ -29,15 +29,16 @@ use mirx_core::{
 use mirx_testkit::{
     ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
     LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState,
-    MemberModerationAction, MembershipCommandAction, MirxApp, Model, NavigationNode,
-    NavigationPathSegment, Room, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
-    RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo, RoomImageMediaState,
-    RoomMediaSource, RoomMemberChange, RoomMessageActivity, RoomMessageActivityLine,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity,
-    RoomStateNoticeActivity, RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession,
-    SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedHistoryCommand,
-    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedReactionCommand,
+    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MirxApp, Model,
+    NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
+    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
+    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
+    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
+    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
+    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
+    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
+    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
@@ -2668,7 +2669,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 30);
+    assert_eq!(version.protocol_version, 31);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4244,6 +4245,125 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
     Ok(())
 }
 
+fn ranked_member(
+    user_id: &str,
+    display_name: &str,
+    rank: RoomMemberRank,
+    moderatable: bool,
+) -> RoomMemberSummary {
+    RoomMemberSummary {
+        user_id: user_id.to_owned(),
+        display_name: Some(display_name.to_owned()),
+        display_name_ambiguous: false,
+        is_own_user: false,
+        rank,
+        can_kick: moderatable,
+        can_ban: moderatable,
+    }
+}
+
+#[test]
+fn automation_driver_irc_moderation_commands_submit_core_commands()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::RoomMembers(
+        RoomMembers {
+            room_id: "!beta:example".to_owned(),
+            members: vec![
+                ranked_member("@alice:example", "Alice", RoomMemberRank::Member, true),
+                ranked_member("@bob:example", "Bob", RoomMemberRank::Moderator, false),
+                ranked_member("@vic:example", "Vic", RoomMemberRank::Voiced, false),
+            ],
+        },
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+
+    for input in [
+        "/kick alice spamming links",
+        "/ban Alice",
+        "/unban @gone:example",
+        "/invite @carol:example",
+        "/op alice",
+        "/voice alice",
+        "/deop Bob",
+        "/devoice Vic",
+        "/nick New Name",
+    ] {
+        app.set_compose_text(input)?;
+        app.send_compose_key(ComposeKey::Return)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        assert_eq!(app.compose_text()?, "", "{input}");
+    }
+
+    let model = app.dump_model()?;
+    let moderation =
+        |action, user_id: &str, reason: Option<&str>| SubmittedMemberModerationCommand {
+            action,
+            room_id: "!beta:example".to_owned(),
+            user_id: user_id.to_owned(),
+            reason: reason.map(str::to_owned),
+        };
+    assert_eq!(
+        model.submitted_member_moderation_commands,
+        vec![
+            moderation(
+                MemberModerationAction::Kick,
+                "@alice:example",
+                Some("spamming links")
+            ),
+            moderation(MemberModerationAction::Ban, "@alice:example", None),
+            moderation(MemberModerationAction::Unban, "@gone:example", None),
+            moderation(MemberModerationAction::Invite, "@carol:example", None),
+        ]
+    );
+    let power = |user_id: &str, role| SubmittedPowerLevelCommand {
+        room_id: "!beta:example".to_owned(),
+        user_id: user_id.to_owned(),
+        role,
+    };
+    assert_eq!(
+        model.submitted_power_level_commands,
+        vec![
+            power("@alice:example", MemberPowerRole::Moderator),
+            power("@alice:example", MemberPowerRole::Voiced),
+            power("@bob:example", MemberPowerRole::Default),
+            power("@vic:example", MemberPowerRole::Default),
+        ]
+    );
+    assert_eq!(
+        model.submitted_profile_commands,
+        vec![SubmittedProfileCommand {
+            display_name: "New Name".to_owned(),
+        }]
+    );
+
+    // The unauthenticated core answers each one, which proves they reached it.
+    let ui_state = app.dump_ui_state()?;
+    let status = find_view(&ui_state, &ViewIdentity::Status);
+    for operation in [
+        "kick room member",
+        "ban room member",
+        "unban room member",
+        "invite room member",
+        "set room member power level",
+        "set display name",
+    ] {
+        assert!(
+            view_contains(
+                status,
+                &format!("{operation} requires an authenticated session")
+            ),
+            "{operation}: {:?}",
+            status.lines
+        );
+    }
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 #[test]
 fn closed_query_reopens_from_the_treebar() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;
@@ -4760,6 +4880,7 @@ fn automation_driver_member_menu_moderation_uses_clicked_member()
             action: MemberModerationAction::Kick,
             room_id: "!members:example".to_owned(),
             user_id: "@casey:example".to_owned(),
+            reason: None,
         }]
     );
     app.open_member_context_menu("@casey:example", ContextMenuCommand::BanMember)?;
@@ -4770,11 +4891,13 @@ fn automation_driver_member_menu_moderation_uses_clicked_member()
                 action: MemberModerationAction::Kick,
                 room_id: "!members:example".to_owned(),
                 user_id: "@casey:example".to_owned(),
+                reason: None,
             },
             SubmittedMemberModerationCommand {
                 action: MemberModerationAction::Ban,
                 room_id: "!members:example".to_owned(),
                 user_id: "@casey:example".to_owned(),
+                reason: None,
             },
         ]
     );
@@ -4808,6 +4931,7 @@ fn automation_driver_member_menu_moderation_respects_independent_permissions()
             action: MemberModerationAction::Kick,
             room_id: "!members:example".to_owned(),
             user_id: "@sam-one:example".to_owned(),
+            reason: None,
         }]
     );
     Ok(())
@@ -5010,6 +5134,7 @@ fn automation_driver_member_moderation_uses_current_keyboard_selection_after_cli
             action: MemberModerationAction::Kick,
             room_id: "!members:example".to_owned(),
             user_id: "@casey:example".to_owned(),
+            reason: None,
         }]
     );
     Ok(())
@@ -5056,21 +5181,25 @@ fn automation_driver_member_moderation_resolves_room_and_thread_parent_room()
                 action: MemberModerationAction::Kick,
                 room_id: "!members:example".to_owned(),
                 user_id: "@casey:example".to_owned(),
+                reason: None,
             },
             SubmittedMemberModerationCommand {
                 action: MemberModerationAction::Ban,
                 room_id: "!members:example".to_owned(),
                 user_id: "@casey:example".to_owned(),
+                reason: None,
             },
             SubmittedMemberModerationCommand {
                 action: MemberModerationAction::Kick,
                 room_id: "!members:example".to_owned(),
                 user_id: "@casey:example".to_owned(),
+                reason: None,
             },
             SubmittedMemberModerationCommand {
                 action: MemberModerationAction::Ban,
                 room_id: "!members:example".to_owned(),
                 user_id: "@casey:example".to_owned(),
+                reason: None,
             },
         ]
     );
