@@ -467,6 +467,7 @@ pub struct SubmittedEditCommand {
 pub struct SubmittedReplyCommand {
     pub room_id: String,
     pub target_event_id: String,
+    pub sender_user_id: String,
     pub body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<SubmittedReplyThreadTarget>,
@@ -1128,6 +1129,22 @@ pub struct UiState {
     /// The frame's menubar as opening each menu would show it: MDI's
     /// maximized-child buttons and separators omitted.
     pub menu_bar: Vec<UiMenu>,
+    /// What the active window's editbox replies to or edits.
+    pub compose_target: Option<UiComposeTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiComposeTarget {
+    pub kind: UiComposeTargetKind,
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiComposeTargetKind {
+    Reply,
+    Edit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1464,6 +1481,7 @@ pub enum ComposeKey {
     Down,
     Tab,
     ShiftTab,
+    Escape,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -1479,6 +1497,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
             Down,
             Tab,
             ShiftTab,
+            Escape,
         }
 
         #[derive(Deserialize)]
@@ -1500,6 +1519,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
                 Kind::Down => Self::Down,
                 Kind::Tab => Self::Tab,
                 Kind::ShiftTab => Self::ShiftTab,
+                Kind::Escape => Self::Escape,
             })
             .map_err(serde::de::Error::custom)
     }

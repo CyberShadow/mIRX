@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 34;
+pub(crate) const PROTOCOL_VERSION: u32 = 35;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -916,6 +916,22 @@ pub(crate) struct UiState {
     /// The frame's menubar as opening each menu would show it: MDI's
     /// maximized-child buttons and separators omitted.
     pub(crate) menu_bar: Vec<UiMenu>,
+    /// What the active window's editbox replies to or edits.
+    pub(crate) compose_target: Option<UiComposeTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiComposeTarget {
+    pub(crate) kind: UiComposeTargetKind,
+    pub(crate) event_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UiComposeTargetKind {
+    Reply,
+    Edit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1158,6 +1174,7 @@ pub(crate) enum ComposeKey {
     Down,
     Tab,
     ShiftTab,
+    Escape,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -1173,6 +1190,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
             Down,
             Tab,
             ShiftTab,
+            Escape,
         }
 
         #[derive(Deserialize)]
@@ -1194,6 +1212,7 @@ impl<'de> Deserialize<'de> for ComposeKey {
                 Kind::Down => Self::Down,
                 Kind::Tab => Self::Tab,
                 Kind::ShiftTab => Self::ShiftTab,
+                Kind::Escape => Self::Escape,
             })
             .map_err(serde::de::Error::custom)
     }
@@ -1416,6 +1435,7 @@ pub(crate) struct DumpSubmittedEditCommand {
 pub(crate) struct DumpSubmittedReplyCommand {
     pub(crate) room_id: String,
     pub(crate) target_event_id: String,
+    pub(crate) sender_user_id: String,
     pub(crate) body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
@@ -2851,8 +2871,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_34() {
-        assert_eq!(PROTOCOL_VERSION, 34);
+    fn protocol_version_is_35() {
+        assert_eq!(PROTOCOL_VERSION, 35);
     }
 
     #[test]
@@ -3596,6 +3616,10 @@ mod tests {
             (
                 br#"{"id":"compose-key","args":{"key":{"kind":"shift_tab"}}}"#.as_slice(),
                 ComposeKey::ShiftTab,
+            ),
+            (
+                br#"{"id":"compose-key","args":{"key":{"kind":"escape"}}}"#.as_slice(),
+                ComposeKey::Escape,
             ),
         ] {
             assert_eq!(
@@ -4649,7 +4673,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":34,
+                    "protocol_version":35,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5205,6 +5229,10 @@ mod tests {
                             enabled: true,
                         }],
                     }],
+                    compose_target: Some(super::UiComposeTarget {
+                        kind: super::UiComposeTargetKind::Reply,
+                        event_id: "$question".to_owned(),
+                    }),
                 },
             ))
             .unwrap(),
@@ -5333,7 +5361,8 @@ mod tests {
                     },
                     "timestamp":{"show":true,"format":"[HH:nn]"},
                     "active_system_menu_items":["&Restore","&Font..."],
-                    "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true}]}]
+                    "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true}]}],
+                    "compose_target":{"kind":"reply","event_id":"$question"}
                 }
             })
         );
@@ -5661,6 +5690,7 @@ mod tests {
             submitted_reply_commands: vec![DumpSubmittedReplyCommand {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$target:example".to_owned(),
+                sender_user_id: "@alice:example".to_owned(),
                 body: "reply text".to_owned(),
                 thread: None,
             }],
@@ -5687,6 +5717,7 @@ mod tests {
                     {
                         "room_id":"!ops:example",
                         "target_event_id":"$target:example",
+                        "sender_user_id":"@alice:example",
                         "body":"reply text"
                     }
                 ],
@@ -5713,6 +5744,7 @@ mod tests {
                 {
                     "room_id":"!ops:example",
                     "target_event_id":"$target:example",
+                    "sender_user_id":"@alice:example",
                     "body":"reply text",
                     "unexpected":true
                 }
@@ -5749,6 +5781,7 @@ mod tests {
             submitted_reply_commands: vec![DumpSubmittedReplyCommand {
                 room_id: "!ops:example".to_owned(),
                 target_event_id: "$target:example".to_owned(),
+                sender_user_id: "@alice:example".to_owned(),
                 body: "reply text".to_owned(),
                 thread: Some(DumpSubmittedReplyThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
@@ -5778,6 +5811,7 @@ mod tests {
                     {
                         "room_id":"!ops:example",
                         "target_event_id":"$target:example",
+                        "sender_user_id":"@alice:example",
                         "body":"reply text",
                         "thread":{
                             "thread_root_event_id":"$thread-root:example",
@@ -5808,6 +5842,7 @@ mod tests {
                 {
                     "room_id":"!ops:example",
                     "target_event_id":"$target:example",
+                    "sender_user_id":"@alice:example",
                     "body":"reply text",
                     "thread":{
                         "thread_root_event_id":"$thread-root:example",

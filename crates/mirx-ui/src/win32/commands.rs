@@ -100,16 +100,18 @@ pub(super) enum SlashCommand {
         target_event_id: String,
         key: String,
     },
+    /// Without a body, arms the editbox to reply.
     Reply {
         target_event_id: String,
-        body: String,
+        body: Option<String>,
     },
     SendFile {
         path: String,
     },
+    /// Without a body, arms the editbox with the message to edit.
     Edit {
         target_event_id: String,
-        body: String,
+        body: Option<String>,
     },
     Redact {
         event_id: String,
@@ -304,7 +306,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "edit",
-        usage: "<event-id> <text>",
+        usage: "<event-id> [text]",
         summary: "replace the text of your message",
     },
     CommandSpec {
@@ -404,7 +406,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "reply",
-        usage: "<event-id> <message>",
+        usage: "<event-id> [message]",
         summary: "reply to a message",
     },
     CommandSpec {
@@ -634,7 +636,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             })
         }
         "reply" => {
-            let (target_event_id, body) = event_and_text(&name, argument)?;
+            let (target_event_id, body) = event_and_optional_text(&name, argument)?;
             Ok(SlashCommand::Reply {
                 target_event_id,
                 body,
@@ -644,7 +646,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             path: required(argument)?,
         }),
         "edit" => {
-            let (target_event_id, body) = event_and_text(&name, argument)?;
+            let (target_event_id, body) = event_and_optional_text(&name, argument)?;
             Ok(SlashCommand::Edit {
                 target_event_id,
                 body,
@@ -678,6 +680,21 @@ fn event_and_text(name: &str, argument: &str) -> Result<(String, String), Comman
         return Err(CommandError::insufficient_parameters(name));
     }
     Ok((event_id.to_owned(), text.to_owned()))
+}
+
+/// `<event-id> [text]`.
+fn event_and_optional_text(
+    name: &str,
+    argument: &str,
+) -> Result<(String, Option<String>), CommandError> {
+    let (event_id, text) = split_word(argument);
+    if event_id.is_empty() {
+        return Err(CommandError::insufficient_parameters(name));
+    }
+    Ok((
+        event_id.to_owned(),
+        (!text.is_empty()).then(|| text.to_owned()),
+    ))
 }
 
 /// Exactly one word.
@@ -1248,7 +1265,7 @@ mod tests {
                 parse(input),
                 Ok(SlashCommand::Edit {
                     target_event_id: "$event-to-edit".to_owned(),
-                    body: "replacement text".to_owned(),
+                    body: Some("replacement text".to_owned()),
                 })
             );
         }
@@ -1260,7 +1277,25 @@ mod tests {
                 parse(input),
                 Ok(SlashCommand::Reply {
                     target_event_id: "$event-to-reply".to_owned(),
-                    body: "hello there".to_owned(),
+                    body: Some("hello there".to_owned()),
+                })
+            );
+        }
+        for input in ["/reply $event-to-reply", "/reply   $event-to-reply   "] {
+            assert_eq!(
+                parse(input),
+                Ok(SlashCommand::Reply {
+                    target_event_id: "$event-to-reply".to_owned(),
+                    body: None,
+                })
+            );
+        }
+        for input in ["/edit $event-to-edit", "/edit   $event-to-edit   "] {
+            assert_eq!(
+                parse(input),
+                Ok(SlashCommand::Edit {
+                    target_event_id: "$event-to-edit".to_owned(),
+                    body: None,
                 })
             );
         }
@@ -1332,11 +1367,9 @@ mod tests {
             ("/react $react-normal", "react"),
             ("/react $react-normal   ", "react"),
             ("/edit", "edit"),
-            ("/edit $event-to-edit", "edit"),
-            ("/edit $event-to-edit   ", "edit"),
+            ("/edit   ", "edit"),
             ("/reply", "reply"),
-            ("/reply $event-to-reply", "reply"),
-            ("/reply $event-to-reply   ", "reply"),
+            ("/reply   ", "reply"),
             ("/unreact", "unreact"),
             ("/redact", "redact"),
             ("/redact   ", "redact"),

@@ -36,10 +36,11 @@ use mirx_testkit::{
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
-    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    TestkitError, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
+    UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
+    UiState, UiTextFont, UiTimestamp, UnsupportedRoomMessageActivity, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -820,6 +821,10 @@ fn data_models_round_trip_through_json() {
                 enabled: false,
             }],
         }],
+        compose_target: Some(UiComposeTarget {
+            kind: UiComposeTargetKind::Edit,
+            event_id: "$mine:example".to_owned(),
+        }),
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1093,6 +1098,7 @@ fn data_models_round_trip_through_json() {
             "timestamp": {"show": true, "format": "[HH:nn]"},
             "active_system_menu_items": ["&Restore", "&Font..."],
             "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false}]}],
+            "compose_target": {"kind": "edit", "event_id": "$mine:example"},
         })
     );
     assert_eq!(
@@ -4614,6 +4620,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         submitted_reply_commands: vec![SubmittedReplyCommand {
             room_id: "!ops:example.org".to_owned(),
             target_event_id: "$target:example.org".to_owned(),
+            sender_user_id: "@alice:example.org".to_owned(),
             body: "follow-up".to_owned(),
             thread: None,
         }],
@@ -4640,6 +4647,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
                 {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
+                    "sender_user_id": "@alice:example.org",
                     "body": "follow-up"
                 }
             ],
@@ -4660,6 +4668,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
                 {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
+                    "sender_user_id": "@alice:example.org",
                     "body": "follow-up"
                 }
             ],
@@ -4693,6 +4702,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         submitted_reply_commands: vec![SubmittedReplyCommand {
             room_id: "!ops:example.org".to_owned(),
             target_event_id: "$target:example.org".to_owned(),
+            sender_user_id: "@alice:example.org".to_owned(),
             body: "thread follow-up".to_owned(),
             thread: Some(SubmittedReplyThreadTarget {
                 thread_root_event_id: "$root:example.org".to_owned(),
@@ -4722,6 +4732,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
                 {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
+                    "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
@@ -4746,6 +4757,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
                 {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
+                    "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
@@ -4853,6 +4865,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             {
                 "room_id": "!ops:example.org",
                 "target_event_id": "$target:example.org",
+                "sender_user_id": "@alice:example.org",
                 "body": "thread follow-up",
                 "thread": {
                     "thread_root_event_id": "$root:example.org",
@@ -4907,6 +4920,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             submitted_reply_commands: vec![SubmittedReplyCommand {
                 room_id: "!ops:example.org".to_owned(),
                 target_event_id: "$target:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
                 body: "thread follow-up".to_owned(),
                 thread: Some(SubmittedReplyThreadTarget {
                     thread_root_event_id: "$root:example.org".to_owned(),
@@ -4939,6 +4953,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 {
                     "room_id": "!ops:example.org",
                     "target_event_id": "$target:example.org",
+                    "sender_user_id": "@alice:example.org",
                     "body": "thread follow-up",
                     "thread": {
                         "thread_root_event_id": "$root:example.org",
@@ -5150,6 +5165,7 @@ fn model_submitted_reply_commands_reject_unknown_nested_fields() {
             {
                 "room_id": "!ops:example.org",
                 "target_event_id": "$target:example.org",
+                "sender_user_id": "@alice:example.org",
                 "body": "follow-up",
                 "unexpected": true
             }
@@ -5181,6 +5197,7 @@ fn model_submitted_reply_command_threads_reject_unknown_nested_fields() {
             {
                 "room_id": "!ops:example.org",
                 "target_event_id": "$target:example.org",
+                "sender_user_id": "@alice:example.org",
                 "body": "thread follow-up",
                 "thread": {
                     "thread_root_event_id": "$root:example.org",
@@ -6283,6 +6300,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         },
         active_system_menu_items: vec![],
         menu_bar: vec![],
+        compose_target: None,
     };
 
     let identity = ViewIdentity::Room {
@@ -6430,6 +6448,7 @@ fn compose_key_round_trips_and_rejects_invalid_shapes() {
         (ComposeKey::Down, r#"{"kind":"down"}"#),
         (ComposeKey::Tab, r#"{"kind":"tab"}"#),
         (ComposeKey::ShiftTab, r#"{"kind":"shift_tab"}"#),
+        (ComposeKey::Escape, r#"{"kind":"escape"}"#),
     ] {
         assert_eq!(
             serde_json::to_string(&key).expect("compose key must serialize"),

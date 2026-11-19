@@ -140,13 +140,14 @@ use crate::{
         LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
         NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
         RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState,
-        UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState, UiRoomState, UiState,
-        UiTextFont, UiTimestamp, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiComposeTarget,
+        UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
+        UiRoomHistoryBackfillState, UiRoomState, UiState, UiTextFont, UiTimestamp,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+        dump_verification_from_state_event, failure_response, parse_command_request,
+        success_response,
     },
 };
 
@@ -186,6 +187,7 @@ use menus::{
     verification_menu_action_enabled,
 };
 use nick_completion::{NickCompletion, member_mention_text};
+use replies::ComposeTarget;
 use status_log::{StatusLineKind, StatusLog};
 
 use settings::{FontSetting, SETTINGS_FILE_NAME, SettingsStore};
@@ -355,6 +357,8 @@ struct MdiViewState {
     /// What Up and Down recall in this window's editbox, as in mIRC, where
     /// each window remembers what was typed in it.
     history: ComposeHistory,
+    /// The message the editbox replies to or edits, until sent or Esc.
+    compose_target: Option<ComposeTarget>,
 }
 
 struct MdiChildCreateState {
@@ -400,6 +404,8 @@ enum TimelineSyntheticRowLabel {
     Invite,
     Typing,
     Backfill,
+    /// What the editbox replies to or edits.
+    ComposeTarget,
     Context,
     Plain,
 }
@@ -4971,6 +4977,7 @@ unsafe fn show_timeline_message_context_menu(
     let action_state = active_message_action_state_for_automation(frame);
     if requested_command.is_some_and(|command| {
         action_state.selected_event_id.is_none()
+            || (command == MENU_ID_MESSAGE_EDIT && !action_state.edit_enabled)
             || (command == MENU_ID_MESSAGE_SAVE_ATTACHMENT && !action_state.save_attachment_enabled)
     }) {
         return Err("message context menu action is disabled".to_owned());
@@ -6498,7 +6505,17 @@ unsafe fn refresh_room_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), S
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MessageActionState {
     selected_event_id: Option<String>,
+    /// The selected message is the user's own text or emote.
+    edit_enabled: bool,
     save_attachment_enabled: bool,
+}
+
+fn selected_message_editable(state: &WindowState, selected_event_id: Option<&str>) -> bool {
+    selected_event_id
+        .and_then(|event_id| window_message(&state.model, &state.active_view, event_id))
+        .is_some_and(|activity| {
+            replies::editable_message(activity, state.model.own_user_id.as_deref()).is_ok()
+        })
 }
 
 fn selected_timeline_media_attachment(state: &WindowState) -> Option<SelectedMediaAttachment> {
@@ -6585,6 +6602,7 @@ fn active_message_action_state(state: &WindowState) -> MessageActionState {
     };
     let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
     MessageActionState {
+        edit_enabled: selected_message_editable(state, selected_event_id.as_deref()),
         selected_event_id,
         save_attachment_enabled,
     }
@@ -6598,6 +6616,7 @@ unsafe fn active_message_action_state_for_automation(hwnd: HWND) -> MessageActio
     let state = state_ref(hwnd);
     let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
     MessageActionState {
+        edit_enabled: selected_message_editable(state, selected_event_id.as_deref()),
         selected_event_id,
         save_attachment_enabled,
     }
@@ -6613,13 +6632,21 @@ unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<()
         };
     for item_id in [
         MENU_ID_MESSAGE_REPLY,
-        MENU_ID_MESSAGE_EDIT,
         MENU_ID_MESSAGE_REACT,
         MENU_ID_MESSAGE_REDACT,
     ] {
         if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
         }
+    }
+    let flags = MF_BYCOMMAND
+        | if action_state.edit_enabled {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    if EnableMenuItem(popup_menu, MENU_ID_MESSAGE_EDIT as u32, flags) == -1 {
+        return Err(last_os_error("EnableMenuItem"));
     }
     let flags = MF_BYCOMMAND
         | if action_state.save_attachment_enabled {
@@ -6891,7 +6918,7 @@ unsafe fn dump_message_menu_state(hwnd: HWND) -> Result<DumpMessageMenuState, St
     let enabled = action_state.selected_event_id.is_some();
     Ok(DumpMessageMenuState {
         reply_enabled: enabled,
-        edit_enabled: enabled,
+        edit_enabled: action_state.edit_enabled,
         react_enabled: enabled,
         redact_enabled: enabled,
         save_attachment_enabled: action_state.save_attachment_enabled,
@@ -6958,11 +6985,17 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_MESSAGE_REPLY => (
             "Message",
-            prefill_reply_to_selected_message(hwnd).map(|_| Some(())),
+            arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Reply {
+                event_id,
+            })
+            .map(|_| Some(())),
         ),
         MENU_ID_MESSAGE_EDIT => (
             "Message",
-            prefill_edit_selected_message(hwnd).map(|_| Some(())),
+            arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Edit {
+                event_id,
+            })
+            .map(|_| Some(())),
         ),
         MENU_ID_MESSAGE_REACT => (
             "Message",
@@ -7281,32 +7314,73 @@ unsafe fn submit_room_menu_action(
     }
 }
 
-unsafe fn prefill_reply_to_selected_message(hwnd: HWND) -> Result<(), String> {
+/// Message > Reply to Message and Edit Message: arm the editbox with the
+/// selected message.
+unsafe fn arm_compose_target_on_selected_message(
+    hwnd: HWND,
+    target: fn(String) -> ComposeTarget,
+) -> Result<(), String> {
     let Some(event_id) = selected_timeline_event_id_for_automation(hwnd) else {
         set_local_command_status(hwnd, "no message selected".to_owned())?;
         return Err("no message selected".to_owned());
     };
-    set_compose_text(hwnd, &reply_compose_text(&event_id))?;
-    SetFocus(compose_edit(hwnd));
+    if let Err(message) = arm_compose_target(hwnd, target(event_id)) {
+        set_local_command_status(hwnd, message.clone())?;
+        return Err(message);
+    }
     Ok(())
 }
 
-fn reply_compose_text(event_id: &str) -> String {
-    format!("/reply {event_id} ")
-}
-
-unsafe fn prefill_edit_selected_message(hwnd: HWND) -> Result<(), String> {
-    let Some(event_id) = selected_timeline_event_id_for_automation(hwnd) else {
-        set_local_command_status(hwnd, "no message selected".to_owned())?;
-        return Err("no message selected".to_owned());
+/// Arms the active window's editbox with `target` and focuses it. A reply
+/// keeps what was typed; an edit replaces it with the message as one would
+/// type it.
+unsafe fn arm_compose_target(hwnd: HWND, target: ComposeTarget) -> Result<(), String> {
+    let edit_text = {
+        let state = state_ref(hwnd);
+        let activity = window_message(&state.model, &state.active_view, target.event_id())
+            .ok_or_else(|| "no such message in this window".to_owned())?;
+        match &target {
+            ComposeTarget::Reply { .. } => None,
+            ComposeTarget::Edit { .. } => Some(replies::compose_text_for_edit(
+                replies::editable_message(activity, state.model.own_user_id.as_deref())?,
+            )),
+        }
     };
-    set_compose_text(hwnd, &edit_compose_text(&event_id))?;
-    SetFocus(compose_edit(hwnd));
+    let view_id = state_ref(hwnd).active_view.clone();
+    state_mut(hwnd)
+        .views
+        .get_mut(&view_id)
+        .expect("the active view has a window")
+        .compose_target = Some(target);
+    let edit = compose_edit(hwnd);
+    match edit_text {
+        Some(text) => set_compose_text(hwnd, &text)?,
+        None => {
+            let len = read_window_text(edit).encode_utf16().count();
+            SendMessageW(edit, EM_SETSEL, len, len as LPARAM);
+        }
+    }
+    refresh_view_content(hwnd, &view_id)?;
+    SetFocus(edit);
     Ok(())
 }
 
-fn edit_compose_text(event_id: &str) -> String {
-    format!("/edit {event_id} ")
+/// Esc in the editbox: disarms it; an edit also drops the old text it put
+/// there.
+unsafe fn cancel_compose_target(hwnd: HWND) -> Result<(), String> {
+    let view_id = state_ref(hwnd).active_view.clone();
+    let target = state_mut(hwnd)
+        .views
+        .get_mut(&view_id)
+        .expect("the active view has a window")
+        .compose_target
+        .take();
+    match target {
+        None => return Ok(()),
+        Some(ComposeTarget::Edit { .. }) => set_compose_text(hwnd, "")?,
+        Some(ComposeTarget::Reply { .. }) => {}
+    }
+    refresh_view_content(hwnd, &view_id)
 }
 
 unsafe fn prefill_react_to_selected_message(hwnd: HWND) -> Result<(), String> {
@@ -9029,9 +9103,7 @@ fn push_reply_quote_row(
             kind: RoomActivityKind::Redacted(_),
             ..
         }) => replies::QUOTE_REDACTED_TEXT.to_owned(),
-        ReplyTarget::Known(target) => {
-            replies::quote_excerpt(&activity_line_text(room_view, target, "").1)
-        }
+        ReplyTarget::Known(target) => quoted_line(room_view, target),
         ReplyTarget::Loading => replies::QUOTE_LOADING_TEXT.to_owned(),
         ReplyTarget::Unavailable => replies::QUOTE_UNAVAILABLE_TEXT.to_owned(),
     };
@@ -9042,6 +9114,46 @@ fn push_reply_quote_row(
             ))
             .with_event_id(room_activity_event_id(activity)),
     );
+}
+
+/// A message as a quote or the compose indicator shows it.
+fn quoted_line(room_view: &RoomViewModel, activity: &RoomActivity) -> String {
+    replies::quote_excerpt(&activity_line_text(room_view, activity, "").1)
+}
+
+/// The bottom line of a window whose editbox is armed with `target`. It
+/// wraps like a log line: the excerpt alone nearly fills a default window.
+fn compose_target_row(model: &UiModel, view_id: &ViewId, target: &ComposeTarget) -> TimelineRow {
+    let room_id = view_id
+        .room_id()
+        .expect("only room and thread windows compose replies and edits");
+    let activity = window_message(model, view_id, target.event_id())
+        .expect("refreshing a window disarms a target it no longer shows");
+    room_context_row(
+        TimelineRowKind::Info,
+        TimelineSyntheticRowLabel::ComposeTarget,
+        &replies::compose_target_indicator(
+            target,
+            &quoted_line(&model.room_views[room_id], activity),
+        ),
+    )
+}
+
+/// The message `event_id` names among the lines of the window `view_id`.
+/// A redacted message is no longer one.
+fn window_message<'a>(
+    model: &'a UiModel,
+    view_id: &ViewId,
+    event_id: &str,
+) -> Option<&'a RoomActivity> {
+    let room_view = model.room_views.get(view_id.room_id()?)?;
+    let activity = &room_view.activities[room_view.find_activity_index_by_event_id(event_id)?];
+    let in_window = view_id
+        .thread_key()
+        .is_none_or(|(_, thread_root_event_id)| {
+            room_activity_belongs_to_thread(activity, thread_root_event_id)
+        });
+    (in_window && !matches!(activity.kind, RoomActivityKind::Redacted(_))).then_some(activity)
 }
 
 /// An activity's line after the timestamp `prefix`, with its row kind and
@@ -10625,6 +10737,7 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
         content: mdi_child_content(child),
         edit: mdi_child_edit(child),
         history: ComposeHistory::default(),
+        compose_target: None,
     };
 
     let state = state_mut(hwnd);
@@ -10867,6 +10980,30 @@ fn dispatch_reply_target_fetches(
     Ok(())
 }
 
+/// A window's editbox stays armed only with a message the window shows: a
+/// redaction, or `/clear`, disarms it.
+fn disarm_vanished_compose_target(state: &mut WindowState, view_id: &ViewId) {
+    let view = state
+        .views
+        .get_mut(view_id)
+        .expect("a refreshed view has a window");
+    if view
+        .compose_target
+        .as_ref()
+        .is_some_and(|target| window_message(&state.model, view_id, target.event_id()).is_none())
+    {
+        view.compose_target = None;
+    }
+}
+
+/// The indicator row of an armed editbox, if `view_id`'s is.
+fn armed_compose_target_row(state: &WindowState, view_id: &ViewId) -> Option<TimelineRow> {
+    state.views[view_id]
+        .compose_target
+        .as_ref()
+        .map(|target| compose_target_row(&state.model, view_id, target))
+}
+
 unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
     let (child, content, title) = {
         let state = state_ref(hwnd);
@@ -10880,6 +11017,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
 
     let title = wide_null(&title);
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
+    disarm_vanished_compose_target(state_mut(hwnd), view_id);
     match view_id {
         ViewId::Status => {
             let (rows, indent_sample) = {
@@ -10902,7 +11040,8 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                     .expect("room view must target an existing room");
                 let room_view = state.model.room_views.get(room_id);
                 let timestamps = state.timestamps();
-                let rows = build_room_timeline_rows(&state.model, room_id, timestamps);
+                let mut rows = build_room_timeline_rows(&state.model, room_id, timestamps);
+                rows.extend(armed_compose_target_row(state, view_id));
                 let (image_requests, reply_target_requests) = match room_view {
                     Some(room_view) if is_sendable_room(room) => (
                         collect_lazy_room_preview_media_requests(
@@ -10958,12 +11097,13 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                     .get(room_id)
                     .expect("thread view must target an existing room view");
                 let timestamps = state.timestamps();
-                let rows = build_thread_timeline_rows(
+                let mut rows = build_thread_timeline_rows(
                     &state.model,
                     room_id,
                     thread_root_event_id,
                     timestamps,
                 );
+                rows.extend(armed_compose_target_row(state, view_id));
                 let thread_activities = || {
                     room_view.activities.iter().filter(|activity| {
                         room_activity_belongs_to_thread(activity, thread_root_event_id)
@@ -12963,6 +13103,16 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         },
         active_system_menu_items: system_menu_labels(active_view.child),
         menu_bar: dump_menu_bar(hwnd)?,
+        compose_target: active_view
+            .compose_target
+            .as_ref()
+            .map(|target| UiComposeTarget {
+                kind: match target {
+                    ComposeTarget::Reply { .. } => UiComposeTargetKind::Reply,
+                    ComposeTarget::Edit { .. } => UiComposeTargetKind::Edit,
+                },
+                event_id: target.event_id().to_owned(),
+            }),
         navigation,
         mdi,
         status_bar,
@@ -13589,31 +13739,52 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
         return Err("message body must not be empty".to_owned());
     }
 
-    let history_entry = match parse_compose_submission(&input) {
-        ComposeSubmission::Message { presentation, body } => {
-            submit_compose(state_mut(hwnd), presentation, body.into_owned(), None)?;
-            Some(input.clone())
-        }
-        ComposeSubmission::LocalCommand(parsed) => {
-            let history_entry = local_command_history_entry(&input, &parsed);
-            match parsed {
-                Ok(command) => run_local_command(hwnd, command)?,
-                Err(error) => report_command_error(hwnd, error)?,
-            }
-            history_entry
-        }
-    };
-    if let Some(entry) = history_entry {
+    let record = |entry: String| {
         state_mut(hwnd)
             .views
             .get_mut(&view)
             .expect("the submitting editbox's window must exist")
             .history
             .record_submission(entry);
-    }
-
+    };
     let empty = wide_null("");
-    SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+    match parse_compose_submission(&input) {
+        ComposeSubmission::Message { presentation, body } => {
+            let target = state_ref(hwnd).views[&view].compose_target.clone();
+            match &target {
+                None => {
+                    submit_compose(state_mut(hwnd), presentation, body.into_owned(), None)?;
+                }
+                Some(ComposeTarget::Reply { event_id }) => {
+                    send_reply(state_mut(hwnd), event_id, presentation, body.into_owned())?;
+                }
+                Some(ComposeTarget::Edit { event_id }) => {
+                    send_edit(state_mut(hwnd), event_id, presentation, body.into_owned())?;
+                }
+            }
+            record(input.clone());
+            SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+            if target.is_some() {
+                state_mut(hwnd)
+                    .views
+                    .get_mut(&view)
+                    .expect("the submitting editbox's window must exist")
+                    .compose_target = None;
+                refresh_view_content(hwnd, &view)?;
+            }
+        }
+        ComposeSubmission::LocalCommand(parsed) => {
+            if let Some(entry) = local_command_history_entry(&input, &parsed) {
+                record(entry);
+            }
+            // Cleared first: a command may fill the editbox, as /edit does.
+            SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+            match parsed {
+                Ok(command) => run_local_command(hwnd, command)?,
+                Err(error) => report_command_error(hwnd, error)?,
+            }
+        }
+    }
     Ok(())
 }
 
@@ -13655,6 +13826,7 @@ unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(), String> {
         ComposeKey::Up => VK_UP_KEY,
         ComposeKey::Down => VK_DOWN_KEY,
         ComposeKey::Tab => VK_TAB_KEY,
+        ComposeKey::Escape => VK_ESCAPE_KEY,
         // A sent key carries no Shift state, so Shift+Tab goes straight to
         // the completion the edit box runs for it.
         ComposeKey::ShiftTab => return complete_compose_nick(hwnd, true),
@@ -14093,15 +14265,59 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
         } => submit_react_slash_command(state_mut(hwnd), target_event_id, key).map(Some),
         SlashCommand::Reply {
             target_event_id,
-            body,
-        } => submit_reply_slash_command(state_mut(hwnd), target_event_id, body).map(Some),
+            body: None,
+        } => {
+            arm_compose_target(
+                hwnd,
+                ComposeTarget::Reply {
+                    event_id: target_event_id,
+                },
+            )?;
+            Ok(None)
+        }
+        SlashCommand::Reply {
+            target_event_id,
+            body: Some(body),
+        } => {
+            send_reply(
+                state_mut(hwnd),
+                &target_event_id,
+                RoomMessagePresentationKind::Text,
+                body,
+            )?;
+            Ok(Some(format!("Reply queued for {target_event_id}")))
+        }
         SlashCommand::SendFile { path } => {
             submit_send_file_slash_command(state_mut(hwnd), path).map(Some)
         }
         SlashCommand::Edit {
             target_event_id,
-            body,
-        } => submit_edit_slash_command(state_mut(hwnd), target_event_id, body).map(Some),
+            body: None,
+        } => {
+            arm_compose_target(
+                hwnd,
+                ComposeTarget::Edit {
+                    event_id: target_event_id,
+                },
+            )?;
+            Ok(None)
+        }
+        SlashCommand::Edit {
+            target_event_id,
+            body: Some(body),
+        } => {
+            // Typed after the event ID, the text keeps the message's kind:
+            // an emote stays an emote.
+            let presentation = {
+                let state = state_ref(hwnd);
+                let activity = window_message(&state.model, &state.active_view, &target_event_id)
+                    .ok_or_else(|| "no such message in this window".to_owned())?;
+                replies::editable_message(activity, state.model.own_user_id.as_deref())?
+                    .presentation
+            };
+            send_edit(state_mut(hwnd), &target_event_id, presentation, body)?;
+            Ok(Some(format!("Edit queued for {target_event_id}")))
+        }
         SlashCommand::Redact { event_id } => {
             submit_redact_slash_command(state_mut(hwnd), event_id).map(Some)
         }
@@ -14586,52 +14802,67 @@ fn submit_react_slash_command(
     Ok(format!("Reaction queued for {target_event_id}"))
 }
 
-fn submit_edit_slash_command(
+/// Replaces the user's message `target_event_id` in the active window with
+/// `presentation` and `body`; sends nothing when that is what it says.
+fn send_edit(
     state: &mut WindowState,
-    target_event_id: String,
+    target_event_id: &str,
+    presentation: RoomMessagePresentationKind,
     body: String,
-) -> Result<String, String> {
+) -> Result<(), String> {
+    let message = replies::editable_message(
+        window_message(&state.model, &state.active_view, target_event_id)
+            .ok_or_else(|| "no such message in this window".to_owned())?,
+        state.model.own_user_id.as_deref(),
+    )?;
+    if message.presentation == presentation && message.body == body {
+        return Ok(());
+    }
     let room_id = resolve_joined_room_target(state, None)?;
-    let command = Command::EditMessage(EditMessageRequest {
-        room_id: room_id.clone(),
-        target_event_id: target_event_id.clone(),
-        presentation: RoomMessagePresentationKind::Text,
-        body,
-    });
-    let sender = state
-        .command_sender
-        .as_ref()
-        .ok_or_else(|| "core command sender is not available".to_owned())?;
-    sender
-        .send(command.clone())
-        .map_err(|err| format!("failed to enqueue edit message command: {err}"))?;
-    state.recorded_commands.push(command);
-    Ok(format!("Edit queued for {target_event_id}"))
+    enqueue_command(
+        state,
+        Command::EditMessage(EditMessageRequest {
+            room_id,
+            target_event_id: target_event_id.to_owned(),
+            presentation,
+            body,
+        }),
+    )
 }
 
-fn submit_reply_slash_command(
+/// Sends a reply to the message `target_event_id` in the active window, in
+/// its thread when the window is one.
+fn send_reply(
     state: &mut WindowState,
-    target_event_id: String,
+    target_event_id: &str,
+    presentation: RoomMessagePresentationKind,
     body: String,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let destination = resolve_compose_destination(state, None)?;
+    let sender_user_id = room_activity_sender_user_id(
+        window_message(&state.model, &state.active_view, target_event_id)
+            .ok_or_else(|| "no such message in this window".to_owned())?,
+    )
+    .expect("a message that is not redacted has a sender")
+    .to_owned();
     let clears_active_thread_marker = destination.thread.is_some();
     enqueue_send_message(
         state,
         SendMessageRequest {
             room_id: destination.room_id,
-            presentation: RoomMessagePresentationKind::Text,
+            presentation,
             body,
             thread: destination.thread,
             reply: Some(SendMessageReplyTarget {
-                event_id: target_event_id.clone(),
+                event_id: target_event_id.to_owned(),
+                sender_user_id,
             }),
         },
     )?;
     if clears_active_thread_marker {
         clear_view_activity_marker(state, &state.active_view.clone());
     }
-    Ok(format!("Reply queued for {target_event_id}"))
+    Ok(())
 }
 
 fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Result<(), String> {
@@ -14901,7 +15132,10 @@ unsafe extern "system" fn edit_window_proc(
     // Keys reach only the focused editbox, and focusing an editbox
     // activates its window, so it is always the active window's.
     let is_compose_key = message == WM_KEYDOWN
-        && matches!(wparam, VK_RETURN_KEY | VK_UP_KEY | VK_DOWN_KEY | VK_TAB_KEY);
+        && matches!(
+            wparam,
+            VK_RETURN_KEY | VK_UP_KEY | VK_DOWN_KEY | VK_TAB_KEY | VK_ESCAPE_KEY
+        );
     if is_compose_key {
         assert_eq!(
             compose_edit(parent),
@@ -14935,10 +15169,17 @@ unsafe extern "system" fn edit_window_proc(
         return 0;
     }
 
-    // TranslateMessage also turns the Tab key into this character. The key
-    // down already completed, so the edit box must not see it: a single-line
-    // edit box rejects it, with a beep on Windows.
-    if message == WM_CHAR && wparam == VK_TAB_KEY {
+    if message == WM_KEYDOWN && wparam == VK_ESCAPE_KEY {
+        if let Err(message) = cancel_compose_target(parent) {
+            let _ = set_local_command_status(parent, message);
+        }
+        return 0;
+    }
+
+    // TranslateMessage also turns the Tab and Esc keys into these
+    // characters. The key down already acted, so the edit box must not see
+    // them: a single-line edit box rejects them, with a beep on Windows.
+    if message == WM_CHAR && matches!(wparam, VK_TAB_KEY | VK_ESCAPE_KEY) {
         return 0;
     }
 
@@ -15163,6 +15404,7 @@ fn dump_submitted_reply_command(command: &Command) -> Option<DumpSubmittedReplyC
                 .map(|reply| DumpSubmittedReplyCommand {
                     room_id: request.room_id.clone(),
                     target_event_id: reply.event_id.clone(),
+                    sender_user_id: reply.sender_user_id.clone(),
                     body: request.body.clone(),
                     thread: request
                         .thread
@@ -17286,6 +17528,7 @@ mod tests {
                 content: null_mut(),
                 edit: compose,
                 history: ComposeHistory::default(),
+                compose_target: None,
             },
         );
 
@@ -17404,6 +17647,7 @@ mod tests {
             content: (hwnd_value + 1) as HWND,
             edit: (hwnd_value + 2) as HWND,
             history: ComposeHistory::default(),
+            compose_target: None,
         }
     }
 
@@ -27207,6 +27451,7 @@ mod tests {
                         content: null_mut(),
                         edit,
                         history: ComposeHistory::default(),
+                        compose_target: None,
                     },
                 );
                 state_mut(hwnd).active_view = room_view.clone();
@@ -27780,6 +28025,7 @@ mod tests {
             active_message_action_state(&state),
             MessageActionState {
                 selected_event_id: None,
+                edit_enabled: false,
                 save_attachment_enabled: false,
             }
         );
@@ -27797,6 +28043,7 @@ mod tests {
             active_message_action_state(&state),
             MessageActionState {
                 selected_event_id: None,
+                edit_enabled: false,
                 save_attachment_enabled: false,
             }
         );
@@ -27821,32 +28068,300 @@ mod tests {
             active_message_action_state(&state),
             MessageActionState {
                 selected_event_id: Some("$event:example".to_owned()),
+                edit_enabled: false,
                 save_attachment_enabled: false,
             }
         );
     }
 
-    #[test]
-    fn reply_menu_prefill_does_not_submit_a_command() {
+    /// The Ops room, active, with Alice's question `$q`, the user's text
+    /// `$mine` and emote `$wave`, and a sender whose commands wait.
+    fn compose_target_state() -> WindowState {
         let mut state = test_state();
-        state.active_view = room_view_id("!room:example");
-        state.selected_timeline_event = Some(SelectedTimelineEvent {
-            view_id: state.active_view.clone(),
-            event_id: "$event-id".to_owned(),
-        });
+        let (sender, commands) = inert_command_sender();
+        // Kept open for the state's lifetime: sends must not fail.
+        std::mem::forget(commands);
+        state.command_sender = Some(sender);
+        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let mine = |event_id: &str, presentation, body: &str, timestamp_ms| {
+            let mut activity = sent_message_activity_with_presentation(
+                "!ops:example",
+                event_id,
+                None,
+                presentation,
+                body,
+                timestamp_ms,
+            );
+            let RoomActivityKind::Message(message) = &mut activity.kind else {
+                unreachable!()
+            };
+            message.sender = user_profile("@me:example");
+            Event::RoomActivity(Box::new(activity))
+        };
+        for event in [
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$q",
+                None,
+                "are we deploying today?",
+                1_700_000_000_000,
+            ),
+            mine(
+                "$mine",
+                RoomMessagePresentationKind::Text,
+                "deploy at 14:00",
+                1_700_000_060_000,
+            ),
+            mine(
+                "$wave",
+                RoomMessagePresentationKind::Emote,
+                "waves",
+                1_700_000_120_000,
+            ),
+        ] {
+            apply_core_event(&mut state, event).unwrap();
+        }
+        state.active_view = room_view_id("!ops:example");
+        state
+    }
 
+    unsafe fn with_compose_target_window(test: impl FnOnce(HWND)) {
+        with_test_compose_window(compose_target_state(), |hwnd| {
+            install_test_view_content(hwnd);
+            refresh_view_content(hwnd, &room_view_id("!ops:example")).unwrap();
+            test(hwnd);
+        });
+    }
+
+    unsafe fn active_compose_target(hwnd: HWND) -> Option<ComposeTarget> {
+        let state = state_ref(hwnd);
+        state.views[&state.active_view].compose_target.clone()
+    }
+
+    /// The active window's lines as its timeline holds them.
+    unsafe fn active_timeline_lines(hwnd: HWND) -> Vec<String> {
+        let state = state_ref(hwnd);
+        let content = state.views[&state.active_view].content;
+        project_timeline_rows(&timeline_state_ref(room_content_timeline(content)).source_rows)
+    }
+
+    fn reply_to(event_id: &str) -> ComposeTarget {
+        ComposeTarget::Reply {
+            event_id: event_id.to_owned(),
+        }
+    }
+
+    fn edit_of(event_id: &str) -> ComposeTarget {
+        ComposeTarget::Edit {
+            event_id: event_id.to_owned(),
+        }
+    }
+
+    fn reply_command(presentation: RoomMessagePresentationKind, body: &str) -> Command {
+        Command::SendMessage(SendMessageRequest {
+            room_id: "!ops:example".to_owned(),
+            presentation,
+            body: body.to_owned(),
+            thread: None,
+            reply: Some(SendMessageReplyTarget {
+                event_id: "$q".to_owned(),
+                sender_user_id: "@alice:example".to_owned(),
+            }),
+        })
+    }
+
+    #[test]
+    fn the_reply_menu_arms_the_editbox_and_enter_sends_the_reply() {
         unsafe {
-            with_test_compose_window(state, |hwnd| {
-                install_test_active_timeline_event(hwnd, "$event-id");
-                prefill_reply_to_selected_message(hwnd).unwrap();
-                assert_eq!(dump_compose_text(hwnd).unwrap(), "/reply $event-id ");
+            with_compose_target_window(|hwnd| {
+                state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+                    view_id: room_view_id("!ops:example"),
+                    event_id: "$q".to_owned(),
+                });
+                set_compose_text(hwnd, "half typed").unwrap();
+                arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Reply {
+                    event_id,
+                })
+                .unwrap();
+                assert_eq!(active_compose_target(hwnd), Some(reply_to("$q")));
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "half typed");
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert_eq!(
+                    active_timeline_lines(hwnd).last().unwrap(),
+                    "* Replying to <@alice:example> are we deploying today? (Esc cancels)"
+                );
+
+                type_compose_line(hwnd, "sure");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![reply_command(RoomMessagePresentationKind::Text, "sure")]
+                );
+                assert_eq!(active_compose_target(hwnd), None);
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "");
+                assert!(
+                    !active_timeline_lines(hwnd)
+                        .iter()
+                        .any(|line| line.starts_with("* Replying"))
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn other_commands_leave_a_reply_armed_and_me_replies_with_an_emote() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                type_compose_line(hwnd, "/reply $q");
+                assert_eq!(active_compose_target(hwnd), Some(reply_to("$q")));
+                type_compose_line(hwnd, "/names");
+                assert_eq!(active_compose_target(hwnd), Some(reply_to("$q")));
+                type_compose_line(hwnd, "/me nods");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![reply_command(RoomMessagePresentationKind::Emote, "nods")]
+                );
+                assert_eq!(active_compose_target(hwnd), None);
+            });
+        }
+    }
+
+    #[test]
+    fn editing_an_emote_prefills_it_and_keeps_it_an_emote() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+                    view_id: room_view_id("!ops:example"),
+                    event_id: "$wave".to_owned(),
+                });
+                assert!(active_message_action_state(state_ref(hwnd)).edit_enabled);
+                arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Edit {
+                    event_id,
+                })
+                .unwrap();
+                assert_eq!(active_compose_target(hwnd), Some(edit_of("$wave")));
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/me waves");
+                assert_eq!(
+                    active_timeline_lines(hwnd).last().unwrap(),
+                    "* Editing * @me:example waves (Esc cancels)"
+                );
+
+                type_compose_line(hwnd, "/me waves back");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::EditMessage(EditMessageRequest {
+                        room_id: "!ops:example".to_owned(),
+                        target_event_id: "$wave".to_owned(),
+                        presentation: RoomMessagePresentationKind::Emote,
+                        body: "waves back".to_owned(),
+                    })]
+                );
+                assert_eq!(active_compose_target(hwnd), None);
+            });
+        }
+    }
+
+    #[test]
+    fn an_unchanged_edit_sends_nothing_and_disarms() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                type_compose_line(hwnd, "/edit $mine");
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "deploy at 14:00");
+                submit_compose_from_edit(hwnd).unwrap();
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+                assert_eq!(active_compose_target(hwnd), None);
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "");
+            });
+        }
+    }
+
+    #[test]
+    fn edit_text_after_the_event_id_keeps_the_messages_kind() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                type_compose_line(hwnd, "/edit $wave waves twice");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::EditMessage(EditMessageRequest {
+                        room_id: "!ops:example".to_owned(),
+                        target_event_id: "$wave".to_owned(),
+                        presentation: RoomMessagePresentationKind::Emote,
+                        body: "waves twice".to_owned(),
+                    })]
+                );
+                assert_eq!(active_compose_target(hwnd), None);
+            });
+        }
+    }
+
+    #[test]
+    fn escape_cancels_an_edit_with_its_text_but_keeps_a_replys_text() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                type_compose_line(hwnd, "/edit $mine");
+                cancel_compose_target(hwnd).unwrap();
+                assert_eq!(active_compose_target(hwnd), None);
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "");
+
+                type_compose_line(hwnd, "/reply $q");
+                set_compose_text(hwnd, "draft").unwrap();
+                cancel_compose_target(hwnd).unwrap();
+                assert_eq!(active_compose_target(hwnd), None);
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "draft");
                 assert!(state_ref(hwnd).recorded_commands.is_empty());
             });
         }
     }
 
     #[test]
-    fn edit_and_react_menu_prefill_do_not_submit_a_command() {
+    fn redacting_the_target_disarms_the_editbox() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                type_compose_line(hwnd, "/reply $q");
+                apply_core_event(
+                    state_mut(hwnd),
+                    incoming_redacted("!ops:example", "$q", "$q-gone"),
+                )
+                .unwrap();
+                refresh_view_content(hwnd, &room_view_id("!ops:example")).unwrap();
+                assert_eq!(active_compose_target(hwnd), None);
+            });
+        }
+    }
+
+    #[test]
+    fn only_the_users_own_messages_in_the_window_can_be_targeted() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+                    view_id: room_view_id("!ops:example"),
+                    event_id: "$q".to_owned(),
+                });
+                assert!(!active_message_action_state(state_ref(hwnd)).edit_enabled);
+                type_compose_line(hwnd, "/edit $q");
+                type_compose_line(hwnd, "/reply $elsewhere");
+                type_compose_line(hwnd, "/edit $q hijacked");
+                // The test clock prints them before the fixture's later lines.
+                let lines = active_timeline_lines(hwnd);
+                assert_eq!(
+                    lines
+                        .iter()
+                        .filter(|line| line.starts_with("[22:12] * /"))
+                        .collect::<Vec<_>>(),
+                    [
+                        "[22:12] * /edit: you can only edit your own messages",
+                        "[22:12] * /reply: no such message in this window",
+                        "[22:12] * /edit: you can only edit your own messages",
+                    ]
+                );
+                assert_eq!(active_compose_target(hwnd), None);
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+            });
+        }
+    }
+
+    #[test]
+    fn react_menu_prefill_does_not_submit_a_command() {
         let mut state = test_state();
         state.active_view = room_view_id("!room:example");
         state.selected_timeline_event = Some(SelectedTimelineEvent {
@@ -27857,8 +28372,6 @@ mod tests {
         unsafe {
             with_test_compose_window(state, |hwnd| {
                 install_test_active_timeline_event(hwnd, "$event-id");
-                prefill_edit_selected_message(hwnd).unwrap();
-                assert_eq!(dump_compose_text(hwnd).unwrap(), "/edit $event-id ");
                 prefill_react_to_selected_message(hwnd).unwrap();
                 assert_eq!(dump_compose_text(hwnd).unwrap(), "/react $event-id ");
                 assert!(state_ref(hwnd).recorded_commands.is_empty());
@@ -28011,44 +28524,41 @@ mod tests {
     }
 
     #[test]
-    fn submit_reply_slash_command_from_active_room_records_typed_request_and_returns_status() {
-        let (mut state, handle) = test_state_with_command_sender();
-        state.model.rooms = vec![room("!room:example", "Room", false)];
-        state.active_view = room_view_id("!room:example");
+    fn send_reply_from_the_active_room_names_the_replied_to_sender() {
+        let mut state = compose_target_state();
 
-        let status =
-            submit_reply_slash_command(&mut state, "$target".to_owned(), "hello there".to_owned())
-                .unwrap();
+        send_reply(
+            &mut state,
+            "$q",
+            RoomMessagePresentationKind::Text,
+            "hello there".to_owned(),
+        )
+        .unwrap();
 
-        assert_eq!(status, "Reply queued for $target");
         assert_eq!(
             state.recorded_commands,
-            vec![Command::SendMessage(SendMessageRequest {
-                room_id: "!room:example".to_owned(),
-                presentation: RoomMessagePresentationKind::Text,
-                body: "hello there".to_owned(),
-                thread: None,
-                reply: Some(SendMessageReplyTarget {
-                    event_id: "$target".to_owned(),
-                }),
-            })]
+            vec![reply_command(
+                RoomMessagePresentationKind::Text,
+                "hello there"
+            )]
         );
         assert_eq!(
             dump_model_from_state(&state).submitted_reply_commands,
             vec![DumpSubmittedReplyCommand {
-                room_id: "!room:example".to_owned(),
-                target_event_id: "$target".to_owned(),
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$q".to_owned(),
+                sender_user_id: "@alice:example".to_owned(),
                 body: "hello there".to_owned(),
                 thread: None,
             }]
         );
-
-        stop_test_core(handle);
     }
 
     #[test]
-    fn submit_reply_slash_command_from_thread_uses_compose_thread_destination() {
-        let (mut state, handle) = test_state_with_command_sender();
+    fn send_reply_from_a_thread_uses_the_compose_thread_destination() {
+        let mut state = test_state();
+        let (sender, _commands) = inert_command_sender();
+        state.command_sender = Some(sender);
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
         apply_core_event(
             &mut state,
@@ -28084,14 +28594,14 @@ mod tests {
             "$thread-1:example".to_owned(),
         );
 
-        let status = submit_reply_slash_command(
+        send_reply(
             &mut state,
-            "$target".to_owned(),
+            "$thread-1:example",
+            RoomMessagePresentationKind::Text,
             "threaded acknowledgement".to_owned(),
         )
         .unwrap();
 
-        assert_eq!(status, "Reply queued for $target");
         assert_eq!(
             state.recorded_commands,
             vec![Command::SendMessage(SendMessageRequest {
@@ -28103,7 +28613,8 @@ mod tests {
                     latest_event_id: "$thread-1:example".to_owned(),
                 }),
                 reply: Some(SendMessageReplyTarget {
-                    event_id: "$target".to_owned(),
+                    event_id: "$thread-1:example".to_owned(),
+                    sender_user_id: "@alice:example".to_owned(),
                 }),
             })]
         );
@@ -28121,7 +28632,8 @@ mod tests {
             dump_model_from_state(&state).submitted_reply_commands,
             vec![DumpSubmittedReplyCommand {
                 room_id: "!ops:example".to_owned(),
-                target_event_id: "$target".to_owned(),
+                target_event_id: "$thread-1:example".to_owned(),
+                sender_user_id: "@alice:example".to_owned(),
                 body: "threaded acknowledgement".to_owned(),
                 thread: Some(DumpSubmittedReplyThreadTarget {
                     thread_root_event_id: "$thread-root:example".to_owned(),
@@ -28129,53 +28641,75 @@ mod tests {
                 }),
             }]
         );
-
-        stop_test_core(handle);
     }
 
     #[test]
-    fn submit_reply_slash_command_from_status_returns_no_room_selected() {
-        let mut state = test_state();
-
+    fn send_reply_and_send_edit_need_the_message_in_the_active_window() {
+        let mut state = compose_target_state();
         assert_eq!(
-            submit_reply_slash_command(&mut state, "$target".to_owned(), "hello".to_owned()),
-            Err("no room selected".to_owned())
+            send_reply(
+                &mut state,
+                "$elsewhere",
+                RoomMessagePresentationKind::Text,
+                "hello".to_owned()
+            ),
+            Err("no such message in this window".to_owned())
+        );
+        assert_eq!(
+            send_edit(
+                &mut state,
+                "$elsewhere",
+                RoomMessagePresentationKind::Text,
+                "hello".to_owned()
+            ),
+            Err("no such message in this window".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
     }
 
     #[test]
-    fn submit_reply_slash_command_requires_available_command_sender() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!room:example", "Room", false)];
-        state.active_view = room_view_id("!room:example");
-
-        assert_eq!(
-            submit_reply_slash_command(&mut state, "$target".to_owned(), "hello".to_owned()),
-            Err("core command sender is not available".to_owned())
-        );
+    fn send_reply_and_send_edit_require_an_available_command_sender() {
+        let mut state = compose_target_state();
+        state.command_sender = None;
+        for result in [
+            send_reply(
+                &mut state,
+                "$q",
+                RoomMessagePresentationKind::Text,
+                "hello".to_owned(),
+            ),
+            send_edit(
+                &mut state,
+                "$mine",
+                RoomMessagePresentationKind::Text,
+                "hello".to_owned(),
+            ),
+        ] {
+            assert_eq!(
+                result,
+                Err("core command sender is not available".to_owned())
+            );
+        }
         assert!(state.recorded_commands.is_empty());
     }
 
     #[test]
-    fn submit_edit_slash_command_from_active_room_records_typed_request_and_returns_status() {
-        let (mut state, handle) = test_state_with_command_sender();
-        state.model.rooms = vec![room("!room:example", "Room", false)];
-        state.active_view = room_view_id("!room:example");
+    fn send_edit_from_the_active_room_records_the_typed_request() {
+        let mut state = compose_target_state();
 
-        let status = submit_edit_slash_command(
+        send_edit(
             &mut state,
-            "$event-to-edit".to_owned(),
+            "$mine",
+            RoomMessagePresentationKind::Text,
             "replacement text".to_owned(),
         )
         .unwrap();
 
-        assert_eq!(status, "Edit queued for $event-to-edit");
         assert_eq!(
             state.recorded_commands,
             vec![Command::EditMessage(EditMessageRequest {
-                room_id: "!room:example".to_owned(),
-                target_event_id: "$event-to-edit".to_owned(),
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$mine".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
                 body: "replacement text".to_owned(),
             })]
@@ -28183,71 +28717,49 @@ mod tests {
         assert_eq!(
             dump_model_from_state(&state).submitted_edit_commands,
             vec![DumpSubmittedEditCommand {
-                room_id: "!room:example".to_owned(),
-                target_event_id: "$event-to-edit".to_owned(),
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$mine".to_owned(),
                 body: "replacement text".to_owned(),
             }]
         );
-
-        stop_test_core(handle);
     }
 
     #[test]
-    fn submit_edit_slash_command_from_thread_targets_parent_room() {
-        let (mut state, handle) = test_state_with_command_sender();
-        state.active_view = thread_view_id("!room:example", "$thread-root");
+    fn send_edit_from_a_thread_targets_the_parent_room() {
+        let mut state = compose_target_state();
+        let mut in_thread = sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$mine-in-thread",
+            None,
+            Some(thread_relation("$q")),
+            RoomMessagePresentationKind::Text,
+            "thread draft",
+            1_700_000_180_000,
+        );
+        let RoomActivityKind::Message(message) = &mut in_thread.kind else {
+            unreachable!()
+        };
+        message.sender = user_profile("@me:example");
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(in_thread))).unwrap();
+        state.active_view = thread_view_id("!ops:example", "$q");
 
-        let status = submit_edit_slash_command(
+        send_edit(
             &mut state,
-            "$event-to-edit".to_owned(),
-            "replacement text".to_owned(),
+            "$mine-in-thread",
+            RoomMessagePresentationKind::Text,
+            "thread final".to_owned(),
         )
         .unwrap();
 
-        assert_eq!(status, "Edit queued for $event-to-edit");
         assert_eq!(
             state.recorded_commands,
             vec![Command::EditMessage(EditMessageRequest {
-                room_id: "!room:example".to_owned(),
-                target_event_id: "$event-to-edit".to_owned(),
+                room_id: "!ops:example".to_owned(),
+                target_event_id: "$mine-in-thread".to_owned(),
                 presentation: RoomMessagePresentationKind::Text,
-                body: "replacement text".to_owned(),
+                body: "thread final".to_owned(),
             })]
         );
-
-        stop_test_core(handle);
-    }
-
-    #[test]
-    fn submit_edit_slash_command_from_status_returns_no_room_selected() {
-        let mut state = test_state();
-
-        assert_eq!(
-            submit_edit_slash_command(
-                &mut state,
-                "$event-to-edit".to_owned(),
-                "replacement text".to_owned(),
-            ),
-            Err("no room selected".to_owned())
-        );
-        assert!(state.recorded_commands.is_empty());
-    }
-
-    #[test]
-    fn submit_edit_slash_command_requires_available_command_sender() {
-        let mut state = test_state();
-        state.model.rooms = vec![room("!room:example", "Room", false)];
-        state.active_view = room_view_id("!room:example");
-
-        assert_eq!(
-            submit_edit_slash_command(
-                &mut state,
-                "$event-to-edit".to_owned(),
-                "replacement text".to_owned(),
-            ),
-            Err("core command sender is not available".to_owned())
-        );
-        assert!(state.recorded_commands.is_empty());
     }
 
     #[test]

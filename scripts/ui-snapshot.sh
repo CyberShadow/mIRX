@@ -999,6 +999,7 @@ configure_case_expectations() {
     replies)
       expect_selected='!replies:example'
       expect_active_view='room:!replies:example'
+      ordered_actions=('input:/reply $replies-question')
       room_expect_args=(
         --expect-room '!replies:example'
       )
@@ -1011,6 +1012,7 @@ configure_case_expectations() {
         --expect-room-view '!replies:example::[22:17] <Alice> the deploy window is 14:00 UTC (edited)'
         --expect-room-view '!replies:example::    > <Dave> the login page times out on the second try'
         --expect-room-view '!replies:example::    > (loading the replied-to message...)'
+        --expect-room-view '!replies:example::* Replying to <Alice> are we deploying today? the build looks green on eve... (Esc cancels)'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'status'

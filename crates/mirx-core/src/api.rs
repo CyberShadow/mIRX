@@ -101,6 +101,8 @@ pub struct SendMessageThreadTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendMessageReplyTarget {
     pub event_id: String,
+    /// Who sent the message replied to, whom the reply mentions.
+    pub sender_user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

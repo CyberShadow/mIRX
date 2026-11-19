@@ -41,10 +41,10 @@ use mirx_testkit::{
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
-    UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
-    UiState, UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiComposeTarget, UiComposeTargetKind,
+    UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UiTimestamp, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -298,6 +298,25 @@ fn fixture_state_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/ui-states")
         .join(name)
+}
+
+/// The `reactions.json` fixture, signed in as `user_id`, whose messages
+/// become the user's own.
+fn reactions_fixture_signed_in_as(user_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut events: Vec<serde_json::Value> =
+        serde_json::from_str(&fs::read_to_string(fixture_state_path("reactions.json"))?)?;
+    assert_eq!(events[0], serde_json::json!("Started"));
+    events.insert(
+        1,
+        serde_json::to_value(Event::LoggedIn {
+            session: CoreStoredSession {
+                user_id: user_id.to_owned(),
+                ..core_stored_session()
+            },
+            homeserver_url: "https://matrix.example/".to_owned(),
+        })?,
+    );
+    Ok(serde_json::to_string(&events)?)
 }
 
 fn fixture_update_path(name: &str) -> PathBuf {
@@ -2755,7 +2774,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 34);
+    assert_eq!(version.protocol_version, 35);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -13044,6 +13063,7 @@ fn automation_driver_slash_reply_records_submitted_reply_without_appending_text(
         vec![SubmittedReplyCommand {
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-normal".to_owned(),
+            sender_user_id: "@normal:example".to_owned(),
             body: "thanks for the detail".to_owned(),
             thread: None,
         }]
@@ -13063,14 +13083,13 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
     let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.load_events(&reactions_fixture_signed_in_as("@normal:example")?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let before = app.room_activity(Some("!reactions:example"))?;
@@ -13079,7 +13098,7 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
     assert!(before_model.submitted_reaction_commands.is_empty());
     assert!(before_model.submitted_redaction_commands.is_empty());
 
-    app.set_compose_text("/edit $event-to-edit replacement text")?;
+    app.set_compose_text("/edit $react-normal replacement text")?;
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
@@ -13089,7 +13108,7 @@ fn automation_driver_slash_edit_records_submitted_edit_without_appending_text()
         model.submitted_edit_commands,
         vec![SubmittedEditCommand {
             room_id: "!reactions:example".to_owned(),
-            target_event_id: "$event-to-edit".to_owned(),
+            target_event_id: "$react-normal".to_owned(),
             body: "replacement text".to_owned(),
         }]
     );
@@ -13119,7 +13138,7 @@ fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
 
     let before = app.room_activity(Some("!reactions:example"))?;
 
-    app.set_compose_text("/reply $react-normal")?;
+    app.set_compose_text("/reply")?;
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
@@ -13330,7 +13349,7 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
 
     let before = app.room_activity(Some("!reactions:example"))?;
 
-    app.set_compose_text("/edit $event-to-edit")?;
+    app.set_compose_text("/edit")?;
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
@@ -13351,6 +13370,15 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
             .text
             .contains("* /edit: insufficient parameters")
     );
+
+    app.set_compose_text("/edit $event-to-edit")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "* /edit: no such message in this window");
+    assert!(model.submitted_edit_commands.is_empty());
+    assert_eq!(app.dump_ui_state()?.compose_target, None);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -13584,6 +13612,7 @@ fn automation_driver_slash_reply_from_thread_uses_compose_thread_destination()
         vec![SubmittedReplyCommand {
             room_id: "!reactions:example".to_owned(),
             target_event_id: "$react-thread-reply".to_owned(),
+            sender_user_id: "@reply:example".to_owned(),
             body: "threaded acknowledgement".to_owned(),
             thread: Some(SubmittedReplyThreadTarget {
                 thread_root_event_id: "$react-thread-root".to_owned(),
@@ -13606,21 +13635,20 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
-    let fixture_path = fixture_state_path("reactions.json");
     let local_app_data = unique_local_app_data_path();
     let options = launch_options(Some(local_app_data.clone()));
     let args = [OsString::from("--automation")];
 
     let app = launch_app_with_options(&exe_path, &args, options)?;
     app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
-    app.load_events(&fs::read_to_string(&fixture_path)?)?;
+    app.load_events(&reactions_fixture_signed_in_as("@reply:example")?)?;
     app.wait_idle(Duration::from_secs(5))?;
 
     let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
     let before = app.room_activity(Some("!reactions:example"))?;
     app.select_view(thread_view_identity.clone())?;
 
-    app.set_compose_text("/edit $event-to-edit replacement text")?;
+    app.set_compose_text("/edit $react-thread-reply replacement text")?;
     app.send_compose_key(ComposeKey::Return)?;
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
@@ -13630,7 +13658,7 @@ fn automation_driver_slash_edit_from_thread_targets_parent_room()
         model.submitted_edit_commands,
         vec![SubmittedEditCommand {
             room_id: "!reactions:example".to_owned(),
-            target_event_id: "$event-to-edit".to_owned(),
+            target_event_id: "$react-thread-reply".to_owned(),
             body: "replacement text".to_owned(),
         }]
     );
@@ -13889,7 +13917,10 @@ fn automation_driver_message_menu_actions_prefill_selected_event()
     app.select_timeline_event("$react-normal")?;
     let enabled = app.dump_message_menu_state()?;
     assert!(enabled.reply_enabled);
-    assert!(enabled.edit_enabled);
+    assert!(
+        !enabled.edit_enabled,
+        "the fixture has no signed-in user, so no message is theirs to edit"
+    );
     assert!(enabled.react_enabled);
     assert!(enabled.redact_enabled);
     assert!(!enabled.save_attachment_enabled);
@@ -13904,15 +13935,29 @@ fn automation_driver_message_menu_actions_prefill_selected_event()
     ));
 
     app.reply_to_selected_message_via_menu()?;
-    assert_eq!(app.compose_text()?, "/reply $react-normal ");
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(
+        app.dump_ui_state()?.compose_target,
+        Some(UiComposeTarget {
+            kind: UiComposeTargetKind::Reply,
+            event_id: "$react-normal".to_owned(),
+        })
+    );
     let model = app.dump_model()?;
     assert!(model.submitted_reply_commands.is_empty());
     assert!(model.submitted_edit_commands.is_empty());
     assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
 
-    app.edit_selected_message_via_menu()?;
-    assert_eq!(app.compose_text()?, "/edit $react-normal ");
+    let error = app
+        .edit_selected_message_via_menu()
+        .expect_err("edit must reject someone else's message");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { code, message, .. }
+            if code == "selected_message_unavailable"
+                && message == "you can only edit your own messages"
+    ));
     let model = app.dump_model()?;
     assert!(model.submitted_reply_commands.is_empty());
     assert!(model.submitted_edit_commands.is_empty());
@@ -13949,7 +13994,14 @@ fn automation_driver_timeline_context_menu_prefills_clicked_message_without_prio
     app.select_room("!reactions:example")?;
     assert_eq!(app.dump_message_menu_state()?.selected_event_id, None);
     app.open_timeline_context_menu("$react-normal", ContextMenuCommand::ReplyMessage)?;
-    assert_eq!(app.compose_text()?, "/reply $react-normal ");
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(
+        app.dump_ui_state()?.compose_target,
+        Some(UiComposeTarget {
+            kind: UiComposeTargetKind::Reply,
+            event_id: "$react-normal".to_owned(),
+        })
+    );
     assert_eq!(
         app.dump_message_menu_state()?.selected_event_id.as_deref(),
         Some("$react-normal")
@@ -13977,8 +14029,151 @@ fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
     app.wait_idle(Duration::from_secs(5))?;
     app.select_room("!reactions:example")?;
     app.select_timeline_event("$react-normal")?;
-    app.open_selected_timeline_context_menu(ContextMenuCommand::EditMessage)?;
-    assert_eq!(app.compose_text()?, "/edit $react-normal ");
+    app.open_selected_timeline_context_menu(ContextMenuCommand::ReplyMessage)?;
+    assert_eq!(
+        app.dump_ui_state()?.compose_target,
+        Some(UiComposeTarget {
+            kind: UiComposeTargetKind::Reply,
+            event_id: "$react-normal".to_owned(),
+        })
+    );
+    let error = app
+        .open_selected_timeline_context_menu(ContextMenuCommand::EditMessage)
+        .expect_err("edit is greyed out on someone else's message");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { code, message, .. }
+            if code == "selected_message_unavailable"
+                && message == "message context menu action is disabled"
+    ));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_reply_menu_arms_and_sends_reply() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path("replies.json"))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!replies:example")?;
+    app.select_timeline_event("$replies-question")?;
+    app.reply_to_selected_message_via_menu()?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        ui_state.compose_target,
+        Some(UiComposeTarget {
+            kind: UiComposeTargetKind::Reply,
+            event_id: "$replies-question".to_owned(),
+        })
+    );
+    let lines = &find_view(&ui_state, &room_identity("!replies:example")).lines;
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some(
+            "* Replying to <Alice> are we deploying today? the build looks green on eve... (Esc cancels)"
+        ),
+        "{lines:?}"
+    );
+    assert_eq!(app.compose_text()?, "");
+
+    app.set_compose_text("yes, at 14:00")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(
+        app.dump_model()?.submitted_reply_commands,
+        vec![SubmittedReplyCommand {
+            room_id: "!replies:example".to_owned(),
+            target_event_id: "$replies-question".to_owned(),
+            sender_user_id: "@alice:example".to_owned(),
+            body: "yes, at 14:00".to_owned(),
+            thread: None,
+        }]
+    );
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.compose_target, None);
+    assert!(
+        !find_view(&ui_state, &room_identity("!replies:example"))
+            .lines
+            .iter()
+            .any(|line| line.contains("Replying to")),
+        "sending disarms the editbox"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_edit_menu_prefills_own_message_and_escape_cancels()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&reactions_fixture_signed_in_as("@normal:example")?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!reactions:example")?;
+
+    app.select_timeline_event("$react-thread-root")?;
+    assert!(!app.dump_message_menu_state()?.edit_enabled);
+    let error = app
+        .edit_selected_message_via_menu()
+        .expect_err("edit must reject someone else's message");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { code, message, .. }
+            if code == "selected_message_unavailable"
+                && message == "you can only edit your own messages"
+    ));
+    assert_eq!(app.dump_ui_state()?.compose_target, None);
+
+    app.select_timeline_event("$react-normal")?;
+    assert!(app.dump_message_menu_state()?.edit_enabled);
+    app.edit_selected_message_via_menu()?;
+    assert_eq!(app.compose_text()?, "normal reaction target");
+    let edit_target = Some(UiComposeTarget {
+        kind: UiComposeTargetKind::Edit,
+        event_id: "$react-normal".to_owned(),
+    });
+    assert_eq!(app.dump_ui_state()?.compose_target, edit_target);
+
+    app.send_compose_key(ComposeKey::Escape)?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(app.dump_ui_state()?.compose_target, None);
+
+    app.edit_selected_message_via_menu()?;
+    assert_eq!(app.dump_ui_state()?.compose_target, edit_target);
+    app.set_compose_text("normal reaction target, fixed")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "");
+    assert_eq!(app.dump_ui_state()?.compose_target, None);
+    assert_eq!(
+        app.dump_model()?.submitted_edit_commands,
+        vec![SubmittedEditCommand {
+            room_id: "!reactions:example".to_owned(),
+            target_event_id: "$react-normal".to_owned(),
+            body: "normal reaction target, fixed".to_owned(),
+        }]
+    );
+
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

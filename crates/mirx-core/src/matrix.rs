@@ -9402,6 +9402,7 @@ mod tests {
             &mut content,
             SendMessageReplyTarget {
                 event_id: "$parent:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect("attach reply relation");
@@ -9480,6 +9481,7 @@ mod tests {
             &mut content,
             SendMessageReplyTarget {
                 event_id: "$parent:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect("attach reply relation");
@@ -9940,6 +9942,7 @@ mod tests {
             &mut content,
             SendMessageReplyTarget {
                 event_id: "$parent:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect("attach reply relation");
@@ -10351,6 +10354,7 @@ mod tests {
                 &mut content,
                 SendMessageReplyTarget {
                     event_id: "$parent:example.org".to_owned(),
+                    sender_user_id: "@alice:example.org".to_owned(),
                 },
             )
             .expect("attach reply relation");
@@ -10379,6 +10383,7 @@ mod tests {
             },
             SendMessageReplyTarget {
                 event_id: "$reply-target:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect("attach thread reply relation");
@@ -10405,6 +10410,7 @@ mod tests {
             &mut content,
             SendMessageReplyTarget {
                 event_id: "not-an-event-id".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect_err("reject invalid reply event id");
@@ -10424,6 +10430,7 @@ mod tests {
             },
             SendMessageReplyTarget {
                 event_id: "$reply-target:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect_err("reject invalid thread root");
@@ -10441,6 +10448,7 @@ mod tests {
             },
             SendMessageReplyTarget {
                 event_id: "$reply-target:example.org".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect_err("reject invalid latest event id");
@@ -10458,6 +10466,7 @@ mod tests {
             },
             SendMessageReplyTarget {
                 event_id: "not-an-event-id".to_owned(),
+                sender_user_id: "@alice:example.org".to_owned(),
             },
         )
         .expect_err("reject invalid reply target");
