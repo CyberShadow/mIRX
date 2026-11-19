@@ -969,7 +969,7 @@ configure_case_expectations() {
       room_activity_expect_args=(
         --expect-room-activity '!reactions:example::"reactions":['
         --expect-room-activity '!reactions:example::"key":"+1"'
-        --expect-room-activity '!reactions:example::"count":1'
+        --expect-room-activity '!reactions:example::"count":4'
         --expect-room-activity '!reactions:example::$reaction-plus-one-b'
         --expect-room-activity '!reactions:example::"key":"eyes"'
         --expect-room-activity '!reactions:example::"type":"thread"'
@@ -977,15 +977,15 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!reactions:example::* Now talking in Reactions (!reactions:example)'
         --expect-room-view '!reactions:example::normal reaction target'
-        --expect-room-view '!reactions:example::reactions: +1 x1'
+        --expect-room-view '!reactions:example::reactions: +1 Bob, Carol, @dave:example +1'
       )
       view_expect_args=(
         --expect-view 'thread:!reactions:example|$react-thread-root::thread reaction root'
         --expect-view 'thread:!reactions:example|$react-thread-root::thread reaction reply'
-        --expect-view 'thread:!reactions:example|$react-thread-root::reactions: eyes x1'
+        --expect-view 'thread:!reactions:example|$react-thread-root::reactions: eyes @dave:example'
       )
       view_forbid_args=(
-        --expect-no-view 'room:!reactions:example::heart x1'
+        --expect-no-view 'room:!reactions:example::heart'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -1657,7 +1657,7 @@ configure_case_expectations() {
       room_view_expect_args=(
         --expect-room-view '!unicode:example::* Now talking in Unicode (!unicode:example)'
         --expect-room-view '!unicode:example::[22:13] <Zoë 🌸> it’s ready — ship it 🚀'
-        --expect-room-view '!unicode:example::reactions: 👍 x2'
+        --expect-room-view '!unicode:example::reactions: 👍 Ωmega, Zoë 🌸'
         --expect-room-view '!unicode:example::[22:14] <Ωmega> naïve café ½'
         --expect-room-view '!unicode:example::[22:15] <Zoë 🌸> Привет, мир / ελληνικά'
         --expect-room-view $'!unicode:example::[22:16] <Ωmega> 👍\uFE0F with VS16, 👨\u200D👩\u200D👧 family, 🇩🇪 flag'

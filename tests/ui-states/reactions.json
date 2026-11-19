@@ -121,6 +121,54 @@
       },
       "kind": {
         "type": "reaction_added",
+        "reaction_event_id": "$reaction-plus-one-c",
+        "sender": "@carol:example",
+        "timestamp_ms": 1700200250000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction-plus-one-d",
+        "sender": "@dave:example",
+        "timestamp_ms": 1700200260000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$reaction-plus-one-e",
+        "sender": "@erin:example",
+        "timestamp_ms": 1700200270000,
+        "key": "+1"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!reactions:example",
+      "target": {
+        "type": "event",
+        "event_id": "$react-normal"
+      },
+      "kind": {
+        "type": "reaction_added",
         "reaction_event_id": "$reaction-heart-a",
         "sender": "@carol:example",
         "timestamp_ms": 1700200300000,
@@ -142,6 +190,49 @@
         "timestamp_ms": 1700200360000,
         "key": "eyes"
       }
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!reactions:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@erin:example",
+          "display_name": "Erin",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
     }
   }
 ]

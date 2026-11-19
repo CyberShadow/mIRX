@@ -8321,9 +8321,21 @@ fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::e
                 vec![
                     reaction_summary(
                         "+1",
-                        2,
-                        &["@alice:example", "@bob:example"],
-                        &["$reaction-plus-one-a", "$reaction-plus-one-b"],
+                        5,
+                        &[
+                            "@alice:example",
+                            "@bob:example",
+                            "@carol:example",
+                            "@dave:example",
+                            "@erin:example",
+                        ],
+                        &[
+                            "$reaction-plus-one-a",
+                            "$reaction-plus-one-b",
+                            "$reaction-plus-one-c",
+                            "$reaction-plus-one-d",
+                            "$reaction-plus-one-e",
+                        ],
                     ),
                     reaction_summary("heart", 1, &["@carol:example"], &["$reaction-heart-a"],),
                 ],
@@ -8360,14 +8372,22 @@ fn automation_driver_loads_receive_side_reactions() -> Result<(), Box<dyn std::e
 
     let ui_state = app.dump_ui_state()?;
     let room_view = find_view(&ui_state, &room_identity("!reactions:example"));
-    assert!(view_contains(room_view, "reactions: +1 x2  heart x1"));
+    // Reactors by member nick, three per key and a count for the rest;
+    // @dave:example is not a member.
+    assert!(view_contains(
+        room_view,
+        "    reactions: +1 Alice, Bob, Carol +2  heart Carol"
+    ));
 
     let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
     app.select_view(thread_view_identity.clone())?;
     app.wait_idle(Duration::from_secs(5))?;
     let thread_state = app.dump_ui_state()?;
     let thread_view = find_view(&thread_state, &thread_view_identity);
-    assert!(view_contains(thread_view, "reactions: eyes x1"));
+    assert!(view_contains(
+        thread_view,
+        "    reactions: eyes @dave:example"
+    ));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -8405,9 +8425,19 @@ fn automation_driver_applies_receive_side_reactions_redactions()
                 ),
                 vec![reaction_summary(
                     "+1",
-                    1,
-                    &["@bob:example"],
-                    &["$reaction-plus-one-b"],
+                    4,
+                    &[
+                        "@bob:example",
+                        "@carol:example",
+                        "@dave:example",
+                        "@erin:example",
+                    ],
+                    &[
+                        "$reaction-plus-one-b",
+                        "$reaction-plus-one-c",
+                        "$reaction-plus-one-d",
+                        "$reaction-plus-one-e",
+                    ],
                 )],
             ),
             text_entry_with_event_id(
@@ -8442,15 +8472,21 @@ fn automation_driver_applies_receive_side_reactions_redactions()
 
     let ui_state = app.dump_ui_state()?;
     let room_view = find_view(&ui_state, &room_identity("!reactions:example"));
-    assert!(view_contains(room_view, "reactions: +1 x1"));
-    assert!(!view_contains(room_view, "heart x1"));
+    assert!(view_contains(
+        room_view,
+        "    reactions: +1 Bob, Carol, @dave:example +1"
+    ));
+    assert!(!view_contains(room_view, "heart"));
 
     let thread_view_identity = thread_identity("!reactions:example", "$react-thread-root");
     app.select_view(thread_view_identity.clone())?;
     app.wait_idle(Duration::from_secs(5))?;
     let thread_state = app.dump_ui_state()?;
     let thread_view = find_view(&thread_state, &thread_view_identity);
-    assert!(view_contains(thread_view, "reactions: eyes x1"));
+    assert!(view_contains(
+        thread_view,
+        "    reactions: eyes @dave:example"
+    ));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

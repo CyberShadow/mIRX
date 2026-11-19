@@ -174,6 +174,7 @@ mod menus;
 mod nick_completion;
 mod options;
 mod options_dialog;
+mod reactions;
 mod replies;
 mod room_list;
 mod send_file;
@@ -1378,24 +1379,31 @@ impl RoomViewModel {
             return Vec::new();
         };
 
-        let mut grouped = BTreeMap::<String, Vec<&RoomReactionEntry>>::new();
-        for entry in reactions.values() {
-            grouped.entry(entry.key.clone()).or_default().push(entry);
+        // In reaction time, so the first reaction stays first as more
+        // arrive: reactors within a group, and groups by their first.
+        let mut entries = reactions.values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            (left.timestamp_ms, &left.reaction_event_id)
+                .cmp(&(right.timestamp_ms, &right.reaction_event_id))
+        });
+        let mut grouped = Vec::<(String, Vec<&RoomReactionEntry>)>::new();
+        for entry in entries {
+            match grouped.iter_mut().find(|(key, _)| *key == entry.key) {
+                Some((_, group)) => group.push(entry),
+                None => grouped.push((entry.key.clone(), vec![entry])),
+            }
         }
 
         grouped
             .into_iter()
-            .map(|(key, mut entries)| {
-                entries.sort_by(|left, right| left.reaction_event_id.cmp(&right.reaction_event_id));
-                DumpRoomReactionSummary {
-                    key,
-                    count: entries.len() as u64,
-                    senders: entries.iter().map(|entry| entry.sender.clone()).collect(),
-                    reaction_event_ids: entries
-                        .iter()
-                        .map(|entry| entry.reaction_event_id.clone())
-                        .collect(),
-                }
+            .map(|(key, entries)| DumpRoomReactionSummary {
+                key,
+                count: entries.len() as u64,
+                senders: entries.iter().map(|entry| entry.sender.clone()).collect(),
+                reaction_event_ids: entries
+                    .iter()
+                    .map(|entry| entry.reaction_event_id.clone())
+                    .collect(),
             })
             .collect()
     }
@@ -9236,16 +9244,15 @@ fn push_room_activity_row(
     if summaries.is_empty() {
         return;
     }
-    let summary_text = summaries
-        .iter()
-        .map(|summary| format!("{} x{}", summary.key, summary.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    let logical_text = format!("    reactions: {summary_text}");
+    // A log row: naming reactors makes the line long, and it wraps.
     rows.push(
-        TimelineRow::full_width(TimelineRowKind::ReactionSummary, logical_text).with_identity(
-            TimelineRowIdentity::activity_reaction_summary(&activity.activity_id),
-        ),
+        TimelineRow::log(
+            TimelineRowKind::ReactionSummary,
+            reactions::summary_line(&summaries, |user_id| room_view.member_nick(user_id)),
+        )
+        .with_identity(TimelineRowIdentity::activity_reaction_summary(
+            &activity.activity_id,
+        )),
     );
 }
 
@@ -19323,13 +19330,13 @@ mod tests {
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
-                "    reactions: +1 x1".to_owned(),
+                "    reactions: +1 @bob:example.org".to_owned(),
             ]
         );
     }
 
     #[test]
-    fn reaction_projection_aggregates_multiple_keys_deterministically_into_one_summary_row() {
+    fn reaction_projection_aggregates_keys_in_reaction_time_into_one_summary_row() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", false)];
 
@@ -19395,9 +19402,57 @@ mod tests {
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
-                "    reactions: +1 x1  eyes x1  heart x2".to_owned(),
+                "    reactions: heart @alice:example.org, @dave:example.org  +1 @bob:example.org  eyes @carol:example.org".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn reaction_row_names_reactors_by_member_nick_once_members_arrive() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, timeline("!ops:example", "hello")).unwrap();
+        for (reaction_event_id, sender, timestamp_ms) in [
+            ("$r1", "@alice:example", 1_700_000_000_300),
+            ("$r2", "@ghost:example", 1_700_000_000_200),
+        ] {
+            apply_core_event(
+                &mut state,
+                incoming_reaction_added(
+                    "!ops:example",
+                    "$!ops:example:hello",
+                    reaction_event_id,
+                    sender,
+                    "+1",
+                    timestamp_ms,
+                ),
+            )
+            .unwrap();
+        }
+        let reaction_row = |state: &WindowState| {
+            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps())
+                .into_iter()
+                .find(|row| row.kind == TimelineRowKind::ReactionSummary)
+                .expect("the message has a reaction row")
+        };
+        assert_eq!(
+            reaction_row(&state).logical_text,
+            "    reactions: +1 @ghost:example, @alice:example"
+        );
+
+        // Members arrive after the reactions; the row is rebuilt from them.
+        apply_core_event(
+            &mut state,
+            Event::RoomMembers(RoomMembers {
+                room_id: "!ops:example".to_owned(),
+                members: vec![member_summary("@alice:example", Some("Alice"), false)],
+            }),
+        )
+        .unwrap();
+        let row = reaction_row(&state);
+        assert_eq!(row.logical_text, "    reactions: +1 @ghost:example, Alice");
+        // It wraps like a log line instead of being clipped.
+        assert_eq!(row.layout, TimelineRowLayout::Log);
     }
 
     #[test]
@@ -19553,7 +19608,8 @@ mod tests {
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
-                "    reactions: +1 x2  heart x1".to_owned(),
+                "    reactions: +1 @bob:example.org, @carol:example.org  heart @dave:example.org"
+                    .to_owned(),
             ]
         );
 
@@ -19574,7 +19630,7 @@ mod tests {
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
-                "    reactions: +1 x1  heart x1".to_owned(),
+                "    reactions: +1 @carol:example.org  heart @dave:example.org".to_owned(),
             ]
         );
     }
@@ -19799,9 +19855,9 @@ mod tests {
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:14] <@alice:example> root msg".to_owned(),
-                "    reactions: heart x1".to_owned(),
+                "    reactions: heart @bob:example.org".to_owned(),
                 "[22:15] <@alice:example> thread rep".to_owned(),
-                "    reactions: eyes x1".to_owned(),
+                "    reactions: eyes @carol:example.org".to_owned(),
             ]
         );
     }
@@ -23188,9 +23244,9 @@ mod tests {
                 "* Now talking in Beta (!beta:example)".to_owned(),
             ),
             TimelineRow::log(TimelineRowKind::Event, "* Topic is 'incident'".to_owned()),
-            TimelineRow::full_width(
+            TimelineRow::log(
                 TimelineRowKind::ReactionSummary,
-                "    reactions: 👍 x1".to_owned(),
+                "    reactions: 👍 Alice".to_owned(),
             ),
             TimelineRow::log(
                 TimelineRowKind::Message {
