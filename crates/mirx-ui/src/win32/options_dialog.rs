@@ -19,16 +19,15 @@ use windows_sys::Win32::UI::Controls::{
     TVM_GETNEXTITEM, TVM_SELECTITEM, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES,
     TVS_LINESATROOT, TVS_SHOWSELALWAYS,
 };
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CREATESTRUCTW,
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, ES_AUTOHSCROLL, ES_NUMBER,
-    GWL_STYLE, GWLP_USERDATA, GetClientRect, GetDlgCtrlID, GetMessageW, GetWindowLongPtrW,
-    GetWindowRect, IDC_ARROW, IDCANCEL, IDOK, IsDialogMessageW, IsWindow, LoadCursorW,
-    MB_ICONERROR, MB_OK, MSG, MessageBoxW, MoveWindow, PostQuitMessage, RegisterClassExW, SW_HIDE,
-    SW_SHOW, SendMessageW, SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_COMMAND,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CreateWindowExW,
+    DefWindowProcW, DestroyWindow, ES_AUTOHSCROLL, ES_NUMBER, GWL_STYLE, GetClientRect,
+    GetDlgCtrlID, GetWindowLongPtrW, GetWindowRect, IDC_ARROW, IDCANCEL, IDOK, IsDialogMessageW,
+    LoadCursorW, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow, RegisterClassExW, SW_HIDE, SW_SHOW,
+    SendMessageW, ShowWindow, WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WNDCLASSEXW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE,
 };
 
 use super::options::{
@@ -36,10 +35,11 @@ use super::options::{
 };
 use super::settings::Settings;
 use super::timestamp::format_tokens;
+use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, EDIT_CLASS_NAME, STATIC_CLASS_NAME, TREE_CLASS_NAME, create_child_window,
     expand_tree_item, insert_tree_item, last_os_error, read_tree_item_text, read_window_text,
-    selected_tree_item, set_window_text, wide_null,
+    run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
 use crate::automation::UiOptionsDialog;
 
@@ -127,13 +127,13 @@ struct DialogState {
 pub(super) struct OptionsDialog {
     hwnd: HWND,
     owner: HWND,
-    state: Box<DialogState>,
+    state: Box<WindowData<DialogState>>,
 }
 
 impl OptionsDialog {
     /// Creates the dialog over `owner`, centred on it, showing `current`.
     pub(super) unsafe fn open(owner: HWND, current: &Settings) -> Result<Self, String> {
-        let mut state = Box::new(DialogState {
+        let mut state = Box::new(WindowData::new(DialogState {
             current: current.clone(),
             tree: null_mut(),
             heading: null_mut(),
@@ -146,7 +146,7 @@ impl OptionsDialog {
                 switchbar_buttons: null_mut(),
             },
             saved: None,
-        });
+        }));
         let mut owner_rect = RECT::default();
         GetWindowRect(owner, &mut owner_rect);
         let class_name = wide_null(OPTIONS_DIALOG_CLASS_NAME);
@@ -163,7 +163,7 @@ impl OptionsDialog {
             owner,
             null_mut(),
             GetModuleHandleW(null()),
-            (&mut *state as *mut DialogState).cast(),
+            (&mut *state as *mut WindowData<DialogState>).cast(),
         );
         if hwnd.is_null() {
             return Err(last_os_error("CreateWindowExW options dialog"));
@@ -182,36 +182,20 @@ impl OptionsDialog {
     /// Shows the dialog until it closes: the settings OK saved, or `None`
     /// for Cancel, Esc and the close box.
     pub(super) unsafe fn run(self) -> Option<Settings> {
-        let Self { hwnd, owner, state } = self;
-        EnableWindow(owner, 0);
+        let Self {
+            hwnd,
+            owner,
+            mut state,
+        } = self;
         ShowWindow(hwnd, SW_SHOW);
         SetFocus(state.tree);
-        let mut message = MSG::default();
-        while IsWindow(hwnd) != 0 {
-            if GetMessageW(&mut message, null_mut(), 0, 0) <= 0 {
-                // The application is quitting: close the dialog, and leave
-                // the quit for the frame's loop.
-                DestroyWindow(hwnd);
-                PostQuitMessage(message.wParam as i32);
-                break;
-            }
-            // The frame is disabled, so every key the user presses is the
-            // dialog's.
-            if IsDialogMessageW(hwnd, &message) != 0 {
-                continue;
-            }
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
-        EnableWindow(owner, 1);
-        state.saved
+        run_modal_dialog(owner, hwnd, |message| IsDialogMessageW(hwnd, message) != 0);
+        state.saved.take()
     }
 }
 
 unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut DialogState;
-    assert!(!state.is_null(), "the options dialog has its state");
-    &mut *state
+    window_data::get(hwnd).expect("the options dialog has its state")
 }
 
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
@@ -520,8 +504,7 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::borrow_create_param::<DialogState>(hwnd, lparam);
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_COMMAND if wparam & 0xffff == IDOK as usize => {
@@ -540,7 +523,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_NCDESTROY => {
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            window_data::detach::<DialogState>(hwnd);
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),

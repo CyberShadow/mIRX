@@ -105,28 +105,28 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu,
     DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE,
     ES_PASSWORD, ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO,
-    FlashWindowEx, GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem,
-    GetForegroundWindow, GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo,
-    GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsChild,
-    IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
-    LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
-    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
-    MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL,
-    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
-    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SendMessageW,
-    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
-    WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY,
-    WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_MEASUREITEM,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT,
-    WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    FlashWindowEx, GA_ROOT, GWL_STYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW, GetClientRect,
+    GetDlgItem, GetForegroundWindow, GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent,
+    GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW,
+    IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL,
+    LB_GETITEMRECT, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
+    LB_SETITEMHEIGHT, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW,
+    MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
+    MDITILE_VERTICAL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP,
+    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
+    SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SHOW_WINDOW_CMD,
+    SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW,
+    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
+    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
+    WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS,
+    WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED,
+    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -181,6 +181,7 @@ mod status_log;
 mod switchbar;
 mod timeline_text;
 mod timestamp;
+mod window_data;
 
 use commands::{
     BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,
@@ -3840,7 +3841,7 @@ fn create_main_window(
 ) -> Result<HWND, String> {
     let class_name = wide_null(FRAME_CLASS_NAME);
     let title = wide_null(FRAME_TITLE);
-    let state_ptr = Box::into_raw(state);
+    let mut state = window_data::CreateParam::new(*state);
 
     let hwnd = unsafe {
         CreateWindowExW(
@@ -3855,14 +3856,11 @@ fn create_main_window(
             null_mut(),
             null_mut(),
             instance,
-            state_ptr.cast(),
+            state.as_param(),
         )
     };
 
     if hwnd.is_null() {
-        unsafe {
-            drop(Box::from_raw(state_ptr));
-        }
         return Err(last_os_error("CreateWindowExW"));
     }
 
@@ -3877,8 +3875,7 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::adopt_create_param::<WindowState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -3998,12 +3995,10 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
-            if !state_ptr.is_null() {
-                destroy_automation_state(&mut *state_ptr);
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
+            if let Some(state) = window_data::get::<WindowState>(hwnd) {
+                destroy_automation_state(state);
             }
+            window_data::drop_owned::<WindowState>(hwnd);
             0
         }
         _ => default_window_proc(hwnd, message, wparam, lparam),
@@ -4217,8 +4212,7 @@ unsafe extern "system" fn timeline_window_proc(
     match message {
         WM_CREATE => {
             let line_height = font_line_height(null_mut());
-            let state = Box::new(TimelineState::new(line_height));
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+            window_data::adopt(hwnd, TimelineState::new(line_height));
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_SETFONT => {
@@ -4257,11 +4251,7 @@ unsafe extern "system" fn timeline_window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr = timeline_state_ptr(hwnd);
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<TimelineState>(hwnd);
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -4277,7 +4267,7 @@ unsafe extern "system" fn room_content_window_proc(
     match message {
         WM_CREATE => match create_room_content_state(hwnd) {
             Ok(state) => {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
+                window_data::adopt(hwnd, *state);
                 layout_room_content(hwnd);
                 0
             }
@@ -4303,11 +4293,7 @@ unsafe extern "system" fn room_content_window_proc(
             1
         }
         WM_NCDESTROY => {
-            let state_ptr = room_content_state_ptr(hwnd);
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<RoomContentState>(hwnd);
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -4325,17 +4311,8 @@ unsafe fn mdi_child_create_state(lparam: LPARAM) -> &'static MdiChildCreateState
     &*state_ptr
 }
 
-unsafe fn room_content_state_ptr(hwnd: HWND) -> *mut RoomContentState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RoomContentState
-}
-
 unsafe fn room_content_state_ref(hwnd: HWND) -> &'static RoomContentState {
-    let state_ptr = room_content_state_ptr(hwnd);
-    assert!(
-        !state_ptr.is_null(),
-        "room content state must exist while the control is alive"
-    );
-    &*state_ptr
+    window_data::get(hwnd).expect("room content state must exist while the control is alive")
 }
 
 unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>, String> {
@@ -4440,12 +4417,9 @@ unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
 }
 
 unsafe fn layout_room_content(hwnd: HWND) {
-    let state_ptr = room_content_state_ptr(hwnd);
-    if state_ptr.is_null() {
+    let Some(state) = window_data::get::<RoomContentState>(hwnd) else {
         return;
-    }
-
-    let state = &*state_ptr;
+    };
     let mut rect = RECT::default();
     GetClientRect(hwnd, &mut rect);
     let height = rect.bottom - rect.top;
@@ -4461,26 +4435,12 @@ unsafe fn layout_room_content(hwnd: HWND) {
     );
 }
 
-unsafe fn timeline_state_ptr(hwnd: HWND) -> *mut TimelineState {
-    GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut TimelineState
-}
-
 unsafe fn timeline_state_ref(hwnd: HWND) -> &'static TimelineState {
-    let state_ptr = timeline_state_ptr(hwnd);
-    assert!(
-        !state_ptr.is_null(),
-        "timeline state must exist while the control is alive"
-    );
-    &*state_ptr
+    timeline_state_mut(hwnd)
 }
 
 unsafe fn timeline_state_mut(hwnd: HWND) -> &'static mut TimelineState {
-    let state_ptr = timeline_state_ptr(hwnd);
-    assert!(
-        !state_ptr.is_null(),
-        "timeline state must exist while the control is alive"
-    );
-    &mut *state_ptr
+    window_data::get(hwnd).expect("timeline state must exist while the control is alive")
 }
 
 /// The width available to timeline text, never less than one pixel so
@@ -5983,8 +5943,7 @@ unsafe extern "system" fn login_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::adopt_create_param::<LoginDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -6037,11 +5996,7 @@ unsafe extern "system" fn login_dialog_window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LoginDialogState;
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<LoginDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -6056,8 +6011,7 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::adopt_create_param::<RecoverE2eeDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -6111,11 +6065,7 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoverE2eeDialogState;
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<RecoverE2eeDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -6130,8 +6080,7 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::adopt_create_param::<SetupE2eeRecoveryDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -6179,12 +6128,7 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr =
-                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SetupE2eeRecoveryDialogState;
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<SetupE2eeRecoveryDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -6199,8 +6143,7 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::adopt_create_param::<RecoveryKeyHandoffDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -6226,12 +6169,7 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr =
-                GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoveryKeyHandoffDialogState;
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<RecoveryKeyHandoffDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -6246,8 +6184,7 @@ unsafe extern "system" fn find_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            let create = &*(lparam as *const CREATESTRUCTW);
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
+            window_data::adopt_create_param::<FindDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
@@ -6289,11 +6226,7 @@ unsafe extern "system" fn find_dialog_window_proc(
             0
         }
         WM_NCDESTROY => {
-            let state_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindDialogState;
-            if !state_ptr.is_null() {
-                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
-                drop(Box::from_raw(state_ptr));
-            }
+            window_data::drop_owned::<FindDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -8201,7 +8134,7 @@ unsafe fn layout_login_dialog(hwnd: HWND) {
 unsafe fn show_login_dialog(owner: HWND, server: &str) -> Result<Option<LoginForm>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let dialog_state = Box::new(LoginDialogState {
+    let mut dialog_state = window_data::CreateParam::new(LoginDialogState {
         initial_server: server.to_owned(),
         result: Arc::clone(&result),
         server_label: null_mut(),
@@ -8215,7 +8148,6 @@ unsafe fn show_login_dialog(owner: HWND, server: &str) -> Result<Option<LoginFor
         ok_button: null_mut(),
         cancel_button: null_mut(),
     });
-    let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
     let title = wide_null("Select Server");
     let dialog = CreateWindowExW(
@@ -8230,34 +8162,13 @@ unsafe fn show_login_dialog(owner: HWND, server: &str) -> Result<Option<LoginFor
         owner,
         null_mut(),
         instance,
-        dialog_state_ptr.cast(),
+        dialog_state.as_param(),
     );
     if dialog.is_null() {
-        drop(Box::from_raw(dialog_state_ptr));
         return Err(last_os_error("CreateWindowExW login dialog"));
     }
 
-    EnableWindow(owner, 0);
-    ShowWindow(dialog, SW_SHOW);
-
-    let mut message = MSG::default();
-    while IsWindow(dialog) != 0 {
-        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
-        if get_result <= 0 {
-            break;
-        }
-        let frame = frame_window_for(message.hwnd);
-        if !frame.is_null() {
-            let mdi_client = state_ref(frame).controls.mdi_client;
-            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
-                continue;
-            }
-        }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-    }
-
-    EnableWindow(owner, 1);
+    run_modal_dialog(owner, dialog, |_| false);
     Ok(result
         .lock()
         .expect("login dialog result mutex poisoned")
@@ -8470,14 +8381,13 @@ unsafe fn layout_recovery_key_handoff_dialog(hwnd: HWND) {
 unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let dialog_state = Box::new(RecoverE2eeDialogState {
+    let mut dialog_state = window_data::CreateParam::new(RecoverE2eeDialogState {
         result: Arc::clone(&result),
         recovery_secret_label: null_mut(),
         recovery_secret_edit: null_mut(),
         ok_button: null_mut(),
         cancel_button: null_mut(),
     });
-    let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(RECOVER_E2EE_DIALOG_CLASS_NAME);
     let title = wide_null("Recover E2EE");
     let dialog = CreateWindowExW(
@@ -8492,34 +8402,13 @@ unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm
         owner,
         null_mut(),
         instance,
-        dialog_state_ptr.cast(),
+        dialog_state.as_param(),
     );
     if dialog.is_null() {
-        drop(Box::from_raw(dialog_state_ptr));
         return Err(last_os_error("CreateWindowExW recover e2ee dialog"));
     }
 
-    EnableWindow(owner, 0);
-    ShowWindow(dialog, SW_SHOW);
-
-    let mut message = MSG::default();
-    while IsWindow(dialog) != 0 {
-        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
-        if get_result <= 0 {
-            break;
-        }
-        let frame = frame_window_for(message.hwnd);
-        if !frame.is_null() {
-            let mdi_client = state_ref(frame).controls.mdi_client;
-            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
-                continue;
-            }
-        }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-    }
-
-    EnableWindow(owner, 1);
+    run_modal_dialog(owner, dialog, |_| false);
     Ok(result
         .lock()
         .expect("recover e2ee dialog result mutex poisoned")
@@ -8529,7 +8418,7 @@ unsafe fn show_recover_e2ee_dialog(owner: HWND) -> Result<Option<RecoverE2eeForm
 unsafe fn show_setup_e2ee_dialog(owner: HWND) -> Result<Option<SetupE2eeRecoveryForm>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let dialog_state = Box::new(SetupE2eeRecoveryDialogState {
+    let mut dialog_state = window_data::CreateParam::new(SetupE2eeRecoveryDialogState {
         result: Arc::clone(&result),
         passphrase_label: null_mut(),
         passphrase_edit: null_mut(),
@@ -8537,7 +8426,6 @@ unsafe fn show_setup_e2ee_dialog(owner: HWND) -> Result<Option<SetupE2eeRecovery
         ok_button: null_mut(),
         cancel_button: null_mut(),
     });
-    let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(SETUP_E2EE_DIALOG_CLASS_NAME);
     let title = wide_null("Set Up E2EE Recovery");
     let dialog = CreateWindowExW(
@@ -8552,34 +8440,13 @@ unsafe fn show_setup_e2ee_dialog(owner: HWND) -> Result<Option<SetupE2eeRecovery
         owner,
         null_mut(),
         instance,
-        dialog_state_ptr.cast(),
+        dialog_state.as_param(),
     );
     if dialog.is_null() {
-        drop(Box::from_raw(dialog_state_ptr));
         return Err(last_os_error("CreateWindowExW setup e2ee dialog"));
     }
 
-    EnableWindow(owner, 0);
-    ShowWindow(dialog, SW_SHOW);
-
-    let mut message = MSG::default();
-    while IsWindow(dialog) != 0 {
-        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
-        if get_result <= 0 {
-            break;
-        }
-        let frame = frame_window_for(message.hwnd);
-        if !frame.is_null() {
-            let mdi_client = state_ref(frame).controls.mdi_client;
-            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
-                continue;
-            }
-        }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-    }
-
-    EnableWindow(owner, 1);
+    run_modal_dialog(owner, dialog, |_| false);
     Ok(result
         .lock()
         .expect("setup e2ee dialog result mutex poisoned")
@@ -8594,7 +8461,7 @@ unsafe fn show_single_field_dialog(
 ) -> Result<Option<String>, String> {
     let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let dialog_state = Box::new(FindDialogState {
+    let mut dialog_state = window_data::CreateParam::new(FindDialogState {
         result: Arc::clone(&result),
         label: label.to_owned(),
         query_label: null_mut(),
@@ -8602,7 +8469,6 @@ unsafe fn show_single_field_dialog(
         ok_button: null_mut(),
         cancel_button: null_mut(),
     });
-    let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(FIND_DIALOG_CLASS_NAME);
     let title = wide_null(title);
     let dialog = CreateWindowExW(
@@ -8617,10 +8483,9 @@ unsafe fn show_single_field_dialog(
         owner,
         null_mut(),
         instance,
-        dialog_state_ptr.cast(),
+        dialog_state.as_param(),
     );
     if dialog.is_null() {
-        drop(Box::from_raw(dialog_state_ptr));
         return Err(last_os_error("CreateWindowExW single field dialog"));
     }
 
@@ -8631,30 +8496,9 @@ unsafe fn show_single_field_dialog(
         SetFocus(state.query_edit);
     }
 
-    EnableWindow(owner, 0);
-    ShowWindow(dialog, SW_SHOW);
-
-    let mut message = MSG::default();
-    while IsWindow(dialog) != 0 {
-        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
-        if get_result <= 0 {
-            break;
-        }
-        if find_dialog_handles_key(dialog, &message) {
-            continue;
-        }
-        let frame = frame_window_for(message.hwnd);
-        if !frame.is_null() {
-            let mdi_client = state_ref(frame).controls.mdi_client;
-            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
-                continue;
-            }
-        }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-    }
-
-    EnableWindow(owner, 1);
+    run_modal_dialog(owner, dialog, |message| {
+        find_dialog_handles_key(dialog, message)
+    });
     Ok(result
         .lock()
         .expect("find dialog result mutex poisoned")
@@ -8710,73 +8554,79 @@ unsafe fn show_about_dialog(owner: HWND) -> Result<(), String> {
         return Err(last_os_error("CreateWindowExW about dialog"));
     }
 
-    EnableWindow(owner, 0);
     SetFocus(GetDlgItem(dialog, ABOUT_DIALOG_OK_ID as i32));
+    run_modal_dialog(owner, dialog, |message| {
+        let closes = message.message == WM_KEYDOWN
+            && matches!(message.wParam, VK_RETURN_KEY | VK_ESCAPE_KEY)
+            && (message.hwnd == dialog || IsChild(dialog, message.hwnd) != 0);
+        if closes {
+            DestroyWindow(dialog);
+        }
+        closes
+    });
+    Ok(())
+}
 
+/// Runs `dialog`'s message loop until it is destroyed, with `owner`
+/// disabled: every key the user presses is the dialog's, so the frame's
+/// accelerators do not apply. `handles_key` may take a message before it is
+/// dispatched.
+unsafe fn run_modal_dialog(owner: HWND, dialog: HWND, mut handles_key: impl FnMut(&MSG) -> bool) {
+    EnableWindow(owner, 0);
     let mut message = MSG::default();
     while IsWindow(dialog) != 0 {
         if GetMessageW(&mut message, null_mut(), 0, 0) <= 0 {
+            // The application is quitting: close the dialog, and leave the
+            // quit for the frame's loop.
+            DestroyWindow(dialog);
+            PostQuitMessage(message.wParam as i32);
             break;
         }
-        if message.message == WM_KEYDOWN
-            && matches!(message.wParam, VK_RETURN_KEY | VK_ESCAPE_KEY)
-            && (message.hwnd == dialog || IsChild(dialog, message.hwnd) != 0)
-        {
-            DestroyWindow(dialog);
+        if handles_key(&message) {
             continue;
         }
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
-
     EnableWindow(owner, 1);
-    Ok(())
 }
 
 unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const LoginDialogState;
-    (!state.is_null()).then_some(&*state)
+    window_data::get(hwnd).map(|state| &*state)
 }
 
 unsafe fn login_dialog_state_mut(hwnd: HWND) -> Option<&'static mut LoginDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut LoginDialogState;
-    (!state.is_null()).then_some(&mut *state)
+    window_data::get(hwnd)
 }
 
 unsafe fn recover_e2ee_dialog_state(hwnd: HWND) -> Option<&'static RecoverE2eeDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RecoverE2eeDialogState;
-    (!state.is_null()).then_some(&*state)
+    window_data::get(hwnd).map(|state| &*state)
 }
 
 unsafe fn recover_e2ee_dialog_state_mut(hwnd: HWND) -> Option<&'static mut RecoverE2eeDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoverE2eeDialogState;
-    (!state.is_null()).then_some(&mut *state)
+    window_data::get(hwnd)
 }
 
 unsafe fn setup_e2ee_dialog_state(hwnd: HWND) -> Option<&'static SetupE2eeRecoveryDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const SetupE2eeRecoveryDialogState;
-    (!state.is_null()).then_some(&*state)
+    window_data::get(hwnd).map(|state| &*state)
 }
 
 unsafe fn setup_e2ee_dialog_state_mut(
     hwnd: HWND,
 ) -> Option<&'static mut SetupE2eeRecoveryDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut SetupE2eeRecoveryDialogState;
-    (!state.is_null()).then_some(&mut *state)
+    window_data::get(hwnd)
 }
 
 unsafe fn recovery_key_handoff_dialog_state(
     hwnd: HWND,
 ) -> Option<&'static RecoveryKeyHandoffDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const RecoveryKeyHandoffDialogState;
-    (!state.is_null()).then_some(&*state)
+    window_data::get(hwnd).map(|state| &*state)
 }
 
 unsafe fn recovery_key_handoff_dialog_state_mut(
     hwnd: HWND,
 ) -> Option<&'static mut RecoveryKeyHandoffDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RecoveryKeyHandoffDialogState;
-    (!state.is_null()).then_some(&mut *state)
+    window_data::get(hwnd)
 }
 
 unsafe fn clear_recovery_key_handoff_dialog_key(hwnd: HWND) {
@@ -8786,13 +8636,11 @@ unsafe fn clear_recovery_key_handoff_dialog_key(hwnd: HWND) {
 }
 
 unsafe fn find_dialog_state(hwnd: HWND) -> Option<&'static FindDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const FindDialogState;
-    (!state.is_null()).then_some(&*state)
+    window_data::get(hwnd).map(|state| &*state)
 }
 
 unsafe fn find_dialog_state_mut(hwnd: HWND) -> Option<&'static mut FindDialogState> {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut FindDialogState;
-    (!state.is_null()).then_some(&mut *state)
+    window_data::get(hwnd)
 }
 
 unsafe fn find_dialog_handles_key(dialog: HWND, message: &MSG) -> bool {
@@ -11057,13 +10905,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
 }
 
 unsafe fn unregister_destroyed_view(child: HWND) {
-    let frame = frame_window_for(child);
-    let state_ptr = GetWindowLongPtrW(frame, GWLP_USERDATA) as *mut WindowState;
-    if state_ptr.is_null() {
-        return;
-    }
-
-    let _ = unregister_view_by_child(&mut *state_ptr, child);
+    let _ = unregister_view_by_child(state_mut(frame_window_for(child)), child);
 }
 
 unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
@@ -16035,8 +15877,7 @@ fn message_loop() {
         }
 
         unsafe {
-            let frame = frame_window_for(message.hwnd);
-            if !frame.is_null() {
+            if let Some(frame) = message_frame(&message) {
                 if TranslateAcceleratorW(frame, state_ref(frame).controls.accelerators, &message)
                     != 0
                 {
@@ -16053,35 +15894,49 @@ fn message_loop() {
     }
 }
 
-unsafe fn frame_window_for(mut hwnd: HWND) -> HWND {
-    let mut frame = hwnd;
-    while !hwnd.is_null() {
-        frame = hwnd;
-        hwnd = GetParent(hwnd);
-    }
-
+/// The frame that `hwnd`, one of its descendants, belongs to.
+unsafe fn frame_window_for(hwnd: HWND) -> HWND {
+    let frame = GetAncestor(hwnd, GA_ROOT);
+    assert!(
+        window_data::get::<WindowState>(frame).is_some(),
+        "window {hwnd:?} is in a frame"
+    );
     frame
 }
 
+/// The frame whose accelerators apply to `message`: the frame or one of its
+/// descendants is its target. Other windows of the thread (dialogs, menus,
+/// the system's own) have none, nor have thread messages.
+unsafe fn message_frame(message: &MSG) -> Option<HWND> {
+    let root = GetAncestor(message.hwnd, GA_ROOT);
+    window_class_is(root, FRAME_CLASS_NAME).then_some(root)
+}
+
+/// Whether `hwnd` is a window of class `class_name`; false for no window.
+unsafe fn window_class_is(hwnd: HWND, class_name: &str) -> bool {
+    let mut buffer = [0u16; 256];
+    let len = GetClassNameW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+    buffer[..len as usize]
+        .iter()
+        .copied()
+        .eq(class_name.encode_utf16())
+}
+
 unsafe fn state_ref(hwnd: HWND) -> &'static WindowState {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowState;
-    assert!(!state.is_null(), "window state must exist");
-    &*state
+    state_mut(hwnd)
 }
 
 unsafe fn state_mut(hwnd: HWND) -> &'static mut WindowState {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WindowState;
-    assert!(!state.is_null(), "window state must exist");
-    &mut *state
+    window_data::get(hwnd).expect("window state must exist")
 }
 
 unsafe fn default_window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WindowState;
-    if state.is_null() {
+    // Messages before WM_NCCREATE and after WM_NCDESTROY.
+    let Some(state) = window_data::get::<WindowState>(hwnd) else {
         return DefWindowProcW(hwnd, message, wparam, lparam);
-    }
+    };
 
-    let mdi_client = (*state).controls.mdi_client;
+    let mdi_client = state.controls.mdi_client;
     if mdi_client.is_null() {
         DefWindowProcW(hwnd, message, wparam, lparam)
     } else {
@@ -17087,13 +16942,12 @@ fn show_error_message(hwnd: HWND, title: &str, message: &str) {
 
 unsafe fn show_e2ee_recovery_key(owner: HWND, recovery_key: &str) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
-    let dialog_state = Box::new(RecoveryKeyHandoffDialogState {
+    let mut dialog_state = window_data::CreateParam::new(RecoveryKeyHandoffDialogState {
         recovery_key: recovery_key.to_owned(),
         instruction_label: null_mut(),
         recovery_key_edit: null_mut(),
         acknowledge_button: null_mut(),
     });
-    let dialog_state_ptr = Box::into_raw(dialog_state);
     let class_name = wide_null(RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME);
     let title = wide_null("E2EE Recovery Key");
     let dialog = CreateWindowExW(
@@ -17108,34 +16962,13 @@ unsafe fn show_e2ee_recovery_key(owner: HWND, recovery_key: &str) -> Result<(), 
         owner,
         null_mut(),
         instance,
-        dialog_state_ptr.cast(),
+        dialog_state.as_param(),
     );
     if dialog.is_null() {
-        drop(Box::from_raw(dialog_state_ptr));
         return Err(last_os_error("CreateWindowExW recovery key handoff dialog"));
     }
 
-    EnableWindow(owner, 0);
-    ShowWindow(dialog, SW_SHOW);
-
-    let mut message = MSG::default();
-    while IsWindow(dialog) != 0 {
-        let get_result = GetMessageW(&mut message, null_mut(), 0, 0);
-        if get_result <= 0 {
-            break;
-        }
-        let frame = frame_window_for(message.hwnd);
-        if !frame.is_null() {
-            let mdi_client = state_ref(frame).controls.mdi_client;
-            if !mdi_client.is_null() && TranslateMDISysAccel(mdi_client, &message) != 0 {
-                continue;
-            }
-        }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
-    }
-
-    EnableWindow(owner, 1);
+    run_modal_dialog(owner, dialog, |_| false);
     Ok(())
 }
 
@@ -17173,8 +17006,13 @@ mod tests {
         RoomStateNoticeActivity, SyncStopReason,
     };
 
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_WRAP};
-    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, GW_OWNER, GetWindow, IsWindowVisible,
+    };
+    use windows_sys::core::BOOL;
 
     use super::menus::verification_actions_text;
 
@@ -18375,14 +18213,13 @@ mod tests {
             "test status bar control must be created"
         );
 
-        let state_ptr = Box::into_raw(Box::new(state));
-        SetWindowLongPtrW(frame, GWLP_USERDATA, state_ptr as isize);
-        (*state_ptr).controls.status_bar = status_bar;
-        let active_view = (*state_ptr).active_view.clone();
-        (*state_ptr)
-            .hwnd_views
-            .insert(child as isize, active_view.clone());
-        (*state_ptr).views.insert(
+        let mut data = Box::new(window_data::WindowData::new(state));
+        window_data::lend(frame, &mut *data);
+        let state = state_mut(frame);
+        state.controls.status_bar = status_bar;
+        let active_view = state.active_view.clone();
+        state.hwnd_views.insert(child as isize, active_view.clone());
+        state.views.insert(
             active_view,
             MdiViewState {
                 child,
@@ -18398,7 +18235,7 @@ mod tests {
         let result = test(frame);
         DestroyWindow(frame);
         DestroyWindow(status_bar);
-        drop(Box::from_raw(state_ptr));
+        drop(data);
         result
     }
 
@@ -31603,6 +31440,125 @@ mod tests {
         let result = test(hwnd);
         DestroyWindow(hwnd);
         result
+    }
+
+    /// Types `c` and Enter into the frame's single-field dialog once its
+    /// modal loop runs. The keys are posted to the dialog's own edit control,
+    /// so that loop handles messages for the dialog's children.
+    unsafe extern "system" fn type_into_single_field_dialog(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        unsafe extern "system" fn find_owned_dialog(hwnd: HWND, found: LPARAM) -> BOOL {
+            let found = &mut *(found as *mut (HWND, HWND));
+            if GetWindow(hwnd, GW_OWNER) == found.0 && window_class_is(hwnd, FIND_DIALOG_CLASS_NAME)
+            {
+                found.1 = hwnd;
+            }
+            1
+        }
+        KillTimer(frame, timer);
+        let mut found = (frame, null_mut());
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(find_owned_dialog),
+            &mut found as *mut (HWND, HWND) as LPARAM,
+        );
+        let edit = find_dialog_state(found.1)
+            .expect("the single-field dialog is open")
+            .query_edit;
+        PostMessageW(edit, WM_CHAR, 'c' as WPARAM, 0);
+        PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
+    }
+
+    #[test]
+    fn a_single_field_dialog_takes_the_keys_typed_into_its_edit() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                register_find_dialog_class(GetModuleHandleW(null())).unwrap();
+                SetTimer(hwnd, 1, 0, Some(type_into_single_field_dialog));
+                assert_eq!(
+                    show_single_field_dialog(hwnd, "Find", "Find", "ab").unwrap(),
+                    Some("abc".to_owned())
+                );
+                assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
+    #[test]
+    fn message_frame_is_the_frame_of_its_descendants_only() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                let message_to = |target: HWND| MSG {
+                    hwnd: target,
+                    ..MSG::default()
+                };
+                let compose = state_ref(hwnd).views[&ViewId::Status].compose().edit;
+                assert_eq!(message_frame(&message_to(compose)), Some(hwnd));
+                assert_eq!(message_frame(&message_to(hwnd)), Some(hwnd));
+                assert_eq!(message_frame(&message_to(null_mut())), None);
+
+                register_about_dialog_class(GetModuleHandleW(null())).unwrap();
+                let dialog = CreateWindowExW(
+                    0,
+                    wide_null(ABOUT_DIALOG_CLASS_NAME).as_ptr(),
+                    wide_null("About mirx").as_ptr(),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    380,
+                    230,
+                    hwnd,
+                    null_mut(),
+                    GetModuleHandleW(null()),
+                    null(),
+                );
+                assert!(!dialog.is_null());
+                let ok = GetDlgItem(dialog, ABOUT_DIALOG_OK_ID as i32);
+                assert!(!ok.is_null());
+                assert_eq!(message_frame(&message_to(ok)), None);
+                assert_eq!(message_frame(&message_to(dialog)), None);
+                DestroyWindow(dialog);
+            });
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "holds another kind of state")]
+    fn a_window_does_not_give_its_state_as_another_kind() {
+        unsafe {
+            register_find_dialog_class(GetModuleHandleW(null())).unwrap();
+            let mut dialog_state = window_data::CreateParam::new(FindDialogState {
+                result: Arc::new(Mutex::new(None)),
+                label: "Find".to_owned(),
+                query_label: null_mut(),
+                query_edit: null_mut(),
+                ok_button: null_mut(),
+                cancel_button: null_mut(),
+            });
+            let dialog = CreateWindowExW(
+                0,
+                wide_null(FIND_DIALOG_CLASS_NAME).as_ptr(),
+                wide_null("Find").as_ptr(),
+                WS_OVERLAPPED,
+                0,
+                0,
+                420,
+                170,
+                null_mut(),
+                null_mut(),
+                GetModuleHandleW(null()),
+                dialog_state.as_param(),
+            );
+            assert!(!dialog.is_null());
+            // What the dialog loops used to do with their own controls'
+            // messages: take the root window for a frame.
+            // The window goes with this test's thread.
+            window_data::get::<WindowState>(dialog);
+        }
     }
 
     /// A frame child's rectangle in the frame's client coordinates.
