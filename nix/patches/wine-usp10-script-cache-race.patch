@@ -1,0 +1,97 @@
+From: mirx developers
+Subject: [PATCH] gdi32/uniscribe: Do not share a script cache between threads.
+
+init_script_cache hands out one ScriptCache per LOGFONT to every caller
+in the process.  A ScriptCache is not just font metrics, though: it is
+filled in lazily and without any locking as it is used (glyph and width
+pages, the GSUB/GDEF/GPOS/CMAP tables, the OpenType script and feature
+lists, which grow with usp10_array_reserve).  So two threads that shape
+text with the same font, each with its own SCRIPT_CACHE variable, as
+two EDIT controls on two threads do, race on the same ScriptCache and
+corrupt the heap; for example both reallocate cache->scripts in
+usp10_script_cache_add_script_list at once.
+
+The code that guarded against two threads creating the same cache at
+once was broken as well.  The thread that loses (whose cache is already
+linked into script_cache_list, and which finds the other one) called
+list_remove(&sc->entry) on the *other* cache, since the loop variable sc
+pointed at it, and then freed its own cache while it was still linked.
+The next lookup walked the freed node and typically faulted in
+memcmp(&sc->lf, ...) at address 0x14, the offset of lf.
+
+Only share a cache with callers on the thread that created it.  Then no
+other thread can add a cache that matches between the lookup and the
+insertion, so the broken race handling goes away rather than being
+fixed.  A cache that an application itself passes to another thread is
+still used from there; serialising such use is up to the application.
+
+Seen as heap corruption and as crashes in ucrtbase!memcmp <-
+init_script_cache <- ScriptStringAnalyse <- EDIT_UpdateUniscribeData
+when several threads each put text into EDIT controls using the same
+font.  N threads that each loop over ScriptStringAnalyse on a DC with
+DEFAULT_GUI_FONT crash on every run without this patch.
+
+---
+--- a/dlls/gdi32/uniscribe/usp10.c
++++ b/dlls/gdi32/uniscribe/usp10.c
+@@ -778,6 +778,7 @@
+ 
+ static HRESULT init_script_cache(const HDC hdc, SCRIPT_CACHE *psc)
+ {
++    DWORD thread_id = GetCurrentThreadId();
+     ScriptCache *sc;
+     unsigned size;
+     LOGFONTW lf;
+@@ -794,10 +795,12 @@
+     size = lstrlenW(lf.lfFaceName);
+     memset(lf.lfFaceName + size, 0, sizeof(lf.lfFaceName) - size * sizeof(WCHAR));
+ 
++    /* A cache fills itself in lazily and without locking, so it is only shared
++     * with callers on the thread that created it. */
+     EnterCriticalSection(&cs_script_cache);
+     LIST_FOR_EACH_ENTRY(sc, &script_cache_list, ScriptCache, entry)
+     {
+-        if (!memcmp(&sc->lf, &lf, sizeof(lf)))
++        if (sc->thread_id == thread_id && !memcmp(&sc->lf, &lf, sizeof(lf)))
+         {
+             sc->refcount++;
+             LeaveCriticalSection(&cs_script_cache);
+@@ -826,25 +829,15 @@
+         free(sc);
+         return E_INVALIDARG;
+     }
++    sc->thread_id = thread_id;
+     sc->lf = lf;
+     sc->refcount = 1;
+     *psc = sc;
+ 
++    /* Only this thread adds caches with this thread_id, so none was added
++     * since the lookup above. */
+     EnterCriticalSection(&cs_script_cache);
+     list_add_head(&script_cache_list, &sc->entry);
+-    LIST_FOR_EACH_ENTRY(sc, &script_cache_list, ScriptCache, entry)
+-    {
+-        if (sc != *psc && !memcmp(&sc->lf, &lf, sizeof(lf)))
+-        {
+-            /* Another thread won the race. Use their cache instead of ours */
+-            list_remove(&sc->entry);
+-            sc->refcount++;
+-            LeaveCriticalSection(&cs_script_cache);
+-            free(*psc);
+-            *psc = sc;
+-            return S_OK;
+-        }
+-    }
+     LeaveCriticalSection(&cs_script_cache);
+     TRACE("<- %p\n", sc);
+     return S_OK;
+--- a/dlls/gdi32/uniscribe/usp10_internal.h
++++ b/dlls/gdi32/uniscribe/usp10_internal.h
+@@ -188,6 +188,7 @@
+ typedef struct {
+     struct list entry;
+     DWORD refcount;
++    DWORD thread_id;
+     LOGFONTW lf;
+     TEXTMETRICW tm;
+     OUTLINETEXTMETRICW *otm;

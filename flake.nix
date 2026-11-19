@@ -13,6 +13,12 @@
       mingwCc = pkgs.pkgsCross.mingwW64.stdenv.cc;
       mingwPthreads = pkgs.pkgsCross.mingwW64.windows.pthreads;
       mingwMcfgthreads = pkgs.pkgsCross.mingwW64.windows.mcfgthreads;
+      # Wine with fixes for bugs our tests hit (see each patch's header).
+      wine = pkgs.wineWow64Packages.stable.overrideAttrs (old: {
+        patches = (old.patches or [ ]) ++ [
+          ./nix/patches/wine-usp10-script-cache-race.patch
+        ];
+      });
       # Fonts installed into every Wine test prefix (never shipped): a
       # monochrome emoji face so glyph fallback is exercised deterministically.
       wineFonts = pkgs.linkFarm "mirx-wine-fonts" [
@@ -35,7 +41,7 @@
           pkgs.pkg-config
           pkgs.rustup
           pkgs.util-linux
-          pkgs.wineWow64Packages.stable
+          wine
           pkgs.xvfb-run
           mingwCc
         ];
