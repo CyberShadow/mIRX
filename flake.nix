@@ -17,6 +17,7 @@
       wine = pkgs.wineWow64Packages.stable.overrideAttrs (old: {
         patches = (old.patches or [ ]) ++ [
           ./nix/patches/wine-usp10-script-cache-race.patch
+          ./nix/patches/wine-win32u-class-register-race.patch
         ];
       });
       # Fonts installed into every Wine test prefix (never shipped): a

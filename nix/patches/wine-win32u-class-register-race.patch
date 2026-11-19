@@ -1,0 +1,76 @@
+From: mirx developers
+Subject: [PATCH] win32u: Keep a new class findable as soon as the server knows it.
+
+NtUserRegisterClassExWOW creates the class on the server and only later,
+after taking user_lock, adds it to the process's class_list, which is
+where NtUserGetClassInfoEx (and so CreateWindowEx) looks classes up.
+
+Classes such as comctl32's are registered lazily on first use:
+CreateWindowEx calls get_class_version, which calls the DLL's
+RegisterClassNameW, and then looks the class up.  When two threads
+create the first window of such a class at once, the second thread's
+RegisterClass fails with ERROR_CLASS_ALREADY_EXISTS while the first is
+between the server call and the class_list insertion; its lookup then
+misses, and CreateWindowEx fails with ERROR_CLASS_DOES_NOT_EXIST.
+
+Take user_lock before the create_class request and hold it until the
+class is in class_list, so that no thread can find that the class
+exists on the server and then miss it in class_list.
+The small icon is copied before taking the lock, since CopyImage may
+call back into user mode; it is destroyed again if registration fails.
+
+Seen with N threads that each create the first window of the same
+comctl32 class at once (e.g. msctls_statusbar32, SysTreeView32): most
+runs had at least one CreateWindowEx fail with error 1411.
+
+---
+--- a/dlls/win32u/class.c
++++ b/dlls/win32u/class.c
+@@ -548,6 +548,17 @@
+ 
+     class->local      = !is_builtin && !(wc->style & CS_GLOBALCLASS);
+ 
++    /* Other non-null values must be set by caller */
++    if (wc->hIcon && !wc->hIconSm)
++        sm_icon = CopyImage( wc->hIcon, IMAGE_ICON,
++                             get_system_metrics( SM_CXSMICON ),
++                             get_system_metrics( SM_CYSMICON ),
++                             LR_COPYFROMRESOURCE );
++
++    /* Hold the lock from creating the server class until it is in class_list:
++     * a thread that fails to register the class because it already exists
++     * must then be able to find it. */
++    user_lock();
+     SERVER_START_REQ( create_class )
+     {
+         req->local      = class->local;
+@@ -565,6 +576,8 @@
+     SERVER_END_REQ;
+     if (!ret)
+     {
++        user_unlock();
++        NtUserDestroyCursor( sm_icon, 0 );
+         free( class );
+         return 0;
+     }
+@@ -579,18 +592,12 @@
+             wine_server_call( req );
+         }
+         SERVER_END_REQ;
++        user_unlock();
++        NtUserDestroyCursor( sm_icon, 0 );
+         free( class );
+         return 0;
+     }
+ 
+-    /* Other non-null values must be set by caller */
+-    if (wc->hIcon && !wc->hIconSm)
+-        sm_icon = CopyImage( wc->hIcon, IMAGE_ICON,
+-                             get_system_metrics( SM_CXSMICON ),
+-                             get_system_metrics( SM_CYSMICON ),
+-                             LR_COPYFROMRESOURCE );
+-
+-    user_lock();
+     if (class->local) list_add_head( &class_list, &class->entry );
+     else list_add_tail( &class_list, &class->entry );
+ 
