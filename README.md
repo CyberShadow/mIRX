@@ -58,13 +58,17 @@ MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
 
 The UI session file still lives at `%LOCALAPPDATA%\mirx\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mirx\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
 
-The menubar follows mIRC: `File` (Connect, Disconnect, Select Server... (`Alt+E`), Log Out, Exit), `Tools` (E2EE recovery and verification), `Commands` (prompts for a slash command's argument and runs it), `Window` (Cascade, Tile, Arrange Icons) and `Help` (Help Topics, About mirx). Room, message and nick-list actions are on their right-click menus.
+The menubar follows mIRC: `File` (Connect, Disconnect, Select Server... (`Alt+E`), Log Out, Exit), `View` (Switchbar, Treebar), `Tools` (E2EE recovery and verification, Options... (`Alt+O`)), `Commands` (prompts for a slash command's argument and runs it), `Window` (Cascade, Tile, Arrange Icons) and `Help` (Help Topics, About mirx). Room, message and nick-list actions are on their right-click menus.
+
+The switchbar has one fixed-width button per window, 120 pixels by default, and wraps them onto as many rows as the frame's width needs, like mIRC's switchbar with Lines set to Auto; the MDI area shrinks to fit. `/switchbar [on|off]` and `/treebar [on|off]`, or `View > Switchbar` and `View > Treebar`, toggle or set whether the switchbar and the tree of windows are shown; without an argument the View menu toggles and the command echoes the current state.
+
+`Tools > Options...` (`Alt+O`) opens mIRC's Options window, a tree of pages: `Connect > Options` (connect on startup), `IRC > Messages` (timestamps on or off and their format, with the tokens listed) and `Display` (switchbar button width, 40 to 400 pixels). OK checks every field: a wrong one shows its page with an error box, and nothing changes until it is fixed; otherwise the settings are saved and take effect at once. Cancel or `Esc` changes nothing.
 
 The Rooms List is mIRC's channels list for a server's room directory. `/list [-s server] [match text]`, `Commands > List rooms...` or `Alt+L` opens it. Without `-s` it lists the user's own homeserver, and the match text is matched by the server against names, topics and aliases. The rooms arrive page by page, up to the first 1000. The caption shows progress: `Rooms List [matrix.org] "rust" - listing...`, then `- 42 rooms`, or `- 1000 of ~5300 rooms` when the cap is hit. Click a column header (Room, Users, Name, Topic) to sort by it, and click it again to reverse; Users sorts the busiest rooms first. Double-click a row or press `Enter` on it to join the room, or to switch to its window if already joined. A new `/list` replaces the listing, and closing the window drops it.
 
 Every join you ask for opens the room's window and makes it active, as `/join` does in mIRC: `/join`, a Rooms List row, `/query` creating a direct room, accepting an invite and `/create`. `/create <name>` creates a private, invite-only, encrypted room. `/create -public #alias [name]` creates a public room listed in the room directory under `#alias:<your server>`; the alias must be on your own server, and the name defaults to the alias.
 
-Connecting works like mIRC's. With a saved session mirx restores it and starts syncing at startup; without one, Select Server opens. Select Server takes a server name such as `matrix.org` (the client URL is discovered through `.well-known`), a homeserver URL, or nothing when the user is a full ID like `@alice:matrix.org`, then logs in and starts syncing. `/server [server]` and `File > Connect` reconnect a disconnected session, restore the saved one, or open Select Server; `/quit` and `File > Disconnect` stop syncing and keep the session; `File > Log Out` ends the session.
+Connecting works like mIRC's. With a saved session mirx restores it and starts syncing at startup, or, with connect on startup off, restores it and waits for `File > Connect` or `/server`; without one, Select Server opens. Select Server takes a server name such as `matrix.org` (the client URL is discovered through `.well-known`), a homeserver URL, or nothing when the user is a full ID like `@alice:matrix.org`, then logs in and starts syncing. `/server [server]` and `File > Connect` reconnect a disconnected session, restore the saved one, or open Select Server; `/quit` and `File > Disconnect` stop syncing and keep the session; `File > Log Out` ends the session.
 
 Presentation settings live in `%LOCALAPPDATA%\mirx\ui-shell\mirx.ini`, next to the session file, and are saved as soon as they change:
 
@@ -74,6 +78,13 @@ text=Fixedsys,9
 [timestamp]
 show=on
 format=[HH:nn]
+[connect]
+startup=on
+[switchbar]
+show=on
+buttons=120
+[treebar]
+show=on
 ```
 
 `/font [-b] <size> <font name>` (or `/font` and every window's system-menu `Font...` for the font dialog) sets the one text font used by every window's text area, nick list and editbox; mIRC's default is Fixedsys 9. `/timestamp [on|off|-f format]` shows, toggles or formats line timestamps, which are in local time; the format takes mIRC `$asctime` tokens (`HH H hh h nn n ss s tt TT dd d mm m yy yyyy`, everything else literal). A missing file means the defaults; a file mirx cannot parse stops startup with an error naming the line, rather than being overwritten. The Wine test scripts pin `TZ=UTC` so timestamps are deterministic.
