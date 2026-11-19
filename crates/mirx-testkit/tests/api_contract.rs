@@ -36,13 +36,13 @@ use mirx_testkit::{
     SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand, SwitchbarItem,
+    SwitchbarState, TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
     UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog,
     UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState,
     UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimestamp, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    UserCommandAction, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -665,6 +665,7 @@ fn data_models_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -935,6 +936,7 @@ fn data_models_round_trip_through_json() {
                 click_point: UiPoint { x: 8, y: 9 },
             }],
         }),
+        ignored_users: Some(vec!["@spam:example".to_owned()]),
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1201,6 +1203,7 @@ fn data_models_round_trip_through_json() {
                     "click_point": {"x": 8, "y": 9},
                 }],
             },
+            "ignored_users": ["@spam:example"],
             "rooms": [
                 {
                     "room_id": "!room:example",
@@ -4235,6 +4238,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4309,6 +4313,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4428,6 +4433,36 @@ fn submitted_power_level_and_profile_commands_have_strict_json_contracts() {
         .is_err()
     );
     assert!(serde_json::from_value::<SubmittedProfileCommand>(serde_json::json!({})).is_err());
+    assert_eq!(
+        serde_json::from_value::<SubmittedUserCommand>(serde_json::json!({
+            "action": "fetch_profile", "user_id": "@bob:example.org"
+        }))
+        .unwrap(),
+        SubmittedUserCommand {
+            action: UserCommandAction::FetchProfile,
+            user_id: "@bob:example.org".to_owned(),
+        }
+    );
+    for action in ["ignore", "unignore"] {
+        assert!(
+            serde_json::from_value::<SubmittedUserCommand>(serde_json::json!({
+                "action": action, "user_id": "@bob:example.org"
+            }))
+            .is_ok()
+        );
+    }
+    assert!(
+        serde_json::from_value::<SubmittedUserCommand>(serde_json::json!({
+            "action": "whois", "user_id": "@bob:example.org"
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<SubmittedUserCommand>(serde_json::json!({
+            "action": "ignore", "user_id": "@bob:example.org", "extra": 1
+        }))
+        .is_err()
+    );
 }
 
 #[test]
@@ -4500,6 +4535,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: vec![SubmittedDirectRoomCommand {
             user_id: "@alice:example.org".to_owned(),
         }],
@@ -4590,6 +4626,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: vec![SubmittedDirectRoomCommand {
             user_id: "@alice:example.org".to_owned(),
         }],
@@ -4692,6 +4729,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: vec![SubmittedReactionCommand {
@@ -4773,6 +4811,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4858,6 +4897,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -4954,6 +4994,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -5078,6 +5119,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: vec![SubmittedReactionCommand {
@@ -5167,6 +5209,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         submitted_member_moderation_commands: Vec::new(),
         submitted_power_level_commands: Vec::new(),
         submitted_profile_commands: Vec::new(),
+        submitted_user_commands: Vec::new(),
         submitted_direct_room_commands: Vec::new(),
         submitted_room_topic_commands: Vec::new(),
         submitted_reaction_commands: Vec::new(),
@@ -5280,6 +5323,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -6515,6 +6559,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         room_list: None,
         options_dialog: None,
         active_timeline: None,
+        ignored_users: None,
     };
 
     let identity = ViewIdentity::Room {

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 42;
+pub(crate) const PROTOCOL_VERSION: u32 = 43;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -935,6 +935,9 @@ pub(crate) struct UiState {
     pub(crate) options_dialog: Option<UiOptionsDialog>,
     /// The active window's timeline; the Rooms List has none.
     pub(crate) active_timeline: Option<UiActiveTimeline>,
+    /// The account's ignore list as the server last listed it; `None`
+    /// until the first list.
+    pub(crate) ignored_users: Option<Vec<String>>,
 }
 
 /// The active window's timeline: the lines it shows now.
@@ -1466,6 +1469,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_profile_commands: Vec<DumpSubmittedProfileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_user_commands: Vec<DumpSubmittedUserCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_direct_room_commands: Vec<DumpSubmittedDirectRoomCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_room_topic_commands: Vec<DumpSubmittedRoomTopicCommand>,
@@ -1541,6 +1546,22 @@ pub(crate) enum DumpMemberPowerRole {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedProfileCommand {
     pub(crate) display_name: String,
+}
+
+/// A request about another user (`/ignore`, `/unignore`, `/whois`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedUserCommand {
+    pub(crate) action: DumpUserCommandAction,
+    pub(crate) user_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DumpUserCommandAction {
+    Ignore,
+    Unignore,
+    FetchProfile,
 }
 
 /// A room directory page asked for (`/list`).
@@ -2892,7 +2913,8 @@ mod tests {
         DumpSubmittedMemberModerationCommand, DumpSubmittedPowerLevelCommand,
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
+        DumpUnsupportedRoomMessageActivity, DumpUserCommandAction, FindActiveViewArgs,
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
         MdiWindowState, NavigationNode, NavigationPathSegment, NoArgs, OpenMemberContextMenuArgs,
@@ -3021,6 +3043,10 @@ mod tests {
         model.submitted_profile_commands = vec![DumpSubmittedProfileCommand {
             display_name: "New Name".to_owned(),
         }];
+        model.submitted_user_commands = vec![DumpSubmittedUserCommand {
+            action: DumpUserCommandAction::FetchProfile,
+            user_id: "@bob:example".to_owned(),
+        }];
 
         let testkit_model =
             serde_json::from_value::<mirx_testkit::Model>(serde_json::to_value(&model).unwrap())
@@ -3056,11 +3082,18 @@ mod tests {
                 display_name: "New Name".to_owned(),
             }]
         );
+        assert_eq!(
+            testkit_model.submitted_user_commands,
+            vec![mirx_testkit::SubmittedUserCommand {
+                action: mirx_testkit::UserCommandAction::FetchProfile,
+                user_id: "@bob:example".to_owned(),
+            }]
+        );
     }
 
     #[test]
-    fn protocol_version_is_42() {
-        assert_eq!(PROTOCOL_VERSION, 42);
+    fn protocol_version_is_43() {
+        assert_eq!(PROTOCOL_VERSION, 43);
     }
 
     #[test]
@@ -4877,7 +4910,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":42,
+                    "protocol_version":43,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4934,6 +4967,7 @@ mod tests {
                     submitted_member_moderation_commands: Vec::new(),
                     submitted_power_level_commands: Vec::new(),
                     submitted_profile_commands: Vec::new(),
+                    submitted_user_commands: Vec::new(),
                     submitted_direct_room_commands: Vec::new(),
                     submitted_room_topic_commands: Vec::new(),
                     submitted_reaction_commands: Vec::new(),
@@ -5501,6 +5535,7 @@ mod tests {
                             click_point: super::UiPoint { x: 8, y: 9 },
                         }],
                     }),
+                    ignored_users: Some(vec!["@spam:example".to_owned()]),
                 },
             ))
             .unwrap(),
@@ -5665,7 +5700,8 @@ mod tests {
                             "event_id":"$answer",
                             "click_point":{"x":8,"y":9}
                         }]
-                    }
+                    },
+                    "ignored_users":["@spam:example"]
                 }
             })
         );
@@ -5703,6 +5739,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5791,6 +5828,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5846,6 +5884,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: vec![DumpSubmittedRoomTopicCommand {
                 room_id: "!ops:example".to_owned(),
@@ -5910,6 +5949,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -5998,6 +6038,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -6092,6 +6133,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -6196,6 +6238,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: vec![DumpSubmittedReactionCommand {
@@ -6324,6 +6367,7 @@ mod tests {
             submitted_member_moderation_commands: Vec::new(),
             submitted_power_level_commands: Vec::new(),
             submitted_profile_commands: Vec::new(),
+            submitted_user_commands: Vec::new(),
             submitted_direct_room_commands: Vec::new(),
             submitted_room_topic_commands: Vec::new(),
             submitted_reaction_commands: Vec::new(),
@@ -6411,6 +6455,7 @@ mod tests {
                 submitted_member_moderation_commands: Vec::new(),
                 submitted_power_level_commands: Vec::new(),
                 submitted_profile_commands: Vec::new(),
+                submitted_user_commands: Vec::new(),
                 submitted_direct_room_commands: Vec::new(),
                 submitted_room_topic_commands: Vec::new(),
                 submitted_reaction_commands: Vec::new(),

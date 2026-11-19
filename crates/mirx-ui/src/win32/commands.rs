@@ -60,6 +60,13 @@ pub(super) enum SlashCommand {
     Whois {
         nick: String,
     },
+    /// `/ignore [nick]`: without a nick, lists the ignore list.
+    Ignore {
+        target: Option<String>,
+    },
+    Unignore {
+        target: String,
+    },
     Close,
     Exit,
     /// `/server [server]`: connect, as File > Connect does.
@@ -220,6 +227,8 @@ impl SlashCommand {
             Self::Msg { .. } => "msg",
             Self::Names { .. } => "names",
             Self::Whois { .. } => "whois",
+            Self::Ignore { .. } => "ignore",
+            Self::Unignore { .. } => "unignore",
             Self::Close => "close",
             Self::Exit => "exit",
             Self::Server { .. } => "server",
@@ -362,6 +371,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "list the commands, or show one's usage",
     },
     CommandSpec {
+        name: "ignore",
+        usage: "[nick]",
+        summary: "ignore a user's messages (no nick: list ignored users)",
+    },
+    CommandSpec {
         name: "invite",
         usage: "<nick> [#room]",
         summary: "invite a user to this room, or the named one",
@@ -485,6 +499,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "unban",
         usage: "<nick> [reason]",
         summary: "lift a user's ban from this room",
+    },
+    CommandSpec {
+        name: "unignore",
+        usage: "<nick>",
+        summary: "stop ignoring a user",
     },
     CommandSpec {
         name: "unreact",
@@ -629,7 +648,14 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             target: optional(argument),
         }),
         "whois" => Ok(SlashCommand::Whois {
-            nick: required(argument)?,
+            nick: single_word(&name, argument)?,
+        }),
+        "ignore" if argument.is_empty() => Ok(SlashCommand::Ignore { target: None }),
+        "ignore" => Ok(SlashCommand::Ignore {
+            target: Some(single_word(&name, argument)?),
+        }),
+        "unignore" => Ok(SlashCommand::Unignore {
+            target: single_word(&name, argument)?,
         }),
         "close" => no_parameters(SlashCommand::Close),
         "exit" => no_parameters(SlashCommand::Exit),
@@ -1907,10 +1933,43 @@ mod tests {
             })
         );
         assert_eq!(
-            parse("/whois Alice Smith"),
+            parse("/whois  @alice:remote "),
             Ok(SlashCommand::Whois {
-                nick: "Alice Smith".to_owned(),
+                nick: "@alice:remote".to_owned(),
             })
+        );
+        assert_eq!(
+            parse("/whois Alice Smith"),
+            error("whois", "too many parameters")
+        );
+        assert_eq!(parse("/ignore"), Ok(SlashCommand::Ignore { target: None }));
+        assert_eq!(
+            parse("/IGNORE bob "),
+            Ok(SlashCommand::Ignore {
+                target: Some("bob".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/ignore bob spam"),
+            error("ignore", "too many parameters")
+        );
+        assert_eq!(
+            parse("/unignore @bob:example"),
+            Ok(SlashCommand::Unignore {
+                target: "@bob:example".to_owned(),
+            })
+        );
+        assert_eq!(parse("/unignore"), insufficient("unignore"));
+        assert_eq!(
+            parse("/unignore a b"),
+            error("unignore", "too many parameters")
+        );
+        assert_eq!(
+            help_lines(Some("ignore")),
+            Ok(vec![
+                "* /ignore [nick] - ignore a user's messages (no nick: list ignored users)"
+                    .to_owned()
+            ])
         );
         assert_eq!(parse("/close"), Ok(SlashCommand::Close));
         assert_eq!(parse("/exit"), Ok(SlashCommand::Exit));

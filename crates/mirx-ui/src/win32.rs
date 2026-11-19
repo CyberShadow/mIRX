@@ -148,10 +148,10 @@ use crate::{
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
         DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
-        DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
-        FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
-        ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState, MdiView,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand, DumpSubmittedUserCommand,
+        DumpSubmittedVerificationAction, DumpUserCommandAction, DumpVerificationActionKind,
+        DumpVerificationMenuState, FailureEnvelope, FindActiveViewResponse, GetVersionResponse,
+        LifecycleState, ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState, MdiView,
         MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationPathSegment, ParsedCommand,
         PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
@@ -173,6 +173,7 @@ mod echo;
 mod errors;
 mod glyph_fonts;
 mod glyph_runs;
+mod ignore;
 mod mdi;
 mod menus;
 mod nick_completion;
@@ -777,6 +778,9 @@ struct UiModel {
     /// The user's highlight words as the server last listed them; `None`
     /// until the first list after signing in, and after logout.
     highlight_words: Option<Vec<HighlightWord>>,
+    /// The account's ignore list as the server last listed it, sorted;
+    /// `None` until the first list after signing in, and after logout.
+    ignored_users: Option<Vec<String>>,
 }
 
 #[derive(Default, Clone)]
@@ -9144,8 +9148,16 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
         Event::HighlightWords(words) => state.model.highlight_words = Some(words),
-        // Shown by /ignore, which the next change adds.
-        Event::IgnoredUsers(_) => {}
+        Event::IgnoredUsers(ignored_users) => {
+            // The first list after signing in is no change.
+            if let Some(old) = &state.model.ignored_users {
+                let lines = ignore::change_lines(old, &ignored_users, |user_id| {
+                    known_nick(&state.model, user_id)
+                });
+                echo_lines_in_active_view(state, lines);
+            }
+            state.model.ignored_users = Some(ignored_users);
+        }
         // Shown by /whois, which a later change asks the server.
         Event::UserProfile(_) => {}
         Event::E2eeStatus(status) => {
@@ -9194,6 +9206,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.model.room_read_states.clear();
             state.model.room_list = None;
             state.model.highlight_words = None;
+            state.model.ignored_users = None;
             state.room_activity.clear();
             state.room_activity_read_targets.clear();
             state.find_states.clear();
@@ -9233,14 +9246,17 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             }
             let line = status_log::error(operation_name(error.operation), &error.message);
             let now = state.clock.now_ms();
-            let room_view = match error_destination(&error) {
-                ErrorDestination::Room(room_id) => state.model.room_views.get_mut(room_id),
-                ErrorDestination::Status => None,
-            };
-            match room_view {
-                Some(room_view) => room_view.echo.push(now, None, context_line(&line)),
-                // Status, or a room that was left or never synced.
-                None => log_status(state, StatusLineKind::Error, line),
+            match error_destination(&error) {
+                ErrorDestination::ActiveWindow { command } => {
+                    let error = CommandError::new(command, error.message.clone());
+                    echo_lines_in_active_view(state, [error.to_string()]);
+                }
+                ErrorDestination::Room(room_id) => match state.model.room_views.get_mut(room_id) {
+                    Some(room_view) => room_view.echo.push(now, None, context_line(&line)),
+                    // The room was left, or never synced.
+                    None => log_status(state, StatusLineKind::Error, line),
+                },
+                ErrorDestination::Status => log_status(state, StatusLineKind::Error, line),
             }
             if !preserves_submission_status(&state.model.status, error.operation) {
                 state.model.status = format!("error during {}", operation_name(error.operation));
@@ -14048,6 +14064,7 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .options_dialog
             .map(|dialog| options_dialog::dump(dialog))
             .transpose()?,
+        ignored_users: state.model.ignored_users.clone(),
         active_timeline: match &state.active_view {
             ViewId::RoomList => None,
             view_id => Some(dump_active_timeline(view_timeline(
@@ -15273,6 +15290,39 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             echo_in_active_view(hwnd, lines)?;
             Ok(None)
         }
+        SlashCommand::Ignore { target: None } => {
+            let lines = {
+                let model = &state_ref(hwnd).model;
+                ignore::list_lines(model.ignored_users.as_deref(), |user_id| {
+                    known_nick(model, user_id)
+                })?
+            };
+            echo_in_active_view(hwnd, lines)?;
+            Ok(None)
+        }
+        SlashCommand::Ignore {
+            target: Some(target),
+        } => {
+            let state = state_mut(hwnd);
+            let user_id = ignore_target(&state.model, &target)?;
+            ignore::check_ignore(
+                state.model.ignored_users.as_deref(),
+                state.model.own_user_id.as_deref(),
+                &user_id,
+                |user_id| known_nick(&state.model, user_id),
+            )?;
+            enqueue_command(state, Command::IgnoreUser(user_id.clone()))?;
+            Ok(Some(format!("ignore submitted: {user_id}")))
+        }
+        SlashCommand::Unignore { target } => {
+            let state = state_mut(hwnd);
+            let user_id = ignore_target(&state.model, &target)?;
+            ignore::check_unignore(state.model.ignored_users.as_deref(), &user_id, |user_id| {
+                known_nick(&state.model, user_id)
+            })?;
+            enqueue_command(state, Command::UnignoreUser(user_id.clone()))?;
+            Ok(Some(format!("unignore submitted: {user_id}")))
+        }
         SlashCommand::Close => {
             let state = state_ref(hwnd);
             if close_action(&state.model, &state.active_view) == CloseAction::Refuse {
@@ -15635,45 +15685,54 @@ unsafe fn report_command_error(hwnd: HWND, error: CommandError) -> Result<(), St
     set_local_command_status(hwnd, text)
 }
 
+/// The window a command's lines print in: the active one. The Rooms List
+/// has no text of its own: what a Commands menu item run there prints goes
+/// to Status.
+fn echo_view(active_view: &ViewId) -> ViewId {
+    match active_view {
+        ViewId::RoomList => ViewId::Status,
+        view => view.clone(),
+    }
+}
+
 /// Prints a command's lines in the active window. They are its newest lines,
-/// in the window the user is looking at, so they raise no activity.
+/// in the window the user is looking at, so they raise no activity. The
+/// caller refreshes the window.
+fn echo_lines_in_active_view(state: &mut WindowState, lines: impl IntoIterator<Item = String>) {
+    let view = echo_view(&state.active_view);
+    let now = state.clock.now_ms();
+    for text in lines {
+        match &view {
+            ViewId::Status => state.model.status_log.push(now, StatusLineKind::Info, text),
+            ViewId::RoomList => unreachable!("Rooms List output goes to Status"),
+            ViewId::Room(room_id) => state
+                .model
+                .room_views
+                .entry(room_id.clone())
+                .or_default()
+                .echo
+                .push(now, None, text),
+            ViewId::Thread {
+                room_id,
+                thread_root_event_id,
+            } => state
+                .model
+                .room_views
+                .get_mut(room_id)
+                .expect("a thread window's room must have a view")
+                .echo
+                .push(now, Some(thread_root_event_id.clone()), text),
+        }
+    }
+}
+
+/// Prints a command's lines in the active window, and shows them.
 unsafe fn echo_in_active_view(
     hwnd: HWND,
     lines: impl IntoIterator<Item = String>,
 ) -> Result<(), String> {
-    let view = match &state_ref(hwnd).active_view {
-        // The Rooms List has no text of its own: what a Commands menu item
-        // run there prints goes to Status.
-        ViewId::RoomList => ViewId::Status,
-        view => view.clone(),
-    };
-    {
-        let state = state_mut(hwnd);
-        let now = state.clock.now_ms();
-        for text in lines {
-            match &view {
-                ViewId::Status => state.model.status_log.push(now, StatusLineKind::Info, text),
-                ViewId::RoomList => unreachable!("Rooms List output goes to Status"),
-                ViewId::Room(room_id) => state
-                    .model
-                    .room_views
-                    .entry(room_id.clone())
-                    .or_default()
-                    .echo
-                    .push(now, None, text),
-                ViewId::Thread {
-                    room_id,
-                    thread_root_event_id,
-                } => state
-                    .model
-                    .room_views
-                    .get_mut(room_id)
-                    .expect("a thread window's room must have a view")
-                    .echo
-                    .push(now, Some(thread_root_event_id.clone()), text),
-            }
-        }
-    }
+    echo_lines_in_active_view(state_mut(hwnd), lines);
+    let view = echo_view(&state_ref(hwnd).active_view);
     refresh_view_content(hwnd, &view)
 }
 
@@ -15744,6 +15803,21 @@ fn all_room_members(model: &UiModel) -> impl Iterator<Item = &RoomMemberSummary>
         .room_views
         .values()
         .flat_map(|view| view.members.iter())
+}
+
+/// The nick a member of a known room goes by, if any room knows them with
+/// a display name.
+fn known_nick(model: &UiModel, user_id: &str) -> Option<String> {
+    all_room_members(model)
+        .filter(|member| member.user_id == user_id)
+        .find_map(|member| member.display_name.clone())
+}
+
+/// The user `/ignore` and `/unignore` name: a user ID, which need not be a
+/// member of any known room, or a known member's nick. Ignored users stay
+/// nameable by ID once they leave every room.
+fn ignore_target(model: &UiModel, target: &str) -> Result<String, String> {
+    Ok(commands::resolve_user(all_room_members(model), target)?.user_id)
 }
 
 /// Where `/msg` sends: a room by ID, alias or display name, else the query
@@ -16580,6 +16654,27 @@ fn submitted_profile_commands_from_state(state: &WindowState) -> Vec<DumpSubmitt
         .collect()
 }
 
+fn submitted_user_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedUserCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| {
+            let (action, user_id) = match command {
+                Command::IgnoreUser(user_id) => (DumpUserCommandAction::Ignore, user_id),
+                Command::UnignoreUser(user_id) => (DumpUserCommandAction::Unignore, user_id),
+                Command::FetchUserProfile(user_id) => {
+                    (DumpUserCommandAction::FetchProfile, user_id)
+                }
+                _ => return None,
+            };
+            Some(DumpSubmittedUserCommand {
+                action,
+                user_id: user_id.clone(),
+            })
+        })
+        .collect()
+}
+
 fn submitted_member_moderation_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedMemberModerationCommand> {
@@ -16906,6 +17001,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         ),
         submitted_power_level_commands: submitted_power_level_commands_from_state(state),
         submitted_profile_commands: submitted_profile_commands_from_state(state),
+        submitted_user_commands: submitted_user_commands_from_state(state),
         submitted_direct_room_commands: submitted_direct_room_commands_from_state(state),
         submitted_room_topic_commands: submitted_room_topic_commands_from_state(state),
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
@@ -29811,6 +29907,64 @@ mod tests {
         assert_eq!(
             status_log_texts(&state).last(),
             Some(&"* Error during fetch message: offline")
+        );
+    }
+
+    #[test]
+    fn ignore_list_changes_and_user_command_errors_print_in_the_active_window() {
+        let mut state = test_state();
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![room("!ops:example", "Ops", false)]),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            Event::RoomMembers(RoomMembers {
+                room_id: "!ops:example".to_owned(),
+                members: vec![member_summary("@bob:example", Some("Bob"), false)],
+            }),
+        )
+        .unwrap();
+        state.active_view = ViewId::Room("!ops:example".to_owned());
+
+        // The list after signing in is no change.
+        apply_core_event(
+            &mut state,
+            Event::IgnoredUsers(vec!["@spam:remote".to_owned()]),
+        )
+        .unwrap();
+        assert!(room_echo_texts(&state, "!ops:example").is_empty());
+        assert_eq!(
+            state.model.ignored_users,
+            Some(vec!["@spam:remote".to_owned()])
+        );
+
+        apply_core_event(
+            &mut state,
+            Event::IgnoredUsers(vec!["@bob:example".to_owned()]),
+        )
+        .unwrap();
+        assert_eq!(
+            room_echo_texts(&state, "!ops:example"),
+            vec![
+                "* Added Bob (@bob:example) to ignore list",
+                "* Removed @spam:remote from ignore list",
+            ]
+        );
+
+        apply_core_event(
+            &mut state,
+            Event::Error(CoreErrorEvent {
+                operation: Operation::UnignoreUser,
+                room_id: None,
+                message: "failed to unignore @bob:example: offline".to_owned(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            room_echo_texts(&state, "!ops:example").last(),
+            Some(&"* /unignore: failed to unignore @bob:example: offline")
         );
     }
 

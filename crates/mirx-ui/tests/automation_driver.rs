@@ -43,11 +43,12 @@ use mirx_testkit::{
     SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget,
-    UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
-    UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
+    UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
+    UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UiTimelineLineKind, UiTimestamp, UnsupportedRoomMessageActivity,
+    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -2873,7 +2874,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 42);
+    assert_eq!(version.protocol_version, 43);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -14336,6 +14337,89 @@ fn slash_topic_shows_and_names_rooms_by_alias() -> Result<(), Box<dyn std::error
             topic: "deploy at noon".to_owned(),
         }]
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn slash_ignore_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    events.push(room_members_event(
+        "!beta:example",
+        &[
+            ("@alice:example", Some("Alice")),
+            ("@bob:example", Some("Bob")),
+        ],
+    ));
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    type_commands(&app, &["/ignore"])?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::IgnoredUsers(
+        Vec::new(),
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    type_commands(&app, &["/ignore", "/ignore Bob", "/ignore Alice"])?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        vec![SubmittedUserCommand {
+            action: UserCommandAction::Ignore,
+            user_id: "@bob:example".to_owned(),
+        }]
+    );
+
+    // The server's echo confirms the change.
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::IgnoredUsers(vec![
+        "@bob:example".to_owned(),
+    ])])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_ui_state()?.ignored_users,
+        Some(vec!["@bob:example".to_owned()])
+    );
+    type_commands(&app, &["/ignore", "/ignore Bob", "/unignore Bob"])?;
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands[1..],
+        [SubmittedUserCommand {
+            action: UserCommandAction::Unignore,
+            user_id: "@bob:example".to_owned(),
+        }]
+    );
+
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &beta);
+    for line in [
+        "] * /ignore: the ignore list has not been received yet",
+        "] * Ignore list is empty",
+        "] * /ignore: you cannot ignore yourself",
+        "] * Added Bob (@bob:example) to ignore list",
+        "] * Ignore list:",
+        "] *   Bob (@bob:example)",
+        "] * /ignore: Bob is already ignored",
+    ] {
+        assert!(
+            only_view_line_containing(view, line).ends_with(line),
+            "{line:?} in {:?}",
+            view.lines
+        );
+    }
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

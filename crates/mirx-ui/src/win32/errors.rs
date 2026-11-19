@@ -9,12 +9,15 @@ use mirx_core::{CoreErrorEvent, Operation};
 pub(super) enum ErrorDestination<'e> {
     /// The window of the room the user acted in or on, if it has one.
     Room(&'e str),
+    /// The window the user typed the command in, as `* /{command}: ...`.
+    ActiveWindow { command: &'static str },
     /// The Status window.
     Status,
 }
 
 /// Where mIRC would print the error. Actions the user took in or on a room
-/// print in its window. Everything else prints in Status: account-wide
+/// print in its window; the answer to a command about a user prints where
+/// it was typed. Everything else prints in Status: account-wide
 /// operations, the automatic ones (read markers), and the room loads that
 /// already show their failure in the window (history, images, quotes).
 pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> {
@@ -39,6 +42,11 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
                 .as_deref()
                 .unwrap_or_else(|| panic!("a {:?} error must name its room", error.operation)),
         ),
+        Operation::IgnoreUser => ErrorDestination::ActiveWindow { command: "ignore" },
+        Operation::UnignoreUser => ErrorDestination::ActiveWindow {
+            command: "unignore",
+        },
+        Operation::FetchUserProfile => ErrorDestination::ActiveWindow { command: "whois" },
         Operation::Login
         | Operation::RestoreSession
         | Operation::SessionUpdate
@@ -52,9 +60,6 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::AddHighlightWord
         | Operation::RemoveHighlightWord
         | Operation::IgnoredUsers
-        | Operation::IgnoreUser
-        | Operation::UnignoreUser
-        | Operation::FetchUserProfile
         | Operation::MarkRoomRead
         | Operation::BackfillRoomHistory
         | Operation::FetchRoomMedia
@@ -131,6 +136,7 @@ mod tests {
             Operation::HighlightWords,
             Operation::AddHighlightWord,
             Operation::RemoveHighlightWord,
+            Operation::IgnoredUsers,
             Operation::ListPublicRooms,
             Operation::RoomList,
             Operation::RoomReadState,
@@ -158,6 +164,21 @@ mod tests {
             assert_eq!(
                 error_destination(&error(operation, Some("!ops:example"))),
                 ErrorDestination::Status,
+                "{operation:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_commands_answer_in_the_active_window() {
+        for (operation, command) in [
+            (Operation::IgnoreUser, "ignore"),
+            (Operation::UnignoreUser, "unignore"),
+            (Operation::FetchUserProfile, "whois"),
+        ] {
+            assert_eq!(
+                error_destination(&error(operation, None)),
+                ErrorDestination::ActiveWindow { command },
                 "{operation:?}"
             );
         }

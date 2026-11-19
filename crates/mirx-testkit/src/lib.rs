@@ -366,6 +366,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_profile_commands: Vec<SubmittedProfileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_user_commands: Vec<SubmittedUserCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_direct_room_commands: Vec<SubmittedDirectRoomCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_room_topic_commands: Vec<SubmittedRoomTopicCommand>,
@@ -441,6 +443,22 @@ pub enum MemberPowerRole {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedProfileCommand {
     pub display_name: String,
+}
+
+/// A request about another user (`/ignore`, `/unignore`, `/whois`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedUserCommand {
+    pub action: UserCommandAction,
+    pub user_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserCommandAction {
+    Ignore,
+    Unignore,
+    FetchProfile,
 }
 
 /// A room directory page asked for (`/list`).
@@ -1180,6 +1198,9 @@ pub struct UiState {
     pub options_dialog: Option<UiOptionsDialog>,
     /// The active window's timeline; the Rooms List has none.
     pub active_timeline: Option<UiActiveTimeline>,
+    /// The account's ignore list as the server last listed it; `None`
+    /// until the first list.
+    pub ignored_users: Option<Vec<String>>,
 }
 
 /// The active window's timeline: the lines it shows now.
