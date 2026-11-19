@@ -27,9 +27,9 @@ use mirx_core::{
     RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat,
     RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomReadState,
-    RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile,
-    RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
+    RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
     UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
@@ -14065,6 +14065,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 direct_user_ids: Vec::new(),
                 tags: Vec::new(),
                 space_children: Vec::new(),
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             },
             RoomSummary {
                 room_id: "!two:example".to_owned(),
@@ -14077,6 +14078,7 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 direct_user_ids: Vec::new(),
                 tags: Vec::new(),
                 space_children: Vec::new(),
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             },
         ]),
         Event::RoomActivity(Box::new(RoomActivity {
@@ -17444,6 +17446,7 @@ mod tests {
             direct_user_ids: Vec::new(),
             tags: Vec::new(),
             space_children: Vec::new(),
+            notification_mode: Some(RoomNotificationMode::AllMessages),
         }
     }
 
@@ -17459,6 +17462,7 @@ mod tests {
             direct_user_ids: Vec::new(),
             tags: Vec::new(),
             space_children: Vec::new(),
+            notification_mode: None,
         }
     }
 
@@ -17474,6 +17478,7 @@ mod tests {
             direct_user_ids: Vec::new(),
             tags: Vec::new(),
             space_children: Vec::new(),
+            notification_mode: Some(RoomNotificationMode::AllMessages),
         }
     }
 

@@ -28,6 +28,10 @@ use matrix_sdk::{
         },
     },
     media::{MediaFormat, MediaRequestParameters, MediaThumbnailSettings},
+    notification_settings::{
+        IsEncrypted, IsOneToOne, NotificationSettings,
+        RoomNotificationMode as SdkRoomNotificationMode,
+    },
     room::edit::EditedContent,
     room::{MessagesOptions, Receipts, RoomMemberRole},
     ruma::{
@@ -49,6 +53,7 @@ use matrix_sdk::{
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
+            push_rules::PushRulesEvent,
             reaction::{OriginalSyncReactionEvent, ReactionEventContent},
             relation::{Annotation, Reply, Thread},
             room::{
@@ -101,9 +106,9 @@ use crate::api::{
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomPowerLevelUserChange,
-    RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
@@ -402,6 +407,9 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
         .collect::<BTreeSet<_>>();
     let invited_rooms = client.invited_rooms();
     let mut rooms = Vec::with_capacity(joined_rooms.len() + invited_rooms.len());
+    // One instance for every room: it reads the stored push rules once and
+    // registers an event handler for as long as it lives.
+    let notification_settings = client.notification_settings().await;
 
     for room in joined_rooms {
         let display_name = room.display_name().await.map_err(|err| {
@@ -429,6 +437,8 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             .cloned()
             .unwrap_or_default();
         let tags = room_tag_summaries_from_tags(tag_content);
+        let notification_mode =
+            room_notification_mode(&notification_settings, &room, encrypted.is_encrypted()).await;
 
         rooms.push(RoomSummary {
             room_id: room.room_id().to_string(),
@@ -441,6 +451,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             direct_user_ids,
             tags,
             space_children,
+            notification_mode: Some(notification_mode),
         });
     }
 
@@ -468,6 +479,7 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             direct_user_ids,
             tags: Vec::new(),
             space_children: Vec::new(),
+            notification_mode: None,
         });
     }
     invited_summaries.sort_by(|left, right| {
@@ -478,6 +490,42 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
     rooms.extend(invited_summaries);
 
     Ok(rooms)
+}
+
+/// The room's own push rule if it has one, else the account default for its
+/// kind: what `Room::notification_mode` computes, without building a
+/// `NotificationSettings` per room. "One-to-one" is the SDK's rule, exactly
+/// two members, not `m.direct`.
+async fn room_notification_mode(
+    notification_settings: &NotificationSettings,
+    room: &Room,
+    encrypted: bool,
+) -> RoomNotificationMode {
+    let mode = match notification_settings
+        .get_user_defined_room_notification_mode(room.room_id())
+        .await
+    {
+        Some(mode) => mode,
+        None => {
+            notification_settings
+                .get_default_room_notification_mode(
+                    IsEncrypted::from(encrypted),
+                    IsOneToOne::from(room.active_members_count() == 2),
+                )
+                .await
+        }
+    };
+    room_notification_mode_from_sdk(mode)
+}
+
+fn room_notification_mode_from_sdk(mode: SdkRoomNotificationMode) -> RoomNotificationMode {
+    match mode {
+        SdkRoomNotificationMode::AllMessages => RoomNotificationMode::AllMessages,
+        SdkRoomNotificationMode::MentionsAndKeywordsOnly => {
+            RoomNotificationMode::MentionsAndKeywordsOnly
+        }
+        SdkRoomNotificationMode::Mute => RoomNotificationMode::Mute,
+    }
 }
 
 /// Joins the room and returns its ID; an alias resolves to the room it
@@ -1378,6 +1426,17 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     let tag_account_data_events = events.clone();
     client.add_event_handler(move |_event: TagEvent, _room: Room, client: Client| {
         let events = tag_account_data_events.clone();
+        async move {
+            emit_room_snapshot_or_room_list_error(&client, &events).await;
+        }
+    });
+
+    // The base client stores global account data before it calls the event
+    // handlers, so the snapshot reads the new rules from the store
+    // (`push_rules_change_re_snapshots_room_notification_modes`).
+    let push_rules_events = events.clone();
+    client.add_event_handler(move |_event: PushRulesEvent, client: Client| {
+        let events = push_rules_events.clone();
         async move {
             emit_room_snapshot_or_room_list_error(&client, &events).await;
         }
@@ -4034,13 +4093,13 @@ mod tests {
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
         room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
-        set_room_member_power_level, sorted_room_member_summaries_from_parts,
+        set_room_member_power_level, sorted_room_member_summaries_from_parts, summarize_rooms,
         sync_message_replacement, unban_room_member, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, ListPublicRoomsRequest, PublicRoom,
-        PublicRoomsPage, PublicRoomsResult, SendFileRequest,
+        PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
     };
 
     #[test]
@@ -5338,6 +5397,10 @@ mod tests {
         UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
+    use matrix_sdk::ruma::push::{
+        EventMatchConditionData, NewConditionalPushRule, NewPushRule, NewSimplePushRule,
+        PushCondition, Ruleset,
+    };
     use matrix_sdk::{
         Client, Room, RoomMemberships, SessionMeta,
         deserialized_responses::{TimelineEvent, UnableToDecryptInfo, UnableToDecryptReason},
@@ -5349,7 +5412,7 @@ mod tests {
         media::{MediaFormat, MediaThumbnailSettings},
         ruma::{
             Int, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomId,
-            OwnedTransactionId, OwnedUserId, UInt, UserId,
+            OwnedTransactionId, OwnedUserId, RoomId, UInt, UserId,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent,
@@ -5388,7 +5451,7 @@ mod tests {
         store::StoreConfig,
     };
     use matrix_sdk_crypto::CrossSigningStatus;
-    use matrix_sdk_test::{JoinedRoomBuilder, ruma_response_from_json};
+    use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder, ruma_response_from_json};
 
     use crate::runtime::EventSender;
     use matrix_sdk::sync::{JoinedRoomUpdate, State, Timeline};
@@ -9647,6 +9710,164 @@ mod tests {
                 "{reasons:?} should be ignored"
             );
         }
+    }
+
+    fn push_rules_account_data(ruleset: &Ruleset) -> serde_json::Value {
+        serde_json::json!({
+            "type": "m.push_rules",
+            "content": { "global": ruleset },
+        })
+    }
+
+    /// The server defaults plus a mute (override) rule for `muted` and a
+    /// mentions-only (room, no actions) rule for `mentions`.
+    fn notification_mode_ruleset(client: &Client, muted: &RoomId, mentions: &RoomId) -> Ruleset {
+        let mut ruleset = Ruleset::server_default(client.user_id().expect("logged-in test client"));
+        ruleset
+            .insert(
+                NewPushRule::Override(NewConditionalPushRule::new(
+                    muted.to_string(),
+                    vec![PushCondition::EventMatch(EventMatchConditionData::new(
+                        "room_id".to_owned(),
+                        muted.to_string(),
+                    ))],
+                    Vec::new(),
+                )),
+                None,
+                None,
+            )
+            .expect("insert mute rule");
+        ruleset
+            .insert(
+                NewPushRule::Room(NewSimplePushRule::new(mentions.to_owned(), Vec::new())),
+                None,
+                None,
+            )
+            .expect("insert mentions rule");
+        ruleset
+    }
+
+    fn summary_notification_modes(
+        rooms: &[RoomSummary],
+    ) -> Vec<(String, Option<RoomNotificationMode>)> {
+        rooms
+            .iter()
+            .map(|room| (room.room_id.clone(), room.notification_mode))
+            .collect()
+    }
+
+    #[test]
+    fn summarize_rooms_reports_each_joined_rooms_notification_mode() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let muted = OwnedRoomId::try_from("!a-muted:example.org").expect("room id");
+            let mentions = OwnedRoomId::try_from("!b-mentions:example.org").expect("room id");
+            let default = OwnedRoomId::try_from("!c-default:example.org").expect("room id");
+            let invite = OwnedRoomId::try_from("!d-invite:example.org").expect("room id");
+            let rules =
+                push_rules_account_data(&notification_mode_ruleset(&client, &muted, &mentions));
+
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder
+                        .add_joined_room(JoinedRoomBuilder::new(&muted))
+                        .add_joined_room(JoinedRoomBuilder::new(&mentions))
+                        .add_joined_room(JoinedRoomBuilder::new(&default))
+                        .add_invited_room(InvitedRoomBuilder::new(&invite))
+                        .add_custom_global_account_data(rules);
+                })
+                .await;
+
+            let mut rooms = summarize_rooms(&client).await.expect("summarize rooms");
+            rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
+            assert_eq!(
+                summary_notification_modes(&rooms),
+                vec![
+                    (muted.to_string(), Some(RoomNotificationMode::Mute)),
+                    (
+                        mentions.to_string(),
+                        Some(RoomNotificationMode::MentionsAndKeywordsOnly)
+                    ),
+                    // A group room under the server defaults.
+                    (default.to_string(), Some(RoomNotificationMode::AllMessages)),
+                    (invite.to_string(), None),
+                ]
+            );
+        });
+    }
+
+    /// Settles when the handler runs: after the base client stored the new
+    /// push rules, so the snapshot it emits already uses them.
+    #[test]
+    fn push_rules_change_re_snapshots_room_notification_modes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let muted = OwnedRoomId::try_from("!a-muted:example.org").expect("room id");
+            let mentions = OwnedRoomId::try_from("!b-mentions:example.org").expect("room id");
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder
+                        .add_joined_room(JoinedRoomBuilder::new(&muted))
+                        .add_joined_room(JoinedRoomBuilder::new(&mentions));
+                })
+                .await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events);
+
+            let rules =
+                push_rules_account_data(&notification_mode_ruleset(&client, &muted, &mentions));
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_custom_global_account_data(rules);
+                })
+                .await;
+
+            let snapshots = drain_events(&event_rx)
+                .into_iter()
+                .filter_map(|event| match event {
+                    Event::SyncedRooms(mut rooms) => {
+                        rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
+                        Some(summary_notification_modes(&rooms))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                snapshots,
+                vec![vec![
+                    (muted.to_string(), Some(RoomNotificationMode::Mute)),
+                    (
+                        mentions.to_string(),
+                        Some(RoomNotificationMode::MentionsAndKeywordsOnly)
+                    ),
+                ]]
+            );
+        });
     }
 
     #[test]

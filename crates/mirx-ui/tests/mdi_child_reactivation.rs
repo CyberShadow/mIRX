@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
     Event, RoomActivity, RoomActivityKind, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomSummary,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode, RoomSummary,
 };
 use mirx_testkit::{LaunchOptions, MirxApp, ViewIdentity};
 use windows_sys::Win32::Foundation::{HWND, WPARAM};
@@ -93,6 +93,7 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         direct_user_ids: Vec::new(),
         tags: Vec::new(),
         space_children: Vec::new(),
+        notification_mode: Some(RoomNotificationMode::AllMessages),
     }
 }
 

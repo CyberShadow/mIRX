@@ -1505,7 +1505,7 @@ mod tests {
         AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
         CreateRoomRequest, CreateRoomVisibility, Event, JoinRoomRequest, KickRoomMemberRequest,
         LoginRequest, Operation, RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers,
-        RoomMembership, RoomReadState, RoomSummary, SyncStopReason,
+        RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
     };
     use matrix_sdk::{
         ruma::{
@@ -2028,6 +2028,10 @@ mod tests {
             direct_user_ids: Vec::new(),
             tags: Vec::new(),
             space_children: Vec::new(),
+            notification_mode: match membership {
+                RoomMembership::Join => Some(RoomNotificationMode::AllMessages),
+                RoomMembership::Invite => None,
+            },
         }
     }
 

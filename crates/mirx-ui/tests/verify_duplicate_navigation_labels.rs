@@ -6,7 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mirx_core::{Event, RoomMembership, RoomReadState, RoomSummary, SpaceChildSummary};
+use mirx_core::{
+    Event, RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SpaceChildSummary,
+};
 use mirx_testkit::{LaunchOptions, MirxApp, NavigationPathSegment, ViewIdentity};
 
 fn mirx_ui_exe_path() -> Result<PathBuf, String> {
@@ -65,6 +67,7 @@ fn space(room_id: &str, display_name: &str, children: Vec<&str>) -> RoomSummary 
                 order: None,
             })
             .collect(),
+        notification_mode: Some(RoomNotificationMode::AllMessages),
     }
 }
 
@@ -86,6 +89,7 @@ fn room(room_id: &str, display_name: &str) -> RoomSummary {
         direct_user_ids: Vec::new(),
         tags: Vec::new(),
         space_children: Vec::new(),
+        notification_mode: Some(RoomNotificationMode::AllMessages),
     }
 }
 

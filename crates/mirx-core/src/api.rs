@@ -411,6 +411,19 @@ pub struct RoomSummary {
     pub direct_user_ids: Vec<String>,
     pub tags: Vec<RoomTagSummary>,
     pub space_children: Vec<SpaceChildSummary>,
+    /// How the user's push rules treat the room: `Some` exactly for joined
+    /// rooms, `None` for invites.
+    pub notification_mode: Option<RoomNotificationMode>,
+}
+
+/// A joined room's effective notification mode under the user's push
+/// rules: its own rule if it has one, else the account default for its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomNotificationMode {
+    AllMessages,
+    MentionsAndKeywordsOnly,
+    Mute,
 }
 
 impl<'de> serde::Deserialize<'de> for RoomSummary {
@@ -431,6 +444,7 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             direct_user_ids: Vec<String>,
             tags: Vec<RoomTagSummary>,
             space_children: Vec<SpaceChildSummary>,
+            notification_mode: serde_json::Value,
         }
 
         let room = WireRoomSummary::deserialize(deserializer)?;
@@ -440,6 +454,27 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             topic => {
                 return Err(serde::de::Error::custom(format!(
                     "invalid topic value: expected string or null, got {topic}"
+                )));
+            }
+        };
+        let notification_mode = match (room.membership, room.notification_mode) {
+            (RoomMembership::Invite, serde_json::Value::Null) => None,
+            (RoomMembership::Join, mode @ serde_json::Value::String(_)) => {
+                Some(serde_json::from_value(mode).map_err(|err| {
+                    serde::de::Error::custom(format!(
+                        "invalid notification_mode for room {}: {err}",
+                        room.room_id
+                    ))
+                })?)
+            }
+            (membership, mode) => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid notification_mode for {membership:?} room {}: expected {}, got {mode}",
+                    room.room_id,
+                    match membership {
+                        RoomMembership::Join => "a mode",
+                        RoomMembership::Invite => "null",
+                    }
                 )));
             }
         };
@@ -455,6 +490,7 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             direct_user_ids: room.direct_user_ids,
             tags: room.tags,
             space_children: room.space_children,
+            notification_mode,
         })
     }
 }

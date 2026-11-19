@@ -12,6 +12,7 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -26,6 +27,7 @@
         ],
         "tags": [],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       }
     ]

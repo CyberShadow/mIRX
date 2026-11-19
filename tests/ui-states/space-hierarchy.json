@@ -22,6 +22,7 @@
             "order": "b"
           }
         ],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -44,6 +45,7 @@
             "order": "b"
           }
         ],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -55,6 +57,7 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -66,6 +69,7 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -77,6 +81,7 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -99,6 +104,7 @@
           }
         ],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       }
     ]

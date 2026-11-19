@@ -11,7 +11,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       },
       {
         "room_id": "!invite:example",
@@ -22,7 +23,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": null
       }
     ]
   },

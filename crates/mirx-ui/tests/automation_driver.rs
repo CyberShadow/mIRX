@@ -21,9 +21,10 @@ use mirx_core::{
     RoomMediaKind as CoreRoomMediaKind, RoomMemberRank, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
-    RoomMessageSendState as CoreRoomMessageSendState, RoomSummary, RoomTyping, SpaceChildSummary,
-    StoredSession as CoreStoredSession, VerificationDecimals as CoreVerificationDecimals,
-    VerificationEmoji as CoreVerificationEmoji, VerificationState as CoreVerificationState,
+    RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
+    RoomTyping, SpaceChildSummary, StoredSession as CoreStoredSession,
+    VerificationDecimals as CoreVerificationDecimals, VerificationEmoji as CoreVerificationEmoji,
+    VerificationState as CoreVerificationState,
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mirx_testkit::{
@@ -777,12 +778,14 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         direct_user_ids: Vec::new(),
         tags: Vec::new(),
         space_children: Vec::new(),
+        notification_mode: Some(RoomNotificationMode::AllMessages),
     }
 }
 
 fn invited_room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSummary {
     RoomSummary {
         membership: RoomMembership::Invite,
+        notification_mode: None,
         ..room_summary(room_id, display_name, encrypted)
     }
 }
@@ -803,6 +806,7 @@ fn joined_space_summary(
         direct_user_ids: Vec::new(),
         tags: Vec::new(),
         space_children: children,
+        notification_mode: Some(RoomNotificationMode::AllMessages),
     }
 }
 
@@ -813,6 +817,7 @@ fn invited_space_summary(
 ) -> RoomSummary {
     RoomSummary {
         membership: RoomMembership::Invite,
+        notification_mode: None,
         ..joined_space_summary(room_id, display_name, children)
     }
 }
@@ -3010,6 +3015,7 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
                     suggested: true,
                     order: Some("aaa".to_owned()),
                 }],
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             },
             room_summary("!room:example", "Room", true),
         ]),
@@ -13351,6 +13357,7 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
                 direct_user_ids: vec!["@alice:example.org".to_owned()],
                 tags: Vec::new(),
                 space_children: Vec::new(),
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             },
         ]),
         text_event(
@@ -13417,6 +13424,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
                 direct_user_ids: vec!["@alice:example.org".to_owned()],
                 tags: Vec::new(),
                 space_children: Vec::new(),
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             },
             RoomSummary {
                 room_id: "!direct-two:example".to_owned(),
@@ -13429,6 +13437,7 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
                 direct_user_ids: vec!["@alice:example.org".to_owned()],
                 tags: Vec::new(),
                 space_children: Vec::new(),
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             },
         ]),
         text_event(

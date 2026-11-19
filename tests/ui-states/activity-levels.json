@@ -12,7 +12,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       },
       {
         "room_id": "!events:example",
@@ -24,7 +25,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       },
       {
         "room_id": "!chat:example",
@@ -36,7 +38,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       },
       {
         "room_id": "!pings:example",
@@ -48,7 +51,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       },
       {
         "room_id": "!casey:example",
@@ -62,7 +66,8 @@
           "@casey:example"
         ],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       },
       {
         "room_id": "!counts:example",
@@ -74,7 +79,8 @@
         "is_direct": false,
         "direct_user_ids": [],
         "tags": [],
-        "space_children": []
+        "space_children": [],
+        "notification_mode": "all_messages"
       }
     ]
   },

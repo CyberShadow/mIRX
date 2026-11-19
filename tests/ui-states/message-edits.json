@@ -17,6 +17,7 @@
             "order": "a"
           }
         ],
+        "notification_mode": "all_messages",
         "membership": "join"
       },
       {
@@ -28,6 +29,7 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
+        "notification_mode": "all_messages",
         "membership": "join"
       }
     ]
