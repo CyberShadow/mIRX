@@ -43,9 +43,10 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush,
     DEFAULT_CHARSET, DT_NOPREFIX, DT_SINGLELINE, DeleteObject, DrawTextW, EndPaint, FW_BOLD,
-    FW_NORMAL, FillRect, FrameRect, GetDC, GetDeviceCaps, GetTextExtentPoint32W, GetTextMetricsW,
-    HBRUSH, HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC,
-    ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
+    FW_NORMAL, FillRect, FrameRect, GetDC, GetDeviceCaps, GetTextExtentPoint32W, GetTextFaceW,
+    GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints,
+    PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW,
+    TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -61,6 +62,10 @@ use windows_sys::Win32::System::Memory::{
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
+use windows_sys::Win32::UI::Controls::Dialogs::{
+    CF_INITTOLOGFONTSTRUCT, CF_LIMITSIZE, CF_NOVERTFONTS, CF_SCREENFONTS, CHOOSEFONTW, ChooseFontW,
+    CommDlgExtendedError,
+};
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
     CDRF_NOTIFYITEMDRAW, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES,
@@ -83,24 +88,25 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD,
     ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx,
     GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
-    GetMessageW, GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU,
-    HideCaret, IDC_ARROW, IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING,
-    LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
-    LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO,
-    MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED,
-    MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
-    SIF_TRACKPOS, SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
-    SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR,
-    WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE,
-    WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE,
-    WM_MDIRESTORE, WM_MDITILE, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
-    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED,
-    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo, GetSystemMenu,
+    GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsChild, IsIconic,
+    IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
+    LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW,
+    MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
+    MDITILE_VERTICAL, MF_BYCOMMAND, MF_BYPOSITION, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
+    SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
+    SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
+    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
+    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT,
+    WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION,
+    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::{
@@ -125,9 +131,9 @@ use crate::{
         NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
         RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
         SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState,
-        UiFindState, UiRoomHistoryBackfillState, UiRoomState, UiState, VerificationActionArgs,
-        ViewActivityLevel, ViewIdentity, WaitIdleResponse, dump_error_from_core,
-        dump_room_activity_from_activity, dump_room_from_summary,
+        UiFindState, UiRoomHistoryBackfillState, UiRoomState, UiState, UiTextFont, UiTimestamp,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
         dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
         dump_verification_from_state_event, failure_response, parse_command_request,
         success_response,
@@ -144,7 +150,7 @@ mod timeline_text;
 mod timestamp;
 
 use commands::{
-    CommandError, ComposeSubmission, E2eeSlashCommand, SlashCommand, TimestampCommand,
+    CommandError, ComposeSubmission, E2eeSlashCommand, FontCommand, SlashCommand, TimestampCommand,
     VerificationAction, local_command_history_entry, parse_compose_submission,
 };
 use echo::{EchoLine, EchoLog};
@@ -187,6 +193,10 @@ const SWITCHBAR_ID: u16 = 1005;
 const VIEW_CONTENT_ID: u16 = 2001;
 /// Every MDI child's editbox; a sibling of its `VIEW_CONTENT_ID` window.
 const VIEW_EDIT_ID: u16 = 2002;
+/// The window menu's Font... item. `WM_SYSCOMMAND` ids are below 0xF000
+/// with the low four bits clear: Windows uses those bits itself.
+const SYSMENU_ID_FONT: usize = 0x0110;
+const SYSMENU_FONT_LABEL: &str = "&Font...";
 const COMPOSE_EDIT_STYLE: WINDOW_STYLE = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL as u32;
 const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
 const MENU_ID_LOGIN: usize = 40001;
@@ -3827,6 +3837,14 @@ unsafe extern "system" fn mdi_child_window_proc(
             }
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
+        WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_FONT => {
+            let frame = frame_window_for(hwnd);
+            if let Err(message) = run_local_command(frame, SlashCommand::Font(FontCommand::Dialog))
+            {
+                show_error_message(frame, "Font", &message);
+            }
+            0
+        }
         WM_CLOSE => {
             if close_view_requested(frame_window_for(hwnd), hwnd) {
                 DefMDIChildProcW(hwnd, message, wparam, lparam)
@@ -4428,27 +4446,35 @@ struct TextFont {
 /// Text height plus room around it inside an editbox's client area.
 const EDIT_TEXT_MARGIN: i32 = 4;
 
+/// The screen's vertical dots per inch, which points convert with.
+unsafe fn screen_dpi() -> i32 {
+    let screen = GetDC(null_mut());
+    assert!(!screen.is_null(), "GetDC must succeed for the screen");
+    let dpi = GetDeviceCaps(screen, LOGPIXELSY as i32);
+    ReleaseDC(null_mut(), screen);
+    dpi
+}
+
+unsafe fn font_setting_logfont(setting: &FontSetting) -> LOGFONTW {
+    let face = setting.face().encode_utf16().collect::<Vec<_>>();
+    let mut logfont = LOGFONTW {
+        // Negative: the character height, as points are measured.
+        lfHeight: -((i32::from(setting.points()) * screen_dpi() + 36) / 72),
+        lfWeight: if setting.bold() { FW_BOLD } else { FW_NORMAL } as i32,
+        lfCharSet: DEFAULT_CHARSET,
+        ..LOGFONTW::default()
+    };
+    assert!(
+        face.len() < logfont.lfFaceName.len(),
+        "a font setting's face must fit LOGFONTW"
+    );
+    logfont.lfFaceName[..face.len()].copy_from_slice(&face);
+    logfont
+}
+
 impl TextFont {
     unsafe fn create(setting: &FontSetting) -> Result<Self, String> {
-        let screen = GetDC(null_mut());
-        assert!(!screen.is_null(), "GetDC must succeed for the screen");
-        let dpi = GetDeviceCaps(screen, LOGPIXELSY as i32);
-        ReleaseDC(null_mut(), screen);
-
-        let face = setting.face().encode_utf16().collect::<Vec<_>>();
-        let mut logfont = LOGFONTW {
-            // Negative: the character height, as points are measured.
-            lfHeight: -((i32::from(setting.points()) * dpi + 36) / 72),
-            lfWeight: if setting.bold() { FW_BOLD } else { FW_NORMAL } as i32,
-            lfCharSet: DEFAULT_CHARSET,
-            ..LOGFONTW::default()
-        };
-        assert!(
-            face.len() < logfont.lfFaceName.len(),
-            "a font setting's face must fit LOGFONTW"
-        );
-        logfont.lfFaceName[..face.len()].copy_from_slice(&face);
-        let font = CreateFontIndirectW(&logfont);
+        let font = CreateFontIndirectW(&font_setting_logfont(setting));
         if font.is_null() {
             return Err(last_os_error("CreateFontIndirectW"));
         }
@@ -4529,6 +4555,67 @@ unsafe fn set_view_text_font(view_id: &ViewId, child: HWND, font: HFONT) {
         }
     }
     SendMessageW(mdi_child_edit(child), WM_SETFONT, font as WPARAM, 1);
+}
+
+/// Makes `setting` the text font of every window and saves it. The new
+/// font is set on every control before the old one is deleted.
+unsafe fn apply_font_setting(hwnd: HWND, setting: FontSetting) -> Result<String, String> {
+    let text_font = TextFont::create(&setting)?;
+    let status = format!("font: {}", setting.label());
+    state_mut(hwnd)
+        .settings
+        .update(|settings| settings.text_font = setting)?;
+    let previous = std::mem::replace(&mut state_mut(hwnd).text_font, text_font);
+    let views = state_ref(hwnd)
+        .views
+        .iter()
+        .map(|(view_id, view)| (view_id.clone(), view.child))
+        .collect::<Vec<_>>();
+    let font = state_ref(hwnd).text_font.hfont();
+    for (view_id, child) in &views {
+        set_view_text_font(view_id, *child, font);
+        layout_mdi_child(*child);
+    }
+    drop(previous);
+    Ok(status)
+}
+
+/// The standard font dialog, starting at the current font; `None` when
+/// cancelled.
+unsafe fn choose_text_font(hwnd: HWND) -> Result<Option<FontSetting>, String> {
+    let mut logfont = font_setting_logfont(&state_ref(hwnd).settings.settings().text_font);
+    let mut choose = CHOOSEFONTW {
+        lStructSize: size_of::<CHOOSEFONTW>() as u32,
+        hwndOwner: hwnd,
+        lpLogFont: &mut logfont,
+        Flags: CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_NOVERTFONTS | CF_LIMITSIZE,
+        nSizeMin: 1,
+        nSizeMax: 72,
+        ..CHOOSEFONTW::default()
+    };
+    if ChooseFontW(&mut choose) == 0 {
+        return match CommDlgExtendedError() {
+            0 => Ok(None),
+            code => Err(format!("ChooseFontW failed: {code:#x}")),
+        };
+    }
+    let face_len = logfont
+        .lfFaceName
+        .iter()
+        .position(|&unit| unit == 0)
+        .expect("LOGFONTW face names are NUL-terminated");
+    let face = String::from_utf16_lossy(&logfont.lfFaceName[..face_len]);
+    let points = u8::try_from(choose.iPointSize / 10).expect("CF_LIMITSIZE keeps sizes to 1-72");
+    FontSetting::new(&face, points, logfont.lfWeight >= FW_BOLD as i32).map(Some)
+}
+
+/// `/font` with no parameters, and every window menu's Font...
+unsafe fn run_font_dialog(hwnd: HWND) -> Result<Option<String>, String> {
+    // Modal: core events keep arriving, so nothing is held across it.
+    match choose_text_font(hwnd)? {
+        Some(setting) => apply_font_setting(hwnd, setting).map(Some),
+        None => Ok(None),
+    }
 }
 
 unsafe fn timeline_client_width(hwnd: HWND) -> i32 {
@@ -9997,12 +10084,20 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
     // Before any rows: the timeline wraps them in its font.
     set_view_text_font(view_id, child, state_ref(frame).text_font.hfont());
 
+    let system_menu = GetSystemMenu(child, 0);
     if matches!(view_id, ViewId::Status) {
         // As in mIRC, the Status window cannot be closed (see WM_CLOSE), so
         // there is always a window to activate when another one closes.
-        if EnableMenuItem(GetSystemMenu(child, 0), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED) == -1 {
+        if EnableMenuItem(system_menu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED) == -1 {
             return Err(last_os_error("EnableMenuItem Status SC_CLOSE"));
         }
+    }
+    // mIRC's window menu has the font too.
+    let font_label = wide_null(SYSMENU_FONT_LABEL);
+    if AppendMenuW(system_menu, MF_SEPARATOR, 0, null()) == 0
+        || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FONT, font_label.as_ptr()) == 0
+    {
+        return Err(last_os_error("AppendMenuW window menu Font..."));
     }
 
     layout_mdi_child(child);
@@ -12302,14 +12397,74 @@ fn dump_active_find_state(state: &WindowState) -> Option<UiFindState> {
         .map(|find_state| dump_find_state(&state.active_view, find_state))
 }
 
+/// The text font as the active window really draws it: the face GDI
+/// selected for the timeline's font, and the heights laid out from it.
+unsafe fn dump_text_font(state: &WindowState, view: &MdiViewState) -> UiTextFont {
+    let timeline = view_timeline(&state.active_view, view.content);
+    let timeline_state = timeline_state_ref(timeline);
+    let hdc = GetDC(timeline);
+    assert!(!hdc.is_null(), "GetDC must succeed for the timeline");
+    let previous = SelectObject(hdc, timeline_state.font);
+    let mut face = [0u16; 32];
+    let face_len = GetTextFaceW(hdc, face.len() as i32, face.as_mut_ptr());
+    SelectObject(hdc, previous);
+    ReleaseDC(timeline, hdc);
+    assert!(face_len > 0, "GetTextFaceW must name the timeline font");
+    let face_len = face
+        .iter()
+        .position(|&unit| unit == 0)
+        .expect("GetTextFaceW NUL-terminates the face");
+    let mut edit_rect = RECT::default();
+    GetWindowRect(mdi_child_edit(view.child), &mut edit_rect);
+    let setting = &state.settings.settings().text_font;
+    UiTextFont {
+        face: String::from_utf16_lossy(&face[..face_len]),
+        points: setting.points(),
+        bold: setting.bold(),
+        line_height: timeline_state.line_height,
+        edit_height: edit_rect.bottom - edit_rect.top,
+    }
+}
+
+unsafe fn system_menu_labels(child: HWND) -> Vec<String> {
+    let menu = GetSystemMenu(child, 0);
+    let count = GetMenuItemCount(menu);
+    assert!(count >= 0, "GetMenuItemCount must read the window menu");
+    (0..count as u32)
+        .filter_map(|position| {
+            let mut label = [0u16; 128];
+            let len = GetMenuStringW(
+                menu,
+                position,
+                label.as_mut_ptr(),
+                label.len() as i32,
+                MF_BYPOSITION,
+            );
+            // Separators have no label.
+            (len > 0).then(|| String::from_utf16_lossy(&label[..len as usize]))
+        })
+        .collect()
+}
+
 unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let navigation = dump_navigation_tree(hwnd)?;
     let mdi = dump_mdi_state(hwnd)?;
     let status_bar = dump_status_bar_state(hwnd)?;
     let switchbar = dump_switchbar_state(hwnd)?;
     let state = state_ref(hwnd);
+    let active_view = state
+        .views
+        .get(&state.active_view)
+        .expect("the active view has a window");
+    let timestamp = &state.settings.settings().timestamp;
 
     Ok(UiState {
+        text_font: dump_text_font(state, active_view),
+        timestamp: UiTimestamp {
+            show: timestamp.show,
+            format: timestamp.format.to_string(),
+        },
+        active_system_menu_items: system_menu_labels(active_view.child),
         navigation,
         mdi,
         status_bar,
@@ -12944,9 +13099,8 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
         }
         ComposeSubmission::LocalCommand(parsed) => {
             let history_entry = local_command_history_entry(&input, &parsed);
-            match parsed.and_then(|command| execute_slash_command(hwnd, command)) {
-                Ok(Some(status)) => set_local_command_status(hwnd, status)?,
-                Ok(None) => {}
+            match parsed {
+                Ok(command) => run_local_command(hwnd, command)?,
                 Err(error) => report_command_error(hwnd, error)?,
             }
             history_entry
@@ -13203,6 +13357,16 @@ fn latest_durable_thread_event_id(
     }
 
     latest_event_id.to_owned()
+}
+
+/// Runs a command and reports how it went: its status, or its error in the
+/// active window.
+unsafe fn run_local_command(hwnd: HWND, command: SlashCommand) -> Result<(), String> {
+    match execute_slash_command(hwnd, command) {
+        Ok(Some(status)) => set_local_command_status(hwnd, status),
+        Ok(None) => Ok(()),
+        Err(error) => report_command_error(hwnd, error),
+    }
 }
 
 /// Runs a typed command. `Ok(Some(status))` is feedback for the status bar;
@@ -13509,6 +13673,10 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
         SlashCommand::Help { topic } => {
             echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
             Ok(None)
+        }
+        SlashCommand::Font(FontCommand::Dialog) => run_font_dialog(hwnd),
+        SlashCommand::Font(FontCommand::Set(setting)) => {
+            apply_font_setting(hwnd, setting).map(Some)
         }
         SlashCommand::Timestamp(command) => match command {
             TimestampCommand::Show => {

@@ -42,7 +42,7 @@ use mirx_testkit::{
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
-    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimestamp,
     UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
     ViewActivityLevel, ViewIdentity,
 };
@@ -58,11 +58,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
     GetClientRect, GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IDNO, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
-    LB_GETTEXT, LB_GETTEXTLEN, PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
-    SIF_ALL, SMTO_NORMAL, SendMessageTimeoutW, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND,
-    WM_VSCROLL, WS_VSCROLL,
+    GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow,
+    IsWindowVisible, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN, PostMessageW, SB_PAGEUP, SB_TOP,
+    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SendMessageTimeoutW, SendMessageW,
+    SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
+    WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2669,7 +2669,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 31);
+    assert_eq!(version.protocol_version, 32);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4260,6 +4260,126 @@ fn type_commands(app: &MirxApp, inputs: &[&str]) -> Result<(), Box<dyn std::erro
         app.wait_idle(Duration::from_secs(5))?;
         assert_eq!(app.compose_text()?, "", "{input}");
     }
+    Ok(())
+}
+
+/// The window menu's Font... id.
+const SYSMENU_ID_FONT: WPARAM = 0x0110;
+
+#[test]
+fn default_text_font_is_fixedsys_in_every_window() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    for identity in [ViewIdentity::Status, room_identity("!beta:example")] {
+        if identity == ViewIdentity::Status {
+            app.select_status_view()?;
+        } else {
+            app.select_view(identity.clone())?;
+        }
+        let ui_state = app.dump_ui_state()?;
+        assert_eq!(ui_state.mdi.active, identity);
+        let font = &ui_state.text_font;
+        assert_eq!(font.face, "Fixedsys", "{identity:?}");
+        assert_eq!((font.points, font.bold), (9, false));
+        assert!((12..=18).contains(&font.line_height), "{font:?}");
+        assert!(font.edit_height < 28, "{font:?}");
+        assert!(
+            ui_state
+                .active_system_menu_items
+                .contains(&"&Font...".to_owned()),
+            "{:?}",
+            ui_state.active_system_menu_items
+        );
+    }
+    assert_eq!(
+        app.dump_ui_state()?.timestamp,
+        UiTimestamp {
+            show: true,
+            format: "[HH:nn]".to_owned(),
+        }
+    );
+    // Nothing changed, so nothing was written.
+    assert!(!settings_file_path(&local_app_data).exists());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn font_command_changes_and_persists_the_text_font() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let launch = || {
+        launch_app_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            launch_options(Some(local_app_data.clone())),
+        )
+    };
+
+    let app = launch()?;
+    let before = app.dump_ui_state()?.text_font;
+    type_commands(&app, &["/font -b 12 Courier"])?;
+    let ui_state = app.dump_ui_state()?;
+    let font = &ui_state.text_font;
+    assert_eq!(font.face, "Courier");
+    assert_eq!((font.points, font.bold), (12, true));
+    assert_ne!(font.line_height, before.line_height);
+    assert_eq!(ui_state.status_bar.text, "font: Courier 12 bold");
+    assert!(
+        fs::read_to_string(settings_file_path(&local_app_data))?
+            .contains("\r\ntext=Courier,12,bold\r\n")
+    );
+
+    type_commands(&app, &["/font -i 12 Courier"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.status_bar.text, "* /font: unknown option -i");
+    assert_eq!(ui_state.text_font.face, "Courier");
+    drop(app);
+
+    let app = launch()?;
+    let font = app.dump_ui_state()?.text_font;
+    assert_eq!(font.face, "Courier");
+    assert_eq!((font.points, font.bold), (12, true));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn font_dialog_from_the_window_menu_cancels_and_applies() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    let child = view_child_hwnd(&app, &beta)?;
+    let open_dialog = || {
+        // Posted: the dialog runs a modal loop inside the handler.
+        assert_ne!(
+            unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_FONT, 0) },
+            0,
+            "posting Font... must succeed"
+        );
+        wait_for_message_box(&app).0
+    };
+
+    let dialog = open_dialog();
+    answer_message_box(&app, dialog, IDCANCEL)?;
+    assert!(!settings_file_path(&local_app_data).exists());
+    assert_eq!(app.dump_ui_state()?.text_font.face, "Fixedsys");
+
+    // The dialog starts at the current font, so OK keeps it, and saves it.
+    let dialog = open_dialog();
+    answer_message_box(&app, dialog, IDOK)?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.status_bar.text, "font: Fixedsys 9");
+    assert_eq!(ui_state.text_font.face, "Fixedsys");
+    assert!(
+        fs::read_to_string(settings_file_path(&local_app_data))?
+            .contains("\r\ntext=Fixedsys,9\r\n")
+    );
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

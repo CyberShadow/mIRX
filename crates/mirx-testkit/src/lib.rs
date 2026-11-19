@@ -1123,6 +1123,31 @@ pub struct UiState {
     pub switchbar: SwitchbarState,
     pub active_find: Option<UiFindState>,
     pub rooms: Vec<UiRoomState>,
+    pub text_font: UiTextFont,
+    pub timestamp: UiTimestamp,
+    /// The labels of the active window's window menu, separators omitted.
+    pub active_system_menu_items: Vec<String>,
+}
+
+/// The text font as the active window draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTextFont {
+    /// The face GDI selected, which may differ from the one asked for.
+    pub face: String,
+    pub points: u8,
+    pub bold: bool,
+    /// The active timeline's line height in pixels.
+    pub line_height: i32,
+    /// The active editbox's height in pixels.
+    pub edit_height: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTimestamp {
+    pub show: bool,
+    pub format: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

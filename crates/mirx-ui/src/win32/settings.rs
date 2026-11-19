@@ -60,6 +60,12 @@ impl FontSetting {
     pub(super) fn bold(&self) -> bool {
         self.bold
     }
+
+    /// `Fixedsys 9`, `Courier 12 bold`.
+    pub(super) fn label(&self) -> String {
+        let bold = if self.bold { " bold" } else { "" };
+        format!("{} {}{bold}", self.face, self.points)
+    }
 }
 
 impl Default for FontSetting {
@@ -318,6 +324,11 @@ mod tests {
         );
         assert!(FontSetting::new(&"x".repeat(31), 9, false).is_ok());
         assert!(FontSetting::new(&"x".repeat(32), 9, false).is_err());
+        assert_eq!(FontSetting::default().label(), "Fixedsys 9");
+        assert_eq!(
+            FontSetting::new("Courier", 12, true).unwrap().label(),
+            "Courier 12 bold"
+        );
     }
 
     #[test]

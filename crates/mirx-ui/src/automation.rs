@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 31;
+pub(crate) const PROTOCOL_VERSION: u32 = 32;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -937,6 +937,31 @@ pub(crate) struct UiState {
     pub(crate) switchbar: SwitchbarState,
     pub(crate) active_find: Option<UiFindState>,
     pub(crate) rooms: Vec<UiRoomState>,
+    pub(crate) text_font: UiTextFont,
+    pub(crate) timestamp: UiTimestamp,
+    /// The labels of the active window's window menu, separators omitted.
+    pub(crate) active_system_menu_items: Vec<String>,
+}
+
+/// The text font as the active window draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTextFont {
+    /// The face GDI selected, which may differ from the one asked for.
+    pub(crate) face: String,
+    pub(crate) points: u8,
+    pub(crate) bold: bool,
+    /// The active timeline's line height in pixels.
+    pub(crate) line_height: i32,
+    /// The active editbox's height in pixels.
+    pub(crate) edit_height: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTimestamp {
+    pub(crate) show: bool,
+    pub(crate) format: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2823,8 +2848,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_31() {
-        assert_eq!(PROTOCOL_VERSION, 31);
+    fn protocol_version_is_32() {
+        assert_eq!(PROTOCOL_VERSION, 32);
     }
 
     #[test]
@@ -3799,7 +3824,10 @@ mod tests {
             "status_bar":{"text":"ready"},
             "switchbar":{"items":[]},
             "active_find":null,
-            "rooms":[]
+            "rooms":[],
+            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25},
+            "timestamp":{"show":true,"format":"[HH:nn]"},
+            "active_system_menu_items":[]
         }))
         .unwrap();
         assert_eq!(without_find.active_find, None);
@@ -3818,7 +3846,10 @@ mod tests {
                 "selected_text":"needle two",
                 "history_search":{"state":"loading"}
             },
-            "rooms":[]
+            "rooms":[],
+            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25},
+            "timestamp":{"show":true,"format":"[HH:nn]"},
+            "active_system_menu_items":[]
         }))
         .unwrap();
         assert_eq!(
@@ -4621,7 +4652,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":31,
+                    "protocol_version":32,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5155,6 +5186,18 @@ mod tests {
                         }),
                         history_backfill: UiRoomHistoryBackfillState::Idle,
                     }],
+                    text_font: super::UiTextFont {
+                        face: "Fixedsys".to_owned(),
+                        points: 9,
+                        bold: false,
+                        line_height: 15,
+                        edit_height: 25,
+                    },
+                    timestamp: super::UiTimestamp {
+                        show: true,
+                        format: "[HH:nn]".to_owned(),
+                    },
+                    active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
                 },
             ))
             .unwrap(),
@@ -5272,7 +5315,16 @@ mod tests {
                             },
                             "history_backfill":{"state":"idle"}
                         }
-                    ]
+                    ],
+                    "text_font":{
+                        "face":"Fixedsys",
+                        "points":9,
+                        "bold":false,
+                        "line_height":15,
+                        "edit_height":25
+                    },
+                    "timestamp":{"show":true,"format":"[HH:nn]"},
+                    "active_system_menu_items":["&Restore","&Font..."]
                 }
             })
         );

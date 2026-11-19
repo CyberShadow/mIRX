@@ -37,9 +37,9 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
     TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -799,6 +799,18 @@ fn data_models_round_trip_through_json() {
             }),
             history_backfill: UiRoomHistoryBackfillState::Idle,
         }],
+        text_font: UiTextFont {
+            face: "Fixedsys".to_owned(),
+            points: 9,
+            bold: false,
+            line_height: 15,
+            edit_height: 25,
+        },
+        timestamp: UiTimestamp {
+            show: true,
+            format: "[HH:nn]".to_owned(),
+        },
+        active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1061,6 +1073,15 @@ fn data_models_round_trip_through_json() {
                     },
                 }
             ],
+            "text_font": {
+                "face": "Fixedsys",
+                "points": 9,
+                "bold": false,
+                "line_height": 15,
+                "edit_height": 25,
+            },
+            "timestamp": {"show": true, "format": "[HH:nn]"},
+            "active_system_menu_items": ["&Restore", "&Font..."],
         })
     );
     assert_eq!(
@@ -6188,6 +6209,18 @@ fn switchbar_helpers_find_items_and_active_item() {
         },
         active_find: None,
         rooms: vec![],
+        text_font: UiTextFont {
+            face: "Fixedsys".to_owned(),
+            points: 9,
+            bold: false,
+            line_height: 15,
+            edit_height: 25,
+        },
+        timestamp: UiTimestamp {
+            show: true,
+            format: "[HH:nn]".to_owned(),
+        },
+        active_system_menu_items: vec![],
     };
 
     let identity = ViewIdentity::Room {

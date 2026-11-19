@@ -1673,6 +1673,36 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    timestamp-format)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # The multi-room fixture with seconds in every stamp and the bitmap
+      # Courier as the text font; the editbox, nick list and line height
+      # follow the font.
+      ordered_actions=(
+        'input:/timestamp -f [HH:nn:ss]'
+        'input:/font 12 Courier'
+      )
+      room_expect_args=(
+        --expect-room '!lobby:example'
+        --expect-room '!ops:example'
+        --expect-room '!random:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::* Now talking in Ops (!ops:example)'
+        --expect-room-view "!ops:example::[22:13:20] * Alice changes topic to 'incident review'"
+        --expect-room-view '!ops:example::[22:14:20] * Joins: Carol (@carol:example)'
+        --expect-room-view '!ops:example::[22:15:20] <Alice> ops topic: incident review'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'font: Courier 12'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
     member-ranks)
       expect_selected='!ranks:example'
       expect_active_view='room:!ranks:example'

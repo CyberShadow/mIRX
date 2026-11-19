@@ -11,6 +11,7 @@ use std::fmt;
 use mirx_core::{MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind};
 
 use super::nick_completion::member_mention_text;
+use super::settings::{FontSetting, parse_points};
 use super::timeline_text::rank_prefix;
 use super::timestamp::TimestampFormat;
 
@@ -122,6 +123,15 @@ pub(super) enum SlashCommand {
         topic: Option<String>,
     },
     Timestamp(TimestampCommand),
+    Font(FontCommand),
+}
+
+/// `/font [-b] <size> <font name>`, mIRC's `/font -z`: one font for every
+/// window. No parameters opens the font dialog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FontCommand {
+    Dialog,
+    Set(FontSetting),
 }
 
 /// `/timestamp [on|off|-f format]`.
@@ -204,6 +214,7 @@ impl SlashCommand {
             Self::Verify { .. } => "verify",
             Self::Help { .. } => "help",
             Self::Timestamp(_) => "timestamp",
+            Self::Font(_) => "font",
         }
     }
 }
@@ -297,6 +308,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "find",
         usage: "<text>",
         summary: "find text in this window",
+    },
+    CommandSpec {
+        name: "font",
+        usage: "[[-b] <size> <font name>]",
+        summary: "set the text font, or choose it in a dialog",
     },
     CommandSpec {
         name: "help",
@@ -626,6 +642,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             topic: optional(argument),
         }),
         "timestamp" => parse_timestamp(argument).map(SlashCommand::Timestamp),
+        "font" => parse_font(argument).map(SlashCommand::Font),
         _ => Err(CommandError::unknown(name)),
     }
 }
@@ -687,6 +704,26 @@ fn parse_e2ee_setup(argument: &str) -> Option<E2eeSlashCommand> {
         passphrase: Some(passphrase.to_owned()),
         wait_for_backups_to_upload,
     })
+}
+
+fn parse_font(argument: &str) -> Result<FontCommand, CommandError> {
+    if argument.is_empty() {
+        return Ok(FontCommand::Dialog);
+    }
+    let error = |reason: String| CommandError::new("font", reason);
+    let (word, rest) = split_word(argument);
+    let (bold, argument) = match word {
+        "-b" | "-B" => (true, rest),
+        _ if word.starts_with('-') => return Err(error(format!("unknown option {word}"))),
+        _ => (false, argument),
+    };
+    let (points, face) = split_word(argument);
+    if face.is_empty() {
+        return Err(CommandError::insufficient_parameters("font"));
+    }
+    FontSetting::new(face, parse_points(points).map_err(error)?, bold)
+        .map(FontCommand::Set)
+        .map_err(error)
 }
 
 fn parse_timestamp(argument: &str) -> Result<TimestampCommand, CommandError> {
@@ -1354,6 +1391,41 @@ mod tests {
                 "{name} is missing from COMMANDS"
             );
         }
+    }
+
+    #[test]
+    fn font_opens_the_dialog_or_sets_the_font() {
+        let font = |face, points, bold| {
+            Ok(SlashCommand::Font(FontCommand::Set(
+                FontSetting::new(face, points, bold).unwrap(),
+            )))
+        };
+        assert_eq!(parse("/font"), Ok(SlashCommand::Font(FontCommand::Dialog)));
+        assert_eq!(parse("/font 9 Fixedsys"), font("Fixedsys", 9, false));
+        assert_eq!(
+            parse("/font -b 12 Courier New"),
+            font("Courier New", 12, true)
+        );
+        assert_eq!(parse("/FONT -B 72  Courier"), font("Courier", 72, true));
+        for (input, reason) in [
+            ("/font -x 9 A", "unknown option -x"),
+            ("/font 0 A", "size must be 1-72"),
+            ("/font 99 A", "size must be 1-72"),
+            ("/font abc Foo", "size must be 1-72"),
+            ("/font 9", "insufficient parameters"),
+            ("/font -b", "insufficient parameters"),
+            ("/font -b 9", "insufficient parameters"),
+            ("/font 9 A,B", "font name cannot contain a comma"),
+        ] {
+            assert_eq!(parse(input), error("font", reason), "{input}");
+        }
+        assert_eq!(
+            help_lines(Some("font")),
+            Ok(vec![
+                "* /font [[-b] <size> <font name>] — set the text font, or choose it in a dialog"
+                    .to_owned()
+            ])
+        );
     }
 
     #[test]
