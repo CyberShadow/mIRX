@@ -4381,7 +4381,9 @@ fn wait_for_message_box(app: &MirxApp) -> (HWND, String) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let dialog = unsafe { frame_message_box(frame) };
-        if !dialog.is_null() {
+        // The box exists before WM_INITDIALOG fills it; a dialog box shows
+        // only once that is done.
+        if !dialog.is_null() && unsafe { IsWindowVisible(dialog) } != 0 {
             // MessageBox's text is the static control with ID 0xFFFF.
             let text = unsafe { read_window_text(GetDlgItem(dialog, 0xFFFF)) };
             return (dialog, text);
