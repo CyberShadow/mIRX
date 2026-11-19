@@ -9687,6 +9687,51 @@ fn automation_driver_compose_history_recalls_accepted_submissions()
 }
 
 #[test]
+fn automation_driver_compose_history_is_per_window() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.select_room("!beta:example")?;
+    app.set_compose_text("typed in beta")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    // Like mIRC, each window's editbox recalls only what was typed in it.
+    app.select_room("!alpha:example")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "");
+    app.set_compose_text("/help")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.select_status_view()?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "");
+
+    app.select_room("!beta:example")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "typed in beta");
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "typed in beta");
+
+    app.select_room("!alpha:example")?;
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "/help");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn automation_driver_compose_history_ignores_rejected_submissions()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
@@ -9931,6 +9976,10 @@ fn automation_driver_slash_status_activates_status_view() -> Result<(), Box<dyn 
     assert!(ui_state.status_bar.text.contains("status window active"));
     assert_eq!(app.selected_navigation_view()?, Some(ViewIdentity::Status));
 
+    // The line belongs to the history of the window it was typed in.
+    app.send_compose_key(ComposeKey::Up)?;
+    assert_eq!(app.compose_text()?, "");
+    app.select_room("!beta:example")?;
     app.send_compose_key(ComposeKey::Up)?;
     assert_eq!(app.compose_text()?, "/status");
 

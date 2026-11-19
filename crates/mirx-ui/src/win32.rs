@@ -307,6 +307,9 @@ struct MdiViewState {
     child: HWND,
     content: HWND,
     edit: HWND,
+    /// What Up and Down recall in this window's editbox, as in mIRC, where
+    /// each window remembers what was typed in it.
+    history: ComposeHistory,
 }
 
 struct MdiChildCreateState {
@@ -2630,7 +2633,6 @@ struct WindowState {
     /// an explicit activation. Holds only joined DM rooms in `model.rooms`.
     closed_queries: BTreeSet<String>,
     room_activity_read_targets: BTreeMap<ViewId, String>,
-    compose_history: ComposeHistory,
     /// The last Tab completion, for further Tabs to cycle.
     nick_completion: Option<ComposeNickCompletion>,
     edit_window_proc: WNDPROC,
@@ -2802,7 +2804,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         room_activity: BTreeMap::new(),
         closed_queries: BTreeSet::new(),
         room_activity_read_targets: BTreeMap::new(),
-        compose_history: ComposeHistory::default(),
         nick_completion: None,
         edit_window_proc: None,
         model: initial_model(),
@@ -4539,7 +4540,7 @@ unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
     let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
     let mention = member_mention_text(&member.user_id, member.display_name.as_deref());
     let edit = compose_edit(hwnd);
-    state_mut(hwnd).compose_history.reset_navigation();
+    active_compose_history(state_mut(hwnd)).reset_navigation();
     replace_edit_selection(edit, &format!("{mention} "));
     SetFocus(edit);
     Ok(())
@@ -4597,7 +4598,7 @@ unsafe fn complete_compose_nick(hwnd: HWND, reverse: bool) -> Result<(), String>
             edit_op
         }
     };
-    state.compose_history.reset_navigation();
+    active_compose_history(state).reset_navigation();
     SendMessageW(
         edit,
         EM_SETSEL,
@@ -9881,6 +9882,7 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
         child,
         content: mdi_child_content(child),
         edit: mdi_child_edit(child),
+        history: ComposeHistory::default(),
     };
 
     let state = state_mut(hwnd);
@@ -12645,20 +12647,18 @@ fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), String> {
 
 unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
     let edit = compose_edit(hwnd);
+    // Commands may activate another window; the line still belongs to the
+    // history of the editbox it was typed in.
+    let view = state_ref(hwnd).active_view.clone();
     let input = read_window_text(edit);
     if input.is_empty() {
         return Err("message body must not be empty".to_owned());
     }
 
-    match parse_compose_submission(&input) {
+    let history_entry = match parse_compose_submission(&input) {
         ComposeSubmission::Message { presentation, body } => {
-            submit_compose_with_history_entry(
-                state_mut(hwnd),
-                presentation,
-                body.into_owned(),
-                input,
-                None,
-            )?;
+            submit_compose(state_mut(hwnd), presentation, body.into_owned(), None)?;
+            Some(input.clone())
         }
         ComposeSubmission::LocalCommand(parsed) => {
             let history_entry = local_command_history_entry(&input, &parsed);
@@ -12667,15 +12667,30 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
                 Ok(None) => {}
                 Err(error) => report_command_error(hwnd, error)?,
             }
-            if let Some(entry) = history_entry {
-                state_mut(hwnd).compose_history.record_submission(entry);
-            }
+            history_entry
         }
+    };
+    if let Some(entry) = history_entry {
+        state_mut(hwnd)
+            .views
+            .get_mut(&view)
+            .expect("the submitting editbox's window must exist")
+            .history
+            .record_submission(entry);
     }
 
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
     Ok(())
+}
+
+/// The history of the active window's editbox, which keys reach.
+fn active_compose_history(state: &mut WindowState) -> &mut ComposeHistory {
+    &mut state
+        .views
+        .get_mut(&state.active_view)
+        .expect("the active view must have a window")
+        .history
 }
 
 /// The active window's editbox, which compose input and commands act on.
@@ -12695,7 +12710,7 @@ unsafe fn dump_compose_text(hwnd: HWND) -> Result<String, String> {
 
 unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), String> {
     let edit = compose_edit(hwnd);
-    state_mut(hwnd).compose_history.reset_navigation();
+    active_compose_history(state_mut(hwnd)).reset_navigation();
     set_compose_edit_text(edit, text);
     Ok(())
 }
@@ -12738,17 +12753,6 @@ fn submit_compose(
     body: String,
     explicit_room_id: Option<&str>,
 ) -> Result<String, String> {
-    let history_entry = body.clone();
-    submit_compose_with_history_entry(state, presentation, body, history_entry, explicit_room_id)
-}
-
-fn submit_compose_with_history_entry(
-    state: &mut WindowState,
-    presentation: RoomMessagePresentationKind,
-    body: String,
-    history_entry: String,
-    explicit_room_id: Option<&str>,
-) -> Result<String, String> {
     if body.is_empty() {
         return Err("message body must not be empty".to_owned());
     }
@@ -12776,7 +12780,6 @@ fn submit_compose_with_history_entry(
     if clears_active_thread_marker {
         clear_view_activity_marker(state, &state.active_view.clone());
     }
-    state.compose_history.record_submission(history_entry);
 
     Ok(destination.room_id)
 }
@@ -13477,13 +13480,11 @@ unsafe fn navigate_compose_history(
     let replacement = match direction {
         ComposeHistoryDirection::Previous => {
             let current_text = read_window_text(edit);
-            let history = &mut state_mut(hwnd).compose_history;
-            history.previous(current_text).map(str::to_owned)
+            active_compose_history(state_mut(hwnd))
+                .previous(current_text)
+                .map(str::to_owned)
         }
-        ComposeHistoryDirection::Next => {
-            let history = &mut state_mut(hwnd).compose_history;
-            history.next()
-        }
+        ComposeHistoryDirection::Next => active_compose_history(state_mut(hwnd)).next(),
     };
     if let Some(text) = replacement {
         set_compose_edit_text(edit, &text);
@@ -13717,7 +13718,7 @@ unsafe extern "system" fn edit_window_proc(
         || message == WM_PASTE
         || (message == WM_KEYDOWN && wparam == VK_DELETE_KEY)
     {
-        state_mut(parent).compose_history.reset_navigation();
+        active_compose_history(state_mut(parent)).reset_navigation();
     }
 
     CallWindowProcW(original, hwnd, message, wparam, lparam)
@@ -15906,7 +15907,6 @@ mod tests {
             room_activity: BTreeMap::new(),
             room_activity_read_targets: BTreeMap::new(),
             closed_queries: BTreeSet::new(),
-            compose_history: ComposeHistory::default(),
             nick_completion: None,
             edit_window_proc: None,
             model: initial_model(),
@@ -15980,6 +15980,7 @@ mod tests {
                 child,
                 content: null_mut(),
                 edit: compose,
+                history: ComposeHistory::default(),
             },
         );
 
@@ -16077,6 +16078,7 @@ mod tests {
             child: hwnd_value as HWND,
             content: (hwnd_value + 1) as HWND,
             edit: (hwnd_value + 2) as HWND,
+            history: ComposeHistory::default(),
         }
     }
 
@@ -20377,9 +20379,9 @@ mod tests {
         assert!(!format!("{:?}", dump_model_from_state(&state)).contains(recovery_key));
         assert!(
             !state
-                .compose_history
-                .entries
-                .iter()
+                .views
+                .values()
+                .flat_map(|view| &view.history.entries)
                 .any(|entry| entry.contains(recovery_key))
         );
     }
@@ -25136,8 +25138,69 @@ mod tests {
     }
 
     #[test]
-    fn invalid_e2ee_recover_form_is_not_recorded_or_recalled_in_compose_history() {
+    fn each_window_recalls_only_what_was_typed_in_it() {
         let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state
+            .model
+            .room_views
+            .insert("!room:example".to_owned(), RoomViewModel::default());
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/wat");
+
+                // A second window, with its own editbox.
+                let room_view = room_view_id("!room:example");
+                let child = state_ref(hwnd).views[&ViewId::Status].child;
+                let edit = CreateWindowExW(
+                    0,
+                    wide_null(EDIT_CLASS_NAME).as_ptr(),
+                    wide_null("").as_ptr(),
+                    WS_CHILD,
+                    0,
+                    0,
+                    0,
+                    0,
+                    child,
+                    null_mut(),
+                    GetModuleHandleW(null()),
+                    null_mut(),
+                );
+                assert!(!edit.is_null());
+                state_mut(hwnd).views.insert(
+                    room_view.clone(),
+                    MdiViewState {
+                        child,
+                        content: null_mut(),
+                        edit,
+                        history: ComposeHistory::default(),
+                    },
+                );
+                state_mut(hwnd).active_view = room_view.clone();
+                install_test_view_content(hwnd);
+
+                navigate_compose_history(hwnd, ComposeHistoryDirection::Previous).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "");
+                type_compose_line(hwnd, "/help clear");
+
+                state_mut(hwnd).active_view = ViewId::Status;
+                navigate_compose_history(hwnd, ComposeHistoryDirection::Previous).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/wat");
+                navigate_compose_history(hwnd, ComposeHistoryDirection::Previous).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/wat");
+
+                state_mut(hwnd).active_view = room_view;
+                navigate_compose_history(hwnd, ComposeHistoryDirection::Previous).unwrap();
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "/help clear");
+            });
+        }
+    }
+
+    #[test]
+    fn invalid_e2ee_recover_form_is_not_recorded_or_recalled_in_compose_history() {
+        let mut history = ComposeHistory::default();
         let input = "/e2ee recover secret phrase".to_owned();
         let ComposeSubmission::LocalCommand(command) = parse_compose_submission(&input) else {
             panic!("expected local command submission");
@@ -25146,65 +25209,43 @@ mod tests {
         let history_entry = local_command_history_entry(&input, &command);
         assert_eq!(history_entry, None);
         if let Some(entry) = history_entry {
-            state.compose_history.record_submission(entry);
+            history.record_submission(entry);
         }
 
-        state
-            .compose_history
-            .record_submission("safe draft".to_owned());
+        history.record_submission("safe draft".to_owned());
 
-        assert!(
-            !state
-                .compose_history
-                .entries
-                .iter()
-                .any(|entry| entry.contains("secret"))
-        );
+        assert!(!history.entries.iter().any(|entry| entry.contains("secret")));
         assert_eq!(
-            state.compose_history.previous("later draft".to_owned()),
+            history.previous("later draft".to_owned()),
             Some("safe draft")
         );
-        assert_eq!(
-            state.compose_history.previous("ignored".to_owned()),
-            Some("safe draft")
-        );
+        assert_eq!(history.previous("ignored".to_owned()), Some("safe draft"));
     }
 
     #[test]
     fn invalid_e2ee_setup_form_is_not_recorded_or_recalled_in_compose_history() {
-        let mut state = test_state();
+        let mut history = ComposeHistory::default();
         let malformed = "/e2ee setup wait passphrases secret phrase";
         let ComposeSubmission::LocalCommand(command) = parse_compose_submission(malformed) else {
             panic!("expected local command submission");
         };
         assert_eq!(local_command_history_entry(malformed, &command), None);
-        state
-            .compose_history
-            .record_submission("safe draft".to_owned());
-        assert!(
-            !state
-                .compose_history
-                .entries
-                .iter()
-                .any(|entry| entry.contains("secret"))
-        );
+        history.record_submission("safe draft".to_owned());
+        assert!(!history.entries.iter().any(|entry| entry.contains("secret")));
     }
 
     #[test]
     fn valid_e2ee_setup_passphrase_form_is_not_recorded_in_compose_history() {
-        let mut state = test_state();
+        let mut history = ComposeHistory::default();
         let input = "/e2ee setup wait passphrase secret phrase";
         let ComposeSubmission::LocalCommand(command) = parse_compose_submission(input) else {
             panic!("expected local command submission");
         };
 
         assert_eq!(local_command_history_entry(input, &command), None);
-        state
-            .compose_history
-            .record_submission("safe draft".to_owned());
+        history.record_submission("safe draft".to_owned());
         assert!(
-            !state
-                .compose_history
+            !history
                 .entries
                 .iter()
                 .any(|entry| entry.contains("secret phrase"))
@@ -26425,19 +26466,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selected_room_id, "!selected:example");
-        let emote_room_id = submit_compose_with_history_entry(
+        let emote_room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Emote,
             "waves".to_owned(),
-            "/me waves".to_owned(),
             None,
         )
         .unwrap();
         assert_eq!(emote_room_id, "!selected:example");
-        assert_eq!(
-            state.compose_history.entries,
-            vec!["hello".to_owned(), "/me waves".to_owned()]
-        );
         assert_eq!(
             state.recorded_commands,
             vec![
@@ -26466,7 +26502,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_compose_records_literal_slash_history_with_stripped_send_body() {
+    fn submit_compose_sends_a_literal_slash_body() {
         let mut state = test_state();
         let handle = start_test_core();
         state.command_sender = Some(handle.command_sender().clone());
@@ -26474,16 +26510,14 @@ mod tests {
         state.model.selected_room = Some("!beta:example".to_owned());
         state.active_view = ViewId::Room("!beta:example".to_owned());
 
-        let room_id = submit_compose_with_history_entry(
+        let room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Text,
             "/status".to_owned(),
-            "//status".to_owned(),
             None,
         )
         .unwrap();
         assert_eq!(room_id, "!beta:example");
-        assert_eq!(state.compose_history.entries, vec!["//status".to_owned()]);
         assert_eq!(
             state.recorded_commands,
             vec![Command::SendMessage(SendMessageRequest {
@@ -26563,11 +26597,10 @@ mod tests {
                 .room_activity_read_targets
                 .contains_key(&thread_view_id("!ops:example", "$thread-root:example"))
         );
-        let emote_room_id = submit_compose_with_history_entry(
+        let emote_room_id = submit_compose(
             &mut state,
             RoomMessagePresentationKind::Emote,
             "waves".to_owned(),
-            "/me waves".to_owned(),
             None,
         )
         .unwrap();
@@ -26673,7 +26706,6 @@ mod tests {
             ),
             Err("message body must not be empty".to_owned())
         );
-        assert!(state.compose_history.entries.is_empty());
         state.model.selected_room = Some("!room:example".to_owned());
         assert_eq!(
             submit_compose(
@@ -26684,7 +26716,6 @@ mod tests {
             ),
             Err("unknown room id: !missing:example".to_owned())
         );
-        assert!(state.compose_history.entries.is_empty());
         assert_eq!(
             submit_compose(
                 &mut state,
@@ -26694,7 +26725,6 @@ mod tests {
             ),
             Err("room is not joined: !invite:example".to_owned())
         );
-        assert!(state.compose_history.entries.is_empty());
         assert_eq!(
             submit_compose(
                 &mut state,
@@ -26704,7 +26734,6 @@ mod tests {
             ),
             Err("unknown room id: !space:example".to_owned())
         );
-        assert!(state.compose_history.entries.is_empty());
         assert_eq!(
             submit_compose(
                 &mut state,
@@ -26714,7 +26743,6 @@ mod tests {
             ),
             Err("no room selected".to_owned())
         );
-        assert!(state.compose_history.entries.is_empty());
         assert!(state.recorded_commands.is_empty());
     }
 
@@ -27147,7 +27175,6 @@ mod tests {
             ),
             Err("core command sender is not available".to_owned())
         );
-        assert!(state.compose_history.entries.is_empty());
     }
 
     #[test]
