@@ -1978,6 +1978,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::SetRoomMemberPowerLevel => "set_room_member_power_level",
         Operation::SetDisplayName => "set_display_name",
         Operation::SetRoomTopic => "set_room_topic",
+        Operation::SetRoomNotificationMode => "set_room_notification_mode",
         Operation::SendMessage => "send_text",
         Operation::SendFile => "send_file",
         Operation::EditMessage => "edit_message",

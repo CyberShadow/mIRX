@@ -111,10 +111,11 @@ use crate::api::{
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
+    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent,
 };
 use crate::runtime::{EventSender, emit_event};
 
@@ -757,6 +758,34 @@ pub(crate) async fn set_room_member_power_level(
         .map_err(|err| {
             MatrixCoreError::new(format!(
                 "failed to set Matrix room member power level: {err}"
+            ))
+        })
+}
+
+/// Writes the room's own push rule for the mode, replacing any other rule
+/// of the user's for that room.
+pub(crate) async fn set_room_notification_mode(
+    client: &Client,
+    request: SetRoomNotificationModeRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    joined_room_by_id(client, room_id.as_str())?;
+    let mode = match request.mode {
+        RoomNotificationMode::AllMessages => SdkRoomNotificationMode::AllMessages,
+        RoomNotificationMode::MentionsAndKeywordsOnly => {
+            SdkRoomNotificationMode::MentionsAndKeywordsOnly
+        }
+        RoomNotificationMode::Mute => SdkRoomNotificationMode::Mute,
+    };
+    client
+        .notification_settings()
+        .await
+        .set_room_notification_mode(room_id, mode)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to set Matrix room notification mode: {err}"
             ))
         })
 }
@@ -4093,13 +4122,15 @@ mod tests {
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
         room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
-        set_room_member_power_level, sorted_room_member_summaries_from_parts, summarize_rooms,
-        sync_message_replacement, unban_room_member, verification_flow_id_from_to_device,
+        set_room_member_power_level, set_room_notification_mode,
+        sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
+        unban_room_member, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, ListPublicRoomsRequest, PublicRoom,
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
+        SetRoomNotificationModeRequest,
     };
 
     #[test]
@@ -5399,7 +5430,7 @@ mod tests {
     };
     use matrix_sdk::ruma::push::{
         EventMatchConditionData, NewConditionalPushRule, NewPushRule, NewSimplePushRule,
-        PushCondition, Ruleset,
+        PushCondition, RuleKind, Ruleset,
     };
     use matrix_sdk::{
         Client, Room, RoomMemberships, SessionMeta,
@@ -5442,7 +5473,7 @@ mod tests {
         },
         send_queue::{LocalEchoContent, RoomSendQueue, RoomSendQueueUpdate, SendQueueUpdate},
         store::SerializableEventContent,
-        test_utils::mocks::{MatrixMockServer, RoomMessagesResponseTemplate},
+        test_utils::mocks::{MatrixMockServer, PushRuleIdSpec, RoomMessagesResponseTemplate},
     };
     use matrix_sdk_base::cross_process_lock::CrossProcessLockConfig;
     use matrix_sdk_base::{
@@ -9866,6 +9897,56 @@ mod tests {
                         Some(RoomNotificationMode::MentionsAndKeywordsOnly)
                     ),
                 ]]
+            );
+        });
+    }
+
+    #[test]
+    fn set_room_notification_mode_writes_the_rooms_push_rule() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+                .await;
+            // Muting is an override rule named after the room.
+            mock_server
+                .mock_set_push_rules(
+                    RuleKind::Override,
+                    PushRuleIdSpec::Some("!room:example.org"),
+                )
+                .ok()
+                .expect(1)
+                .mount()
+                .await;
+
+            set_room_notification_mode(
+                &client,
+                SetRoomNotificationModeRequest {
+                    room_id: room_id().to_string(),
+                    mode: RoomNotificationMode::Mute,
+                },
+            )
+            .await
+            .expect("mute the room");
+
+            let error = set_room_notification_mode(
+                &client,
+                SetRoomNotificationModeRequest {
+                    room_id: "!other:example.org".to_owned(),
+                    mode: RoomNotificationMode::Mute,
+                },
+            )
+            .await
+            .expect_err("only a joined room has a mode");
+            assert_eq!(
+                error.to_string(),
+                "joined room not found: !other:example.org"
             );
         });
     }

@@ -29,6 +29,9 @@ pub enum Command {
     SetDisplayName(SetDisplayNameRequest),
     RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
+    /// Writes the room's push rule; the next sync's `SyncedRooms` reports
+    /// the new mode.
+    SetRoomNotificationMode(SetRoomNotificationModeRequest),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -276,6 +279,13 @@ pub struct RejectRoomInviteRequest {
 pub struct SetRoomTopicRequest {
     pub room_id: String,
     pub topic: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRoomNotificationModeRequest {
+    pub room_id: String,
+    pub mode: RoomNotificationMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1207,6 +1217,7 @@ pub enum Operation {
     SetDisplayName,
     RejectRoomInvite,
     SetRoomTopic,
+    SetRoomNotificationMode,
     SendMessage,
     SendFile,
     EditMessage,

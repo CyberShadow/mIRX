@@ -17,8 +17,8 @@ use crate::api::{
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
     RoomReadState, RoomSummary, SendReactionRequest, SetDisplayNameRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, SyncStopReason,
-    UnbanRoomMemberRequest, VerificationFlowId,
+    SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, HomeserverSpec, MatrixCoreError};
 
@@ -220,6 +220,9 @@ async fn handle_command(
             handle_reject_room_invite(event_tx, state, request).await
         }
         Command::SetRoomTopic(request) => handle_set_room_topic(event_tx, state, request).await,
+        Command::SetRoomNotificationMode(request) => {
+            handle_set_room_notification_mode(event_tx, state, request).await
+        }
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -963,6 +966,27 @@ async fn handle_set_room_topic(
 
     if let Err(err) = matrix::set_room_topic(client, request).await {
         emit_matrix_error(event_tx, Operation::SetRoomTopic, err);
+    }
+
+    false
+}
+
+async fn handle_set_room_notification_mode(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: SetRoomNotificationModeRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SetRoomNotificationMode,
+            "set room notification mode requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::set_room_notification_mode(client, request).await {
+        emit_matrix_error(event_tx, Operation::SetRoomNotificationMode, err);
     }
 
     false

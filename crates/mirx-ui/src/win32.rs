@@ -17267,6 +17267,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SetRoomMemberPowerLevel => "set room member power level",
         Operation::SetDisplayName => "set display name",
         Operation::SetRoomTopic => "set room topic",
+        Operation::SetRoomNotificationMode => "set room notifications",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",

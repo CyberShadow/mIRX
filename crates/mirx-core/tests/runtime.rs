@@ -20,10 +20,10 @@ use mirx_core::{
     RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomSummary, RoomTagSummary, RoomTyping, RoomUserProfile, SendFileRequest, SendMessageRequest,
     SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
-    SyncStopReason, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, start,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
+    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -528,6 +528,18 @@ fn redact_event_before_login_emits_redact_event_error() {
         }),
         Operation::RedactEvent,
         "redact event requires an authenticated session",
+    );
+}
+
+#[test]
+fn set_room_notification_mode_before_login_emits_its_error() {
+    assert_invalid_authenticated_command(
+        Command::SetRoomNotificationMode(SetRoomNotificationModeRequest {
+            room_id: "!ops:example.org".to_owned(),
+            mode: RoomNotificationMode::Mute,
+        }),
+        Operation::SetRoomNotificationMode,
+        "set room notification mode requires an authenticated session",
     );
 }
 
