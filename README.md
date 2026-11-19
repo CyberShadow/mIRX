@@ -58,6 +58,10 @@ MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
 
 The UI session file still lives at `%LOCALAPPDATA%\mirx\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mirx\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
 
+The menubar follows mIRC: `File` (Connect, Disconnect, Select Server... (`Alt+E`), Log Out, Exit), `Tools` (E2EE recovery and verification), `Commands` (prompts for a slash command's argument and runs it), `Window` (Cascade, Tile, Arrange Icons) and `Help` (Help Topics, About mirx). Room, message and nick-list actions are on their right-click menus.
+
+Connecting works like mIRC's. With a saved session mirx restores it and starts syncing at startup; without one, Select Server opens. Select Server takes a server name such as `matrix.org` (the client URL is discovered through `.well-known`), a homeserver URL, or nothing when the user is a full ID like `@alice:matrix.org`, then logs in and starts syncing. `/server [server]` and `File > Connect` reconnect a disconnected session, restore the saved one, or open Select Server; `/quit` and `File > Disconnect` stop syncing and keep the session; `File > Log Out` ends the session.
+
 Presentation settings live in `%LOCALAPPDATA%\mirx\ui-shell\mirx.ini`, next to the session file, and are saved as soon as they change:
 
 ```ini
@@ -72,7 +76,7 @@ format=[HH:nn]
 
 Like mIRC, a character the text font has no glyph for draws in the first fallback font that has one, at the text font's height and on its baseline, in every text area and nick list: Segoe UI, Tahoma, Segoe UI Symbol, Segoe UI Emoji, Noto Emoji, then the Windows script fonts (Nirmala UI, Microsoft YaHei, Yu Gothic, Malgun Gothic and others), whichever are installed. Emoji are monochrome; sequences (ZWJ families, skin tones, flags) draw as their component glyphs, and invisible format characters such as variation selectors are not drawn. The Wine test prefixes get the monochrome Noto Emoji font from the devshell (`MIRX_WINE_FONTS`), so the harness chain is Fixedsys, Tahoma, Noto Emoji.
 
-Find is UI-scoped. Status and Thread Find search only loaded text, while Room Find searches loaded text first and can page older room history through backfill. `/find <text>`, `Edit > Find...`, and `Ctrl+F` all invoke the same behavior; Find does not use Matrix server-side search.
+Find is UI-scoped. Status and Thread Find search only loaded text, while Room Find searches loaded text first and can page older room history through backfill. `/find <text>`, every window's system-menu `Find Text...`, and `Ctrl+F` all invoke the same behavior; Find does not use Matrix server-side search.
 
 ## Release Measurement
 
