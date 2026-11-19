@@ -3404,7 +3404,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages"}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -3424,6 +3424,8 @@ mod tests {
                             tags: Vec::new(),
                             space_children: Vec::new(),
                             notification_mode: Some(RoomNotificationMode::AllMessages),
+                            canonical_alias: None,
+                            alt_aliases: Vec::new(),
                         }]),
                         Event::RoomActivity(Box::new(RoomActivity {
                             room_id: "!room:example".to_owned(),
@@ -4134,6 +4136,8 @@ mod tests {
                 tags: Vec::new(),
                 space_children: Vec::new(),
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             }]),
             Event::VerificationRequest(VerificationRequest {
                 flow_id: "flow-1".to_owned(),
@@ -4158,7 +4162,7 @@ mod tests {
             serde_json::to_value(&events).unwrap(),
             json!([
                 "Started",
-                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages"}]},
+                {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
                 {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
                 {"Error":{"operation":"SendMessage","message":"send failed"}}
@@ -4195,7 +4199,7 @@ mod tests {
     fn load_command_rejects_unknown_fields_inside_event_payloads() {
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","unexpected":true}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"unexpected":true}]}]}}"#,
         )
         .unwrap_err();
 
@@ -4206,14 +4210,14 @@ mod tests {
                 "ok":false,
                 "err":{
                     "code":"invalid_args",
-                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `topic`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`, `notification_mode`"
+                    "message":"invalid command args: unknown field `unexpected`, expected one of `room_id`, `display_name`, `topic`, `membership`, `encrypted`, `is_space`, `is_direct`, `direct_user_ids`, `tags`, `space_children`, `notification_mode`, `canonical_alias`, `alt_aliases`"
                 }
             })
         );
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}],"notification_mode":"all_messages"}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!space:example","display_name":"Space","topic":null,"membership":"join","encrypted":false,"is_space":true,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[{"room_id":"!one:example","suggested":true,"order":"aaa","unexpected":true}],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}]}}"#,
         )
         .unwrap_err();
 
@@ -4231,7 +4235,7 @@ mod tests {
 
         let error = parse_command_request(
             COMMAND_ID_LOAD_SYNTHETIC_STATE,
-            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[],"notification_mode":"all_messages"}]}]}}"#,
+            br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[{"tag":"m.favourite","order":"0.25","unexpected":true}],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]}]}}"#,
         )
         .unwrap_err();
 
@@ -6483,6 +6487,8 @@ mod tests {
                     order: Some("aaa".to_owned()),
                 }],
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             }),
             super::DumpRoom {
                 room_id: "!room:example".to_owned(),

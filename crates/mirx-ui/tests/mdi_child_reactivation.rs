@@ -94,6 +94,8 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         tags: Vec::new(),
         space_children: Vec::new(),
         notification_mode: Some(RoomNotificationMode::AllMessages),
+        canonical_alias: None,
+        alt_aliases: Vec::new(),
     }
 }
 

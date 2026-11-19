@@ -35,8 +35,9 @@ use matrix_sdk::{
     room::edit::EditedContent,
     room::{MessagesOptions, Receipts, RoomMemberRole},
     ruma::{
-        EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedRoomId,
-        OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt, UserId,
+        EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId,
+        OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt,
+        UserId,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::{
             directory::get_public_rooms_filtered,
@@ -458,6 +459,8 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             tags,
             space_children,
             notification_mode: Some(notification_mode),
+            canonical_alias: room.canonical_alias().map(|alias| alias.to_string()),
+            alt_aliases: alias_strings(room.alt_aliases()),
         });
     }
 
@@ -486,6 +489,8 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
             tags: Vec::new(),
             space_children: Vec::new(),
             notification_mode: None,
+            canonical_alias: room.canonical_alias().map(|alias| alias.to_string()),
+            alt_aliases: alias_strings(room.alt_aliases()),
         });
     }
     invited_summaries.sort_by(|left, right| {
@@ -496,6 +501,10 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
     rooms.extend(invited_summaries);
 
     Ok(rooms)
+}
+
+fn alias_strings(aliases: Vec<OwnedRoomAliasId>) -> Vec<String> {
+    aliases.into_iter().map(|alias| alias.to_string()).collect()
 }
 
 /// The room's own push rule if it has one, else the account default for its
@@ -10148,6 +10157,146 @@ mod tests {
             highlight_words_from_ruleset(&Ruleset::server_default(&user_id)),
             Vec::new()
         );
+    }
+
+    fn canonical_alias_state(alias: Option<&str>, alt_aliases: &[&str]) -> Raw<AnySyncStateEvent> {
+        Raw::from_json_string(
+            serde_json::json!({
+                "type": "m.room.canonical_alias",
+                "state_key": "",
+                "sender": "@example:localhost",
+                "event_id": format!("$alias-{}:localhost", alt_aliases.len()),
+                "origin_server_ts": 1u64,
+                "content": { "alias": alias, "alt_aliases": alt_aliases },
+            })
+            .to_string(),
+        )
+        .expect("canonical alias state event")
+    }
+
+    fn summary_aliases(rooms: &[RoomSummary]) -> Vec<(String, Option<String>, Vec<String>)> {
+        rooms
+            .iter()
+            .map(|room| {
+                (
+                    room.room_id.clone(),
+                    room.canonical_alias.clone(),
+                    room.alt_aliases.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn summarize_rooms_reports_room_aliases() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let ops = OwnedRoomId::try_from("!a-ops:example.org").expect("room id");
+            let invite = OwnedRoomId::try_from("!b-invite:example.org").expect("room id");
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder
+                        .add_joined_room(JoinedRoomBuilder::new(&ops).add_state_event(
+                            canonical_alias_state(
+                                Some("#ops:example.org"),
+                                &["#hall:example.org", "#ops:other.org"],
+                            ),
+                        ))
+                        .add_invited_room(InvitedRoomBuilder::new(&invite));
+                })
+                .await;
+
+            let mut rooms = summarize_rooms(&client).await.expect("summarize rooms");
+            rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
+            assert_eq!(
+                summary_aliases(&rooms),
+                vec![
+                    (
+                        ops.to_string(),
+                        Some("#ops:example.org".to_owned()),
+                        vec!["#hall:example.org".to_owned(), "#ops:other.org".to_owned()],
+                    ),
+                    (invite.to_string(), None, Vec::new()),
+                ]
+            );
+        });
+    }
+
+    /// The room-list task re-snapshots the rooms when a room's
+    /// `m.room.canonical_alias` changes.
+    #[test]
+    fn canonical_alias_change_re_snapshots_rooms() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            let ops = OwnedRoomId::try_from("!ops:example.org").expect("room id");
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_joined_room(JoinedRoomBuilder::new(&ops));
+                })
+                .await;
+            let (events, event_rx) = mpsc::channel();
+            let task = super::start_room_list_update_task(client.clone(), events)
+                .expect("start the room-list task");
+
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(&ops)
+                            .add_state_event(canonical_alias_state(Some("#ops:example.org"), &[])),
+                    );
+                })
+                .await;
+
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let rooms = loop {
+                match event_rx.try_recv() {
+                    Ok(Event::SyncedRooms(rooms)) => break rooms,
+                    Ok(event) => panic!("expected SyncedRooms, got {event:?}"),
+                    Err(mpsc::TryRecvError::Empty) => {
+                        assert!(
+                            tokio::time::Instant::now() < deadline,
+                            "no SyncedRooms after the alias change"
+                        );
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => panic!("room-list task stopped"),
+                }
+            };
+            assert_eq!(
+                summary_aliases(&rooms),
+                vec![(
+                    ops.to_string(),
+                    Some("#ops:example.org".to_owned()),
+                    Vec::new()
+                )]
+            );
+            task.abort();
+        });
     }
 
     async fn sync_push_rules(mock_server: &MatrixMockServer, client: &Client, ruleset: &Ruleset) {

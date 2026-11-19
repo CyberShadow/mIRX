@@ -14240,6 +14240,8 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 tags: Vec::new(),
                 space_children: Vec::new(),
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             },
             RoomSummary {
                 room_id: "!two:example".to_owned(),
@@ -14253,6 +14255,8 @@ unsafe fn run_self_test(hwnd: HWND) -> Result<(), String> {
                 tags: Vec::new(),
                 space_children: Vec::new(),
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             },
         ]),
         Event::RoomActivity(Box::new(RoomActivity {
@@ -17678,6 +17682,8 @@ mod tests {
             tags: Vec::new(),
             space_children: Vec::new(),
             notification_mode: Some(RoomNotificationMode::AllMessages),
+            canonical_alias: None,
+            alt_aliases: Vec::new(),
         }
     }
 
@@ -17694,6 +17700,8 @@ mod tests {
             tags: Vec::new(),
             space_children: Vec::new(),
             notification_mode: None,
+            canonical_alias: None,
+            alt_aliases: Vec::new(),
         }
     }
 
@@ -17710,6 +17718,8 @@ mod tests {
             tags: Vec::new(),
             space_children: Vec::new(),
             notification_mode: Some(RoomNotificationMode::AllMessages),
+            canonical_alias: None,
+            alt_aliases: Vec::new(),
         }
     }
 

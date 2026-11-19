@@ -779,6 +779,8 @@ fn room_summary(room_id: &str, display_name: &str, encrypted: bool) -> RoomSumma
         tags: Vec::new(),
         space_children: Vec::new(),
         notification_mode: Some(RoomNotificationMode::AllMessages),
+        canonical_alias: None,
+        alt_aliases: Vec::new(),
     }
 }
 
@@ -786,6 +788,8 @@ fn invited_room_summary(room_id: &str, display_name: &str, encrypted: bool) -> R
     RoomSummary {
         membership: RoomMembership::Invite,
         notification_mode: None,
+        canonical_alias: None,
+        alt_aliases: Vec::new(),
         ..room_summary(room_id, display_name, encrypted)
     }
 }
@@ -807,6 +811,8 @@ fn joined_space_summary(
         tags: Vec::new(),
         space_children: children,
         notification_mode: Some(RoomNotificationMode::AllMessages),
+        canonical_alias: None,
+        alt_aliases: Vec::new(),
     }
 }
 
@@ -818,6 +824,8 @@ fn invited_space_summary(
     RoomSummary {
         membership: RoomMembership::Invite,
         notification_mode: None,
+        canonical_alias: None,
+        alt_aliases: Vec::new(),
         ..joined_space_summary(room_id, display_name, children)
     }
 }
@@ -3016,6 +3024,8 @@ fn automation_driver_exposes_space_metadata_but_rejects_space_actions()
                     order: Some("aaa".to_owned()),
                 }],
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             },
             room_summary("!room:example", "Room", true),
         ]),
@@ -13664,6 +13674,8 @@ fn automation_driver_slash_query_opens_existing_direct_room_match()
                 tags: Vec::new(),
                 space_children: Vec::new(),
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             },
         ]),
         text_event(
@@ -13731,6 +13743,8 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
                 tags: Vec::new(),
                 space_children: Vec::new(),
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             },
             RoomSummary {
                 room_id: "!direct-two:example".to_owned(),
@@ -13744,6 +13758,8 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
                 tags: Vec::new(),
                 space_children: Vec::new(),
                 notification_mode: Some(RoomNotificationMode::AllMessages),
+                canonical_alias: None,
+                alt_aliases: Vec::new(),
             },
         ]),
         text_event(

@@ -12,6 +12,8 @@
         "tags": [],
         "space_children": [],
         "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": [],
         "membership": "join"
       }
     ]

@@ -460,6 +460,10 @@ pub struct RoomSummary {
     /// How the user's push rules treat the room: `Some` exactly for joined
     /// rooms, `None` for invites.
     pub notification_mode: Option<RoomNotificationMode>,
+    /// `m.room.canonical_alias`'s `alias`, e.g. `#ops:example.org`.
+    pub canonical_alias: Option<String>,
+    /// `m.room.canonical_alias`'s `alt_aliases`, in event order.
+    pub alt_aliases: Vec<String>,
 }
 
 /// A joined room's effective notification mode under the user's push
@@ -491,6 +495,8 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             tags: Vec<RoomTagSummary>,
             space_children: Vec<SpaceChildSummary>,
             notification_mode: serde_json::Value,
+            canonical_alias: serde_json::Value,
+            alt_aliases: Vec<String>,
         }
 
         let room = WireRoomSummary::deserialize(deserializer)?;
@@ -500,6 +506,16 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             topic => {
                 return Err(serde::de::Error::custom(format!(
                     "invalid topic value: expected string or null, got {topic}"
+                )));
+            }
+        };
+        let canonical_alias = match room.canonical_alias {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(alias) => Some(alias),
+            alias => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid canonical_alias for room {}: expected string or null, got {alias}",
+                    room.room_id
                 )));
             }
         };
@@ -537,6 +553,8 @@ impl<'de> serde::Deserialize<'de> for RoomSummary {
             tags: room.tags,
             space_children: room.space_children,
             notification_mode,
+            canonical_alias,
+            alt_aliases: room.alt_aliases,
         })
     }
 }

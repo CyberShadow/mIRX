@@ -12,7 +12,9 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
-        "notification_mode": "all_messages"
+        "notification_mode": "all_messages",
+        "canonical_alias": null,
+        "alt_aliases": []
       },
       {
         "room_id": "!invite:example",
@@ -24,7 +26,9 @@
         "direct_user_ids": [],
         "tags": [],
         "space_children": [],
-        "notification_mode": null
+        "notification_mode": null,
+        "canonical_alias": null,
+        "alt_aliases": []
       }
     ]
   },

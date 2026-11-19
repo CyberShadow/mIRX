@@ -2119,6 +2119,8 @@ mod tests {
                 RoomMembership::Join => Some(RoomNotificationMode::AllMessages),
                 RoomMembership::Invite => None,
             },
+            canonical_alias: None,
+            alt_aliases: Vec::new(),
         }
     }
 

@@ -1,6 +1,6 @@
 [
   "Started",
-  {"SyncedRooms":[{"room_id":"!find-thread:example","display_name":"Find Thread","topic":null,"encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","membership":"join"}]},
+  {"SyncedRooms":[{"room_id":"!find-thread:example","display_name":"Find Thread","topic":null,"encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[],"membership":"join"}]},
   {"RoomActivity":{"room_id":"!find-thread:example","activity_id":"event:$find-thread-root","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":"$find-thread-root","transaction_id":null,"sender": { "user_id": "@alice:example", "display_name": null, "display_name_ambiguous": false },"presentation":"text","body":"root msg","send_state":{"state":"sent"}},"relation":null}},
   {"RoomActivity":{"room_id":"!find-thread:example","activity_id":"event:$find-thread-current","timestamp_ms":1700000060000,"highlight":false,"relation":{"type":"thread","thread_root_event_id":"$find-thread-root","in_reply_to_event_id":"$find-thread-root","is_falling_back":false},"kind":{"type":"message","event_id":"$find-thread-current","transaction_id":null,"sender": { "user_id": "@bob:example", "display_name": null, "display_name_ambiguous": false },"presentation":"text","body":"current thread reply","send_state":{"state":"sent"}}}}
 ]
