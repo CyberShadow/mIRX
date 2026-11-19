@@ -4699,11 +4699,13 @@ unsafe fn submit_selected_member_moderation(hwnd: HWND, kick: bool) -> Result<()
         Command::KickRoomMember(KickRoomMemberRequest {
             room_id: room_id.clone(),
             user_id: member.user_id.clone(),
+            reason: None,
         })
     } else {
         Command::BanRoomMember(BanRoomMemberRequest {
             room_id: room_id.clone(),
             user_id: member.user_id.clone(),
+            reason: None,
         })
     };
     let sender = state_ref(hwnd)
@@ -15089,6 +15091,10 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::RejectRoomInvite => "reject room invitation",
         Operation::KickRoomMember => "kick room member",
         Operation::BanRoomMember => "ban room member",
+        Operation::UnbanRoomMember => "unban room member",
+        Operation::InviteRoomMember => "invite room member",
+        Operation::SetRoomMemberPowerLevel => "set room member power level",
+        Operation::SetDisplayName => "set display name",
         Operation::SetRoomTopic => "set room topic",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",

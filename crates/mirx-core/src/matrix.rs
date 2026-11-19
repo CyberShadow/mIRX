@@ -34,7 +34,7 @@ use matrix_sdk::{
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
             AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, SyncStateEvent,
-            ToDeviceEvent,
+            TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
@@ -51,7 +51,7 @@ use matrix_sdk::{
                 },
                 power_levels::{
                     OriginalSyncRoomPowerLevelsEvent, PossiblyRedactedRoomPowerLevelsEventContent,
-                    RoomPowerLevelsEventContent, UserPowerLevel,
+                    RoomPowerLevels, RoomPowerLevelsEventContent, UserPowerLevel,
                 },
                 redaction::OriginalSyncRoomRedactionEvent,
                 topic::OriginalSyncRoomTopicEvent,
@@ -78,11 +78,11 @@ use tokio::task::JoinHandle;
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomMediaRequest, KickRoomMemberRequest, LoginRequest, MarkRoomReadRequest,
-    Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    Event, FetchRoomMediaRequest, InviteRoomMemberRequest, KickRoomMemberRequest, LoginRequest,
+    MarkRoomReadRequest, MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
+    RecoverE2eeRequest, RedactEventRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
@@ -91,7 +91,8 @@ use crate::api::{
     RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, UnbanRoomMemberRequest,
     UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
     VerificationRequest, VerificationState, VerificationStateEvent,
 };
@@ -528,7 +529,7 @@ pub(crate) async fn kick_room_member(
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
-    room.kick_user(user_id, None)
+    room.kick_user(user_id, request.reason.as_deref())
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to kick Matrix room member: {err}")))
 }
@@ -543,9 +544,108 @@ pub(crate) async fn ban_room_member(
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
     let room = joined_room_by_id(client, room_id.as_str())?;
 
-    room.ban_user(user_id, None)
+    room.ban_user(user_id, request.reason.as_deref())
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to ban Matrix room member: {err}")))
+}
+
+pub(crate) async fn unban_room_member(
+    client: &Client,
+    request: &UnbanRoomMemberRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room = joined_room_by_id(client, room_id.as_str())?;
+
+    room.unban_user(user_id, request.reason.as_deref())
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to unban Matrix room member: {err}")))
+}
+
+pub(crate) async fn invite_room_member(
+    client: &Client,
+    request: &InviteRoomMemberRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room = joined_room_by_id(client, room_id.as_str())?;
+
+    room.invite_user_by_id(user_id)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to invite Matrix room member: {err}")))
+}
+
+/// Moderator in the IRC sense: the conventional Matrix moderator level.
+const MODERATOR_POWER_LEVEL: u8 = 50;
+
+/// The power level that gives `role` in a room with `power_levels`.
+///
+/// Voiced is the lowest level above `users_default` that may send
+/// `m.room.message`; a room where that level reaches moderator has no
+/// distinct voice level.
+fn member_power_role_level(
+    power_levels: &RoomPowerLevels,
+    role: MemberPowerRole,
+) -> Result<Int, MatrixCoreError> {
+    let moderator = Int::from(MODERATOR_POWER_LEVEL);
+    match role {
+        MemberPowerRole::Moderator => Ok(moderator),
+        MemberPowerRole::Default => Ok(power_levels.users_default),
+        MemberPowerRole::Voiced => {
+            let message_level = power_levels
+                .events
+                .get(&TimelineEventType::RoomMessage)
+                .copied()
+                .unwrap_or(power_levels.events_default);
+            let level = message_level.max(power_levels.users_default + Int::from(1));
+            if level >= moderator {
+                return Err(MatrixCoreError::new(format!(
+                    "room has no voice level below moderator: voice needs power level {level}"
+                )));
+            }
+            Ok(level)
+        }
+    }
+}
+
+pub(crate) async fn set_room_member_power_level(
+    client: &Client,
+    request: &SetRoomMemberPowerLevelRequest,
+) -> Result<(), MatrixCoreError> {
+    let room_id = <&RoomId>::try_from(request.room_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id: {err}")))?;
+    let user_id = <&UserId>::try_from(request.user_id.as_str())
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let room = joined_room_by_id(client, room_id.as_str())?;
+
+    let power_levels = room.power_levels().await.map_err(|err| {
+        MatrixCoreError::new(format!("failed to load Matrix room power levels: {err}"))
+    })?;
+    let level = member_power_role_level(&power_levels, request.role)?;
+
+    room.update_power_levels(vec![(user_id, level)])
+        .await
+        .map(|_| ())
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to set Matrix room member power level: {err}"
+            ))
+        })
+}
+
+pub(crate) async fn set_display_name(
+    client: &Client,
+    request: &SetDisplayNameRequest,
+) -> Result<(), MatrixCoreError> {
+    client
+        .account()
+        .set_display_name(Some(&request.display_name))
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to set Matrix display name: {err}")))
 }
 
 pub(crate) async fn reject_room_invite(
@@ -3588,10 +3688,10 @@ mod tests {
         attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
         backfill_room_history, ban_room_member, cancelled_state,
         direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_media,
-        insert_pending_outgoing_kind, joined_room_members, joined_room_members_no_sync,
-        joined_room_update_changes_members, kick_room_member, map_cross_signing_status,
-        map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        insert_pending_outgoing_kind, invite_room_member, joined_room_members,
+        joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
@@ -3606,9 +3706,10 @@ mod tests {
         room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
-        room_unable_to_decrypt_reason_from_sdk, sorted_room_member_summaries_from_parts,
-        sync_message_replacement, verification_flow_id_from_to_device,
-        verification_request_from_to_device, verification_requested_state_event,
+        room_unable_to_decrypt_reason_from_sdk, set_display_name, set_room_member_power_level,
+        sorted_room_member_summaries_from_parts, sync_message_replacement, unban_room_member,
+        verification_flow_id_from_to_device, verification_request_from_to_device,
+        verification_requested_state_event,
     };
 
     #[test]
@@ -3810,6 +3911,7 @@ mod tests {
                 &KickRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3840,6 +3942,7 @@ mod tests {
                 &KickRoomMemberRequest {
                     room_id: "invalid-room-id".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3854,6 +3957,7 @@ mod tests {
                 &KickRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "invalid-user-id".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3868,6 +3972,7 @@ mod tests {
                 &KickRoomMemberRequest {
                     room_id: "!other:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3910,6 +4015,7 @@ mod tests {
                 &BanRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3940,6 +4046,7 @@ mod tests {
                 &BanRoomMemberRequest {
                     room_id: "invalid-room-id".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3954,6 +4061,7 @@ mod tests {
                 &BanRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "invalid-user-id".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3968,6 +4076,7 @@ mod tests {
                 &BanRoomMemberRequest {
                     room_id: "!other:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 },
             )
             .await
@@ -3986,6 +4095,440 @@ mod tests {
                     .filter(|request| request.url.path().ends_with("/ban"))
                     .count(),
                 1
+            );
+        });
+    }
+
+    fn moderation_test_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime")
+    }
+
+    async fn request_bodies_ending_with(
+        mock_server: &MatrixMockServer,
+        suffix: &str,
+    ) -> Vec<serde_json::Value> {
+        mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled")
+            .iter()
+            .filter(|request| request.url.path().ends_with(suffix))
+            .map(|request| {
+                request
+                    .body_json::<serde_json::Value>()
+                    .expect("request JSON body")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn kick_and_ban_room_member_send_the_reason_in_the_request_body() {
+        moderation_test_runtime().block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            mock_server.mock_kick_user().ok().expect(1).mount().await;
+            mock_server.mock_ban_user().ok().expect(1).mount().await;
+
+            kick_room_member(
+                &client,
+                &KickRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                    reason: Some("spamming".to_owned()),
+                },
+            )
+            .await
+            .expect("kick joined member with reason");
+            ban_room_member(
+                &client,
+                &BanRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@target:example.org".to_owned(),
+                    reason: Some("spamming".to_owned()),
+                },
+            )
+            .await
+            .expect("ban joined member with reason");
+
+            let expected =
+                serde_json::json!({ "user_id": "@target:example.org", "reason": "spamming" });
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/kick").await,
+                vec![expected.clone()]
+            );
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/ban").await,
+                vec![expected]
+            );
+        });
+    }
+
+    #[test]
+    fn unban_room_member_submits_exact_request_and_rejects_invalid_or_non_joined_rooms() {
+        moderation_test_runtime().block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path_regex(
+                    r"^/_matrix/client/v3/rooms/.*/unban$",
+                ))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
+                )
+                .expect(2)
+                .mount(mock_server.server())
+                .await;
+
+            for reason in [None, Some("appealed".to_owned())] {
+                unban_room_member(
+                    &client,
+                    &UnbanRoomMemberRequest {
+                        room_id: "!room:example.org".to_owned(),
+                        user_id: "@target:example.org".to_owned(),
+                        reason,
+                    },
+                )
+                .await
+                .expect("unban member of joined room");
+            }
+
+            let unban_requests = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled")
+                .into_iter()
+                .filter(|request| request.url.path().ends_with("/unban"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                unban_requests
+                    .iter()
+                    .map(|request| request.url.path().to_owned())
+                    .collect::<Vec<_>>(),
+                vec!["/_matrix/client/v3/rooms/!room:example.org/unban"; 2]
+            );
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/unban").await,
+                vec![
+                    serde_json::json!({ "user_id": "@target:example.org" }),
+                    serde_json::json!({ "user_id": "@target:example.org", "reason": "appealed" }),
+                ]
+            );
+
+            for (room, user, expected) in [
+                (
+                    "invalid-room-id",
+                    "@target:example.org",
+                    "invalid Matrix room id: leading sigil is incorrect or missing",
+                ),
+                (
+                    "!room:example.org",
+                    "invalid-user-id",
+                    "invalid Matrix user id: leading sigil is incorrect or missing",
+                ),
+                (
+                    "!other:example.org",
+                    "@target:example.org",
+                    "joined room not found: !other:example.org",
+                ),
+            ] {
+                let err = unban_room_member(
+                    &client,
+                    &UnbanRoomMemberRequest {
+                        room_id: room.to_owned(),
+                        user_id: user.to_owned(),
+                        reason: None,
+                    },
+                )
+                .await
+                .expect_err("rejected unban");
+                assert_eq!(err.to_string(), expected);
+            }
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/unban")
+                    .await
+                    .len(),
+                2
+            );
+        });
+    }
+
+    #[test]
+    fn invite_room_member_submits_exact_request_and_rejects_invalid_or_non_joined_rooms() {
+        moderation_test_runtime().block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            mock_server
+                .mock_invite_user_by_id()
+                .ok()
+                .expect(1)
+                .mount()
+                .await;
+
+            invite_room_member(
+                &client,
+                &InviteRoomMemberRequest {
+                    room_id: "!room:example.org".to_owned(),
+                    user_id: "@guest:example.org".to_owned(),
+                },
+            )
+            .await
+            .expect("invite into joined room");
+
+            let invite_paths = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled")
+                .into_iter()
+                .filter(|request| request.url.path().ends_with("/invite"))
+                .map(|request| request.url.path().to_owned())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                invite_paths,
+                vec!["/_matrix/client/v3/rooms/!room:example.org/invite"]
+            );
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/invite").await,
+                vec![serde_json::json!({ "user_id": "@guest:example.org" })]
+            );
+
+            for (room, user, expected) in [
+                (
+                    "invalid-room-id",
+                    "@guest:example.org",
+                    "invalid Matrix room id: leading sigil is incorrect or missing",
+                ),
+                (
+                    "!room:example.org",
+                    "invalid-user-id",
+                    "invalid Matrix user id: leading sigil is incorrect or missing",
+                ),
+                (
+                    "!other:example.org",
+                    "@guest:example.org",
+                    "joined room not found: !other:example.org",
+                ),
+            ] {
+                let err = invite_room_member(
+                    &client,
+                    &InviteRoomMemberRequest {
+                        room_id: room.to_owned(),
+                        user_id: user.to_owned(),
+                    },
+                )
+                .await
+                .expect_err("rejected invite");
+                assert_eq!(err.to_string(), expected);
+            }
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/invite")
+                    .await
+                    .len(),
+                1
+            );
+        });
+    }
+
+    /// Syncs a joined room with the given power-levels content, sets
+    /// `@target:example.org` to `role` and returns the result plus the
+    /// `users` map of every power-levels PUT body.
+    async fn set_target_power_role(
+        power_levels: serde_json::Value,
+        role: MemberPowerRole,
+    ) -> (Result<(), super::MatrixCoreError>, Vec<serde_json::Value>) {
+        let mock_server = MatrixMockServer::new().await;
+        let client = mock_server.client_builder().build().await;
+        let state_events = serde_json::json!([
+            { "type": "m.room.create", "state_key": "", "sender": "@example:localhost", "event_id": "$create:localhost", "origin_server_ts": 1u64, "content": { "creator": "@example:localhost" } },
+            { "type": "m.room.power_levels", "state_key": "", "sender": "@example:localhost", "event_id": "$power:localhost", "origin_server_ts": 2u64, "content": power_levels },
+            { "type": "m.room.member", "state_key": "@example:localhost", "sender": "@example:localhost", "event_id": "$actor:localhost", "origin_server_ts": 3u64, "content": { "membership": "join" } }
+        ]);
+        mock_server
+            .sync_room(
+                &client,
+                JoinedRoomBuilder::new(room_id().as_ref())
+                    .add_state_bulk(raw_sync_state_events(&state_events)),
+            )
+            .await;
+        mock_server
+            .mock_room_send_state()
+            .ok(OwnedEventId::try_from("$power-update:localhost").expect("valid event id"))
+            .mount()
+            .await;
+
+        let result = set_room_member_power_level(
+            &client,
+            &SetRoomMemberPowerLevelRequest {
+                room_id: "!room:example.org".to_owned(),
+                user_id: "@target:example.org".to_owned(),
+                role,
+            },
+        )
+        .await;
+        let users = request_bodies_ending_with(&mock_server, "/state/m.room.power_levels/")
+            .await
+            .into_iter()
+            .map(|body| body["users"].clone())
+            .collect();
+        (result, users)
+    }
+
+    #[test]
+    fn set_room_member_power_level_maps_irc_roles_to_room_levels() {
+        moderation_test_runtime().block_on(async {
+            let base = serde_json::json!({
+                "users_default": 0,
+                "events_default": 0,
+                "users": { "@example:localhost": 100, "@target:example.org": 25 },
+            });
+            let with = |extra: serde_json::Value| {
+                let mut content = base.clone();
+                content
+                    .as_object_mut()
+                    .expect("power levels object")
+                    .extend(extra.as_object().expect("extra object").clone());
+                content
+            };
+
+            for (content, role, target_level) in [
+                (base.clone(), MemberPowerRole::Moderator, Some(50)),
+                (base.clone(), MemberPowerRole::Voiced, Some(1)),
+                (
+                    with(serde_json::json!({ "events": { "m.room.message": 10 } })),
+                    MemberPowerRole::Voiced,
+                    Some(10),
+                ),
+                (
+                    with(serde_json::json!({ "events_default": 20 })),
+                    MemberPowerRole::Voiced,
+                    Some(20),
+                ),
+                (
+                    with(serde_json::json!({ "users_default": 5 })),
+                    MemberPowerRole::Voiced,
+                    Some(6),
+                ),
+                (base.clone(), MemberPowerRole::Default, None),
+            ] {
+                let (result, users) = set_target_power_role(content, role).await;
+                result.expect("set power level");
+                let mut expected = serde_json::json!({ "@example:localhost": 100 });
+                if let Some(level) = target_level {
+                    expected["@target:example.org"] = serde_json::json!(level);
+                }
+                assert_eq!(users, vec![expected], "{role:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn set_room_member_power_level_refuses_voice_when_messages_need_moderator() {
+        moderation_test_runtime().block_on(async {
+            for content in [
+                serde_json::json!({
+                    "users_default": 0,
+                    "events_default": 0,
+                    "events": { "m.room.message": 50 },
+                    "users": { "@example:localhost": 100 },
+                }),
+                serde_json::json!({
+                    "users_default": 49,
+                    "events_default": 0,
+                    "users": { "@example:localhost": 100 },
+                }),
+            ] {
+                let (result, users) = set_target_power_role(content, MemberPowerRole::Voiced).await;
+                let err = result.expect_err("no voice level below moderator");
+                assert!(
+                    err.to_string()
+                        .contains("room has no voice level below moderator"),
+                    "{err}"
+                );
+                assert!(users.is_empty(), "no power-levels request: {users:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn set_room_member_power_level_rejects_invalid_or_non_joined_rooms() {
+        moderation_test_runtime().block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_joined_room(&client, room_id().as_ref())
+                .await;
+            for (room, user, expected) in [
+                (
+                    "invalid-room-id",
+                    "@target:example.org",
+                    "invalid Matrix room id: leading sigil is incorrect or missing",
+                ),
+                (
+                    "!room:example.org",
+                    "invalid-user-id",
+                    "invalid Matrix user id: leading sigil is incorrect or missing",
+                ),
+                (
+                    "!other:example.org",
+                    "@target:example.org",
+                    "joined room not found: !other:example.org",
+                ),
+            ] {
+                let err = set_room_member_power_level(
+                    &client,
+                    &SetRoomMemberPowerLevelRequest {
+                        room_id: room.to_owned(),
+                        user_id: user.to_owned(),
+                        role: MemberPowerRole::Moderator,
+                    },
+                )
+                .await
+                .expect_err("rejected power level change");
+                assert_eq!(err.to_string(), expected);
+            }
+        });
+    }
+
+    #[test]
+    fn set_display_name_puts_the_new_display_name_profile_field() {
+        moderation_test_runtime().block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let user_id = client.user_id().expect("authenticated user").to_owned();
+            mock_server
+                .mock_set_profile_field(
+                    &user_id,
+                    matrix_sdk::ruma::profile::ProfileFieldName::DisplayName,
+                )
+                .ok()
+                .expect(1)
+                .mount()
+                .await;
+
+            set_display_name(
+                &client,
+                &SetDisplayNameRequest {
+                    display_name: "New Nick".to_owned(),
+                },
+            )
+            .await
+            .expect("set display name");
+
+            assert_eq!(
+                request_bodies_ending_with(&mock_server, "/profile/@example:localhost/displayname")
+                    .await,
+                vec![serde_json::json!({ "displayname": "New Nick" })]
             );
         });
     }
@@ -4434,19 +4977,20 @@ mod tests {
     use crate::api::{
         BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreErrorEvent, E2eeBackupState,
         E2eeCrossSigningStatus, E2eeRecoveryState, Event, FetchRoomMediaRequest,
-        KickRoomMemberRequest, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity,
-        RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-        RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-        RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomHistoryBackfillEvent,
-        RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
-        RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMessageActivity,
-        RoomMessagePresentationKind, RoomMessageSendState, RoomPowerLevelUserChange,
-        RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity, RoomStateNoticeContent,
-        RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity, RoomUnableToDecryptReason,
-        RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendMessageReplyTarget,
-        SendMessageThreadTarget, StoredSession, UnsupportedRoomMessageActivity,
-        VerificationDecimals, VerificationEmoji, VerificationRequest, VerificationState,
-        VerificationStateEvent,
+        InviteRoomMemberRequest, KickRoomMemberRequest, MemberPowerRole, Operation,
+        ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind, RoomActivityRelation,
+        RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+        RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
+        RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
+        RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
+        RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+        RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
+        RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
+        RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
+        RoomVideoInfo, SendMessageReplyTarget, SendMessageThreadTarget, SetDisplayNameRequest,
+        SetRoomMemberPowerLevelRequest, StoredSession, UnbanRoomMemberRequest,
+        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
+        VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, Room, RoomMemberships, SessionMeta,

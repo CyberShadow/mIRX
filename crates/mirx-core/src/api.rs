@@ -21,6 +21,10 @@ pub enum Command {
     LeaveRoom(LeaveRoomRequest),
     KickRoomMember(KickRoomMemberRequest),
     BanRoomMember(BanRoomMemberRequest),
+    UnbanRoomMember(UnbanRoomMemberRequest),
+    InviteRoomMember(InviteRoomMemberRequest),
+    SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest),
+    SetDisplayName(SetDisplayNameRequest),
     RejectRoomInvite(RejectRoomInviteRequest),
     SetRoomTopic(SetRoomTopicRequest),
     SendMessage(SendMessageRequest),
@@ -141,6 +145,7 @@ pub struct LeaveRoomRequest {
 pub struct KickRoomMemberRequest {
     pub room_id: String,
     pub user_id: String,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -148,6 +153,48 @@ pub struct KickRoomMemberRequest {
 pub struct BanRoomMemberRequest {
     pub room_id: String,
     pub user_id: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnbanRoomMemberRequest {
+    pub room_id: String,
+    pub user_id: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InviteRoomMemberRequest {
+    pub room_id: String,
+    pub user_id: String,
+}
+
+/// The IRC-style role a member is given by setting their room power level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberPowerRole {
+    /// Power level 50.
+    Moderator,
+    /// The lowest level above `users_default` that may send messages.
+    Voiced,
+    /// The room's `users_default`.
+    Default,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRoomMemberPowerLevelRequest {
+    pub room_id: String,
+    pub user_id: String,
+    pub role: MemberPowerRole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetDisplayNameRequest {
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -984,6 +1031,10 @@ pub enum Operation {
     LeaveRoom,
     KickRoomMember,
     BanRoomMember,
+    UnbanRoomMember,
+    InviteRoomMember,
+    SetRoomMemberPowerLevel,
+    SetDisplayName,
     RejectRoomInvite,
     SetRoomTopic,
     SendMessage,

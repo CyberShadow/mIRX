@@ -5,21 +5,23 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomMediaRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomMediaRequest, InviteRoomMemberRequest,
+    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
+    MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
     RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
-    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -381,9 +383,59 @@ fn kick_room_member_before_login_emits_kick_room_member_error() {
         Command::KickRoomMember(KickRoomMemberRequest {
             room_id: "!ops:example.org".to_owned(),
             user_id: "@bob:example.org".to_owned(),
+            reason: None,
         }),
         Operation::KickRoomMember,
         "kick room member requires an authenticated session",
+    );
+}
+
+#[test]
+fn unban_room_member_before_login_emits_unban_room_member_error() {
+    assert_invalid_authenticated_command(
+        Command::UnbanRoomMember(UnbanRoomMemberRequest {
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@bob:example.org".to_owned(),
+            reason: None,
+        }),
+        Operation::UnbanRoomMember,
+        "unban room member requires an authenticated session",
+    );
+}
+
+#[test]
+fn invite_room_member_before_login_emits_invite_room_member_error() {
+    assert_invalid_authenticated_command(
+        Command::InviteRoomMember(InviteRoomMemberRequest {
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@bob:example.org".to_owned(),
+        }),
+        Operation::InviteRoomMember,
+        "invite room member requires an authenticated session",
+    );
+}
+
+#[test]
+fn set_room_member_power_level_before_login_emits_power_level_error() {
+    assert_invalid_authenticated_command(
+        Command::SetRoomMemberPowerLevel(SetRoomMemberPowerLevelRequest {
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@bob:example.org".to_owned(),
+            role: MemberPowerRole::Moderator,
+        }),
+        Operation::SetRoomMemberPowerLevel,
+        "set room member power level requires an authenticated session",
+    );
+}
+
+#[test]
+fn set_display_name_before_login_emits_set_display_name_error() {
+    assert_invalid_authenticated_command(
+        Command::SetDisplayName(SetDisplayNameRequest {
+            display_name: "Nick".to_owned(),
+        }),
+        Operation::SetDisplayName,
+        "set display name requires an authenticated session",
     );
 }
 
@@ -393,6 +445,7 @@ fn ban_room_member_before_login_emits_ban_room_member_error() {
         Command::BanRoomMember(BanRoomMemberRequest {
             room_id: "!ops:example.org".to_owned(),
             user_id: "@bob:example.org".to_owned(),
+            reason: None,
         }),
         Operation::BanRoomMember,
         "ban room member requires an authenticated session",
@@ -823,13 +876,16 @@ fn member_moderation_requests_and_commands_preserve_room_and_user_ids() {
     let kick_request = KickRoomMemberRequest {
         room_id: "!ops:example.org".to_owned(),
         user_id: "@alice:example.org".to_owned(),
+        reason: Some("spamming".to_owned()),
     };
     let ban_request = BanRoomMemberRequest {
         room_id: "!ops:example.org".to_owned(),
         user_id: "@bob:example.org".to_owned(),
+        reason: None,
     };
 
-    let kick_json = r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org"}"#;
+    let kick_json =
+        r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org","reason":"spamming"}"#;
     assert_eq!(
         serde_json::to_string(&kick_request).expect("serialize kick request"),
         kick_json
@@ -839,7 +895,7 @@ fn member_moderation_requests_and_commands_preserve_room_and_user_ids() {
         kick_request.clone()
     );
 
-    let ban_json = r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org"}"#;
+    let ban_json = r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","reason":null}"#;
     assert_eq!(
         serde_json::to_string(&ban_request).expect("serialize ban request"),
         ban_json
@@ -851,20 +907,124 @@ fn member_moderation_requests_and_commands_preserve_room_and_user_ids() {
 
     assert!(matches!(
         Command::KickRoomMember(kick_request),
-        Command::KickRoomMember(KickRoomMemberRequest { room_id, user_id })
-            if room_id == "!ops:example.org" && user_id == "@alice:example.org"
+        Command::KickRoomMember(KickRoomMemberRequest { room_id, user_id, reason })
+            if room_id == "!ops:example.org"
+                && user_id == "@alice:example.org"
+                && reason.as_deref() == Some("spamming")
     ));
     assert!(matches!(
         Command::BanRoomMember(ban_request),
-        Command::BanRoomMember(BanRoomMemberRequest { room_id, user_id })
+        Command::BanRoomMember(BanRoomMemberRequest { room_id, user_id, reason: None })
             if room_id == "!ops:example.org" && user_id == "@bob:example.org"
     ));
+}
+
+#[test]
+fn unban_and_invite_requests_round_trip_through_serde() {
+    for (request, json) in [
+        (
+            UnbanRoomMemberRequest {
+                room_id: "!ops:example.org".to_owned(),
+                user_id: "@bob:example.org".to_owned(),
+                reason: Some("appealed".to_owned()),
+            },
+            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","reason":"appealed"}"#,
+        ),
+        (
+            UnbanRoomMemberRequest {
+                room_id: "!ops:example.org".to_owned(),
+                user_id: "@bob:example.org".to_owned(),
+                reason: None,
+            },
+            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","reason":null}"#,
+        ),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&request).expect("serialize unban request"),
+            json
+        );
+        assert_eq!(
+            serde_json::from_str::<UnbanRoomMemberRequest>(json).expect("deserialize unban"),
+            request
+        );
+    }
+
+    let invite = InviteRoomMemberRequest {
+        room_id: "!ops:example.org".to_owned(),
+        user_id: "@carol:example.org".to_owned(),
+    };
+    let invite_json = r#"{"room_id":"!ops:example.org","user_id":"@carol:example.org"}"#;
+    assert_eq!(
+        serde_json::to_string(&invite).expect("serialize invite request"),
+        invite_json
+    );
+    assert_eq!(
+        serde_json::from_str::<InviteRoomMemberRequest>(invite_json).expect("deserialize invite"),
+        invite
+    );
+}
+
+#[test]
+fn set_room_member_power_level_requests_round_trip_every_role() {
+    for (role, json) in [
+        (
+            MemberPowerRole::Moderator,
+            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"moderator"}"#,
+        ),
+        (
+            MemberPowerRole::Voiced,
+            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"voiced"}"#,
+        ),
+        (
+            MemberPowerRole::Default,
+            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"default"}"#,
+        ),
+    ] {
+        let request = SetRoomMemberPowerLevelRequest {
+            room_id: "!ops:example.org".to_owned(),
+            user_id: "@bob:example.org".to_owned(),
+            role,
+        };
+        assert_eq!(
+            serde_json::to_string(&request).expect("serialize power level request"),
+            json
+        );
+        assert_eq!(
+            serde_json::from_str::<SetRoomMemberPowerLevelRequest>(json)
+                .expect("deserialize power level request"),
+            request
+        );
+    }
+    assert!(
+        serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
+            r#"{"room_id":"!ops:example.org","user_id":"@bob:example.org","role":"admin"}"#
+        )
+        .is_err(),
+        "power level request must reject unknown roles"
+    );
+}
+
+#[test]
+fn set_display_name_request_round_trips_through_serde() {
+    let request = SetDisplayNameRequest {
+        display_name: "New Nick".to_owned(),
+    };
+    let json = r#"{"display_name":"New Nick"}"#;
+    assert_eq!(
+        serde_json::to_string(&request).expect("serialize display name request"),
+        json
+    );
+    assert_eq!(
+        serde_json::from_str::<SetDisplayNameRequest>(json).expect("deserialize display name"),
+        request
+    );
 }
 
 #[test]
 fn member_moderation_requests_reject_unknown_fields() {
     for json in [
         r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org","unexpected":true}"#,
+        r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org","reason":null,"unexpected":true}"#,
         r#"{"room_id":"!ops:example.org","unexpected":true}"#,
     ] {
         assert!(
@@ -875,7 +1035,36 @@ fn member_moderation_requests_reject_unknown_fields() {
             serde_json::from_str::<BanRoomMemberRequest>(json).is_err(),
             "ban request must reject invalid fields"
         );
+        assert!(
+            serde_json::from_str::<UnbanRoomMemberRequest>(json).is_err(),
+            "unban request must reject invalid fields"
+        );
+        assert!(
+            serde_json::from_str::<InviteRoomMemberRequest>(json).is_err(),
+            "invite request must reject invalid fields"
+        );
     }
+    assert!(
+        serde_json::from_str::<InviteRoomMemberRequest>(
+            r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org","reason":"hi"}"#
+        )
+        .is_err(),
+        "invite request carries no reason"
+    );
+    assert!(
+        serde_json::from_str::<SetRoomMemberPowerLevelRequest>(
+            r#"{"room_id":"!ops:example.org","user_id":"@alice:example.org","role":"voiced","level":1}"#
+        )
+        .is_err(),
+        "power level request must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_str::<SetDisplayNameRequest>(
+            r#"{"display_name":"Nick","unexpected":true}"#
+        )
+        .is_err(),
+        "display name request must reject unknown fields"
+    );
 }
 
 #[test]
@@ -883,6 +1072,13 @@ fn member_moderation_operations_round_trip_through_serde() {
     for (operation, json) in [
         (Operation::KickRoomMember, r#""KickRoomMember""#),
         (Operation::BanRoomMember, r#""BanRoomMember""#),
+        (Operation::UnbanRoomMember, r#""UnbanRoomMember""#),
+        (Operation::InviteRoomMember, r#""InviteRoomMember""#),
+        (
+            Operation::SetRoomMemberPowerLevel,
+            r#""SetRoomMemberPowerLevel""#,
+        ),
+        (Operation::SetDisplayName, r#""SetDisplayName""#),
     ] {
         assert_eq!(
             serde_json::to_string(&operation).expect("serialize operation"),

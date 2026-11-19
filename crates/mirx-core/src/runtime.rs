@@ -12,11 +12,12 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CoreErrorEvent, CreateDirectRoomRequest, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
-    E2eeRecoverySucceeded, EditMessageRequest, Event, JoinRoomRequest, KickRoomMemberRequest,
-    LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomMembers,
-    RoomMembership, RoomReadState, RoomSummary, SendReactionRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, VerificationFlowId,
+    E2eeRecoverySucceeded, EditMessageRequest, Event, InviteRoomMemberRequest, JoinRoomRequest,
+    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
+    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
+    SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
+    SetupE2eeRecoveryRequest, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -202,6 +203,16 @@ async fn handle_command(
         Command::LeaveRoom(request) => handle_leave_room(event_tx, state, request).await,
         Command::KickRoomMember(request) => handle_kick_room_member(event_tx, state, request).await,
         Command::BanRoomMember(request) => handle_ban_room_member(event_tx, state, request).await,
+        Command::UnbanRoomMember(request) => {
+            handle_unban_room_member(event_tx, state, request).await
+        }
+        Command::InviteRoomMember(request) => {
+            handle_invite_room_member(event_tx, state, request).await
+        }
+        Command::SetRoomMemberPowerLevel(request) => {
+            handle_set_room_member_power_level(event_tx, state, request).await
+        }
+        Command::SetDisplayName(request) => handle_set_display_name(event_tx, state, request).await,
         Command::RejectRoomInvite(request) => {
             handle_reject_room_invite(event_tx, state, request).await
         }
@@ -605,6 +616,111 @@ async fn handle_ban_room_member(
         matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
     {
         emit_matrix_error(event_tx, Operation::BanRoomMember, err);
+    }
+
+    false
+}
+
+async fn handle_unban_room_member(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: UnbanRoomMemberRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::UnbanRoomMember,
+            "unban room member requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::unban_room_member(client, &request).await {
+        emit_matrix_error(event_tx, Operation::UnbanRoomMember, err);
+        return false;
+    }
+
+    if let Err(err) =
+        matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
+    {
+        emit_matrix_error(event_tx, Operation::UnbanRoomMember, err);
+    }
+
+    false
+}
+
+async fn handle_invite_room_member(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: InviteRoomMemberRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::InviteRoomMember,
+            "invite room member requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::invite_room_member(client, &request).await {
+        emit_matrix_error(event_tx, Operation::InviteRoomMember, err);
+        return false;
+    }
+
+    if let Err(err) =
+        matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
+    {
+        emit_matrix_error(event_tx, Operation::InviteRoomMember, err);
+    }
+
+    false
+}
+
+async fn handle_set_room_member_power_level(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: SetRoomMemberPowerLevelRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SetRoomMemberPowerLevel,
+            "set room member power level requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::set_room_member_power_level(client, &request).await {
+        emit_matrix_error(event_tx, Operation::SetRoomMemberPowerLevel, err);
+        return false;
+    }
+
+    if let Err(err) =
+        matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
+    {
+        emit_matrix_error(event_tx, Operation::SetRoomMemberPowerLevel, err);
+    }
+
+    false
+}
+
+async fn handle_set_display_name(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: SetDisplayNameRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::SetDisplayName,
+            "set display name requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::set_display_name(client, &request).await {
+        emit_matrix_error(event_tx, Operation::SetDisplayName, err);
     }
 
     false
@@ -1400,6 +1516,7 @@ mod tests {
                 Command::KickRoomMember(KickRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 }),
                 "/kick",
                 false,
@@ -1419,6 +1536,7 @@ mod tests {
                 Command::BanRoomMember(BanRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 }),
                 "/ban",
                 true,
@@ -1491,6 +1609,7 @@ mod tests {
                 Command::KickRoomMember(KickRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 }),
                 Operation::KickRoomMember,
                 "/kick",
@@ -1510,6 +1629,7 @@ mod tests {
                 Command::BanRoomMember(BanRoomMemberRequest {
                     room_id: "!room:example.org".to_owned(),
                     user_id: "@target:example.org".to_owned(),
+                    reason: None,
                 }),
                 Operation::BanRoomMember,
                 "/ban",
