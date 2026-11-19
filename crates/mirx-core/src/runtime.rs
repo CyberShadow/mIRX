@@ -12,7 +12,7 @@ use tokio::task::{JoinHandle as TokioJoinHandle, LocalSet};
 use crate::api::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest, E2eeRecoveryOperation,
-    E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event,
+    E2eeRecoverySetupSucceeded, E2eeRecoverySucceeded, EditMessageRequest, Event, HighlightWord,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
     LoginRequest, MarkRoomReadRequest, Operation, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomJoined, RoomMembers, RoomMembership,
@@ -223,6 +223,10 @@ async fn handle_command(
         Command::SetRoomNotificationMode(request) => {
             handle_set_room_notification_mode(event_tx, state, request).await
         }
+        Command::AddHighlightWord(word) => handle_add_highlight_word(event_tx, state, word).await,
+        Command::RemoveHighlightWord(word) => {
+            handle_remove_highlight_word(event_tx, state, word).await
+        }
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -313,6 +317,11 @@ async fn handle_login(
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
+    let highlight_words = if rooms.is_ok() {
+        Some(matrix::highlight_words(&client).await)
+    } else {
+        None
+    };
     emit_event(
         event_tx,
         Event::LoggedIn {
@@ -322,11 +331,12 @@ async fn handle_login(
     );
     match rooms {
         Ok(rooms) => match room_members.expect("room members exist after successful sync") {
-            Ok(room_members) => emit_initial_synced_rooms_members_and_read_states(
+            Ok(room_members) => emit_initial_room_snapshot(
                 event_tx,
                 rooms,
                 room_members,
                 room_read_states.expect("read states exist after successful sync"),
+                highlight_words.expect("highlight words exist after successful sync"),
             ),
             Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
         },
@@ -412,14 +422,20 @@ async fn handle_restore_session(
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
+    let highlight_words = if rooms.is_ok() {
+        Some(matrix::highlight_words(&client).await)
+    } else {
+        None
+    };
     emit_event(event_tx, Event::RestoredSession);
     match rooms {
         Ok(rooms) => match room_members.expect("room members exist after successful sync") {
-            Ok(room_members) => emit_initial_synced_rooms_members_and_read_states(
+            Ok(room_members) => emit_initial_room_snapshot(
                 event_tx,
                 rooms,
                 room_members,
                 room_read_states.expect("read states exist after successful sync"),
+                highlight_words.expect("highlight words exist after successful sync"),
             ),
             Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
         },
@@ -992,6 +1008,48 @@ async fn handle_set_room_notification_mode(
     false
 }
 
+async fn handle_add_highlight_word(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    word: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::AddHighlightWord,
+            "add highlight word requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::add_highlight_word(client, &word).await {
+        emit_matrix_error(event_tx, Operation::AddHighlightWord, err);
+    }
+
+    false
+}
+
+async fn handle_remove_highlight_word(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    word: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::RemoveHighlightWord,
+            "remove highlight word requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::remove_highlight_word(client, &word).await {
+        emit_matrix_error(event_tx, Operation::RemoveHighlightWord, err);
+    }
+
+    false
+}
+
 async fn handle_mark_room_read(
     event_tx: &EventSender,
     state: &mut WorkerState,
@@ -1420,11 +1478,12 @@ fn task_is_running(
     false
 }
 
-fn emit_initial_synced_rooms_members_and_read_states(
+fn emit_initial_room_snapshot(
     event_tx: &EventSender,
     rooms: Vec<RoomSummary>,
     room_members: Vec<RoomMembers>,
     room_read_states: Vec<RoomReadState>,
+    highlight_words: Result<Vec<HighlightWord>, MatrixCoreError>,
 ) {
     let joined_room_ids = rooms
         .iter()
@@ -1433,6 +1492,10 @@ fn emit_initial_synced_rooms_members_and_read_states(
         .collect::<std::collections::HashSet<_>>();
 
     emit_event(event_tx, Event::SyncedRooms(rooms));
+    match highlight_words {
+        Ok(words) => emit_event(event_tx, Event::HighlightWords(words)),
+        Err(err) => emit_matrix_error(event_tx, Operation::HighlightWords, err),
+    }
     for members in room_members {
         if joined_room_ids.contains(&members.room_id) {
             emit_event(event_tx, Event::RoomMembers(members));
@@ -1520,16 +1583,16 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        EventSender, WorkerState, emit_initial_synced_rooms_members_and_read_states,
-        handle_command, handle_login, handle_start_sync, handle_stop_sync, run_worker,
-        shutdown_state,
+        EventSender, WorkerState, emit_initial_room_snapshot, handle_command, handle_login,
+        handle_start_sync, handle_stop_sync, run_worker, shutdown_state,
     };
     use crate::api::CoreConfig;
     use crate::api::{
         AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest,
-        CreateRoomRequest, CreateRoomVisibility, Event, JoinRoomRequest, KickRoomMemberRequest,
-        LoginRequest, Operation, RoomJoined, RoomMemberRank, RoomMemberSummary, RoomMembers,
-        RoomMembership, RoomNotificationMode, RoomReadState, RoomSummary, SyncStopReason,
+        CreateRoomRequest, CreateRoomVisibility, Event, HighlightWord, JoinRoomRequest,
+        KickRoomMemberRequest, LoginRequest, Operation, RoomJoined, RoomMemberRank,
+        RoomMemberSummary, RoomMembers, RoomMembership, RoomNotificationMode, RoomReadState,
+        RoomSummary, SyncStopReason,
     };
     use matrix_sdk::{
         ruma::{
@@ -2198,11 +2261,15 @@ mod tests {
             ),
         ];
 
-        emit_initial_synced_rooms_members_and_read_states(
+        emit_initial_room_snapshot(
             &event_tx as &EventSender,
             rooms.clone(),
             room_members.clone(),
             read_states.clone(),
+            Ok(vec![HighlightWord {
+                word: "deploy".to_owned(),
+                highlights: true,
+            }]),
         );
 
         assert_eq!(
@@ -2210,6 +2277,15 @@ mod tests {
                 .recv_timeout(Duration::from_secs(2))
                 .expect("synced rooms event"),
             Event::SyncedRooms(rooms)
+        );
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("highlight words event"),
+            Event::HighlightWords(vec![HighlightWord {
+                word: "deploy".to_owned(),
+                highlights: true,
+            }])
         );
         for members in room_members.into_iter().take(2) {
             assert_eq!(
@@ -2230,7 +2306,7 @@ mod tests {
         assert_eq!(
             event_rx.try_recv(),
             Err(TryRecvError::Empty),
-            "initial snapshot must only emit synced rooms, room members, and room read states"
+            "initial snapshot must only emit synced rooms, highlight words, room members, and room read states"
         );
     }
 
@@ -2558,6 +2634,13 @@ mod tests {
                 "{events:?}"
             );
             assert!(logged_in < synced_rooms);
+            // No `m.push_rules` from the mock server: the server defaults
+            // have no highlight words.
+            assert_eq!(
+                events.get(synced_rooms + 1),
+                Some(&Event::HighlightWords(Vec::new())),
+                "{events:?}"
+            );
             assert!(!sync_task_is_none(&state));
             shutdown_state(&mut state).await;
         });

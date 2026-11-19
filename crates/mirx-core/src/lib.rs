@@ -10,7 +10,7 @@ pub use api::{
     CoreErrorEvent, CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility,
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation,
     E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
+    EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
     ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
     PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
@@ -32,7 +32,7 @@ pub use api::{
     SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason,
     UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, login_server,
+    VerificationStateEvent, login_server, validate_highlight_word,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

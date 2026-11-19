@@ -6,8 +6,8 @@ use mirx_core::{
     CreateDirectRoomRequest, CreateRoomRequest, CreateRoomVisibility, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryOperation, E2eeRecoverySetupSucceeded,
     E2eeRecoveryState, E2eeRecoverySucceeded, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest,
+    FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
+    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, ListPublicRoomsRequest, LoginRequest,
     MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
     PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
     RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RoomActivity,
@@ -23,7 +23,7 @@ use mirx_core::{
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
     UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -540,6 +540,65 @@ fn set_room_notification_mode_before_login_emits_its_error() {
         }),
         Operation::SetRoomNotificationMode,
         "set room notification mode requires an authenticated session",
+    );
+}
+
+#[test]
+fn highlight_word_commands_before_login_emit_their_errors() {
+    assert_invalid_authenticated_command(
+        Command::AddHighlightWord("deploy".to_owned()),
+        Operation::AddHighlightWord,
+        "add highlight word requires an authenticated session",
+    );
+    assert_invalid_authenticated_command(
+        Command::RemoveHighlightWord("deploy".to_owned()),
+        Operation::RemoveHighlightWord,
+        "remove highlight word requires an authenticated session",
+    );
+}
+
+#[test]
+fn validate_highlight_word_accepts_words_wildcards_and_phrases() {
+    for word in ["deploy", "*help*", "release day", "a?c"] {
+        assert_eq!(validate_highlight_word(word), Ok(()), "{word}");
+    }
+    for (word, error) in [
+        ("", "a highlight word cannot be empty"),
+        ("  ", "a highlight word cannot be empty"),
+        (" x", "a highlight word cannot start or end with a space"),
+        ("x ", "a highlight word cannot start or end with a space"),
+        ("a/b", "a highlight word cannot contain / or \\"),
+        ("a\\b", "a highlight word cannot contain / or \\"),
+        (".m.rule", "a highlight word cannot start with ."),
+    ] {
+        assert_eq!(
+            validate_highlight_word(word),
+            Err(error.to_owned()),
+            "{word:?}"
+        );
+    }
+}
+
+#[test]
+fn highlight_words_event_round_trips() {
+    let event = Event::HighlightWords(vec![HighlightWord {
+        word: "deploy".to_owned(),
+        highlights: false,
+    }]);
+    let json = serde_json::to_string(&event).expect("serialize highlight words");
+    assert_eq!(
+        json,
+        r#"{"HighlightWords":[{"word":"deploy","highlights":false}]}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Event>(&json).expect("deserialize highlight words"),
+        event
+    );
+    assert!(
+        serde_json::from_str::<Event>(
+            r#"{"HighlightWords":[{"word":"deploy","highlights":false,"unexpected":true}]}"#
+        )
+        .is_err()
     );
 }
 

@@ -37,6 +37,7 @@ use matrix_sdk::{
     ruma::{
         EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedRoomId,
         OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt, UserId,
+        api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::{
             directory::get_public_rooms_filtered,
             media::get_content_thumbnail::v3::Method,
@@ -77,7 +78,10 @@ use matrix_sdk::{
             tag::{TagEvent, TagEventContent, Tags},
             typing::SyncTypingEvent,
         },
-        push::Action,
+        push::{
+            Action, HighlightTweakValue, NewPatternedPushRule, NewPushRule, RuleKind, Ruleset,
+            SoundTweakValue, Tweak,
+        },
     },
     send_queue::{LocalEcho, LocalEchoContent, RoomSendQueueUpdate, SendQueueUpdate},
     store::{RoomLoadSettings, SerializableEventContent},
@@ -92,21 +96,22 @@ use mime::Mime;
 use serde::Deserialize;
 use tokio::task::JoinHandle;
 
+use crate::api::validate_highlight_word;
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest,
-    MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
-    RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
-    RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
-    RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
+    FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
+    JoinRoomRequest, KickRoomMemberRequest, ListPublicRoomsRequest, LoginRequest,
+    MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoom, PublicRoomsPage,
+    PublicRoomsResult, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult,
+    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageActivity, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource,
+    RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership,
+    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
     RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState, RoomStateNoticeActivity,
     RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping, RoomUnableToDecryptActivity,
     RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest,
@@ -790,6 +795,113 @@ pub(crate) async fn set_room_notification_mode(
         })
 }
 
+/// The user's keyword rules: every enabled content rule that is not a
+/// server default (the SDK's `enabled_keywords`), one per pattern, in
+/// ruleset order. A pattern highlights if any of its rules does.
+fn highlight_words_from_ruleset(ruleset: &Ruleset) -> Vec<HighlightWord> {
+    let mut words: Vec<HighlightWord> = Vec::new();
+    for rule in ruleset
+        .content
+        .iter()
+        .filter(|rule| !rule.default && rule.enabled)
+    {
+        let highlights = rule.actions.iter().any(Action::is_highlight);
+        match words.iter_mut().find(|word| word.word == rule.pattern) {
+            Some(word) => word.highlights |= highlights,
+            None => words.push(HighlightWord {
+                word: rule.pattern.clone(),
+                highlights,
+            }),
+        }
+    }
+    words
+}
+
+pub(crate) async fn highlight_words(
+    client: &Client,
+) -> Result<Vec<HighlightWord>, MatrixCoreError> {
+    let ruleset =
+        client.account().push_rules().await.map_err(|err| {
+            MatrixCoreError::new(format!("failed to read Matrix push rules: {err}"))
+        })?;
+    Ok(highlight_words_from_ruleset(&ruleset))
+}
+
+/// What a highlight word's rule does: notify with a sound and highlight,
+/// as the server's own mention rules do.
+fn highlight_word_actions() -> Vec<Action> {
+    vec![
+        Action::Notify,
+        Action::SetTweak(Tweak::Sound(SoundTweakValue::Default)),
+        Action::SetTweak(Tweak::Highlight(HighlightTweakValue::Yes)),
+    ]
+}
+
+/// Makes `word` one highlighting content rule named after it. The SDK's
+/// `add_keyword` writes notify-only rules, so mirx writes its own: the PUT
+/// creates the rule or replaces the actions of a notify-only one, a
+/// disabled one is enabled again, and the word's other rules go.
+pub(crate) async fn add_highlight_word(client: &Client, word: &str) -> Result<(), MatrixCoreError> {
+    let failed = |err: &dyn Display| {
+        MatrixCoreError::new(format!("failed to add highlight word \"{word}\": {err}"))
+    };
+    validate_highlight_word(word).map_err(|err| failed(&err))?;
+    let ruleset = client
+        .account()
+        .push_rules()
+        .await
+        .map_err(|err| failed(&err))?;
+
+    client
+        .send(set_pushrule::v3::Request::new(NewPushRule::Content(
+            NewPatternedPushRule::new(word.to_owned(), word.to_owned(), highlight_word_actions()),
+        )))
+        .await
+        .map_err(|err| failed(&err))?;
+    if ruleset
+        .get(RuleKind::Content, word)
+        .is_some_and(|rule| !rule.enabled())
+    {
+        client
+            .send(set_pushrule_enabled::v3::Request::new(
+                RuleKind::Content,
+                word.to_owned(),
+                true,
+            ))
+            .await
+            .map_err(|err| failed(&err))?;
+    }
+    for rule in ruleset
+        .content
+        .iter()
+        .filter(|rule| !rule.default && rule.pattern == word && rule.rule_id != word)
+    {
+        client
+            .send(delete_pushrule::v3::Request::new(
+                RuleKind::Content,
+                rule.rule_id.clone(),
+            ))
+            .await
+            .map_err(|err| failed(&err))?;
+    }
+    Ok(())
+}
+
+/// Deletes every content rule of the user's with the word as its pattern.
+pub(crate) async fn remove_highlight_word(
+    client: &Client,
+    word: &str,
+) -> Result<(), MatrixCoreError> {
+    client
+        .notification_settings()
+        .await
+        .remove_keyword(word)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!("failed to remove highlight word \"{word}\": {err}"))
+        })
+}
+
 pub(crate) async fn set_display_name(
     client: &Client,
     request: &SetDisplayNameRequest,
@@ -1464,10 +1576,14 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
     // handlers, so the snapshot reads the new rules from the store
     // (`push_rules_change_re_snapshots_room_notification_modes`).
     let push_rules_events = events.clone();
-    client.add_event_handler(move |_event: PushRulesEvent, client: Client| {
+    client.add_event_handler(move |event: PushRulesEvent, client: Client| {
         let events = push_rules_events.clone();
         async move {
             emit_room_snapshot_or_room_list_error(&client, &events).await;
+            emit_event(
+                &events,
+                Event::HighlightWords(highlight_words_from_ruleset(&event.content.global)),
+            );
         }
     });
 
@@ -4099,20 +4215,22 @@ mod tests {
     use super::{
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
         ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
-        attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
-        backfill_room_history, ban_room_member, cancelled_state, content_type_for_file_name,
-        create_room, direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync,
-        fetch_room_event, fetch_room_media, insert_pending_outgoing_kind, invite_room_member,
-        joined_room_members, joined_room_members_no_sync, joined_room_update_changes_members,
-        kick_room_member, list_public_rooms, map_cross_signing_status, map_decimals,
-        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
-        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        add_highlight_word, attach_reply_relation, attach_thread_relation,
+        attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
+        content_type_for_file_name, create_room, direct_user_ids_by_room_from_content,
+        emit_member_snapshots_after_sync, fetch_room_event, fetch_room_media,
+        highlight_word_actions, highlight_words_from_ruleset, insert_pending_outgoing_kind,
+        invite_room_member, joined_room_members, joined_room_members_no_sync,
+        joined_room_update_changes_members, kick_room_member, list_public_rooms,
+        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
+        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
         map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
-        reaction_event_content, read_file_bytes, register_event_handlers, reply_mention_user_ids,
-        restore_session, room_activity_from_sync_member, room_activity_from_sync_message,
-        room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
+        reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
+        reply_mention_user_ids, restore_session, room_activity_from_sync_member,
+        room_activity_from_sync_message, room_activity_from_sync_topic,
+        room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
         room_history_backfill_event_from_timeline_event,
@@ -4128,7 +4246,7 @@ mod tests {
         verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
-        CreateRoomRequest, CreateRoomVisibility, ListPublicRoomsRequest, PublicRoom,
+        CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
         SetRoomNotificationModeRequest,
     };
@@ -5429,8 +5547,8 @@ mod tests {
         VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::ruma::push::{
-        EventMatchConditionData, NewConditionalPushRule, NewPushRule, NewSimplePushRule,
-        PushCondition, RuleKind, Ruleset,
+        Action, EventMatchConditionData, NewConditionalPushRule, NewPatternedPushRule, NewPushRule,
+        NewSimplePushRule, PatternedPushRule, PushCondition, RuleKind, Ruleset,
     };
     use matrix_sdk::{
         Client, Room, RoomMemberships, SessionMeta,
@@ -9869,34 +9987,43 @@ mod tests {
             let (events, event_rx) = mpsc::channel();
             register_event_handlers(&client, events);
 
-            let rules =
-                push_rules_account_data(&notification_mode_ruleset(&client, &muted, &mentions));
-            mock_server
-                .mock_sync()
-                .ok_and_run(&client, |builder| {
-                    builder.add_custom_global_account_data(rules);
-                })
-                .await;
+            let mut ruleset = notification_mode_ruleset(&client, &muted, &mentions);
+            ruleset
+                .insert(
+                    NewPushRule::Content(NewPatternedPushRule::new(
+                        "deploy".to_owned(),
+                        "deploy".to_owned(),
+                        highlight_word_actions(),
+                    )),
+                    None,
+                    None,
+                )
+                .expect("insert keyword rule");
+            sync_push_rules(&mock_server, &client, &ruleset).await;
 
-            let snapshots = drain_events(&event_rx)
-                .into_iter()
-                .filter_map(|event| match event {
-                    Event::SyncedRooms(mut rooms) => {
-                        rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
-                        Some(summary_notification_modes(&rooms))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+            let events = drain_events(&event_rx);
+            let [Event::SyncedRooms(rooms), Event::HighlightWords(words)] = events.as_slice()
+            else {
+                panic!("expected SyncedRooms then HighlightWords, got {events:?}");
+            };
+            let mut rooms = rooms.clone();
+            rooms.sort_by(|left, right| left.room_id.cmp(&right.room_id));
             assert_eq!(
-                snapshots,
-                vec![vec![
+                summary_notification_modes(&rooms),
+                vec![
                     (muted.to_string(), Some(RoomNotificationMode::Mute)),
                     (
                         mentions.to_string(),
                         Some(RoomNotificationMode::MentionsAndKeywordsOnly)
                     ),
-                ]]
+                ]
+            );
+            assert_eq!(
+                words,
+                &vec![HighlightWord {
+                    word: "deploy".to_owned(),
+                    highlights: true,
+                }]
             );
         });
     }
@@ -9947,6 +10074,258 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 "joined room not found: !other:example.org"
+            );
+        });
+    }
+
+    fn content_rule(
+        rule_id: &str,
+        pattern: &str,
+        actions: Vec<Action>,
+        enabled: bool,
+    ) -> PatternedPushRule {
+        serde_json::from_value(serde_json::json!({
+            "rule_id": rule_id,
+            "pattern": pattern,
+            "actions": actions,
+            "default": false,
+            "enabled": enabled,
+        }))
+        .expect("content rule")
+    }
+
+    /// The server defaults with these user content rules appended.
+    fn ruleset_with_content_rules(user_id: &UserId, rules: Vec<PatternedPushRule>) -> Ruleset {
+        let mut ruleset = Ruleset::server_default(user_id);
+        ruleset.content.extend(rules);
+        ruleset
+    }
+
+    fn notify_only() -> Vec<Action> {
+        vec![Action::Notify]
+    }
+
+    #[test]
+    fn highlight_words_from_ruleset_lists_enabled_user_keywords_once() {
+        let user_id = UserId::parse("@example:localhost").expect("user id");
+        let server_default: PatternedPushRule = serde_json::from_value(serde_json::json!({
+            "rule_id": ".m.rule.contains_user_name",
+            "pattern": "example",
+            "actions": highlight_word_actions(),
+            "default": true,
+            "enabled": true,
+        }))
+        .expect("server default content rule");
+        let ruleset = ruleset_with_content_rules(
+            &user_id,
+            vec![
+                server_default,
+                content_rule("deploy", "deploy", highlight_word_actions(), true),
+                content_rule("build", "build", notify_only(), true),
+                content_rule("off", "off", highlight_word_actions(), false),
+                // A second rule for a word merges into the first; either
+                // highlighting makes the word highlight.
+                content_rule("build-highlight", "build", highlight_word_actions(), true),
+                content_rule("deploy-again", "deploy", notify_only(), true),
+            ],
+        );
+
+        // The server default rule is not the user's word.
+        assert_eq!(
+            highlight_words_from_ruleset(&ruleset),
+            vec![
+                HighlightWord {
+                    word: "deploy".to_owned(),
+                    highlights: true,
+                },
+                HighlightWord {
+                    word: "build".to_owned(),
+                    highlights: true,
+                },
+            ]
+        );
+        assert_eq!(
+            highlight_words_from_ruleset(&Ruleset::server_default(&user_id)),
+            Vec::new()
+        );
+    }
+
+    async fn sync_push_rules(mock_server: &MatrixMockServer, client: &Client, ruleset: &Ruleset) {
+        let rules = push_rules_account_data(ruleset);
+        mock_server
+            .mock_sync()
+            .ok_and_run(client, |builder| {
+                builder.add_custom_global_account_data(rules);
+            })
+            .await;
+    }
+
+    async fn mount_push_rule_writes(mock_server: &MatrixMockServer) {
+        mock_server
+            .mock_set_push_rules(RuleKind::Content, PushRuleIdSpec::Any)
+            .ok()
+            .mount()
+            .await;
+        mock_server
+            .mock_enable_push_rule(RuleKind::Content, "[^/]*")
+            .ok()
+            .mount()
+            .await;
+        mock_server
+            .mock_delete_push_rules(RuleKind::Content, PushRuleIdSpec::Any)
+            .ok()
+            .mount()
+            .await;
+    }
+
+    /// Every push-rule request the server saw: method, path and JSON body.
+    async fn push_rule_requests(
+        mock_server: &MatrixMockServer,
+    ) -> Vec<(String, String, serde_json::Value)> {
+        mock_server
+            .received_requests()
+            .await
+            .expect("request recording enabled")
+            .iter()
+            .filter(|request| request.url.path().contains("/pushrules/"))
+            .map(|request| {
+                (
+                    request.method.to_string(),
+                    request.url.path().to_owned(),
+                    request
+                        .body_json::<serde_json::Value>()
+                        .expect("request JSON body"),
+                )
+            })
+            .collect()
+    }
+
+    fn highlight_rule_body(pattern: &str) -> serde_json::Value {
+        serde_json::json!({
+            "pattern": pattern,
+            "actions": ["notify", {"set_tweak": "sound", "value": "default"}, {"set_tweak": "highlight"}],
+        })
+    }
+
+    #[test]
+    fn add_highlight_word_writes_one_enabled_highlighting_rule_for_the_word() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            // Element's disabled notify-only rule for the word, and an older
+            // rule for it under another ID.
+            let ruleset = ruleset_with_content_rules(
+                client.user_id().expect("logged-in test client"),
+                vec![
+                    content_rule("deploy", "deploy", notify_only(), false),
+                    content_rule("deploy-old", "deploy", notify_only(), true),
+                ],
+            );
+            sync_push_rules(&mock_server, &client, &ruleset).await;
+            mount_push_rule_writes(&mock_server).await;
+
+            add_highlight_word(&client, "deploy")
+                .await
+                .expect("add highlight word");
+            add_highlight_word(&client, "release day")
+                .await
+                .expect("add a phrase");
+
+            assert_eq!(
+                push_rule_requests(&mock_server).await,
+                vec![
+                    (
+                        "PUT".to_owned(),
+                        "/_matrix/client/v3/pushrules/global/content/deploy".to_owned(),
+                        highlight_rule_body("deploy"),
+                    ),
+                    (
+                        "PUT".to_owned(),
+                        "/_matrix/client/v3/pushrules/global/content/deploy/enabled".to_owned(),
+                        serde_json::json!({ "enabled": true }),
+                    ),
+                    (
+                        "DELETE".to_owned(),
+                        "/_matrix/client/v3/pushrules/global/content/deploy-old".to_owned(),
+                        serde_json::json!({}),
+                    ),
+                    (
+                        "PUT".to_owned(),
+                        "/_matrix/client/v3/pushrules/global/content/release%20day".to_owned(),
+                        highlight_rule_body("release day"),
+                    ),
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn add_highlight_word_rejects_an_invalid_word_without_a_request() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mount_push_rule_writes(&mock_server).await;
+
+            let error = add_highlight_word(&client, "a/b")
+                .await
+                .expect_err("a slash cannot be in a rule ID");
+            assert_eq!(
+                error.to_string(),
+                r#"failed to add highlight word "a/b": a highlight word cannot contain / or \"#
+            );
+            assert_eq!(push_rule_requests(&mock_server).await, Vec::new());
+        });
+    }
+
+    #[test]
+    fn remove_highlight_word_deletes_every_rule_for_the_word() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let ruleset = ruleset_with_content_rules(
+                client.user_id().expect("logged-in test client"),
+                vec![
+                    content_rule("deploy", "deploy", highlight_word_actions(), true),
+                    content_rule("deploy-old", "deploy", notify_only(), false),
+                    content_rule("build", "build", notify_only(), true),
+                ],
+            );
+            sync_push_rules(&mock_server, &client, &ruleset).await;
+            mount_push_rule_writes(&mock_server).await;
+
+            remove_highlight_word(&client, "deploy")
+                .await
+                .expect("remove highlight word");
+
+            assert_eq!(
+                push_rule_requests(&mock_server).await,
+                vec![
+                    (
+                        "DELETE".to_owned(),
+                        "/_matrix/client/v3/pushrules/global/content/deploy".to_owned(),
+                        serde_json::json!({}),
+                    ),
+                    (
+                        "DELETE".to_owned(),
+                        "/_matrix/client/v3/pushrules/global/content/deploy-old".to_owned(),
+                        serde_json::json!({}),
+                    ),
+                ]
             );
         });
     }

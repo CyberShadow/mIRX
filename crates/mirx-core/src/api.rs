@@ -32,6 +32,12 @@ pub enum Command {
     /// Writes the room's push rule; the next sync's `SyncedRooms` reports
     /// the new mode.
     SetRoomNotificationMode(SetRoomNotificationModeRequest),
+    /// Writes a content push rule that highlights messages containing the
+    /// word (see `validate_highlight_word`); the next sync's
+    /// `HighlightWords` lists it.
+    AddHighlightWord(String),
+    /// Deletes the user's content push rules for the word.
+    RemoveHighlightWord(String),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -286,6 +292,36 @@ pub struct SetRoomTopicRequest {
 pub struct SetRoomNotificationModeRequest {
     pub room_id: String,
     pub mode: RoomNotificationMode,
+}
+
+/// One of the user's keyword (content) push rules, as mIRC's highlight
+/// list shows it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HighlightWord {
+    /// The rule's pattern: a word or phrase, `*` and `?` are wildcards.
+    pub word: String,
+    /// The rule highlights (`set_tweak: highlight`); otherwise it only
+    /// notifies, as the keywords other clients add do.
+    pub highlights: bool,
+}
+
+/// Whether `word` can name a highlight word's push rule: the rule ID is the
+/// word itself, as Element names keyword rules.
+pub fn validate_highlight_word(word: &str) -> Result<(), String> {
+    if word.trim().is_empty() {
+        return Err("a highlight word cannot be empty".to_owned());
+    }
+    if word.trim() != word {
+        return Err("a highlight word cannot start or end with a space".to_owned());
+    }
+    if word.contains(['/', '\\']) {
+        return Err("a highlight word cannot contain / or \\".to_owned());
+    }
+    if word.starts_with('.') {
+        return Err("a highlight word cannot start with .".to_owned());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1218,6 +1254,9 @@ pub enum Operation {
     RejectRoomInvite,
     SetRoomTopic,
     SetRoomNotificationMode,
+    HighlightWords,
+    AddHighlightWord,
+    RemoveHighlightWord,
     SendMessage,
     SendFile,
     EditMessage,
@@ -1276,6 +1315,9 @@ pub enum Event {
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),
+    /// The user's highlight words, in push-rule order: with the first room
+    /// snapshot and whenever the push rules change.
+    HighlightWords(Vec<HighlightWord>),
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),

@@ -19,21 +19,22 @@ use mirx_core::{
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     CreateRoomRequest, CreateRoomVisibility, E2eeBackupState, E2eeBackupStatus,
     E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest, Event,
-    FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
-    Operation, PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity,
-    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo,
-    RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat,
-    RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership,
-    RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState, RoomNotificationMode,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
-    UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, login_server, start,
+    FetchRoomEventRequest, FetchRoomMediaRequest, HighlightWord, InviteRoomMemberRequest,
+    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
+    MemberPowerRole, Operation, PublicRoomsPage, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
+    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioInfo, RoomEventFetch,
+    RoomEventFetchResult, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary,
+    RoomMembers, RoomMembership, RoomMessageActivity, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomNotificationMode, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile, RoomVideoInfo,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession, UnbanRoomMemberRequest,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -761,6 +762,9 @@ struct UiModel {
     /// The `/list` listing; the Rooms List window exists exactly while this
     /// is `Some`.
     room_list: Option<RoomListState>,
+    /// The user's highlight words as the server last listed them; `None`
+    /// until the first list after signing in, and after logout.
+    highlight_words: Option<Vec<HighlightWord>>,
 }
 
 #[derive(Default, Clone)]
@@ -8985,6 +8989,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
+        Event::HighlightWords(words) => state.model.highlight_words = Some(words),
         Event::E2eeStatus(status) => {
             for line in status_log::e2ee_status(&status) {
                 log_status(state, StatusLineKind::Info, line);
@@ -9030,6 +9035,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.model.last_error = None;
             state.model.room_read_states.clear();
             state.model.room_list = None;
+            state.model.highlight_words = None;
             state.room_activity.clear();
             state.room_activity_read_targets.clear();
             state.find_states.clear();
@@ -17268,6 +17274,9 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::SetDisplayName => "set display name",
         Operation::SetRoomTopic => "set room topic",
         Operation::SetRoomNotificationMode => "set room notifications",
+        Operation::HighlightWords => "highlight words",
+        Operation::AddHighlightWord => "add highlight word",
+        Operation::RemoveHighlightWord => "remove highlight word",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",
@@ -24946,6 +24955,13 @@ mod tests {
         state
             .hwnd_views
             .insert(20, ViewId::Room("!room:example".to_owned()));
+        let words = vec![HighlightWord {
+            word: "deploy".to_owned(),
+            highlights: true,
+        }];
+        apply_core_event(&mut state, Event::HighlightWords(words.clone()))
+            .expect("highlight words apply");
+        assert_eq!(state.model.highlight_words, Some(words));
 
         with_local_app_data(|_| {
             apply_core_event(&mut state, Event::LoggedOut)
@@ -24954,6 +24970,7 @@ mod tests {
         let removed = take_stale_room_views(&mut state);
 
         assert!(state.model.rooms.is_empty());
+        assert_eq!(state.model.highlight_words, None);
         assert_eq!(state.model.selected_room, None);
         assert!(state.model.room_views.is_empty());
         assert_eq!(state.model.last_activity, None);
