@@ -10,22 +10,12 @@ die() {
   exit 1
 }
 
+# shellcheck source=wine-prefix.sh
+source "$root_dir/scripts/wine-prefix.sh"
+
 cleanup() {
   if [[ -n "${tmpdir:-}" ]]; then
     rm -rf "$tmpdir"
-  fi
-}
-
-ensure_wineprefix() {
-  export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
-  export WINEARCH="${WINEARCH:-win64}"
-  export WINEDLLOVERRIDES=mscoree,mshtml=
-  # Timestamps show local time: pin it so the output is the same everywhere.
-  export TZ=UTC
-
-  mkdir -p "$WINEPREFIX"
-  if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
-    wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
   fi
 }
 
@@ -44,7 +34,7 @@ if [[ $# -eq 0 ]] && [[ ! -f "$exe_path" ]]; then
   cargo build --release --package mirx-ui --target x86_64-pc-windows-gnu
 fi
 
-ensure_wineprefix
+ensure_wineprefix "$tmpdir/wineprefix"
 
 if command -v xvfb-run >/dev/null 2>&1; then
   xvfb-run -a wine "$exe_path" --self-test

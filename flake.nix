@@ -13,6 +13,14 @@
       mingwCc = pkgs.pkgsCross.mingwW64.stdenv.cc;
       mingwPthreads = pkgs.pkgsCross.mingwW64.windows.pthreads;
       mingwMcfgthreads = pkgs.pkgsCross.mingwW64.windows.mcfgthreads;
+      # Fonts installed into every Wine test prefix (never shipped): a
+      # monochrome emoji face so glyph fallback is exercised deterministically.
+      wineFonts = pkgs.linkFarm "mirx-wine-fonts" [
+        {
+          name = "NotoEmoji.ttf";
+          path = "${pkgs.noto-fonts-monochrome-emoji}/share/fonts/noto/NotoEmoji.ttf";
+        }
+      ];
     in
     {
       devShells.${system}.default = pkgs.mkShell {
@@ -47,6 +55,7 @@
           export CFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           export CXXFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           export WINEDLLOVERRIDES="mscoree,mshtml="
+          export MIRX_WINE_FONTS="${wineFonts}"
 
           ln -sfn "$PTHREADS" "$MIRX_ROOT/.nix-pthreads"
           ln -sfn "$MCFGTHREADS" "$MIRX_ROOT/.nix-mcfgthreads"

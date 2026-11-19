@@ -13,6 +13,9 @@ die() {
   exit 1
 }
 
+# shellcheck source=wine-prefix.sh
+source "$root_dir/scripts/wine-prefix.sh"
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
@@ -111,28 +114,6 @@ ensure_xvfb() {
     start_xvfb_explicit "$MIRX_WINE_DISPLAY"
   else
     start_xvfb_auto
-  fi
-}
-
-ensure_wineprefix() {
-  export WINEPREFIX="${WINEPREFIX:-$runner_tmpdir/wineprefix}"
-  export WINEARCH="${WINEARCH:-win64}"
-  export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
-  export WINEDEBUG="${WINEDEBUG:--all}"
-  # Timestamps show local time: pin it so the output is the same everywhere.
-  export TZ=UTC
-
-  if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
-    local prefix_lock_name=${WINEPREFIX//\//_}
-    local prefix_lock_file="${TMPDIR:-/var/tmp}/mirx-wineprefix-init${prefix_lock_name}.lock"
-    exec 8>"$prefix_lock_file"
-    flock 8
-    mkdir -p "$WINEPREFIX"
-    if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
-      wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
-    fi
-    flock -u 8
-    exec 8>&-
   fi
 }
 
@@ -248,7 +229,7 @@ main() {
   runner_tmpdir=$(mktemp -d "${TMPDIR:-/var/tmp}/mirx-wine-runner.${runner_pid}.XXXXXX")
   trap cleanup EXIT
   ensure_xvfb
-  ensure_wineprefix
+  ensure_wineprefix "$runner_tmpdir/wineprefix"
   start_host_capture_helper
 
   wine "$@"

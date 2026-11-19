@@ -22,6 +22,9 @@ die() {
   exit 1
 }
 
+# shellcheck source=wine-prefix.sh
+source "$root_dir/scripts/wine-prefix.sh"
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
@@ -107,20 +110,6 @@ ensure_xvfb() {
     start_xvfb_explicit "$MIRX_WINE_DISPLAY"
   else
     start_xvfb_auto
-  fi
-}
-
-ensure_wineprefix() {
-  export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
-  export WINEARCH="${WINEARCH:-win64}"
-  export WINEDLLOVERRIDES=mscoree,mshtml=
-  export WINEDEBUG="${WINEDEBUG:--all}"
-  # Timestamps show local time: pin it so the output is the same everywhere.
-  export TZ=UTC
-
-  mkdir -p "$WINEPREFIX"
-  if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
-    wineboot -i >/dev/null 2>&1 || die "wineboot failed while initializing $WINEPREFIX"
   fi
 }
 
@@ -2776,7 +2765,7 @@ main() {
   cd "$root_dir"
   ensure_xvfb
   resolve_binaries
-  ensure_wineprefix
+  ensure_wineprefix "$tmpdir/wineprefix"
   ensure_binaries
 
   shopt -s nullglob
