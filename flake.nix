@@ -18,6 +18,7 @@
         patches = (old.patches or [ ]) ++ [
           ./nix/patches/wine-usp10-script-cache-race.patch
           ./nix/patches/wine-win32u-class-register-race.patch
+          ./nix/patches/wine-winex11-xim-thread-race.patch
         ];
       });
       # Fonts installed into every Wine test prefix (never shipped): a
