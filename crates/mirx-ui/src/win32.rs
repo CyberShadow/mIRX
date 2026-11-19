@@ -709,6 +709,8 @@ struct RoomViewModel {
     preview_media: BTreeMap<String, RoomPreviewMediaState>,
     /// Messages replies answer that are not among `activities`, by event ID.
     reply_targets: BTreeMap<String, ReplyTargetState>,
+    /// The messages among `activities` that were edited, shown `(edited)`.
+    edited_event_ids: BTreeSet<String>,
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
     history: RoomHistoryBackfillState,
@@ -842,6 +844,8 @@ impl RoomViewModel {
             )
         });
         self.reactions_by_target.clear();
+        // Only pending messages stay, and they have no event to be edited.
+        self.edited_event_ids.clear();
         self.echo.clear_room_window();
         self.retain_preview_media_for_visible_activities();
         self.rebuild_threads();
@@ -1232,6 +1236,7 @@ impl RoomViewModel {
         };
         message.presentation = replacement.presentation;
         message.body = replacement.body;
+        self.edited_event_ids.insert(target_event_id.to_owned());
         self.rebuild_threads();
         true
     }
@@ -1242,6 +1247,8 @@ impl RoomViewModel {
         };
         let activity_id = self.activities[index].activity_id.clone();
         self.remove_reactions_for_target(target_event_id);
+        // A redacted line says only that; what it was, edited or not, is gone.
+        self.edited_event_ids.remove(target_event_id);
         self.activities[index].kind = RoomActivityKind::Redacted(RoomRedactedActivity {
             event_id: target_event_id.to_owned(),
         });
@@ -9048,6 +9055,14 @@ fn activity_line_text(
         RoomActivityKind::Message(message) => {
             let suffix = match &message.send_state {
                 RoomMessageSendState::Pending => " (sending)",
+                RoomMessageSendState::Sent
+                    if message
+                        .event_id
+                        .as_ref()
+                        .is_some_and(|event_id| room_view.edited_event_ids.contains(event_id)) =>
+                {
+                    " (edited)"
+                }
                 RoomMessageSendState::Sent => "",
                 RoomMessageSendState::Failed { .. } => " (failed)",
             };
@@ -17798,7 +17813,7 @@ mod tests {
             render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
-                "[22:13] * @alice:example edited body".to_owned(),
+                "[22:13] * @alice:example edited body (edited)".to_owned(),
             ]
         );
     }
@@ -18084,6 +18099,37 @@ mod tests {
         assert_eq!(
             room_lines(&state)[2],
             "    > (loading the replied-to message...)"
+        );
+    }
+
+    #[test]
+    fn an_edited_message_is_marked_until_it_is_redacted() {
+        let mut state = reply_quote_state("$q");
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$a",
+                "$a-edit",
+                RoomMessagePresentationKind::Emote,
+                "says yes",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            room_lines(&state)[3],
+            "[22:14] * @bob:example says yes (edited)"
+        );
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$a", "$a-gone"),
+        )
+        .unwrap();
+        assert_eq!(room_lines(&state)[3], "[22:14] * message redacted");
+        assert!(
+            state.model.room_views["!ops:example"]
+                .edited_event_ids
+                .is_empty()
         );
     }
 
@@ -23470,6 +23516,7 @@ mod tests {
                 threads: BTreeMap::new(),
                 preview_media: BTreeMap::new(),
                 reply_targets: BTreeMap::new(),
+                edited_event_ids: BTreeSet::new(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
                 history: RoomHistoryBackfillState::default(),
