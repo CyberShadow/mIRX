@@ -1622,6 +1622,31 @@ configure_case_expectations() {
         --expect-no-navigation-text 'member list context line'
       )
       ;;
+    glyph-fallback)
+      expect_selected='!unicode:example'
+      expect_active_view='room:!unicode:example'
+      room_expect_args=(
+        --expect-room '!unicode:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!unicode:example::* Now talking in Unicode (!unicode:example)'
+        --expect-room-view '!unicode:example::[22:13] <Zoë 🌸> it’s ready — ship it 🚀'
+        --expect-room-view '!unicode:example::reactions: 👍 x2'
+        --expect-room-view '!unicode:example::[22:14] <Ωmega> naïve café ½'
+        --expect-room-view '!unicode:example::[22:15] <Zoë 🌸> Привет, мир / ελληνικά'
+        --expect-room-view $'!unicode:example::[22:16] <Ωmega> 👍\uFE0F with VS16, 👨\u200D👩\u200D👧 family, 🇩🇪 flag'
+        --expect-room-view '!unicode:example::[22:17] <Zoë 🌸> 日本語'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!unicode:example::Zoë 🌸'
+        --expect-room-member '!unicode:example::Ωmega'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!unicode:example::Unicode'
+      )
+      expect_switchbar_active='room:!unicode:example'
+      ;;
     irc-commands)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'

@@ -1,0 +1,196 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!unicode:example",
+        "display_name": "Unicode",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!unicode:example",
+      "activity_id": "event:$unicode-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$unicode-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@zoe:example",
+          "display_name": "Zoë 🌸",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "it’s ready — ship it 🚀",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!unicode:example",
+      "activity_id": "event:$unicode-2",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$unicode-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@omega:example",
+          "display_name": "Ωmega",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "naïve café ½",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!unicode:example",
+      "activity_id": "event:$unicode-3",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$unicode-3",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@zoe:example",
+          "display_name": "Zoë 🌸",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "Привет, мир / ελληνικά",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!unicode:example",
+      "activity_id": "event:$unicode-4",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$unicode-4",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@omega:example",
+          "display_name": "Ωmega",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "👍️ with VS16, 👨‍👩‍👧 family, 🇩🇪 flag",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!unicode:example",
+      "activity_id": "event:$unicode-5",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$unicode-5",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@zoe:example",
+          "display_name": "Zoë 🌸",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "日本語",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!unicode:example",
+      "target": {
+        "type": "event",
+        "event_id": "$unicode-1"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$unicode-reaction-1",
+        "sender": "@omega:example",
+        "timestamp_ms": 1700000300000,
+        "key": "👍"
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!unicode:example",
+      "target": {
+        "type": "event",
+        "event_id": "$unicode-1"
+      },
+      "kind": {
+        "type": "reaction_added",
+        "reaction_event_id": "$unicode-reaction-2",
+        "sender": "@zoe:example",
+        "timestamp_ms": 1700000301000,
+        "key": "👍"
+      }
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!unicode:example",
+      "members": [
+        {
+          "user_id": "@omega:example",
+          "display_name": "Ωmega",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@zoe:example",
+          "display_name": "Zoë 🌸",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  }
+]
