@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 36;
+pub(crate) const PROTOCOL_VERSION: u32 = 37;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -907,6 +907,7 @@ pub(crate) struct UiState {
     pub(crate) mdi: MdiState,
     pub(crate) status_bar: StatusBarState,
     pub(crate) switchbar: SwitchbarState,
+    pub(crate) frame_layout: UiFrameLayout,
     pub(crate) active_find: Option<UiFindState>,
     pub(crate) rooms: Vec<UiRoomState>,
     pub(crate) text_font: UiTextFont,
@@ -947,6 +948,25 @@ pub(crate) struct UiPoint {
     pub(crate) y: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiRect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+}
+
+/// Where the frame's child windows are, read back from them, in the
+/// frame's client coordinates. A hidden bar is `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiFrameLayout {
+    pub(crate) switchbar: Option<UiRect>,
+    pub(crate) treebar: Option<UiRect>,
+    pub(crate) mdi_client: UiRect,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct UiComposeTarget {
@@ -975,6 +995,7 @@ pub(crate) struct UiMenuItem {
     /// With its `&` mnemonic and any `\t` accelerator text.
     pub(crate) label: String,
     pub(crate) enabled: bool,
+    pub(crate) checked: bool,
 }
 
 /// The text font as the active window draws it.
@@ -1105,6 +1126,8 @@ pub(crate) struct StatusBarState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SwitchbarState {
+    /// How many rows the buttons wrap onto.
+    pub(crate) rows: u32,
     pub(crate) items: Vec<SwitchbarItem>,
 }
 
@@ -1294,6 +1317,8 @@ pub(crate) struct SwitchbarItem {
     pub(crate) title: String,
     pub(crate) active: bool,
     pub(crate) activity: Option<ViewActivityLevel>,
+    /// The button, in the switchbar's client coordinates.
+    pub(crate) rect: UiRect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2764,9 +2789,10 @@ mod tests {
         SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
         SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs,
         SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem, SwitchbarState,
-        UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState, UiRoomReadState,
-        UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
-        WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request, success_response,
+        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect, UiRoomHistoryBackfillState,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2920,8 +2946,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_36() {
-        assert_eq!(PROTOCOL_VERSION, 36);
+    fn protocol_version_is_37() {
+        assert_eq!(PROTOCOL_VERSION, 37);
     }
 
     #[test]
@@ -3890,7 +3916,8 @@ mod tests {
             "navigation":{"text":"mirx","children":[]},
             "mdi":{"active":{"kind":"status"},"views":[]},
             "status_bar":{"text":"ready"},
-            "switchbar":{"items":[]},
+            "switchbar":{"rows":1,"items":[]},
+            "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
             "active_find":null,
             "rooms":[],
             "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
@@ -3905,7 +3932,8 @@ mod tests {
             "navigation":{"text":"mirx","children":[]},
             "mdi":{"active":{"kind":"room","room_id":"!room:example"},"views":[]},
             "status_bar":{"text":"ready"},
-            "switchbar":{"items":[]},
+            "switchbar":{"rows":1,"items":[]},
+            "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
             "active_find":{
                 "active":{"kind":"room","room_id":"!room:example"},
                 "query":"needle",
@@ -4557,6 +4585,12 @@ mod tests {
             title: "Thread".to_owned(),
             active: false,
             activity: Some(ViewActivityLevel::Message),
+            rect: UiRect {
+                x: 120,
+                y: 0,
+                width: 120,
+                height: 36,
+            },
         };
         let switchbar_item_json = json!({
             "identity": {
@@ -4567,6 +4601,7 @@ mod tests {
             "title": "Thread",
             "active": false,
             "activity": "message",
+            "rect": {"x": 120, "y": 0, "width": 120, "height": 36},
         });
         assert_eq!(
             serde_json::from_value::<SwitchbarItem>(switchbar_item_json.clone())
@@ -4722,7 +4757,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":36,
+                    "protocol_version":37,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5197,12 +5232,19 @@ mod tests {
                         text: "synced 1 room(s)".to_owned(),
                     },
                     switchbar: SwitchbarState {
+                        rows: 1,
                         items: vec![
                             SwitchbarItem {
                                 identity: ViewIdentity::Status,
                                 title: "Status".to_owned(),
                                 active: false,
                                 activity: None,
+                                rect: UiRect {
+                                    x: 0,
+                                    y: 0,
+                                    width: 120,
+                                    height: 36,
+                                },
                             },
                             SwitchbarItem {
                                 identity: ViewIdentity::Room {
@@ -5211,6 +5253,12 @@ mod tests {
                                 title: "Room".to_owned(),
                                 active: true,
                                 activity: Some(ViewActivityLevel::Message),
+                                rect: UiRect {
+                                    x: 120,
+                                    y: 0,
+                                    width: 120,
+                                    height: 36,
+                                },
                             },
                             SwitchbarItem {
                                 identity: ViewIdentity::Thread {
@@ -5220,8 +5268,29 @@ mod tests {
                                 title: "Thread".to_owned(),
                                 active: false,
                                 activity: Some(ViewActivityLevel::Message),
+                                rect: UiRect {
+                                    x: 240,
+                                    y: 0,
+                                    width: 120,
+                                    height: 36,
+                                },
                             },
                         ],
+                    },
+                    frame_layout: UiFrameLayout {
+                        switchbar: Some(UiRect {
+                            x: 0,
+                            y: 0,
+                            width: 1008,
+                            height: 28,
+                        }),
+                        treebar: None,
+                        mdi_client: UiRect {
+                            x: 0,
+                            y: 28,
+                            width: 1008,
+                            height: 600,
+                        },
                     },
                     active_find: Some(UiFindState {
                         active: ViewIdentity::Room {
@@ -5277,6 +5346,7 @@ mod tests {
                         items: vec![super::UiMenuItem {
                             label: "&Help Topics".to_owned(),
                             enabled: true,
+                            checked: false,
                         }],
                     }],
                     compose_target: Some(super::UiComposeTarget {
@@ -5350,26 +5420,35 @@ mod tests {
                         "text":"synced 1 room(s)"
                     },
                     "switchbar":{
+                        "rows":1,
                         "items":[
                             {
                                 "identity":{"kind":"status"},
                                 "title":"Status",
                                 "active":false,
-                                "activity":null
+                                "activity":null,
+                                "rect":{"x":0,"y":0,"width":120,"height":36}
                             },
                             {
                                 "identity":{"kind":"room","room_id":"!room:example"},
                                 "title":"Room",
                                 "active":true,
-                                "activity":"message"
+                                "activity":"message",
+                                "rect":{"x":120,"y":0,"width":120,"height":36}
                             },
                             {
                                 "identity":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"},
                                 "title":"Thread",
                                 "active":false,
-                                "activity":"message"
+                                "activity":"message",
+                                "rect":{"x":240,"y":0,"width":120,"height":36}
                             }
                         ]
+                    },
+                    "frame_layout":{
+                        "switchbar":{"x":0,"y":0,"width":1008,"height":28},
+                        "treebar":null,
+                        "mdi_client":{"x":0,"y":28,"width":1008,"height":600}
                     },
                     "active_find":{
                         "active":{"kind":"room","room_id":"!room:example"},
@@ -5419,7 +5498,7 @@ mod tests {
                     },
                     "timestamp":{"show":true,"format":"[HH:nn]"},
                     "active_system_menu_items":["&Restore","&Font..."],
-                    "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true}]}],
+                    "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true,"checked":false}]}],
                     "compose_target":{"kind":"reply","event_id":"$question"},
                     "room_list":{
                         "columns":["Room","Users"],

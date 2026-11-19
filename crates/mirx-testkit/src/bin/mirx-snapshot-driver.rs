@@ -46,6 +46,7 @@ mod cli {
         pub(crate) expect_switchbar_items: Vec<SwitchbarItemExpectation>,
         pub(crate) expect_no_switchbar_items: Vec<ViewIdentity>,
         pub(crate) expect_switchbar_active: Option<ViewIdentity>,
+        pub(crate) expect_switchbar_rows: Option<u32>,
         pub(crate) expect_switchbar_activity: Vec<SwitchbarActivityExpectation>,
         pub(crate) expect_no_switchbar_activity: Vec<ViewIdentity>,
         pub(crate) expect_navigation_texts: Vec<String>,
@@ -469,6 +470,17 @@ mod cli {
                         &value,
                     )?);
                 }
+                "--expect-switchbar-rows" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| "missing value for --expect-switchbar-rows".to_owned())?;
+                    config.expect_switchbar_rows =
+                        Some(value.parse().ok().filter(|rows| *rows >= 1).ok_or_else(|| {
+                            format!(
+                                "invalid --expect-switchbar-rows value {value:?}; expected a row count of at least 1"
+                            )
+                        })?);
+                }
                 "--expect-switchbar-activity" => {
                     let value = args.next().ok_or_else(|| {
                         "missing value for --expect-switchbar-activity".to_owned()
@@ -605,6 +617,7 @@ mod cli {
             "  <identity> is status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>",
             "  --expect-no-switchbar-item <identity>",
             "  --expect-switchbar-active <identity>",
+            "  --expect-switchbar-rows <count>",
             "  --expect-switchbar-activity <identity>::<event|message|highlight>",
             "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
@@ -1108,6 +1121,21 @@ mod cli {
         }
 
         #[test]
+        fn parse_args_rejects_bad_switchbar_rows() {
+            for value in ["0", "-1", "two"] {
+                assert!(
+                    parse_args(
+                        ["--expect-switchbar-rows", value]
+                            .into_iter()
+                            .map(str::to_owned)
+                    )
+                    .is_err(),
+                    "{value:?} must be rejected"
+                );
+            }
+        }
+
+        #[test]
         fn parse_args_rejects_unknown_window_actions_and_states() {
             for args in [
                 ["--action", "arrange:tile"],
@@ -1217,6 +1245,8 @@ mod cli {
                     "status",
                     "--expect-switchbar-active",
                     "room:!ops:example",
+                    "--expect-switchbar-rows",
+                    "2",
                     "--expect-switchbar-activity",
                     "thread:!ops:example|$thread-root::highlight",
                     "--expect-no-switchbar-activity",
@@ -1296,6 +1326,7 @@ mod cli {
                     room_id: "!ops:example".to_owned(),
                 })
             );
+            assert_eq!(config.expect_switchbar_rows, Some(2));
             assert_eq!(
                 config.expect_switchbar_activity,
                 vec![SwitchbarActivityExpectation {
@@ -1852,6 +1883,7 @@ mod windows_main {
                 || !self.expect_switchbar_items.is_empty()
                 || !self.expect_no_switchbar_items.is_empty()
                 || self.expect_switchbar_active.is_some()
+                || self.expect_switchbar_rows.is_some()
                 || !self.expect_switchbar_activity.is_empty()
                 || !self.expect_no_switchbar_activity.is_empty()
                 || !self.expect_navigation_texts.is_empty()
@@ -2372,6 +2404,16 @@ mod windows_main {
                     format_view_identity(&expected.identity),
                     expected.state
                 );
+            }
+
+            if let Some(expected_rows) = config.expect_switchbar_rows {
+                if ui_state.switchbar.rows != expected_rows {
+                    return Err(format!(
+                        "switchbar rows assertion failed: {} row(s), expected {expected_rows}",
+                        ui_state.switchbar.rows
+                    ));
+                }
+                println!("PASS switchbar rows {expected_rows}");
             }
 
             if let Some(expected_identity) = config.expect_switchbar_active.as_ref() {

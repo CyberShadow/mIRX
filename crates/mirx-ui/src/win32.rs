@@ -44,11 +44,12 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
-    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DeleteObject,
-    DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC, GetDeviceCaps,
-    GetSysColor, GetSysColorBrush, GetTextFaceW, GetTextMetricsW, HBRUSH, HFONT, InvalidateRect,
-    LOGFONTW, LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject,
-    SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
+    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER,
+    DT_END_ELLIPSIS, DT_SINGLELINE, DeleteObject, DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL,
+    FillRect, FrameRect, GetDC, GetDeviceCaps, GetSysColor, GetSysColorBrush, GetTextFaceW,
+    GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints,
+    PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW,
+    TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -81,20 +82,22 @@ use windows_sys::Win32::UI::Controls::{
     LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
     NM_RETURN, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMLVDISPINFOW, NMTBCUSTOMDRAW, NMTVCUSTOMDRAW,
     ODS_FOCUS, ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo,
-    TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON,
-    TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
-    TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD,
-    TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT,
-    TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
-    TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
+    TB_ADDBUTTONSW, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_CHECKBUTTON, TB_DELETEBUTTON,
+    TB_GETBUTTONSIZE, TB_GETITEMRECT, TB_GETROWS, TB_SETBITMAPSIZE, TB_SETBUTTONWIDTH,
+    TB_SETDRAWTEXTFLAGS, TB_SETEXTENDEDSTYLE, TB_SETMAXTEXTROWS, TBBUTTON, TBSTATE_CHECKED,
+    TBSTATE_ENABLED, TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TBSTYLE_WRAPABLE, TOOLBARCLASSNAMEW,
+    TVE_EXPAND, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST,
+    TVI_ROOT, TVIF_TEXT, TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND,
+    TVM_GETITEMRECT, TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM,
+    TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetKeyState, SetFocus, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ACCEL, CreateAcceleratorTableW, DestroyAcceleratorTable, FALT, FCONTROL, FVIRTKEY, GetMenu,
-    GetMenuItemInfoW, HACCEL, MENUITEMINFOW, MFS_DISABLED, MFT_BITMAP, MFT_SEPARATOR, MIIM_FTYPE,
-    MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, TranslateAcceleratorW,
+    GetMenuItemInfoW, HACCEL, MENUITEMINFOW, MFS_CHECKED, MFS_DISABLED, MFT_BITMAP, MFT_SEPARATOR,
+    MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, TranslateAcceleratorW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
@@ -149,12 +152,13 @@ use crate::{
         PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
         SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
         SwitchbarState, UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState,
-        UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomList,
-        UiRoomState, UiState, UiTextFont, UiTimestamp, VerificationActionArgs, ViewActivityLevel,
-        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
+        UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
+        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimestamp,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+        dump_verification_from_state_event, failure_response, parse_command_request,
+        success_response,
     },
 };
 
@@ -171,6 +175,7 @@ mod replies;
 mod room_list;
 mod settings;
 mod status_log;
+mod switchbar;
 mod timeline_text;
 mod timestamp;
 
@@ -198,6 +203,7 @@ use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
 use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
 use status_log::{StatusLineKind, StatusLog};
+use switchbar::SWITCHBAR_BUTTON_WIDTH;
 
 use settings::{FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use timeline_text::{
@@ -286,7 +292,6 @@ const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
 const AUTOMATION_RESPONSE_CAPACITY: usize = 4 * 1024 * 1024;
 const TREE_WIDTH: i32 = 240;
-const SWITCHBAR_HEIGHT: i32 = 28;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
 const TIMELINE_VERTICAL_PADDING: i32 = 6;
@@ -6312,8 +6317,15 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         null(),
         // The frame lays the switchbar out. Without CCS_NORESIZE the toolbar
         // sizes itself to its ideal height and overlaps the MDI client's top
-        // edge, painting over it whenever the switchbar repaints.
-        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | CCS_NORESIZE as u32 | CCS_NOPARENTALIGN as u32,
+        // edge, painting over it whenever the switchbar repaints. Its
+        // buttons wrap onto more rows on its own WM_SIZE (TBSTYLE_WRAPABLE),
+        // and `layout_controls` sizes it to them.
+        WS_CHILD
+            | WS_VISIBLE
+            | TBSTYLE_FLAT
+            | TBSTYLE_WRAPABLE
+            | CCS_NORESIZE as u32
+            | CCS_NOPARENTALIGN as u32,
         0,
         0,
         0,
@@ -6338,11 +6350,15 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         0,
         TBSTYLE_EX_MIXEDBUTTONS as LPARAM,
     );
+    set_switchbar_button_width(state.controls.switchbar, SWITCHBAR_BUTTON_WIDTH);
+    // One line per label, cut with "..." when it is wider than its button.
+    SendMessageW(state.controls.switchbar, TB_SETMAXTEXTROWS, 1, 0);
+    let text_flags = DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
     SendMessageW(
         state.controls.switchbar,
-        TB_SETBUTTONSIZE,
-        0,
-        pack_size_lparam(160, SWITCHBAR_HEIGHT),
+        TB_SETDRAWTEXTFLAGS,
+        text_flags as WPARAM,
+        text_flags as LPARAM,
     );
 
     state.controls.tree = create_child_window(
@@ -6391,6 +6407,22 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Gives every switchbar button `width` pixels, whatever its label.
+unsafe fn set_switchbar_button_width(switchbar: HWND, width: i32) {
+    // The minimum and the maximum width.
+    SendMessageW(
+        switchbar,
+        TB_SETBUTTONWIDTH,
+        0,
+        pack_size_lparam(width, width),
+    );
+    // A wrapping toolbar starts a new row only once a button's bitmap would
+    // pass the edge (comctl32's `TOOLBAR_WrapToolbar`), and the buttons have
+    // no bitmap: a bitmap as wide as the button wraps the button itself, so
+    // no row ends in a clipped button. 16 is the default bitmap height.
+    SendMessageW(switchbar, TB_SETBITMAPSIZE, 0, pack_size_lparam(width, 16));
 }
 
 unsafe fn create_popup_menu() -> Result<HMENU, String> {
@@ -8731,7 +8763,24 @@ unsafe fn layout_controls(hwnd: HWND) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
     let tree_width = TREE_WIDTH.min(width);
-    let switchbar_height = SWITCHBAR_HEIGHT.min(height);
+    // The switchbar wraps its buttons on its own WM_SIZE, so it gets the
+    // frame's width first and its height from the rows that gives.
+    let mut switchbar_rect = RECT::default();
+    GetWindowRect(state.controls.switchbar, &mut switchbar_rect);
+    MoveWindow(
+        state.controls.switchbar,
+        0,
+        0,
+        width,
+        switchbar_rect.bottom - switchbar_rect.top,
+        1,
+    );
+    let rows = u32::try_from(SendMessageW(state.controls.switchbar, TB_GETROWS, 0, 0))
+        .expect("a toolbar's row count is positive");
+    let button_height =
+        (SendMessageW(state.controls.switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32;
+    let switchbar_height = switchbar::switchbar_height(rows, button_height).min(height);
+    MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
     // A status bar sizes and places itself at the bottom of its parent, so
     // the controls above it are laid out against its real height. Sizing it
     // to a guessed height instead left it overlapping them by a few pixels,
@@ -8744,7 +8793,6 @@ unsafe fn layout_controls(hwnd: HWND) {
     let mdi_width = (width - tree_width).max(0);
     let mdi_height = (height - switchbar_height - status_bar_height).max(0);
 
-    MoveWindow(state.controls.switchbar, 0, 0, width, switchbar_height, 1);
     MoveWindow(
         state.controls.tree,
         0,
@@ -12924,7 +12972,8 @@ unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
     {
         return Err("failed to add switchbar buttons".to_owned());
     }
-    SendMessageW(switchbar, TB_AUTOSIZE, 0, 0);
+    // More or fewer buttons may take more or fewer rows.
+    layout_controls(hwnd);
     refresh_switchbar_state(hwnd)
 }
 
@@ -12937,11 +12986,10 @@ unsafe fn refresh_switchbar_state(hwnd: HWND) -> Result<(), String> {
     let view_ids = state_ref(hwnd).switchbar_views.clone();
     for (index, view_id) in view_ids.iter().enumerate() {
         let command_id = SWITCHBAR_COMMAND_FIRST + index;
-        let button_state = {
-            let state = state_ref(hwnd);
-            switchbar_button_state(state, view_id)
-        };
-        if SendMessageW(switchbar, TB_SETSTATE, command_id, button_state as LPARAM) == 0 {
+        let checked = state_ref(hwnd).active_view == *view_id;
+        // TB_SETSTATE would replace the whole state, wrap bit included,
+        // which only the toolbar's layout sets.
+        if SendMessageW(switchbar, TB_CHECKBUTTON, command_id, checked as LPARAM) == 0 {
             return Err(format!("failed to refresh switchbar button {command_id}"));
         }
     }
@@ -13380,19 +13428,67 @@ unsafe fn dump_switchbar_state(hwnd: HWND) -> Result<SwitchbarState, String> {
 
     let active = active_view_identity(hwnd)?;
     let state = state_ref(hwnd);
+    let switchbar = state.controls.switchbar;
     let items = state
         .switchbar_views
-        .clone()
-        .into_iter()
-        .map(|view_id| SwitchbarItem {
-            identity: view_identity_from_view_id(&view_id),
-            title: switchbar_button_text(state, &view_id),
-            active: view_identity_from_view_id(&view_id) == active,
-            activity: state.room_activity.get(&view_id).copied(),
+        .iter()
+        .enumerate()
+        .map(|(index, view_id)| {
+            let mut rect = RECT::default();
+            if SendMessageW(
+                switchbar,
+                TB_GETITEMRECT,
+                index,
+                &mut rect as *mut RECT as LPARAM,
+            ) == 0
+            {
+                return Err(format!("failed to read switchbar button {index}"));
+            }
+            Ok(SwitchbarItem {
+                identity: view_identity_from_view_id(view_id),
+                title: switchbar_button_text(state, view_id),
+                active: view_identity_from_view_id(view_id) == active,
+                activity: state.room_activity.get(view_id).copied(),
+                rect: ui_rect(rect),
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
+    let rows = u32::try_from(SendMessageW(switchbar, TB_GETROWS, 0, 0))
+        .expect("a toolbar's row count is positive");
 
-    Ok(SwitchbarState { items })
+    Ok(SwitchbarState { rows, items })
+}
+
+fn ui_rect(rect: RECT) -> UiRect {
+    UiRect {
+        x: rect.left,
+        y: rect.top,
+        width: rect.right - rect.left,
+        height: rect.bottom - rect.top,
+    }
+}
+
+/// A child window's rectangle in the frame's client coordinates, or `None`
+/// while it is hidden.
+unsafe fn frame_child_rect(hwnd: HWND, child: HWND) -> Option<UiRect> {
+    // Its own style: `IsWindowVisible` also asks whether the frame is shown.
+    if GetWindowLongPtrW(child, GWL_STYLE) as u32 & WS_VISIBLE == 0 {
+        return None;
+    }
+    let mut rect = RECT::default();
+    GetWindowRect(child, &mut rect);
+    MapWindowPoints(null_mut(), hwnd, (&mut rect as *mut RECT).cast(), 2);
+    Some(ui_rect(rect))
+}
+
+unsafe fn dump_frame_layout(hwnd: HWND) -> UiFrameLayout {
+    let controls = &state_ref(hwnd).controls;
+    UiFrameLayout {
+        switchbar: frame_child_rect(hwnd, controls.switchbar),
+        treebar: frame_child_rect(hwnd, controls.tree),
+        mdi_client: frame_child_rect(hwnd, controls.mdi_client)
+            .expect("the MDI client is always shown"),
+    }
 }
 
 fn dump_active_find_state(state: &WindowState) -> Option<UiFindState> {
@@ -13604,6 +13700,7 @@ unsafe fn dump_menu_bar(hwnd: HWND) -> Result<Vec<UiMenu>, String> {
             items.push(UiMenuItem {
                 label: item_label,
                 enabled: item.fState & MFS_DISABLED == 0,
+                checked: item.fState & MFS_CHECKED != 0,
             });
         }
         menus.push(UiMenu { label, items });
@@ -13620,6 +13717,7 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let mdi = dump_mdi_state(hwnd)?;
     let status_bar = dump_status_bar_state(hwnd)?;
     let switchbar = dump_switchbar_state(hwnd)?;
+    let frame_layout = dump_frame_layout(hwnd);
     let state = state_ref(hwnd);
     let active_view = state
         .views
@@ -13661,6 +13759,7 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         mdi,
         status_bar,
         switchbar,
+        frame_layout,
         active_find: dump_active_find_state(state),
         rooms: state
             .model
@@ -16950,6 +17049,8 @@ mod tests {
         ListPublicRoomsRequest, PublicRoomsResult, RoomMemberChange, RoomMemberRank,
         RoomStateNoticeActivity, SyncStopReason,
     };
+
+    use windows_sys::Win32::UI::Controls::{TB_GETSTATE, TBSTATE_WRAP};
 
     use super::menus::verification_actions_text;
 
@@ -31356,6 +31457,111 @@ mod tests {
             let menu_state = active_message_action_state(&state);
             assert!(menu_state.selected_event_id.is_some());
             assert!(menu_state.save_attachment_enabled);
+        }
+    }
+
+    /// Runs `test` on a real frame `width` x `height` with its controls and
+    /// the Status window, and destroys it afterwards.
+    unsafe fn with_test_frame<T>(width: i32, height: i32, test: impl FnOnce(HWND) -> T) -> T {
+        let instance = GetModuleHandleW(null());
+        init_common_controls().unwrap();
+        register_frame_class(instance).unwrap();
+        register_mdi_child_class(instance).unwrap();
+        register_room_content_class(instance).unwrap();
+        register_timeline_class(instance).unwrap();
+        let hwnd = create_main_window(
+            instance,
+            Box::new(test_state()),
+            FrameSize { width, height },
+        )
+        .unwrap();
+        let result = test(hwnd);
+        DestroyWindow(hwnd);
+        result
+    }
+
+    /// A frame child's rectangle in the frame's client coordinates.
+    unsafe fn frame_child_layout(hwnd: HWND, child: HWND) -> UiRect {
+        frame_child_rect(hwnd, child).expect("the child window is shown")
+    }
+
+    unsafe fn switchbar_button_height(switchbar: HWND) -> i32 {
+        (SendMessageW(switchbar, TB_GETBUTTONSIZE, 0, 0) as u32 >> 16) as i32
+    }
+
+    #[test]
+    fn the_switchbar_wraps_onto_rows_that_the_frame_lays_out() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                let room_ids = (0..8)
+                    .map(|index| format!("!room{index}:example"))
+                    .collect::<Vec<_>>();
+                for (index, room_id) in room_ids.iter().enumerate() {
+                    state_mut(hwnd).model.rooms.push(room(
+                        room_id,
+                        &format!("Room {index}"),
+                        false,
+                    ));
+                }
+                sync_views_and_tree(hwnd).unwrap();
+
+                let controls = &state_ref(hwnd).controls;
+                let switchbar = controls.switchbar;
+                let rows = SendMessageW(switchbar, TB_GETROWS, 0, 0) as u32;
+                assert!(rows >= 2, "9 buttons of 120 px wrap in 600 px: {rows}");
+                let bar = frame_child_layout(hwnd, switchbar);
+                assert_eq!(
+                    bar.height,
+                    switchbar::switchbar_height(rows, switchbar_button_height(switchbar))
+                );
+                let mdi_client = frame_child_layout(hwnd, controls.mdi_client);
+                assert_eq!(mdi_client.y, bar.y + bar.height);
+                assert_eq!(frame_child_layout(hwnd, controls.tree).y, mdi_client.y);
+                for index in 0..room_ids.len() + 1 {
+                    let mut button = RECT::default();
+                    SendMessageW(
+                        switchbar,
+                        TB_GETITEMRECT,
+                        index,
+                        &mut button as *mut RECT as LPARAM,
+                    );
+                    assert_eq!(button.right - button.left, SWITCHBAR_BUTTON_WIDTH);
+                    assert!(button.right <= bar.width, "button {index} is clipped");
+                }
+
+                // Activating a view checks its button and keeps the wrap
+                // the layout set on the last button of each row.
+                let wrapped = |hwnd: HWND| {
+                    (0..room_ids.len() + 1)
+                        .filter(|index| {
+                            let command_id = SWITCHBAR_COMMAND_FIRST + index;
+                            SendMessageW(
+                                state_ref(hwnd).controls.switchbar,
+                                TB_GETSTATE,
+                                command_id,
+                                0,
+                            ) as u32
+                                & TBSTATE_WRAP
+                                != 0
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let wrapped_before = wrapped(hwnd);
+                assert_eq!(wrapped_before.len(), rows as usize - 1);
+                activate_view(hwnd, &room_view_id(&room_ids[7]), None).unwrap();
+                assert_eq!(wrapped(hwnd), wrapped_before);
+
+                state_mut(hwnd).model.rooms.truncate(1);
+                sync_views_and_tree(hwnd).unwrap();
+                let switchbar = state_ref(hwnd).controls.switchbar;
+                assert_eq!(SendMessageW(switchbar, TB_GETROWS, 0, 0), 1);
+                let bar = frame_child_layout(hwnd, switchbar);
+                assert_eq!(bar.height, switchbar::SWITCHBAR_ROW_HEIGHT);
+                assert_eq!(
+                    frame_child_layout(hwnd, state_ref(hwnd).controls.mdi_client).y,
+                    bar.height
+                );
+            });
         }
     }
 }

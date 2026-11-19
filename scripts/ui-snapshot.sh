@@ -195,6 +195,7 @@ configure_case_expectations() {
   expect_active_find_selected_text=
   case_frame_size=
   expect_switchbar_active=
+  expect_switchbar_rows=
   verification_text_expect_args=()
   mdi_placement_expect_args=()
   mdi_title_expect_args=()
@@ -2003,6 +2004,7 @@ configure_case_expectations() {
         --expect-navigation-activity 'thread:!focus:example|$focus-root::message'
       )
       expect_switchbar_active='room:!focus:example'
+      expect_switchbar_rows=2
       ;;
     shell-long-labels-constrained)
       expect_selected='!long-focus:example'
@@ -2735,6 +2737,9 @@ run_case() {
   driver_args+=("${verification_text_expect_args[@]}")
   if [[ -n "${expect_switchbar_active:-}" ]]; then
     driver_args+=(--expect-switchbar-active "$expect_switchbar_active")
+  fi
+  if [[ -n "${expect_switchbar_rows:-}" ]]; then
+    driver_args+=(--expect-switchbar-rows "$expect_switchbar_rows")
   fi
 
   ui_args=(--render-state "$state_path_win" --automation)

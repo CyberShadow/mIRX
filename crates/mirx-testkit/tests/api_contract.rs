@@ -37,10 +37,10 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
     TestkitError, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
-    UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomList,
-    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState,
+    UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -740,12 +740,19 @@ fn data_models_round_trip_through_json() {
             text: "synced 1 room(s)".to_owned(),
         },
         switchbar: SwitchbarState {
+            rows: 1,
             items: vec![
                 SwitchbarItem {
                     identity: ViewIdentity::Status,
                     title: "Status".to_owned(),
                     active: false,
                     activity: None,
+                    rect: UiRect {
+                        x: 0,
+                        y: 0,
+                        width: 120,
+                        height: 36,
+                    },
                 },
                 SwitchbarItem {
                     identity: ViewIdentity::Room {
@@ -754,6 +761,12 @@ fn data_models_round_trip_through_json() {
                     title: "Room".to_owned(),
                     active: true,
                     activity: Some(ViewActivityLevel::Message),
+                    rect: UiRect {
+                        x: 120,
+                        y: 0,
+                        width: 120,
+                        height: 36,
+                    },
                 },
                 SwitchbarItem {
                     identity: ViewIdentity::Thread {
@@ -763,8 +776,34 @@ fn data_models_round_trip_through_json() {
                     title: "Thread".to_owned(),
                     active: false,
                     activity: Some(ViewActivityLevel::Message),
+                    rect: UiRect {
+                        x: 240,
+                        y: 0,
+                        width: 120,
+                        height: 36,
+                    },
                 },
             ],
+        },
+        frame_layout: UiFrameLayout {
+            switchbar: Some(UiRect {
+                x: 0,
+                y: 0,
+                width: 1008,
+                height: 28,
+            }),
+            treebar: Some(UiRect {
+                x: 0,
+                y: 28,
+                width: 240,
+                height: 600,
+            }),
+            mdi_client: UiRect {
+                x: 240,
+                y: 28,
+                width: 768,
+                height: 600,
+            },
         },
         active_find: Some(UiFindState {
             active: ViewIdentity::Room {
@@ -820,6 +859,7 @@ fn data_models_round_trip_through_json() {
             items: vec![UiMenuItem {
                 label: "&Disconnect".to_owned(),
                 enabled: false,
+                checked: false,
             }],
         }],
         compose_target: Some(UiComposeTarget {
@@ -1023,6 +1063,7 @@ fn data_models_round_trip_through_json() {
                 "text": "synced 1 room(s)",
             },
             "switchbar": {
+                "rows": 1,
                 "items": [
                     {
                         "identity": {
@@ -1031,6 +1072,7 @@ fn data_models_round_trip_through_json() {
                         "title": "Status",
                         "active": false,
                         "activity": null,
+                        "rect": {"x": 0, "y": 0, "width": 120, "height": 36},
                     },
                     {
                         "identity": {
@@ -1040,6 +1082,7 @@ fn data_models_round_trip_through_json() {
                         "title": "Room",
                         "active": true,
                         "activity": "message",
+                        "rect": {"x": 120, "y": 0, "width": 120, "height": 36},
                     },
                     {
                         "identity": {
@@ -1050,8 +1093,14 @@ fn data_models_round_trip_through_json() {
                         "title": "Thread",
                         "active": false,
                         "activity": "message",
+                        "rect": {"x": 240, "y": 0, "width": 120, "height": 36},
                     }
                 ],
+            },
+            "frame_layout": {
+                "switchbar": {"x": 0, "y": 0, "width": 1008, "height": 28},
+                "treebar": {"x": 0, "y": 28, "width": 240, "height": 600},
+                "mdi_client": {"x": 240, "y": 28, "width": 768, "height": 600},
             },
             "active_find": {
                 "active": {
@@ -1114,7 +1163,7 @@ fn data_models_round_trip_through_json() {
             },
             "timestamp": {"show": true, "format": "[HH:nn]"},
             "active_system_menu_items": ["&Restore", "&Font..."],
-            "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false}]}],
+            "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false, "checked": false}]}],
             "compose_target": {"kind": "edit", "event_id": "$mine:example"},
         })
     );
@@ -6295,12 +6344,19 @@ fn switchbar_helpers_find_items_and_active_item() {
             text: "ready".to_owned(),
         },
         switchbar: SwitchbarState {
+            rows: 1,
             items: vec![
                 SwitchbarItem {
                     identity: ViewIdentity::Status,
                     title: "Status".to_owned(),
                     active: false,
                     activity: None,
+                    rect: UiRect {
+                        x: 0,
+                        y: 0,
+                        width: 120,
+                        height: 36,
+                    },
                 },
                 SwitchbarItem {
                     identity: ViewIdentity::Room {
@@ -6309,8 +6365,34 @@ fn switchbar_helpers_find_items_and_active_item() {
                     title: "Room".to_owned(),
                     active: true,
                     activity: Some(ViewActivityLevel::Message),
+                    rect: UiRect {
+                        x: 120,
+                        y: 0,
+                        width: 120,
+                        height: 36,
+                    },
                 },
             ],
+        },
+        frame_layout: UiFrameLayout {
+            switchbar: Some(UiRect {
+                x: 0,
+                y: 0,
+                width: 1008,
+                height: 28,
+            }),
+            treebar: Some(UiRect {
+                x: 0,
+                y: 28,
+                width: 240,
+                height: 600,
+            }),
+            mdi_client: UiRect {
+                x: 240,
+                y: 28,
+                width: 768,
+                height: 600,
+            },
         },
         active_find: None,
         rooms: vec![],

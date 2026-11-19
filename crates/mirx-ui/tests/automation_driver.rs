@@ -66,9 +66,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow,
     IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED,
     PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
-    SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowTextW, WM_CHAR, WM_COMMAND,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
+    SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
+    WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2857,7 +2858,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 36);
+    assert_eq!(version.protocol_version, 37);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5886,6 +5887,87 @@ fn automation_driver_member_moderation_status_view_has_no_target()
             .submitted_member_moderation_commands
             .is_empty()
     );
+    Ok(())
+}
+
+/// Every switchbar button is the fixed width and inside the switchbar, and
+/// the treebar and MDI client start right below its last row.
+fn assert_switchbar_rows_fit(ui_state: &UiState, button_width: i32) {
+    let bar = ui_state
+        .frame_layout
+        .switchbar
+        .expect("the switchbar is shown");
+    for item in &ui_state.switchbar.items {
+        assert_eq!(item.rect.width, button_width, "{item:?}");
+        assert!(item.rect.right() <= bar.width, "{item:?} is clipped");
+        assert!(item.rect.y < bar.height, "{item:?} is below the switchbar");
+    }
+    let rows = ui_state
+        .switchbar
+        .items
+        .iter()
+        .map(|item| item.rect.y)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(rows.len(), ui_state.switchbar.rows as usize);
+    assert_eq!(ui_state.frame_layout.mdi_client.y, bar.bottom());
+    assert_eq!(
+        ui_state
+            .frame_layout
+            .treebar
+            .expect("the treebar is shown")
+            .y,
+        bar.bottom()
+    );
+}
+
+#[test]
+fn switchbar_wraps_fixed_width_buttons_and_relayouts() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("shell-many-open-views.json");
+    let options = LaunchOptions {
+        frame_size: Some(FrameSize {
+            width: 640,
+            height: 480,
+        }),
+        ..launch_options(None)
+    };
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let narrow = app.dump_ui_state()?;
+    assert_eq!(narrow.switchbar.items.len(), 11);
+    assert!(narrow.switchbar.rows >= 3, "{:?}", narrow.switchbar);
+    assert_switchbar_rows_fit(&narrow, 120);
+
+    let frame = app.automation_frame_hwnd() as HWND;
+    assert_ne!(
+        unsafe {
+            SetWindowPos(
+                frame,
+                null_mut(),
+                0,
+                0,
+                1280,
+                480,
+                SWP_NOMOVE | SWP_NOZORDER,
+            )
+        },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    let wide = app.dump_ui_state()?;
+    assert!(
+        wide.switchbar.rows < narrow.switchbar.rows,
+        "{:?}",
+        wide.switchbar
+    );
+    assert_switchbar_rows_fit(&wide, 120);
+    assert!(wide.frame_layout.mdi_client.y < narrow.frame_layout.mdi_client.y);
     Ok(())
 }
 
@@ -11573,6 +11655,7 @@ fn menu(label: &str, items: &[(&str, bool)]) -> UiMenu {
             .map(|(label, enabled)| UiMenuItem {
                 label: (*label).to_owned(),
                 enabled: *enabled,
+                checked: false,
             })
             .collect(),
     }

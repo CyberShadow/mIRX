@@ -1132,6 +1132,7 @@ pub struct UiState {
     pub mdi: MdiState,
     pub status_bar: StatusBarState,
     pub switchbar: SwitchbarState,
+    pub frame_layout: UiFrameLayout,
     pub active_find: Option<UiFindState>,
     pub rooms: Vec<UiRoomState>,
     pub text_font: UiTextFont,
@@ -1172,6 +1173,35 @@ pub struct UiPoint {
     pub y: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+impl UiRect {
+    pub fn bottom(&self) -> i32 {
+        self.y + self.height
+    }
+
+    pub fn right(&self) -> i32 {
+        self.x + self.width
+    }
+}
+
+/// Where the frame's child windows are, read back from them, in the
+/// frame's client coordinates. A hidden bar is `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiFrameLayout {
+    pub switchbar: Option<UiRect>,
+    pub treebar: Option<UiRect>,
+    pub mdi_client: UiRect,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiComposeTarget {
@@ -1200,6 +1230,7 @@ pub struct UiMenuItem {
     /// With its `&` mnemonic and any `\t` accelerator text.
     pub label: String,
     pub enabled: bool,
+    pub checked: bool,
 }
 
 /// The text font as the active window draws it.
@@ -1424,6 +1455,8 @@ pub struct StatusBarState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SwitchbarState {
+    /// How many rows the buttons wrap onto.
+    pub rows: u32,
     pub items: Vec<SwitchbarItem>,
 }
 
@@ -1631,6 +1664,8 @@ pub struct SwitchbarItem {
     pub title: String,
     pub active: bool,
     pub activity: Option<ViewActivityLevel>,
+    /// The button, in the switchbar's client coordinates.
+    pub rect: UiRect,
 }
 
 impl UiState {
