@@ -75,6 +75,8 @@ mod cli {
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) enum Action {
         Find(String),
+        /// Types a line into the active window's editbox and presses Return.
+        Input(String),
         Append(String),
         Arrange(MdiArrangement),
         WindowState(ViewIdentity, MdiWindowState),
@@ -572,7 +574,7 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
             "  --expect-active-find-history <local_only|loading|exhausted|failed>",
@@ -618,6 +620,9 @@ mod cli {
     fn parse_action(value: &str) -> Result<Action, String> {
         if let Some(query) = value.strip_prefix("find:") {
             return Ok(Action::Find(query.to_owned()));
+        }
+        if let Some(text) = value.strip_prefix("input:") {
+            return Ok(Action::Input(text.to_owned()));
         }
         if let Some(path) = value.strip_prefix("append:") {
             return Ok(Action::Append(path.to_owned()));
@@ -862,7 +867,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>> (repeatable)"
             ));
             assert!(usage().contains("--expect-mdi-placement <identity>::<state>"));
             assert!(usage().contains("--expect-mdi-title <identity>::<caption>"));
@@ -1025,6 +1030,8 @@ mod cli {
                     "--action",
                     "find:older needle",
                     "--action",
+                    "input:/kick Bob  spaced reason",
+                    "--action",
                     "append:C:\\snapshots\\backfill.json",
                 ]
                 .into_iter()
@@ -1036,6 +1043,7 @@ mod cli {
                 config.actions,
                 vec![
                     Action::Find("older needle".to_owned()),
+                    Action::Input("/kick Bob  spaced reason".to_owned()),
                     Action::Append("C:\\snapshots\\backfill.json".to_owned()),
                 ]
             );
@@ -1820,8 +1828,8 @@ mod windows_main {
     use std::process::ExitCode;
 
     use mirx_testkit::{
-        MdiView, MirxApp, NavigationNode, RoomActivity, UiFindHistorySearchState, UiState,
-        Verification, VerificationState, ViewIdentity,
+        ComposeKey, MdiView, MirxApp, NavigationNode, RoomActivity, UiFindHistorySearchState,
+        UiState, Verification, VerificationState, ViewIdentity,
     };
 
     use crate::cli::{Action, Config, ViewExpectation, format_view_identity, parse_args};
@@ -1928,6 +1936,15 @@ mod windows_main {
                         .map_err(|error| format!("FIND_ACTIVE_VIEW failed: {error}"))?;
                     app.wait_idle(config.wait_idle).map_err(|error| {
                         format!("WAIT_IDLE after FIND_ACTIVE_VIEW failed: {error}")
+                    })?;
+                }
+                Action::Input(text) => {
+                    app.set_compose_text(text)
+                        .map_err(|error| format!("SET_COMPOSE_TEXT failed: {error}"))?;
+                    app.send_compose_key(ComposeKey::Return)
+                        .map_err(|error| format!("SEND_COMPOSE_KEY failed: {error}"))?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after SEND_COMPOSE_KEY failed: {error}")
                     })?;
                 }
                 Action::Append(path) => {

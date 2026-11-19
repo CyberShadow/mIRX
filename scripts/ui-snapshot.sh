@@ -1631,6 +1631,46 @@ configure_case_expectations() {
         --expect-no-navigation-text 'member list context line'
       )
       ;;
+    irc-commands)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # Typed after the fixture's 22:10/22:11 lines, at the fixed 22:12
+      # render-state clock, so the command lines print below them.
+      ordered_actions=(
+        'input:/names'
+        'input:/kick'
+        'input:/kick Sam'
+        'input:/whois Alice'
+        'input:/msg Alice hi there'
+        'input:/help kick'
+      )
+      room_expect_args=(
+        --expect-room '!ops:example'
+        --expect-room '!dm-alice:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:11] <Alice> who is around?'
+        --expect-room-view '!ops:example::[22:12] * Names Ops: ~Creator &Admin @Mod +Voice Alan Alice Sam Sam'
+        --expect-room-view '!ops:example::[22:12] * End of /NAMES list'
+        --expect-room-view '!ops:example::[22:12] * /kick: insufficient parameters'
+        --expect-room-view '!ops:example::[22:12] * /kick: Sam is ambiguous (@sam-one:example, @sam-two:example)'
+        --expect-room-view '!ops:example::[22:12] * Alice is @alice:example'
+        --expect-room-view '!ops:example::[22:12] * Alice on Ops Alice'
+        --expect-room-view '!ops:example::[22:12] * Alice End of /WHOIS list'
+        --expect-room-view '!ops:example::[22:12] -> *Alice* hi there'
+        --expect-room-view '!ops:example::[22:12] * /kick <nick> [reason] — kick a member from this room'
+      )
+      # The status bar keeps the last command error.
+      status_bar_expect_args=(
+        --expect-status-bar '* /kick: Sam is ambiguous'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'room:!dm-alice:example::Alice'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
     member-ranks)
       expect_selected='!ranks:example'
       expect_active_view='room:!ranks:example'
