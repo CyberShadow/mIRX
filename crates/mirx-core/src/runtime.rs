@@ -227,6 +227,8 @@ async fn handle_command(
         Command::RemoveHighlightWord(word) => {
             handle_remove_highlight_word(event_tx, state, word).await
         }
+        Command::IgnoreUser(user_id) => handle_ignore_user(event_tx, state, user_id).await,
+        Command::UnignoreUser(user_id) => handle_unignore_user(event_tx, state, user_id).await,
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -317,8 +319,8 @@ async fn handle_login(
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
-    let highlight_words = if rooms.is_ok() {
-        Some(matrix::highlight_words(&client).await)
+    let account_lists = if rooms.is_ok() {
+        Some(AccountLists::read(&client).await)
     } else {
         None
     };
@@ -336,7 +338,7 @@ async fn handle_login(
                 rooms,
                 room_members,
                 room_read_states.expect("read states exist after successful sync"),
-                highlight_words.expect("highlight words exist after successful sync"),
+                account_lists.expect("account lists exist after successful sync"),
             ),
             Err(err) => emit_matrix_error(event_tx, Operation::Login, err),
         },
@@ -422,8 +424,8 @@ async fn handle_restore_session(
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
-    let highlight_words = if rooms.is_ok() {
-        Some(matrix::highlight_words(&client).await)
+    let account_lists = if rooms.is_ok() {
+        Some(AccountLists::read(&client).await)
     } else {
         None
     };
@@ -435,7 +437,7 @@ async fn handle_restore_session(
                 rooms,
                 room_members,
                 room_read_states.expect("read states exist after successful sync"),
-                highlight_words.expect("highlight words exist after successful sync"),
+                account_lists.expect("account lists exist after successful sync"),
             ),
             Err(err) => emit_matrix_error(event_tx, Operation::RestoreSession, err),
         },
@@ -1085,6 +1087,48 @@ async fn handle_remove_highlight_word(
     false
 }
 
+async fn handle_ignore_user(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    user_id: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::IgnoreUser,
+            "ignore user requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::ignore_user(client, &user_id).await {
+        emit_matrix_error(event_tx, Operation::IgnoreUser, err);
+    }
+
+    false
+}
+
+async fn handle_unignore_user(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    user_id: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::UnignoreUser,
+            "unignore user requires an authenticated session",
+        );
+        return false;
+    };
+
+    if let Err(err) = matrix::unignore_user(client, &user_id).await {
+        emit_matrix_error(event_tx, Operation::UnignoreUser, err);
+    }
+
+    false
+}
+
 async fn handle_mark_room_read(
     event_tx: &EventSender,
     state: &mut WorkerState,
@@ -1518,12 +1562,27 @@ fn task_is_running(
     false
 }
 
+/// The account-wide lists the first room snapshot carries.
+struct AccountLists {
+    highlight_words: Result<Vec<HighlightWord>, MatrixCoreError>,
+    ignored_users: Result<Vec<String>, MatrixCoreError>,
+}
+
+impl AccountLists {
+    async fn read(client: &Client) -> Self {
+        Self {
+            highlight_words: matrix::highlight_words(client).await,
+            ignored_users: matrix::ignored_users(client).await,
+        }
+    }
+}
+
 fn emit_initial_room_snapshot(
     event_tx: &EventSender,
     rooms: Vec<RoomSummary>,
     room_members: Vec<RoomMembers>,
     room_read_states: Vec<RoomReadState>,
-    highlight_words: Result<Vec<HighlightWord>, MatrixCoreError>,
+    account_lists: AccountLists,
 ) {
     let joined_room_ids = rooms
         .iter()
@@ -1532,9 +1591,13 @@ fn emit_initial_room_snapshot(
         .collect::<std::collections::HashSet<_>>();
 
     emit_event(event_tx, Event::SyncedRooms(rooms));
-    match highlight_words {
+    match account_lists.highlight_words {
         Ok(words) => emit_event(event_tx, Event::HighlightWords(words)),
         Err(err) => emit_matrix_error(event_tx, Operation::HighlightWords, err),
+    }
+    match account_lists.ignored_users {
+        Ok(user_ids) => emit_event(event_tx, Event::IgnoredUsers(user_ids)),
+        Err(err) => emit_matrix_error(event_tx, Operation::IgnoredUsers, err),
     }
     for members in room_members {
         if joined_room_ids.contains(&members.room_id) {
@@ -1651,8 +1714,8 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        EventSender, WorkerState, emit_initial_room_snapshot, handle_command, handle_login,
-        handle_start_sync, handle_stop_sync, run_worker, shutdown_state,
+        AccountLists, EventSender, WorkerState, emit_initial_room_snapshot, handle_command,
+        handle_login, handle_start_sync, handle_stop_sync, run_worker, shutdown_state,
     };
     use crate::api::CoreConfig;
     use crate::api::{
@@ -2377,10 +2440,13 @@ mod tests {
             rooms.clone(),
             room_members.clone(),
             read_states.clone(),
-            Ok(vec![HighlightWord {
-                word: "deploy".to_owned(),
-                highlights: true,
-            }]),
+            AccountLists {
+                highlight_words: Ok(vec![HighlightWord {
+                    word: "deploy".to_owned(),
+                    highlights: true,
+                }]),
+                ignored_users: Ok(vec!["@spam:example.org".to_owned()]),
+            },
         );
 
         assert_eq!(
@@ -2397,6 +2463,12 @@ mod tests {
                 word: "deploy".to_owned(),
                 highlights: true,
             }])
+        );
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("ignored users event"),
+            Event::IgnoredUsers(vec!["@spam:example.org".to_owned()])
         );
         for members in room_members.into_iter().take(2) {
             assert_eq!(

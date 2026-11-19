@@ -52,6 +52,7 @@ use matrix_sdk::{
             AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, InitialStateEvent,
             Mentions, SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
+            ignored_user_list::{IgnoredUserListEvent, IgnoredUserListEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
             },
@@ -836,6 +837,62 @@ pub(crate) async fn highlight_words(
     Ok(highlight_words_from_ruleset(&ruleset))
 }
 
+/// The account's ignore list, sorted; no `m.ignored_user_list` event means
+/// an empty list.
+pub(crate) async fn ignored_users(client: &Client) -> Result<Vec<String>, MatrixCoreError> {
+    let content = client
+        .account()
+        .account_data::<IgnoredUserListEventContent>()
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to read the ignore list: {err}")))?
+        .map(|raw| raw.deserialize())
+        .transpose()
+        .map_err(|err| MatrixCoreError::new(format!("failed to decode the ignore list: {err}")))?
+        .unwrap_or_default();
+    Ok(ignored_user_ids(&content))
+}
+
+fn ignored_user_ids(content: &IgnoredUserListEventContent) -> Vec<String> {
+    // A map keyed by user ID, so already sorted and unique.
+    content
+        .ignored_users
+        .keys()
+        .map(|user_id| user_id.to_string())
+        .collect()
+}
+
+fn parse_user_id(user_id: &str) -> Result<OwnedUserId, MatrixCoreError> {
+    UserId::parse(user_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid user ID \"{user_id}\": {err}")))
+}
+
+/// Adds the user to the ignore list. The server's echo of the list, in the
+/// next sync, is the confirmation.
+pub(crate) async fn ignore_user(client: &Client, user_id: &str) -> Result<(), MatrixCoreError> {
+    let user_id = parse_user_id(user_id)?;
+    client
+        .account()
+        .ignore_user(&user_id)
+        .await
+        .map_err(|err| match err {
+            matrix_sdk::Error::CantIgnoreLoggedInUser => {
+                MatrixCoreError::new("you cannot ignore yourself")
+            }
+            err => MatrixCoreError::new(format!("failed to ignore {user_id}: {err}")),
+        })
+}
+
+/// Removes the user from the ignore list; one who is not on it changes
+/// nothing.
+pub(crate) async fn unignore_user(client: &Client, user_id: &str) -> Result<(), MatrixCoreError> {
+    let user_id = parse_user_id(user_id)?;
+    client
+        .account()
+        .unignore_user(&user_id)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to unignore {user_id}: {err}")))
+}
+
 /// What a highlight word's rule does: notify with a sound and highlight,
 /// as the server's own mention rules do.
 fn highlight_word_actions() -> Vec<Action> {
@@ -1597,6 +1654,17 @@ pub(crate) fn register_event_handlers(client: &Client, events: EventSender) {
             emit_event(
                 &events,
                 Event::HighlightWords(highlight_words_from_ruleset(&event.content.global)),
+            );
+        }
+    });
+
+    let ignored_user_list_events = events.clone();
+    client.add_event_handler(move |event: IgnoredUserListEvent| {
+        let events = ignored_user_list_events.clone();
+        async move {
+            emit_event(
+                &events,
+                Event::IgnoredUsers(ignored_user_ids(&event.content)),
             );
         }
     });
@@ -4250,12 +4318,12 @@ mod tests {
         attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
         content_type_for_file_name, create_room, direct_user_ids_by_room_from_content,
         emit_member_snapshots_after_sync, fetch_room_event, fetch_room_media,
-        highlight_word_actions, highlight_words_from_ruleset, insert_pending_outgoing_kind,
-        invite_room_member, joined_room_members, joined_room_members_no_sync,
-        joined_room_update_changes_members, kick_room_member, list_public_rooms,
-        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
-        map_send_queue_update, member_target_display_name,
+        highlight_word_actions, highlight_words_from_ruleset, ignore_user, ignored_users,
+        insert_pending_outgoing_kind, invite_room_member, joined_room_members,
+        joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
+        list_public_rooms, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
+        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
+        map_local_message_activity, map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, remove_highlight_word,
@@ -4273,7 +4341,7 @@ mod tests {
         room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
         set_room_member_power_level, set_room_notification_mode,
         sorted_room_member_summaries_from_parts, summarize_rooms, sync_message_replacement,
-        unban_room_member, verification_flow_id_from_to_device,
+        unban_room_member, unignore_user, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
@@ -10318,6 +10386,238 @@ mod tests {
                 )]
             );
             task.abort();
+        });
+    }
+
+    fn ignored_user_list_json(user_ids: &[&str]) -> serde_json::Value {
+        let ignored_users = user_ids
+            .iter()
+            .map(|user_id| ((*user_id).to_owned(), serde_json::json!({})))
+            .collect::<serde_json::Map<_, _>>();
+        serde_json::json!({
+            "type": "m.ignored_user_list",
+            "content": { "ignored_users": ignored_users },
+        })
+    }
+
+    async fn sync_ignored_users(
+        mock_server: &MatrixMockServer,
+        client: &Client,
+        user_ids: &[&str],
+    ) {
+        let list = ignored_user_list_json(user_ids);
+        mock_server
+            .mock_sync()
+            .ok_and_run(client, |builder| {
+                builder.add_custom_global_account_data(list);
+            })
+            .await;
+    }
+
+    /// The bodies of the ignore-list PUTs the server received.
+    async fn ignored_user_list_puts(mock_server: &MatrixMockServer) -> Vec<serde_json::Value> {
+        mock_server
+            .server()
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .into_iter()
+            .filter(|request| {
+                request.method == wiremock::http::Method::PUT
+                    && request
+                        .url
+                        .path()
+                        .ends_with("/account_data/m.ignored_user_list")
+            })
+            .map(|request| serde_json::from_slice(&request.body).expect("JSON body"))
+            .collect()
+    }
+
+    #[test]
+    fn ignore_user_puts_the_ignored_user_list() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            wiremock::Mock::given(wiremock::matchers::method("PUT"))
+                .and(wiremock::matchers::path_regex(
+                    r"^/_matrix/client/v3/user/.*/account_data/m\.ignored_user_list$",
+                ))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({})),
+                )
+                .mount(mock_server.server())
+                .await;
+
+            ignore_user(&client, "@bob:localhost")
+                .await
+                .expect("ignore bob");
+            assert_eq!(
+                ignored_user_list_puts(&mock_server).await,
+                vec![serde_json::json!({ "ignored_users": { "@bob:localhost": {} } })]
+            );
+
+            // The SDK edits the stored list: the server's echo seeds it.
+            sync_ignored_users(
+                &mock_server,
+                &client,
+                &["@bob:localhost", "@spam:localhost"],
+            )
+            .await;
+            assert_eq!(
+                ignored_users(&client).await.expect("stored list"),
+                vec!["@bob:localhost".to_owned(), "@spam:localhost".to_owned()]
+            );
+            unignore_user(&client, "@bob:localhost")
+                .await
+                .expect("unignore bob");
+            assert_eq!(
+                ignored_user_list_puts(&mock_server).await.last(),
+                Some(&serde_json::json!({ "ignored_users": { "@spam:localhost": {} } }))
+            );
+
+            let puts = ignored_user_list_puts(&mock_server).await.len();
+            assert_eq!(
+                ignore_user(&client, "@example:localhost")
+                    .await
+                    .expect_err("ignoring yourself")
+                    .to_string(),
+                "you cannot ignore yourself"
+            );
+            assert_eq!(
+                ignore_user(&client, "bob")
+                    .await
+                    .expect_err("an invalid user ID")
+                    .to_string(),
+                r#"invalid user ID "bob": leading sigil is incorrect or missing"#
+            );
+            assert_eq!(
+                unignore_user(&client, "@bob")
+                    .await
+                    .expect_err("an invalid user ID")
+                    .to_string(),
+                r#"invalid user ID "@bob": required colon is missing"#
+            );
+            assert_eq!(ignored_user_list_puts(&mock_server).await.len(), puts);
+        });
+    }
+
+    #[test]
+    fn ignored_user_list_change_emits_ignored_users() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            assert_eq!(
+                ignored_users(&client).await.expect("no list yet"),
+                Vec::<String>::new()
+            );
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events);
+
+            sync_ignored_users(
+                &mock_server,
+                &client,
+                &["@spam:localhost", "@bob:localhost"],
+            )
+            .await;
+
+            assert_eq!(
+                drain_events(&event_rx),
+                vec![Event::IgnoredUsers(vec![
+                    "@bob:localhost".to_owned(),
+                    "@spam:localhost".to_owned(),
+                ])]
+            );
+        });
+    }
+
+    /// The SDK's event cache clears every room when the ignore list changes;
+    /// the room-list and read-state tasks that subscribe to it, and the
+    /// timeline handlers, keep working after it.
+    #[test]
+    fn ignored_user_list_change_keeps_core_tasks_alive() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            mock_server.sync_joined_room(&client, &room_id()).await;
+            let (events, event_rx) = mpsc::channel();
+            register_event_handlers(&client, events.clone());
+            let read_state_task = super::start_room_read_state_update_task(client.clone(), events.clone())
+                .expect("start the read-state task");
+            let room_list_task = super::start_room_list_update_task(client.clone(), events)
+                .expect("start the room-list task");
+
+            sync_ignored_users(&mock_server, &client, &["@spam:localhost"]).await;
+            mock_server
+                .mock_sync()
+                .ok_and_run(&client, |builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(&room_id())
+                            .add_timeline_event(raw_sync_timeline_event(text_message_json(
+                                "$after:localhost",
+                                "@bob:localhost",
+                                "still here",
+                            )))
+                            .add_account_data(
+                                Raw::<matrix_sdk::ruma::events::AnyRoomAccountDataEvent>::from_json_string(
+                                    serde_json::json!({
+                                        "type": "m.fully_read",
+                                        "content": { "event_id": "$after:localhost" },
+                                    })
+                                    .to_string(),
+                                )
+                                .expect("fully read marker"),
+                            ),
+                    );
+                })
+                .await;
+
+            let mut got = Vec::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            let seen = |got: &[Event]| {
+                got.iter().any(|event| matches!(event, Event::RoomActivity(_)))
+                    && got.iter().any(|event| {
+                        matches!(event, Event::RoomReadState(state)
+                            if state.fully_read_event_id.as_deref() == Some("$after:localhost"))
+                    })
+            };
+            while !seen(&got) {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "activity and read state did not arrive: {got:?}"
+                );
+                got.extend(std::iter::from_fn(|| event_rx.try_recv().ok()));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert!(
+                got.contains(&Event::IgnoredUsers(vec!["@spam:localhost".to_owned()])),
+                "{got:?}"
+            );
+            assert!(
+                !got.iter().any(|event| matches!(event, Event::Error(_))),
+                "{got:?}"
+            );
+            read_state_task.abort();
+            room_list_task.abort();
         });
     }
 

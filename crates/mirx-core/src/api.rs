@@ -38,6 +38,12 @@ pub enum Command {
     AddHighlightWord(String),
     /// Deletes the user's content push rules for the word.
     RemoveHighlightWord(String),
+    /// Adds the user ID to the account's ignore list
+    /// (`m.ignored_user_list`); the next sync's `IgnoredUsers` lists it.
+    IgnoreUser(String),
+    /// Removes the user ID from the ignore list; the next sync's
+    /// `IgnoredUsers` no longer lists it.
+    UnignoreUser(String),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -1309,6 +1315,9 @@ pub enum Operation {
     HighlightWords,
     AddHighlightWord,
     RemoveHighlightWord,
+    IgnoredUsers,
+    IgnoreUser,
+    UnignoreUser,
     SendMessage,
     SendFile,
     EditMessage,
@@ -1373,6 +1382,10 @@ pub enum Event {
     /// The user's highlight words, in push-rule order: with the first room
     /// snapshot and whenever the push rules change.
     HighlightWords(Vec<HighlightWord>),
+    /// The user IDs on the account's ignore list (`m.ignored_user_list`),
+    /// sorted: with the first room snapshot, and whenever it changes. The
+    /// server stops sending ignored users' events.
+    IgnoredUsers(Vec<String>),
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),

@@ -9144,6 +9144,8 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
         Event::HighlightWords(words) => state.model.highlight_words = Some(words),
+        // Shown by /ignore, which the next change adds.
+        Event::IgnoredUsers(_) => {}
         Event::E2eeStatus(status) => {
             for line in status_log::e2ee_status(&status) {
                 log_status(state, StatusLineKind::Info, line);
@@ -17485,6 +17487,9 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::HighlightWords => "highlight words",
         Operation::AddHighlightWord => "add highlight word",
         Operation::RemoveHighlightWord => "remove highlight word",
+        Operation::IgnoredUsers => "ignore list",
+        Operation::IgnoreUser => "ignore user",
+        Operation::UnignoreUser => "unignore user",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",

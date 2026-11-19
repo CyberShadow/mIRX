@@ -51,6 +51,9 @@ pub(super) fn error_destination(error: &CoreErrorEvent) -> ErrorDestination<'_> 
         | Operation::HighlightWords
         | Operation::AddHighlightWord
         | Operation::RemoveHighlightWord
+        | Operation::IgnoredUsers
+        | Operation::IgnoreUser
+        | Operation::UnignoreUser
         | Operation::MarkRoomRead
         | Operation::BackfillRoomHistory
         | Operation::FetchRoomMedia

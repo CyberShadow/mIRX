@@ -149,6 +149,8 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::SetDisplayName(_)
         | Command::AddHighlightWord(_)
         | Command::RemoveHighlightWord(_)
+        | Command::IgnoreUser(_)
+        | Command::UnignoreUser(_)
         | Command::ListPublicRooms(_)
         | Command::RefreshE2eeStatus
         | Command::SetupE2eeRecovery(_)
@@ -604,6 +606,28 @@ fn highlight_word_commands_before_login_emit_their_errors() {
         Operation::RemoveHighlightWord,
         "remove highlight word requires an authenticated session",
     );
+}
+
+#[test]
+fn ignore_commands_before_login_emit_their_errors() {
+    assert_invalid_authenticated_command(
+        Command::IgnoreUser("@bob:example.org".to_owned()),
+        Operation::IgnoreUser,
+        "ignore user requires an authenticated session",
+    );
+    assert_invalid_authenticated_command(
+        Command::UnignoreUser("@bob:example.org".to_owned()),
+        Operation::UnignoreUser,
+        "unignore user requires an authenticated session",
+    );
+}
+
+#[test]
+fn ignored_users_event_round_trips() {
+    let event = Event::IgnoredUsers(vec!["@bob:example.org".to_owned()]);
+    let json = serde_json::to_string(&event).unwrap();
+    assert_eq!(json, r#"{"IgnoredUsers":["@bob:example.org"]}"#);
+    assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), event);
 }
 
 #[test]
