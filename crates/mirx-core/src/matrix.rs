@@ -48,6 +48,7 @@ use matrix_sdk::{
                     AudioInfo, FileInfo, MessageType, OriginalSyncRoomMessageEvent,
                     Relation as MessageContentRelation, Relation as MessageRelation,
                     RoomMessageEventContent, RoomMessageEventContentWithoutRelation, VideoInfo,
+                    sanitize::remove_plain_reply_fallback,
                 },
                 power_levels::{
                     OriginalSyncRoomPowerLevelsEvent, PossiblyRedactedRoomPowerLevelsEventContent,
@@ -1506,6 +1507,7 @@ fn room_activity_from_sync_message(
     if let Some((presentation, body)) =
         room_message_presentation_and_body_from_message_type(&event.content.msgtype)
     {
+        let body = strip_reply_fallback(relation.as_ref(), body);
         return Some(RoomActivity {
             room_id: room_id.to_owned(),
             activity_id: format!("event:{}", event.event_id),
@@ -1708,6 +1710,26 @@ fn room_activity_relation_from_message(
             is_falling_back: thread.is_falling_back,
         }),
         _ => None,
+    }
+}
+
+/// A reply's body without the plain-text quote of the message it replies
+/// to (`> <@alice:example.org> hi`), which older clients still send: the UI
+/// shows what a reply answers from its relation, so the quote would repeat
+/// it. Only replies can carry one; any other body is the user's text, even
+/// when it starts with `> <`.
+fn strip_reply_fallback(relation: Option<&RoomActivityRelation>, body: String) -> String {
+    match relation {
+        Some(RoomActivityRelation::Reply { .. })
+        | Some(RoomActivityRelation::Thread {
+            in_reply_to_event_id: Some(_),
+            ..
+        }) => remove_plain_reply_fallback(&body).to_owned(),
+        Some(RoomActivityRelation::Thread {
+            in_reply_to_event_id: None,
+            ..
+        })
+        | None => body,
     }
 }
 
@@ -3135,7 +3157,7 @@ fn message_presentation_and_body_from_serialized_event(
 
     Ok(Some(LocalEchoMessageDetails {
         presentation,
-        body,
+        body: strip_reply_fallback(relation.as_ref(), body),
         relation,
     }))
 }
@@ -5834,6 +5856,70 @@ mod tests {
                     send_state: RoomMessageSendState::Sent,
                 }),
             })
+        );
+    }
+
+    fn sync_message_body(content: serde_json::Value) -> String {
+        let event: OriginalSyncRoomMessageEvent = serde_json::from_value(serde_json::json!({
+            "type": "m.room.message",
+            "content": content,
+            "event_id": "$event:example.org",
+            "sender": "@bob:example.org",
+            "origin_server_ts": 1700000000000u64
+        }))
+        .expect("deserialize sync message event");
+        let activity = room_activity_from_sync_message(
+            "!room:example.org",
+            &event,
+            profile("@bob:example.org"),
+            false,
+        )
+        .expect("a message activity");
+        let RoomActivityKind::Message(message) = activity.kind else {
+            panic!("expected a message activity");
+        };
+        message.body
+    }
+
+    #[test]
+    fn sync_reply_body_drops_the_plain_reply_fallback() {
+        assert_eq!(
+            sync_message_body(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "> <@alice:example.org> hi\n\nhello",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$hi:example.org" } }
+            })),
+            "hello"
+        );
+        assert_eq!(
+            sync_message_body(serde_json::json!({
+                "msgtype": "m.emote",
+                "body": "> * <@alice:example.org> waves\n\nwaves back",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$wave:example.org" } }
+            })),
+            "waves back"
+        );
+        assert_eq!(
+            sync_message_body(serde_json::json!({
+                "msgtype": "m.text",
+                "body": "> <@alice:example.org> in thread\n\nthread answer",
+                "m.relates_to": {
+                    "rel_type": "m.thread",
+                    "event_id": "$root:example.org",
+                    "is_falling_back": true,
+                    "m.in_reply_to": { "event_id": "$latest:example.org" }
+                }
+            })),
+            "thread answer"
+        );
+    }
+
+    #[test]
+    fn sync_body_without_a_reply_keeps_a_quote_like_start() {
+        let body = "> <@alice:example.org> hi\n\nhello";
+        assert_eq!(
+            sync_message_body(serde_json::json!({ "msgtype": "m.text", "body": body })),
+            body
         );
     }
 
