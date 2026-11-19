@@ -5976,7 +5976,7 @@ fn active_room_action_state(state: &WindowState) -> RoomActionState {
     RoomActionState {
         accept_invite_enabled: resolve_invite_command_room_id(state, "accept", None).is_ok(),
         reject_invite_enabled: resolve_invite_command_room_id(state, "reject", None).is_ok(),
-        part_room_enabled: resolve_part_slash_command_room_id(state, None).is_ok(),
+        part_room_enabled: resolve_joined_room_target(state, None).is_ok(),
     }
 }
 
@@ -12759,29 +12759,59 @@ fn submit_compose(
 
     let destination = resolve_compose_destination(state, explicit_room_id)?;
 
-    let sender = state
-        .command_sender
-        .as_ref()
-        .ok_or_else(|| "core command sender is not available".to_owned())?;
-    let send_body = body.clone();
     let clears_active_thread_marker = explicit_room_id.is_none() && destination.thread.is_some();
-    let command = Command::SendMessage(SendMessageRequest {
-        room_id: destination.room_id.clone(),
-        presentation,
-        body: send_body,
-        thread: destination.thread,
-        reply: None,
-    });
-    sender
-        .send(command.clone())
-        .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
-    #[cfg(test)]
-    state.recorded_commands.push(command);
+    enqueue_send_message(
+        state,
+        SendMessageRequest {
+            room_id: destination.room_id.clone(),
+            presentation,
+            body,
+            thread: destination.thread,
+            reply: None,
+        },
+    )?;
     if clears_active_thread_marker {
         clear_view_activity_marker(state, &state.active_view.clone());
     }
 
     Ok(destination.room_id)
+}
+
+/// Sends to a joined room's main timeline, from a command naming the room.
+fn send_room_message(
+    state: &mut WindowState,
+    room_id: String,
+    presentation: RoomMessagePresentationKind,
+    body: String,
+) -> Result<(), String> {
+    if sendable_room_by_id(&state.model.rooms, &room_id).is_none() {
+        return Err(format!("room is not joined: {room_id}"));
+    }
+    enqueue_send_message(
+        state,
+        SendMessageRequest {
+            room_id,
+            presentation,
+            body,
+            thread: None,
+            reply: None,
+        },
+    )
+}
+
+fn enqueue_send_message(
+    state: &mut WindowState,
+    request: SendMessageRequest,
+) -> Result<(), String> {
+    let command = Command::SendMessage(request);
+    state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12929,19 +12959,88 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
         SlashCommand::Join { target } => {
             submit_join_slash_command(state_mut(hwnd), target).map(Some)
         }
-        SlashCommand::Query { user_id } => {
+        SlashCommand::Query { target, message } => {
+            let user_id =
+                commands::resolve_user(all_room_members(&state_ref(hwnd).model), &target)?.user_id;
             match resolve_direct_room_query_target(&state_ref(hwnd).model, &user_id) {
                 QueryTargetResolution::Single(room_id) => {
-                    activate_view(hwnd, &ViewId::Room(room_id), None)?;
+                    activate_view(hwnd, &ViewId::Room(room_id.clone()), None)?;
+                    if let Some(body) = message {
+                        send_room_message(
+                            state_mut(hwnd),
+                            room_id,
+                            RoomMessagePresentationKind::Text,
+                            body,
+                        )?;
+                    }
                     Ok(Some(format!("query opened: {user_id}")))
                 }
                 QueryTargetResolution::Ambiguous => {
                     Err(format!("ambiguous query target: {user_id}"))
                 }
                 QueryTargetResolution::None => {
-                    submit_query_slash_command(state_mut(hwnd), user_id).map(Some)
+                    let status = submit_query_slash_command(state_mut(hwnd), user_id.clone())?;
+                    if message.is_some() {
+                        echo_in_active_view(
+                            hwnd,
+                            [format!(
+                                "* /query: creating a query with {user_id}; message not sent"
+                            )],
+                        )?;
+                    }
+                    Ok(Some(status))
                 }
             }
+        }
+        SlashCommand::Msg {
+            target,
+            body,
+            presentation,
+        } => {
+            let room_id = msg_target_room_id(&state_ref(hwnd).model, &target)?;
+            send_room_message(state_mut(hwnd), room_id, presentation, body.clone())?;
+            echo_in_active_view(hwnd, [commands::msg_echo(presentation, &target, &body)])?;
+            Ok(None)
+        }
+        SlashCommand::Names { target } => {
+            let lines = {
+                let state = state_ref(hwnd);
+                let room_id = resolve_joined_room_target(state, target.as_deref())?;
+                let room = room_by_id(&state.model.rooms, &room_id)
+                    .expect("a joined room target must exist");
+                let members = state
+                    .model
+                    .room_views
+                    .get(&room_id)
+                    .map(|view| view.members.as_slice())
+                    .unwrap_or_default();
+                commands::names_lines(&room.display_name, members)
+            };
+            echo_in_active_view(hwnd, lines)?;
+            Ok(None)
+        }
+        SlashCommand::Whois { nick } => {
+            let lines = whois_lines(&state_ref(hwnd).model, &nick)?;
+            echo_in_active_view(hwnd, lines)?;
+            Ok(None)
+        }
+        SlashCommand::Close => {
+            let state = state_ref(hwnd);
+            if close_action(&state.model, &state.active_view) == CloseAction::Refuse {
+                return Err("the Status window cannot be closed".to_owned());
+            }
+            // Posted: closing may ask first, and destroys this editbox.
+            let child = state.views[&state.active_view].child;
+            if PostMessageW(child, WM_CLOSE, 0, 0) == 0 {
+                return Err(last_os_error("PostMessageW WM_CLOSE"));
+            }
+            Ok(None)
+        }
+        SlashCommand::Exit => {
+            if PostMessageW(hwnd, WM_CLOSE, 0, 0) == 0 {
+                return Err(last_os_error("PostMessageW WM_CLOSE"));
+            }
+            Ok(None)
         }
         SlashCommand::Accept { target } => {
             submit_accept_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
@@ -13152,10 +13251,56 @@ fn resolve_direct_room_query_target(model: &UiModel, user_id: &str) -> QueryTarg
     QueryTargetResolution::Single(room.room_id.clone())
 }
 
-fn resolve_part_slash_command_room_id(
-    state: &WindowState,
-    target: Option<&str>,
-) -> Result<String, String> {
+/// Every known member of every room; a user in several rooms is listed
+/// once per room.
+fn all_room_members(model: &UiModel) -> impl Iterator<Item = &RoomMemberSummary> {
+    model
+        .room_views
+        .values()
+        .flat_map(|view| view.members.iter())
+}
+
+/// Where `/msg` sends: a room by ID or display name, else the query with a
+/// user named by ID or nick. Like mIRC's `/msg`, it does not open a query.
+fn msg_target_room_id(model: &UiModel, target: &str) -> Result<String, String> {
+    match resolve_room_command_target(&model.rooms, target) {
+        Ok(room_id) => return Ok(room_id),
+        Err(WindowTargetError::Ambiguous) => return Err(format!("ambiguous target: {target}")),
+        Err(WindowTargetError::Unknown) => {}
+    }
+    let user_id = commands::resolve_user(all_room_members(model), target)?.user_id;
+    match resolve_direct_room_query_target(model, &user_id) {
+        QueryTargetResolution::Single(room_id) => Ok(room_id),
+        QueryTargetResolution::Ambiguous => Err(format!("ambiguous query target: {user_id}")),
+        QueryTargetResolution::None => Err(format!("no query with {target}; use /query {target}")),
+    }
+}
+
+/// `/whois` from what the client knows: the member and the joined rooms
+/// shared with them.
+fn whois_lines(model: &UiModel, nick: &str) -> Result<Vec<String>, String> {
+    let target = commands::resolve_user(all_room_members(model), nick)?;
+    let member = target
+        .member
+        .ok_or_else(|| format!("no such nick: {nick}"))?;
+    let shared_rooms = model
+        .rooms
+        .iter()
+        .filter(|room| is_sendable_room(room))
+        .filter_map(|room| {
+            let member = model
+                .room_views
+                .get(&room.room_id)?
+                .members
+                .iter()
+                .find(|member| member.user_id == target.user_id)?;
+            Some((member.rank, room.display_name.as_str()))
+        })
+        .collect::<Vec<_>>();
+    Ok(commands::whois_lines(member, &shared_rooms))
+}
+
+fn resolve_joined_room_target(state: &WindowState, target: Option<&str>) -> Result<String, String> {
     let Some(target) = target else {
         return match &state.active_view {
             ViewId::Room(room_id) => {
@@ -13178,8 +13323,8 @@ fn resolve_part_slash_command_room_id(
                 Err(format!("room is not joined: {target}"))
             }
         }
-        Err(WindowTargetError::Unknown) => Err(format!("unknown part target: {target}")),
-        Err(WindowTargetError::Ambiguous) => Err(format!("ambiguous part target: {target}")),
+        Err(WindowTargetError::Unknown) => Err(format!("unknown room: {target}")),
+        Err(WindowTargetError::Ambiguous) => Err(format!("ambiguous room: {target}")),
     }
 }
 
@@ -13335,7 +13480,7 @@ fn submit_part_slash_command(
     state: &mut WindowState,
     target: Option<&str>,
 ) -> Result<String, String> {
-    let room_id = resolve_part_slash_command_room_id(state, target)?;
+    let room_id = resolve_joined_room_target(state, target)?;
     let command = Command::LeaveRoom(LeaveRoomRequest {
         room_id: room_id.clone(),
     });
@@ -13355,7 +13500,7 @@ fn submit_react_slash_command(
     target_event_id: String,
     key: String,
 ) -> Result<String, String> {
-    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let room_id = resolve_joined_room_target(state, None)?;
     let command = Command::SendReaction(SendReactionRequest {
         room_id: room_id.clone(),
         target_event_id: target_event_id.clone(),
@@ -13377,7 +13522,7 @@ fn submit_edit_slash_command(
     target_event_id: String,
     body: String,
 ) -> Result<String, String> {
-    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let room_id = resolve_joined_room_target(state, None)?;
     let command = Command::EditMessage(EditMessageRequest {
         room_id: room_id.clone(),
         target_event_id: target_event_id.clone(),
@@ -13401,24 +13546,19 @@ fn submit_reply_slash_command(
     body: String,
 ) -> Result<String, String> {
     let destination = resolve_compose_destination(state, None)?;
-    let sender = state
-        .command_sender
-        .as_ref()
-        .ok_or_else(|| "core command sender is not available".to_owned())?;
     let clears_active_thread_marker = destination.thread.is_some();
-    let command = Command::SendMessage(SendMessageRequest {
-        room_id: destination.room_id.clone(),
-        presentation: RoomMessagePresentationKind::Text,
-        body,
-        thread: destination.thread,
-        reply: Some(SendMessageReplyTarget {
-            event_id: target_event_id.clone(),
-        }),
-    });
-    sender
-        .send(command.clone())
-        .map_err(|err| format!("failed to enqueue send message command: {err}"))?;
-    state.recorded_commands.push(command);
+    enqueue_send_message(
+        state,
+        SendMessageRequest {
+            room_id: destination.room_id,
+            presentation: RoomMessagePresentationKind::Text,
+            body,
+            thread: destination.thread,
+            reply: Some(SendMessageReplyTarget {
+                event_id: target_event_id.clone(),
+            }),
+        },
+    )?;
     if clears_active_thread_marker {
         clear_view_activity_marker(state, &state.active_view.clone());
     }
@@ -13426,7 +13566,7 @@ fn submit_reply_slash_command(
 }
 
 fn submit_redact_event_command(state: &mut WindowState, event_id: String) -> Result<(), String> {
-    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let room_id = resolve_joined_room_target(state, None)?;
     let command = Command::RedactEvent(RedactEventRequest { room_id, event_id });
     let sender = state
         .command_sender
@@ -13456,7 +13596,7 @@ fn submit_unreact_slash_command(
 }
 
 fn submit_topic_slash_command(state: &mut WindowState, topic: String) -> Result<String, String> {
-    let room_id = resolve_part_slash_command_room_id(state, None)?;
+    let room_id = resolve_joined_room_target(state, None)?;
     let command = Command::SetRoomTopic(SetRoomTopicRequest {
         room_id: room_id.clone(),
         topic,
@@ -24947,6 +25087,156 @@ mod tests {
         assert_eq!(state.model.selected_room, Some("!room:example".to_owned()));
     }
 
+    /// A channel Ops with Alice and Bob, and a query with Alice; Ops active.
+    fn irc_command_state() -> (WindowState, CoreHandle) {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            query("!dm:example", "Alice", "@alice:example"),
+        ];
+        let mut bob = member_summary("@bob:example", Some("Bob"), false);
+        bob.rank = RoomMemberRank::Moderator;
+        let ops = RoomViewModel {
+            members: vec![member_summary("@alice:example", Some("Alice"), false), bob],
+            ..Default::default()
+        };
+        state
+            .model
+            .room_views
+            .insert("!ops:example".to_owned(), ops);
+        let dm = RoomViewModel {
+            members: vec![member_summary("@alice:example", Some("Alice"), false)],
+            ..Default::default()
+        };
+        state.model.room_views.insert("!dm:example".to_owned(), dm);
+        state.active_view = room_view_id("!ops:example");
+        (state, handle)
+    }
+
+    fn sent_message(
+        room_id: &str,
+        presentation: RoomMessagePresentationKind,
+        body: &str,
+    ) -> Command {
+        Command::SendMessage(SendMessageRequest {
+            room_id: room_id.to_owned(),
+            presentation,
+            body: body.to_owned(),
+            thread: None,
+            reply: None,
+        })
+    }
+
+    #[test]
+    fn msg_and_notice_send_into_the_query_and_echo_in_the_active_window() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/msg alice hi there");
+                type_compose_line(hwnd, "/notice Alice heads up");
+                type_compose_line(hwnd, "/msg Bob hi");
+                type_compose_line(hwnd, "/msg Nobody hi");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        sent_message("!dm:example", RoomMessagePresentationKind::Text, "hi there"),
+                        sent_message(
+                            "!dm:example",
+                            RoomMessagePresentationKind::Notice,
+                            "heads up"
+                        ),
+                    ]
+                );
+                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 4..],
+                    [
+                        "[22:12] -> *alice* hi there",
+                        "[22:12] -> -Alice- heads up",
+                        "[22:12] * /msg: no query with Bob; use /query Bob",
+                        "[22:12] * /msg: no such nick: Nobody",
+                    ]
+                );
+                assert_eq!(state_ref(hwnd).active_view, room_view_id("!ops:example"));
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn names_and_whois_print_member_data_in_the_active_window() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/names");
+                type_compose_line(hwnd, "/whois alice");
+                type_compose_line(hwnd, "/whois @stranger:example");
+                type_compose_line(hwnd, "/names Nowhere");
+                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 7..],
+                    [
+                        "[22:12] * Names Ops: Alice @Bob",
+                        "[22:12] * End of /NAMES list",
+                        "[22:12] * Alice is @alice:example",
+                        "[22:12] * Alice on Ops Alice",
+                        "[22:12] * Alice End of /WHOIS list",
+                        "[22:12] * /whois: no such nick: @stranger:example",
+                        "[22:12] * /names: unknown room: Nowhere",
+                    ]
+                );
+                assert!(state_ref(hwnd).recorded_commands.is_empty());
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn query_with_a_message_creates_the_query_and_says_the_message_waits() {
+        let (state, handle) = irc_command_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/query bob hello");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![Command::CreateDirectRoom(CreateDirectRoomRequest {
+                        user_id: "@bob:example".to_owned(),
+                    })]
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "query submitted: @bob:example"
+                );
+                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                assert_eq!(
+                    lines.last().map(String::as_str),
+                    Some("[22:12] * /query: creating a query with @bob:example; message not sent")
+                );
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn close_in_status_is_refused_in_the_window() {
+        let state = test_state();
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/close");
+                assert_eq!(
+                    project_timeline_rows(&build_status_timeline_rows(
+                        &state_ref(hwnd).model.status_log
+                    )),
+                    vec!["[22:12] * /close: the Status window cannot be closed".to_owned()]
+                );
+            });
+        }
+    }
+
     #[test]
     fn command_error_echoes_in_the_room_window_and_the_status_bar() {
         let mut state = test_state();
@@ -25907,7 +26197,7 @@ mod tests {
 
         assert_eq!(
             submit_part_slash_command(&mut state, Some("Shared")),
-            Err("ambiguous part target: Shared".to_owned())
+            Err("ambiguous room: Shared".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
     }

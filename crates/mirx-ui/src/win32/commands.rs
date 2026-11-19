@@ -8,7 +8,10 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use mirx_core::RoomMessagePresentationKind;
+use mirx_core::{RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind};
+
+use super::nick_completion::member_mention_text;
+use super::timeline_text::rank_prefix;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ComposeSubmission<'a> {
@@ -31,9 +34,25 @@ pub(super) enum SlashCommand {
     Join {
         target: String,
     },
+    /// `/query <nick> [message]`.
     Query {
-        user_id: String,
+        target: String,
+        message: Option<String>,
     },
+    /// `/msg` (Text) and `/notice` (Notice).
+    Msg {
+        target: String,
+        body: String,
+        presentation: RoomMessagePresentationKind,
+    },
+    Names {
+        target: Option<String>,
+    },
+    Whois {
+        nick: String,
+    },
+    Close,
+    Exit,
     Accept {
         target: Option<String>,
     },
@@ -105,6 +124,15 @@ impl SlashCommand {
             Self::Window { .. } => "window",
             Self::Join { .. } => "join",
             Self::Query { .. } => "query",
+            Self::Msg {
+                presentation: RoomMessagePresentationKind::Notice,
+                ..
+            } => "notice",
+            Self::Msg { .. } => "msg",
+            Self::Names { .. } => "names",
+            Self::Whois { .. } => "whois",
+            Self::Close => "close",
+            Self::Exit => "exit",
             Self::Accept { .. } => "accept",
             Self::Reject { .. } => "reject",
             Self::Part { .. } => "part",
@@ -174,6 +202,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "clear this window",
     },
     CommandSpec {
+        name: "close",
+        usage: "",
+        summary: "close this window",
+    },
+    CommandSpec {
         name: "e2ee",
         usage: "[status|refresh|recover|setup [wait] [passphrase <passphrase>]]",
         summary: "show or manage end-to-end encryption",
@@ -182,6 +215,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "edit",
         usage: "<event-id> <text>",
         summary: "replace the text of your message",
+    },
+    CommandSpec {
+        name: "exit",
+        usage: "",
+        summary: "close mirx",
     },
     CommandSpec {
         name: "find",
@@ -204,14 +242,29 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         summary: "send an action",
     },
     CommandSpec {
+        name: "msg",
+        usage: "<nick|room> <message>",
+        summary: "send a message without opening a window",
+    },
+    CommandSpec {
+        name: "names",
+        usage: "[room]",
+        summary: "list this room's members, or the named room's",
+    },
+    CommandSpec {
+        name: "notice",
+        usage: "<nick|room> <message>",
+        summary: "send a notice",
+    },
+    CommandSpec {
         name: "part",
         usage: "[room]",
         summary: "leave this room, or the named one",
     },
     CommandSpec {
         name: "query",
-        usage: "<user-id>",
-        summary: "open a query with a user",
+        usage: "<nick> [message]",
+        summary: "open a query with a user, and send a message there",
     },
     CommandSpec {
         name: "react",
@@ -257,6 +310,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "verify",
         usage: "<accept|cancel|confirm|reject>",
         summary: "answer a device verification",
+    },
+    CommandSpec {
+        name: "whois",
+        usage: "<nick>",
+        summary: "show who a user is and the rooms you share",
     },
     CommandSpec {
         name: "window",
@@ -351,9 +409,38 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "join" => Ok(SlashCommand::Join {
             target: required(argument)?,
         }),
-        "query" => Ok(SlashCommand::Query {
-            user_id: required(argument)?,
+        "query" => {
+            required(argument)?;
+            let (target, message) = split_word(argument);
+            Ok(SlashCommand::Query {
+                target: target.to_owned(),
+                message: optional(message),
+            })
+        }
+        "msg" | "notice" => {
+            let (target, body) = split_word(argument);
+            if body.is_empty() {
+                return Err(CommandError::insufficient_parameters(name.as_str()));
+            }
+            let presentation = if name == "msg" {
+                RoomMessagePresentationKind::Text
+            } else {
+                RoomMessagePresentationKind::Notice
+            };
+            Ok(SlashCommand::Msg {
+                target: target.to_owned(),
+                body: body.to_owned(),
+                presentation,
+            })
+        }
+        "names" => Ok(SlashCommand::Names {
+            target: optional(argument),
         }),
+        "whois" => Ok(SlashCommand::Whois {
+            nick: required(argument)?,
+        }),
+        "close" => no_parameters(SlashCommand::Close),
+        "exit" => no_parameters(SlashCommand::Exit),
         "accept" => Ok(SlashCommand::Accept {
             target: optional(argument),
         }),
@@ -509,6 +596,144 @@ pub(super) fn help_lines(topic: Option<&str>) -> Result<Vec<String>, String> {
         format!(" {}", spec.usage)
     };
     Ok(vec![format!("* /{}{usage} — {}", spec.name, spec.summary)])
+}
+
+/// The member a nick names, resolved as IRC users expect: an exact user ID,
+/// else a display name (case-insensitive, as IRC nicks are), else a user ID
+/// localpart (`alice` for `@alice:example.org`). Each step must match exactly
+/// one user; a member listed in several rooms is one user.
+pub(super) fn resolve_nick<'m>(
+    members: impl IntoIterator<Item = &'m RoomMemberSummary>,
+    nick: &str,
+) -> Result<&'m RoomMemberSummary, String> {
+    let members = members.into_iter().collect::<Vec<_>>();
+    let folded = nick.to_lowercase();
+    let steps: [&dyn Fn(&RoomMemberSummary) -> bool; 3] = [
+        &|member| member.user_id == nick,
+        &|member| {
+            member
+                .display_name
+                .as_deref()
+                .is_some_and(|name| name.to_lowercase() == folded)
+        },
+        &|member| user_id_localpart(&member.user_id).to_lowercase() == folded,
+    ];
+    for matches_nick in steps {
+        let mut matched = Vec::<&RoomMemberSummary>::new();
+        for member in members
+            .iter()
+            .copied()
+            .filter(|member| matches_nick(member))
+        {
+            if !matched.iter().any(|known| known.user_id == member.user_id) {
+                matched.push(member);
+            }
+        }
+        match matched.as_slice() {
+            [] => continue,
+            [member] => return Ok(member),
+            _ => {
+                let user_ids = matched
+                    .iter()
+                    .map(|member| member.user_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!("{nick} is ambiguous ({user_ids})"));
+            }
+        }
+    }
+    Err(format!("no such nick: {nick}"))
+}
+
+/// A user a command names: a user ID, which may name someone outside the
+/// known rooms, or a known member's nick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UserTarget<'m> {
+    pub(super) user_id: String,
+    pub(super) member: Option<&'m RoomMemberSummary>,
+}
+
+pub(super) fn resolve_user<'m>(
+    members: impl IntoIterator<Item = &'m RoomMemberSummary>,
+    nick: &str,
+) -> Result<UserTarget<'m>, String> {
+    let members = members.into_iter().collect::<Vec<_>>();
+    if is_user_id(nick) {
+        return Ok(UserTarget {
+            user_id: nick.to_owned(),
+            member: members.into_iter().find(|member| member.user_id == nick),
+        });
+    }
+    let member = resolve_nick(members, nick)?;
+    Ok(UserTarget {
+        user_id: member.user_id.clone(),
+        member: Some(member),
+    })
+}
+
+/// `@localpart:server`, the shape of a Matrix user ID.
+fn is_user_id(text: &str) -> bool {
+    text.strip_prefix('@')
+        .and_then(|rest| rest.split_once(':'))
+        .is_some_and(|(localpart, server)| !localpart.is_empty() && !server.is_empty())
+}
+
+fn user_id_localpart(user_id: &str) -> &str {
+    user_id
+        .strip_prefix('@')
+        .and_then(|rest| rest.split_once(':'))
+        .map_or(user_id, |(localpart, _)| localpart)
+}
+
+/// The nick a member goes by in command output.
+fn member_nick(member: &RoomMemberSummary) -> &str {
+    member_mention_text(&member.user_id, member.display_name.as_deref())
+}
+
+/// `/names`: the members, in nick list order, with their rank prefixes.
+pub(super) fn names_lines(room_name: &str, members: &[RoomMemberSummary]) -> Vec<String> {
+    let names = members
+        .iter()
+        .map(|member| format!("{}{}", rank_prefix(member.rank), member_nick(member)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    vec![
+        format!("* Names {room_name}: {names}"),
+        "* End of /NAMES list".to_owned(),
+    ]
+}
+
+/// `/whois`: who the member is and the rooms shared with them, each with
+/// the member's rank prefix there.
+pub(super) fn whois_lines(
+    member: &RoomMemberSummary,
+    shared_rooms: &[(RoomMemberRank, &str)],
+) -> Vec<String> {
+    let nick = member_nick(member);
+    let mut lines = vec![format!("* {nick} is {}", member.user_id)];
+    if !shared_rooms.is_empty() {
+        let rooms = shared_rooms
+            .iter()
+            .map(|(rank, room_name)| format!("{}{room_name}", rank_prefix(*rank)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(format!("* {nick} on {rooms}"));
+    }
+    lines.push(format!("* {nick} End of /WHOIS list"));
+    lines
+}
+
+/// The echo of `/msg` (`-> *nick* text`) and `/notice` (`-> -nick- text`).
+pub(super) fn msg_echo(
+    presentation: RoomMessagePresentationKind,
+    target: &str,
+    body: &str,
+) -> String {
+    match presentation {
+        RoomMessagePresentationKind::Text => format!("-> *{target}* {body}"),
+        RoomMessagePresentationKind::Notice => format!("-> -{target}- {body}"),
+        RoomMessagePresentationKind::Emote => unreachable!("/msg and /notice never send emotes"),
+    }
 }
 
 /// What Up recalls for a submitted command. Commands that may carry an
@@ -714,7 +939,8 @@ mod tests {
             assert_eq!(
                 parse(input),
                 Ok(SlashCommand::Query {
-                    user_id: "@alice:example.org".to_owned(),
+                    target: "@alice:example.org".to_owned(),
+                    message: None,
                 })
             );
         }
@@ -924,6 +1150,12 @@ mod tests {
             "/e2ee",
             "/verify accept",
             "/help",
+            "/msg x t",
+            "/notice x t",
+            "/names",
+            "/whois x",
+            "/close",
+            "/exit",
         ];
         for input in samples {
             let name = parse(input).expect(input).name();
@@ -938,7 +1170,7 @@ mod tests {
     fn help_lists_every_command_or_shows_one() {
         let lines = help_lines(None).unwrap();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with("* Commands: /accept /clear /e2ee"));
+        assert!(lines[0].starts_with("* Commands: /accept /clear /close /e2ee"));
         assert!(lines[0].contains(" /help "));
         assert_eq!(lines[1], "* /help <command> for usage");
         assert_eq!(
@@ -958,6 +1190,188 @@ mod tests {
             Ok(SlashCommand::Help {
                 topic: Some("kick".to_owned()),
             })
+        );
+    }
+
+    fn member(
+        user_id: &str,
+        display_name: Option<&str>,
+        rank: RoomMemberRank,
+    ) -> RoomMemberSummary {
+        RoomMemberSummary {
+            user_id: user_id.to_owned(),
+            display_name: display_name.map(str::to_owned),
+            display_name_ambiguous: false,
+            is_own_user: false,
+            rank,
+            can_kick: false,
+            can_ban: false,
+        }
+    }
+
+    #[test]
+    fn parse_accepts_message_and_member_info_commands() {
+        assert_eq!(
+            parse("/query Alice  hello there "),
+            Ok(SlashCommand::Query {
+                target: "Alice".to_owned(),
+                message: Some("hello there".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/MSG Alice hi there"),
+            Ok(SlashCommand::Msg {
+                target: "Alice".to_owned(),
+                body: "hi there".to_owned(),
+                presentation: RoomMessagePresentationKind::Text,
+            })
+        );
+        assert_eq!(
+            parse("/notice !ops:example hi"),
+            Ok(SlashCommand::Msg {
+                target: "!ops:example".to_owned(),
+                body: "hi".to_owned(),
+                presentation: RoomMessagePresentationKind::Notice,
+            })
+        );
+        assert_eq!(parse("/names"), Ok(SlashCommand::Names { target: None }));
+        assert_eq!(
+            parse("/names Ops"),
+            Ok(SlashCommand::Names {
+                target: Some("Ops".to_owned()),
+            })
+        );
+        assert_eq!(
+            parse("/whois Alice Smith"),
+            Ok(SlashCommand::Whois {
+                nick: "Alice Smith".to_owned(),
+            })
+        );
+        assert_eq!(parse("/close"), Ok(SlashCommand::Close));
+        assert_eq!(parse("/exit"), Ok(SlashCommand::Exit));
+        for (input, command) in [
+            ("/msg", "msg"),
+            ("/msg Alice", "msg"),
+            ("/notice Alice  ", "notice"),
+            ("/whois", "whois"),
+        ] {
+            assert_eq!(parse(input), insufficient(command), "{input}");
+        }
+        assert_eq!(parse("/close now"), error("close", "takes no parameters"));
+        assert_eq!(parse("/exit now"), error("exit", "takes no parameters"));
+    }
+
+    #[test]
+    fn resolve_nick_prefers_user_id_then_display_name_then_localpart() {
+        let members = [
+            member("@alice:example", Some("Alice"), RoomMemberRank::Member),
+            member("@bob:example", Some("alice2"), RoomMemberRank::Member),
+            member("@sam-one:example", Some("Sam"), RoomMemberRank::Member),
+            member("@sam-two:example", Some("sam"), RoomMemberRank::Member),
+            member("@carol:example", None, RoomMemberRank::Member),
+            // The same user listed by a second room is still one user.
+            member("@alice:example", Some("Alice"), RoomMemberRank::Moderator),
+        ];
+        let resolve = |nick| resolve_nick(&members, nick).map(|member| member.user_id.as_str());
+
+        assert_eq!(resolve("@bob:example"), Ok("@bob:example"));
+        assert_eq!(resolve("ALICE"), Ok("@alice:example"));
+        assert_eq!(resolve("Alice2"), Ok("@bob:example"));
+        assert_eq!(resolve("carol"), Ok("@carol:example"));
+        assert_eq!(resolve("bob"), Ok("@bob:example"));
+        assert_eq!(
+            resolve("Sam"),
+            Err("Sam is ambiguous (@sam-one:example, @sam-two:example)".to_owned())
+        );
+        assert_eq!(resolve("Nobody"), Err("no such nick: Nobody".to_owned()));
+        assert_eq!(
+            resolve("@nobody:example"),
+            Err("no such nick: @nobody:example".to_owned())
+        );
+    }
+
+    #[test]
+    fn resolve_user_accepts_any_user_id() {
+        let members = [member(
+            "@alice:example",
+            Some("Alice"),
+            RoomMemberRank::Member,
+        )];
+        assert_eq!(
+            resolve_user(&members, "@stranger:example"),
+            Ok(UserTarget {
+                user_id: "@stranger:example".to_owned(),
+                member: None,
+            })
+        );
+        assert_eq!(
+            resolve_user(&members, "@alice:example"),
+            Ok(UserTarget {
+                user_id: "@alice:example".to_owned(),
+                member: Some(&members[0]),
+            })
+        );
+        assert_eq!(
+            resolve_user(&members, "alice"),
+            Ok(UserTarget {
+                user_id: "@alice:example".to_owned(),
+                member: Some(&members[0]),
+            })
+        );
+        assert_eq!(
+            resolve_user(&members, "@"),
+            Err("no such nick: @".to_owned())
+        );
+    }
+
+    #[test]
+    fn names_whois_and_msg_lines_read_like_mirc() {
+        let members = [
+            member("@creator:example", Some("Creator"), RoomMemberRank::Creator),
+            member(
+                "@admin:example",
+                Some("Admin"),
+                RoomMemberRank::Administrator,
+            ),
+            member("@mod:example", Some("Mod"), RoomMemberRank::Moderator),
+            member("@voice:example", Some("Voice"), RoomMemberRank::Voiced),
+            member("@ghost:example", None, RoomMemberRank::Member),
+        ];
+        assert_eq!(
+            names_lines("Ops", &members),
+            vec![
+                "* Names Ops: ~Creator &Admin @Mod +Voice @ghost:example".to_owned(),
+                "* End of /NAMES list".to_owned(),
+            ]
+        );
+        assert_eq!(
+            whois_lines(
+                &members[2],
+                &[
+                    (RoomMemberRank::Moderator, "Ops"),
+                    (RoomMemberRank::Member, "Lobby")
+                ]
+            ),
+            vec![
+                "* Mod is @mod:example".to_owned(),
+                "* Mod on @Ops Lobby".to_owned(),
+                "* Mod End of /WHOIS list".to_owned(),
+            ]
+        );
+        assert_eq!(
+            whois_lines(&members[4], &[]),
+            vec![
+                "* @ghost:example is @ghost:example".to_owned(),
+                "* @ghost:example End of /WHOIS list".to_owned(),
+            ]
+        );
+        assert_eq!(
+            msg_echo(RoomMessagePresentationKind::Text, "Alice", "hi"),
+            "-> *Alice* hi"
+        );
+        assert_eq!(
+            msg_echo(RoomMessagePresentationKind::Notice, "Alice", "hi"),
+            "-> -Alice- hi"
         );
     }
 }

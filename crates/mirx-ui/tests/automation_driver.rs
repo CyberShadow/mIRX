@@ -4162,6 +4162,89 @@ fn closing_a_query_window_hides_it_until_its_next_message() -> Result<(), Box<dy
 }
 
 #[test]
+fn automation_driver_irc_info_commands_echo_in_active_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        room_members_event(
+            "!beta:example",
+            &[
+                ("@alice:example", Some("Alice")),
+                ("@bob:example", Some("Bob")),
+            ],
+        ),
+        room_members_event("!alpha:example", &[("@alice:example", Some("Alice"))]),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    let alpha = room_identity("!alpha:example");
+    app.select_view(beta.clone())?;
+
+    for input in [
+        "/names",
+        "/whois alice",
+        "/help names",
+        "/msg alice hi there",
+    ] {
+        app.set_compose_text(input)?;
+        app.send_compose_key(ComposeKey::Return)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        assert_eq!(app.compose_text()?, "", "{input}");
+    }
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, beta);
+    let view = find_view(&ui_state, &beta);
+    for line in [
+        "] * Names Beta: Alice Bob",
+        "] * End of /NAMES list",
+        "] * Alice is @alice:example",
+        "] * Alice on Beta Alpha",
+        "] * Alice End of /WHOIS list",
+        "] * /names [room] — list this room's members, or the named room's",
+        "] -> *alice* hi there",
+    ] {
+        assert!(
+            only_view_line_containing(view, line).ends_with(line),
+            "{line:?} in {:?}",
+            view.lines
+        );
+    }
+    // /msg does not open or activate the query.
+    assert!(!view_contains(find_view(&ui_state, &alpha), "hi there"));
+
+    app.select_status_view()?;
+    app.set_compose_text("/close")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert!(view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        "* /close: the Status window cannot be closed"
+    ));
+
+    // /close closes the active window as its close button does: a query
+    // window hides.
+    app.select_view(alpha.clone())?;
+    app.set_compose_text("/close")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(ui_state.mdi.views.iter().all(|view| view.identity != alpha));
+    assert!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != alpha)
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn closed_query_reopens_from_the_treebar() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;
     let alpha = room_identity("!alpha:example");
