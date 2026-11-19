@@ -39,15 +39,15 @@ use mirx_testkit::{
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
     SubmittedFileCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
-    SubmittedMembershipCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
-    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
-    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
-    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
-    UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimestamp,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    SubmittedMembershipCommand, SubmittedNotificationCommand, SubmittedPowerLevelCommand,
+    SubmittedProfileCommand, SubmittedReactionCommand, SubmittedRecoveryCommand,
+    SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
+    SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget,
+    UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
+    UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
+    UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -2864,7 +2864,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 40);
+    assert_eq!(version.protocol_version, 41);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -14838,6 +14838,85 @@ fn automation_driver_room_menu_accept_keeps_invite_until_synced_rooms_join()
     assert!(joined.rooms.iter().any(|room| {
         room.room_id == "!invite:example" && room.membership == RoomMembership::Join
     }));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn room_menu_notifications_check_follows_summary_and_submits()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let args = [OsString::from("--automation")];
+    let quiet = |mode| RoomSummary {
+        notification_mode: Some(mode),
+        ..room_summary("!quiet:example", "Quiet", false)
+    };
+    let rooms = |mode| {
+        Event::SyncedRooms(vec![
+            room_summary("!beta:example", "Beta", false),
+            quiet(mode),
+            invited_room_summary("!invite:example", "Lobby", false),
+        ])
+    };
+
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        rooms(RoomNotificationMode::MentionsAndKeywordsOnly),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!quiet:example")?;
+
+    let menu = app.dump_room_menu_state()?;
+    assert_eq!(
+        menu.notification_mode,
+        Some(RoomNotificationMode::MentionsAndKeywordsOnly)
+    );
+    assert!(menu.notification_items_enabled);
+
+    app.open_selected_navigation_context_menu(ContextMenuCommand::NotifyMute)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_notification_commands,
+        vec![SubmittedNotificationCommand::SetRoomNotificationMode {
+            room_id: "!quiet:example".to_owned(),
+            mode: RoomNotificationMode::Mute,
+        }]
+    );
+    // The check waits for the server's echo.
+    assert_eq!(
+        app.dump_room_menu_state()?.notification_mode,
+        Some(RoomNotificationMode::MentionsAndKeywordsOnly)
+    );
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![rooms(
+        RoomNotificationMode::Mute,
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_room_menu_state()?.notification_mode,
+        Some(RoomNotificationMode::Mute)
+    );
+
+    app.select_room("!invite:example")?;
+    let menu = app.dump_room_menu_state()?;
+    assert_eq!(menu.notification_mode, None);
+    assert!(!menu.notification_items_enabled);
+    let error = app
+        .open_selected_navigation_context_menu(ContextMenuCommand::NotifyAllMessages)
+        .expect_err("Notifications is greyed for an invite");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { message, .. }
+            if message == "room context menu action is disabled"
+    ));
+    assert_eq!(app.dump_model()?.submitted_notification_commands.len(), 1);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

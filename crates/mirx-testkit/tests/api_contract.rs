@@ -14,7 +14,8 @@ use mirx_core::{
     RoomHistoryBackfill as CoreRoomHistoryBackfill,
     RoomHistoryBackfillEvent as CoreRoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia,
     RoomMediaFormat as CoreRoomMediaFormat, RoomMediaKind as CoreRoomMediaKind,
-    RoomMediaSource as CoreRoomMediaSource, RoomMemberRank, RoomMembership, RoomReadState,
+    RoomMediaSource as CoreRoomMediaSource, RoomMemberRank, RoomMembership, RoomNotificationMode,
+    RoomReadState,
 };
 use mirx_testkit::{
     BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
@@ -448,12 +449,48 @@ fn error_display_formats_each_public_variant() {
 }
 
 #[test]
+fn submitted_notification_commands_serialize_as_tagged_objects() {
+    let commands = vec![
+        mirx_testkit::SubmittedNotificationCommand::SetRoomNotificationMode {
+            room_id: "!ops:example".to_owned(),
+            mode: RoomNotificationMode::MentionsAndKeywordsOnly,
+        },
+        mirx_testkit::SubmittedNotificationCommand::AddHighlightWord {
+            word: "deploy".to_owned(),
+        },
+        mirx_testkit::SubmittedNotificationCommand::RemoveHighlightWord {
+            word: "build".to_owned(),
+        },
+    ];
+    let json = serde_json::to_value(&commands).expect("serialize notification commands");
+    assert_eq!(
+        json,
+        serde_json::json!([
+            {"type": "set_room_notification_mode", "room_id": "!ops:example", "mode": "mentions_and_keywords_only"},
+            {"type": "add_highlight_word", "word": "deploy"},
+            {"type": "remove_highlight_word", "word": "build"}
+        ])
+    );
+    assert_eq!(
+        serde_json::from_value::<Vec<mirx_testkit::SubmittedNotificationCommand>>(json)
+            .expect("deserialize notification commands"),
+        commands
+    );
+}
+
+#[test]
 fn menu_state_models_round_trip_and_reject_unknown_fields() {
     let room = mirx_testkit::RoomMenuState {
         accept_invite_enabled: true,
         reject_invite_enabled: false,
         part_room_enabled: false,
+        notification_mode: Some(RoomNotificationMode::Mute),
+        notification_items_enabled: true,
     };
+    assert_eq!(
+        serde_json::to_value(&room).expect("serialize room menu state")["notification_mode"],
+        serde_json::json!("mute")
+    );
     assert_eq!(
         serde_json::from_value::<mirx_testkit::RoomMenuState>(
             serde_json::to_value(&room).expect("serialize room menu state"),
@@ -495,6 +532,8 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
             "accept_invite_enabled": true,
             "reject_invite_enabled": false,
             "part_room_enabled": false,
+            "notification_mode": null,
+            "notification_items_enabled": false,
             "unexpected": true
         }))
         .is_err()
@@ -632,6 +671,7 @@ fn data_models_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4195,6 +4235,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4268,6 +4309,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4460,6 +4502,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4552,6 +4595,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4652,6 +4696,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4734,6 +4779,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
             thread: None,
         }],
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4821,6 +4867,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
             }),
         }],
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: Vec::new(),
         submitted_verification_actions: Vec::new(),
@@ -4907,6 +4954,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: vec![SubmittedRedactionCommand {
             room_id: "!ops:example.org".to_owned(),
             event_id: "$reaction:example.org".to_owned(),
@@ -5043,6 +5091,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
                 }),
             }],
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: vec![SubmittedRedactionCommand {
                 room_id: "!ops:example.org".to_owned(),
                 event_id: "$reaction:example.org".to_owned(),
@@ -5118,6 +5167,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         submitted_edit_commands: Vec::new(),
         submitted_reply_commands: Vec::new(),
         submitted_file_commands: Vec::new(),
+        submitted_notification_commands: Vec::new(),
         submitted_redaction_commands: Vec::new(),
         submitted_history_commands: vec![
             SubmittedHistoryCommand {
@@ -5230,6 +5280,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),

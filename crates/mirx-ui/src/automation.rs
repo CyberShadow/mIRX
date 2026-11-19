@@ -7,15 +7,16 @@ use mirx_core::{
     RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomFileActivity, RoomFileInfo,
     RoomImageActivity, RoomImageInfo, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomVideoActivity, RoomVideoInfo,
-    StoredSession, UnsupportedRoomMessageActivity, VerificationState, VerificationStateEvent,
+    RoomNotificationMode, RoomPowerLevelValueChange, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary,
+    RoomVideoActivity, RoomVideoInfo, StoredSession, UnsupportedRoomMessageActivity,
+    VerificationState, VerificationStateEvent,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 40;
+pub(crate) const PROTOCOL_VERSION: u32 = 41;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -561,6 +562,9 @@ pub(crate) enum ContextMenuCommand {
     AcceptInvite,
     RejectInvite,
     PartRoom,
+    NotifyAllMessages,
+    NotifyMentionsAndKeywords,
+    NotifyMute,
     ReplyMessage,
     GoToOriginal,
     EditMessage,
@@ -854,6 +858,9 @@ pub(crate) struct DumpRoomMenuState {
     pub(crate) accept_invite_enabled: bool,
     pub(crate) reject_invite_enabled: bool,
     pub(crate) part_room_enabled: bool,
+    /// The mode Notifications checks, if any.
+    pub(crate) notification_mode: Option<RoomNotificationMode>,
+    pub(crate) notification_items_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1464,6 +1471,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_file_commands: Vec<DumpSubmittedFileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_notification_commands: Vec<DumpSubmittedNotificationCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_redaction_commands: Vec<DumpSubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_history_commands: Vec<DumpSubmittedHistoryCommand>,
@@ -1575,6 +1584,23 @@ pub(crate) struct DumpSubmittedReplyCommand {
     pub(crate) body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
+}
+
+/// A notification settings change the UI sent: a room's mode or a
+/// highlight word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum DumpSubmittedNotificationCommand {
+    SetRoomNotificationMode {
+        room_id: String,
+        mode: RoomNotificationMode,
+    },
+    AddHighlightWord {
+        word: String,
+    },
+    RemoveHighlightWord {
+        word: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3021,8 +3047,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_40() {
-        assert_eq!(PROTOCOL_VERSION, 40);
+    fn protocol_version_is_41() {
+        assert_eq!(PROTOCOL_VERSION, 41);
     }
 
     #[test]
@@ -4834,7 +4860,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":40,
+                    "protocol_version":41,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4897,6 +4923,7 @@ mod tests {
                     submitted_edit_commands: Vec::new(),
                     submitted_reply_commands: Vec::new(),
                     submitted_file_commands: Vec::new(),
+                    submitted_notification_commands: Vec::new(),
                     submitted_redaction_commands: Vec::new(),
                     submitted_history_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
@@ -5659,6 +5686,7 @@ mod tests {
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5746,6 +5774,7 @@ mod tests {
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5803,6 +5832,7 @@ mod tests {
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5867,6 +5897,7 @@ mod tests {
             }],
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5956,6 +5987,7 @@ mod tests {
                 thread: None,
             }],
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -6052,6 +6084,7 @@ mod tests {
                 }),
             }],
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -6150,6 +6183,7 @@ mod tests {
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: vec![DumpSubmittedRedactionCommand {
                 room_id: "!ops:example".to_owned(),
                 event_id: "$reaction:example".to_owned(),
@@ -6273,6 +6307,7 @@ mod tests {
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
             submitted_file_commands: Vec::new(),
+            submitted_notification_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: vec![
                 DumpSubmittedHistoryCommand {
@@ -6359,6 +6394,7 @@ mod tests {
                 submitted_edit_commands: Vec::new(),
                 submitted_reply_commands: Vec::new(),
                 submitted_file_commands: Vec::new(),
+                submitted_notification_commands: Vec::new(),
                 submitted_redaction_commands: Vec::new(),
                 submitted_history_commands: Vec::new(),
                 submitted_verification_actions: Vec::new(),

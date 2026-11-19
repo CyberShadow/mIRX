@@ -32,9 +32,9 @@ use mirx_core::{
     RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile, RoomVideoInfo,
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
     SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
-    SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession, UnbanRoomMemberRequest,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, login_server, start,
+    SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
+    UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
+    VerificationState, VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -103,31 +103,32 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
     CLIENTCREATESTRUCT, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT, CallWindowProcW, CheckMenuItem,
-    CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW,
-    DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
-    ES_MULTILINE, ES_PASSWORD, ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY,
-    FLASHWINFO, FlashWindowEx, GA_ROOT, GWL_STYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW,
-    GetClientRect, GetDlgItem, GetForegroundWindow, GetMenuItemCount, GetMenuStringW, GetMessageW,
-    GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret,
-    IDC_ARROW, IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
-    LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT,
-    LB_SETCURSEL, LB_SETITEMHEIGHT, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED,
-    LoadCursorW, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW,
-    MDITILE_HORIZONTAL, MDITILE_VERTICAL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED,
-    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
-    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
-    SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE,
-    SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
-    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
-    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
-    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
-    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
-    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    CheckMenuRadioItem, CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW,
+    DefMDIChildProcW, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar,
+    ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_READONLY, EnableMenuItem,
+    FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx, GA_ROOT, GWL_STYLE, GWLP_WNDPROC,
+    GetAncestor, GetClassNameW, GetClientRect, GetDlgItem, GetForegroundWindow, GetMenuItemCount,
+    GetMenuState, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo, GetSystemMenu,
+    GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsChild, IsIconic,
+    IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
+    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
+    MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE,
+    SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW, SendMessageW,
+    SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE,
+    WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
+    WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
+    WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS,
+    WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED,
+    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -143,25 +144,25 @@ use crate::{
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
         DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
         DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
-        DumpSubmittedMembershipCommand, DumpSubmittedPowerLevelCommand,
-        DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomListRequest, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
-        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-        NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
-        RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline,
-        UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout,
-        UiMenu, UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState,
-        UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimestamp,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        DumpSubmittedMembershipCommand, DumpSubmittedNotificationCommand,
+        DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
+        DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
+        FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
+        ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState, MdiView,
+        MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationPathSegment, ParsedCommand,
+        PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
+        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind,
+        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
+        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimelineLine,
+        UiTimelineLineKind, UiTimestamp, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -203,13 +204,16 @@ use menus::{
     MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL,
     MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY,
     MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
+    MENU_ID_ROOM_NOTIFY_ALL, MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE,
     MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY,
     MENU_ID_TOOLS_OPTIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
     MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VIEW_SWITCHBAR,
     MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
-    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU, VIEW_MENU,
-    WINDOW_MENU, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
-    verification_menu_action_enabled, view_menu_bar, view_menu_checks,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
+    ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, commands_menu_item,
+    commands_menu_line, commands_menu_title, file_menu_state, notification_menu_id,
+    notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
+    view_menu_bar, view_menu_checks,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
@@ -346,6 +350,9 @@ struct Controls {
     /// Right-click menus. They hang in no menubar, so `WM_DESTROY`
     /// destroys them.
     room_menu: HMENU,
+    /// The room menu's Notifications submenu, which gets its own
+    /// `WM_INITMENUPOPUP`; destroyed with `room_menu`.
+    room_notifications_menu: HMENU,
     message_menu: HMENU,
     member_menu: HMENU,
     accelerators: HACCEL,
@@ -4008,6 +4015,7 @@ unsafe extern "system" fn window_proc(
                 DestroyMenu(*menu);
                 *menu = null_mut();
             }
+            controls.room_notifications_menu = null_mut();
             DestroyAcceleratorTable(controls.accelerators);
             controls.accelerators = null_mut();
             if let Some(sender) = state_mut(hwnd).command_sender.as_ref() {
@@ -6485,6 +6493,19 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         "Reject Invite",
     )?;
     append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_PART, "Part Room")?;
+    if AppendMenuW(room_menu, MF_SEPARATOR, 0, null()) == 0 {
+        return Err(last_os_error("AppendMenuW"));
+    }
+    let room_notifications_menu = create_popup_menu()?;
+    for (_, id, label) in ROOM_NOTIFICATIONS_MENU {
+        append_menu_text(room_notifications_menu, MF_STRING, id, label)?;
+    }
+    append_menu_text(
+        room_menu,
+        MF_POPUP,
+        room_notifications_menu as usize,
+        "&Notifications",
+    )?;
 
     let message_menu = create_popup_menu()?;
     for (id, label) in [
@@ -6587,6 +6608,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     controls.view_menu = view_menu;
     controls.tools_menu = tools_menu;
     controls.room_menu = room_menu;
+    controls.room_notifications_menu = room_notifications_menu;
     controls.message_menu = message_menu;
     controls.member_menu = member_menu;
     controls.accelerators = accelerator_table;
@@ -6623,14 +6645,68 @@ struct RoomActionState {
     accept_invite_enabled: bool,
     reject_invite_enabled: bool,
     part_room_enabled: bool,
+    /// The active joined room's mode, which Notifications checks; `None`
+    /// greys Notifications (an invite, or no room).
+    notification_mode: Option<RoomNotificationMode>,
 }
 
 fn active_room_action_state(state: &WindowState) -> RoomActionState {
+    let joined_room = resolve_joined_room_target(state, None);
     RoomActionState {
         accept_invite_enabled: resolve_invite_command_room_id(state, "accept", None).is_ok(),
         reject_invite_enabled: resolve_invite_command_room_id(state, "reject", None).is_ok(),
-        part_room_enabled: resolve_joined_room_target(state, None).is_ok(),
+        part_room_enabled: joined_room.is_ok(),
+        notification_mode: joined_room.ok().map(|room_id| {
+            joined_room_notification_mode(
+                sendable_room_by_id(&state.model.rooms, &room_id)
+                    .expect("the joined room target is a joined room"),
+            )
+        }),
     }
+}
+
+/// Notifications checks the room's mode, or nothing while it is greyed.
+unsafe fn refresh_room_notifications_menu_state(
+    hwnd: HWND,
+    popup_menu: HMENU,
+) -> Result<(), String> {
+    let mode = active_room_action_state(state_ref(hwnd)).notification_mode;
+    for (_, item_id, _) in ROOM_NOTIFICATIONS_MENU {
+        let flags = MF_BYCOMMAND
+            | if mode.is_some() {
+                MF_ENABLED
+            } else {
+                MF_GRAYED
+            };
+        if EnableMenuItem(popup_menu, item_id as u32, flags) == -1 {
+            return Err(last_os_error("EnableMenuItem"));
+        }
+    }
+    match mode {
+        Some(mode) => {
+            let [(_, first, _), _, (_, last, _)] = ROOM_NOTIFICATIONS_MENU;
+            if CheckMenuRadioItem(
+                popup_menu,
+                first as u32,
+                last as u32,
+                notification_menu_id(mode) as u32,
+                MF_BYCOMMAND,
+            ) == 0
+            {
+                return Err(last_os_error("CheckMenuRadioItem"));
+            }
+        }
+        None => {
+            for (_, item_id, _) in ROOM_NOTIFICATIONS_MENU {
+                if CheckMenuItem(popup_menu, item_id as u32, MF_BYCOMMAND | MF_UNCHECKED)
+                    == u32::MAX
+                {
+                    return Err(format!("CheckMenuItem: menu item {item_id} does not exist"));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 unsafe fn refresh_room_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
@@ -6981,6 +7057,8 @@ unsafe fn refresh_menu_popup(hwnd: HWND, popup_menu: HMENU) -> Result<(), String
         refresh_tools_menu_state(hwnd, popup_menu)
     } else if popup_menu == controls.room_menu {
         refresh_room_menu_state(hwnd, popup_menu)
+    } else if popup_menu == controls.room_notifications_menu {
+        refresh_room_notifications_menu_state(hwnd, popup_menu)
     } else if popup_menu == controls.message_menu {
         refresh_message_menu_state(hwnd, popup_menu)
     } else {
@@ -7089,12 +7167,40 @@ unsafe fn dump_room_menu_state(hwnd: HWND) -> Result<DumpRoomMenuState, String> 
     if room_menu.is_null() {
         return Err("Room menu is not available".to_owned());
     }
-    refresh_room_menu_state(hwnd, room_menu)?;
+    refresh_menu_popup(hwnd, room_menu)?;
     let action_state = active_room_action_state(state_ref(hwnd));
+    // Notifications as its own WM_INITMENUPOPUP leaves it, read back from
+    // the menu.
+    let notifications_menu = state_ref(hwnd).controls.room_notifications_menu;
+    refresh_menu_popup(hwnd, notifications_menu)?;
+    let mut notification_mode = None;
+    let mut enabled_items = 0;
+    for (mode, item_id, _) in ROOM_NOTIFICATIONS_MENU {
+        let item_state = GetMenuState(notifications_menu, item_id as u32, MF_BYCOMMAND);
+        if item_state == u32::MAX {
+            return Err(format!("GetMenuState: menu item {item_id} does not exist"));
+        }
+        if item_state & MF_CHECKED != 0 {
+            if notification_mode.is_some() {
+                return Err("Notifications checks more than one mode".to_owned());
+            }
+            notification_mode = Some(mode);
+        }
+        if item_state & MF_GRAYED == 0 {
+            enabled_items += 1;
+        }
+    }
+    let notification_items_enabled = match enabled_items {
+        0 => false,
+        3 => true,
+        _ => return Err("Notifications greys only some of its items".to_owned()),
+    };
     Ok(DumpRoomMenuState {
         accept_invite_enabled: action_state.accept_invite_enabled,
         reject_invite_enabled: action_state.reject_invite_enabled,
         part_room_enabled: action_state.part_room_enabled,
+        notification_mode,
+        notification_items_enabled,
     })
 }
 
@@ -7174,6 +7280,16 @@ unsafe fn menu_command_result(
             "Room",
             submit_room_menu_action(hwnd, submit_part_slash_command).map(|_| Some(())),
         ),
+        MENU_ID_ROOM_NOTIFY_ALL | MENU_ID_ROOM_NOTIFY_MENTIONS | MENU_ID_ROOM_NOTIFY_MUTE => {
+            let mode = notification_menu_mode(command_id).expect("a Notifications item");
+            (
+                "Room",
+                submit_room_menu_action(hwnd, |state, target| {
+                    submit_room_notification_mode(state, target, mode)
+                })
+                .map(|_| Some(())),
+            )
+        }
         MENU_ID_MESSAGE_REPLY => (
             "Message",
             arm_compose_target_on_selected_message(hwnd, |event_id| ComposeTarget::Reply {
@@ -7409,6 +7525,11 @@ unsafe fn invoke_menu_command_for_automation(hwnd: HWND, command_id: usize) -> R
             active_room_action_state(state_ref(hwnd)).reject_invite_enabled
         }
         MENU_ID_ROOM_PART => active_room_action_state(state_ref(hwnd)).part_room_enabled,
+        MENU_ID_ROOM_NOTIFY_ALL | MENU_ID_ROOM_NOTIFY_MENTIONS | MENU_ID_ROOM_NOTIFY_MUTE => {
+            active_room_action_state(state_ref(hwnd))
+                .notification_mode
+                .is_some()
+        }
         _ => true,
     };
     if !room_action_enabled {
@@ -7425,6 +7546,9 @@ fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
         ContextMenuCommand::AcceptInvite => MENU_ID_ROOM_ACCEPT_INVITE,
         ContextMenuCommand::RejectInvite => MENU_ID_ROOM_REJECT_INVITE,
         ContextMenuCommand::PartRoom => MENU_ID_ROOM_PART,
+        ContextMenuCommand::NotifyAllMessages => MENU_ID_ROOM_NOTIFY_ALL,
+        ContextMenuCommand::NotifyMentionsAndKeywords => MENU_ID_ROOM_NOTIFY_MENTIONS,
+        ContextMenuCommand::NotifyMute => MENU_ID_ROOM_NOTIFY_MUTE,
         ContextMenuCommand::ReplyMessage => MENU_ID_MESSAGE_REPLY,
         ContextMenuCommand::GoToOriginal => MENU_ID_MESSAGE_GO_TO_ORIGINAL,
         ContextMenuCommand::EditMessage => MENU_ID_MESSAGE_EDIT,
@@ -7446,7 +7570,12 @@ unsafe fn invoke_navigation_context_menu_for_automation(
         .ok_or_else(|| "room context menu command is unavailable".to_owned())?;
     if !matches!(
         command_id,
-        MENU_ID_ROOM_ACCEPT_INVITE | MENU_ID_ROOM_REJECT_INVITE | MENU_ID_ROOM_PART
+        MENU_ID_ROOM_ACCEPT_INVITE
+            | MENU_ID_ROOM_REJECT_INVITE
+            | MENU_ID_ROOM_PART
+            | MENU_ID_ROOM_NOTIFY_ALL
+            | MENU_ID_ROOM_NOTIFY_MENTIONS
+            | MENU_ID_ROOM_NOTIFY_MUTE
     ) {
         return Err("room context menu command is unavailable".to_owned());
     }
@@ -7512,7 +7641,7 @@ unsafe fn timeline_event_context_lparam_for_automation(
 
 unsafe fn submit_room_menu_action(
     hwnd: HWND,
-    submit: fn(&mut WindowState, Option<&str>) -> Result<String, String>,
+    submit: impl FnOnce(&mut WindowState, Option<&str>) -> Result<String, String>,
 ) -> Result<(), String> {
     let result = submit(state_mut(hwnd), None);
     match result {
@@ -13370,6 +13499,8 @@ unsafe fn show_navigation_room_context_menu(
         (command == MENU_ID_ROOM_ACCEPT_INVITE && !action_state.accept_invite_enabled)
             || (command == MENU_ID_ROOM_REJECT_INVITE && !action_state.reject_invite_enabled)
             || (command == MENU_ID_ROOM_PART && !action_state.part_room_enabled)
+            || (notification_menu_mode(command).is_some()
+                && action_state.notification_mode.is_none())
     }) {
         return Err("room context menu action is disabled".to_owned());
     }
@@ -15830,6 +15961,28 @@ fn submit_part_slash_command(
     Ok(format!("part submitted: {room_id}"))
 }
 
+/// Room > Notifications: sets the room's mode on the server. The check
+/// follows the next room snapshot, not the click.
+fn submit_room_notification_mode(
+    state: &mut WindowState,
+    target: Option<&str>,
+    mode: RoomNotificationMode,
+) -> Result<String, String> {
+    let room_id = resolve_joined_room_target(state, target)?;
+    let display_name = sendable_room_by_id(&state.model.rooms, &room_id)
+        .expect("the joined room target is a joined room")
+        .display_name
+        .clone();
+    enqueue_command(
+        state,
+        Command::SetRoomNotificationMode(SetRoomNotificationModeRequest { room_id, mode }),
+    )?;
+    Ok(format!(
+        "notifications for {display_name}: {}",
+        notification_mode_label(mode)
+    ))
+}
+
 fn submit_react_slash_command(
     state: &mut WindowState,
     target_event_id: String,
@@ -16591,6 +16744,36 @@ fn submitted_reply_commands_from_state(state: &WindowState) -> Vec<DumpSubmitted
         .collect()
 }
 
+fn dump_submitted_notification_command(
+    command: &Command,
+) -> Option<DumpSubmittedNotificationCommand> {
+    match command {
+        Command::SetRoomNotificationMode(request) => {
+            Some(DumpSubmittedNotificationCommand::SetRoomNotificationMode {
+                room_id: request.room_id.clone(),
+                mode: request.mode,
+            })
+        }
+        Command::AddHighlightWord(word) => {
+            Some(DumpSubmittedNotificationCommand::AddHighlightWord { word: word.clone() })
+        }
+        Command::RemoveHighlightWord(word) => {
+            Some(DumpSubmittedNotificationCommand::RemoveHighlightWord { word: word.clone() })
+        }
+        _ => None,
+    }
+}
+
+fn submitted_notification_commands_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedNotificationCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_notification_command)
+        .collect()
+}
+
 fn submitted_file_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedFileCommand> {
     state
         .recorded_commands
@@ -16709,6 +16892,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_edit_commands: submitted_edit_commands_from_state(state),
         submitted_reply_commands: submitted_reply_commands_from_state(state),
         submitted_file_commands: submitted_file_commands_from_state(state),
+        submitted_notification_commands: submitted_notification_commands_from_state(state),
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
         submitted_history_commands: submitted_history_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
@@ -29602,6 +29786,7 @@ mod tests {
                 accept_invite_enabled: true,
                 reject_invite_enabled: true,
                 part_room_enabled: false,
+                notification_mode: None,
             }
         );
 
@@ -29612,8 +29797,47 @@ mod tests {
                 accept_invite_enabled: false,
                 reject_invite_enabled: false,
                 part_room_enabled: true,
+                notification_mode: Some(RoomNotificationMode::AllMessages),
             }
         );
+
+        state.model.rooms[1].notification_mode = Some(RoomNotificationMode::Mute);
+        state.active_view = room_view_id("!joined:example");
+        assert_eq!(
+            active_room_action_state(&state).notification_mode,
+            Some(RoomNotificationMode::Mute)
+        );
+
+        state.active_view = ViewId::Status;
+        assert_eq!(active_room_action_state(&state).notification_mode, None);
+    }
+
+    #[test]
+    fn submit_room_notification_mode_records_the_command_and_names_the_room() {
+        let (mut state, handle) = test_state_with_command_sender();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state.active_view = room_view_id("!room:example");
+
+        assert_eq!(
+            submit_room_notification_mode(&mut state, None, RoomNotificationMode::Mute),
+            Ok("notifications for Room: Mute".to_owned())
+        );
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SetRoomNotificationMode(
+                SetRoomNotificationModeRequest {
+                    room_id: "!room:example".to_owned(),
+                    mode: RoomNotificationMode::Mute,
+                }
+            )]
+        );
+        // The check follows the server, not the click.
+        assert_eq!(
+            state.model.rooms[0].notification_mode,
+            Some(RoomNotificationMode::AllMessages)
+        );
+
+        stop_test_core(handle);
     }
 
     #[test]

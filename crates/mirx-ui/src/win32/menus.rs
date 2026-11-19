@@ -5,7 +5,7 @@
 //! builds the Win32 menus from them. The Room, Message and Member menus are
 //! right-click menus of the treebar, timeline and nick list, not bar menus.
 
-use mirx_core::{VerificationState, VerificationStateEvent};
+use mirx_core::{RoomNotificationMode, VerificationState, VerificationStateEvent};
 
 use super::commands::VerificationAction;
 use super::settings::{Bar, Settings};
@@ -47,6 +47,9 @@ pub(super) const MENU_ID_VIEW_SWITCHBAR: usize = 40036;
 pub(super) const MENU_ID_VIEW_TREEBAR: usize = 40037;
 /// Options..., which Alt+O sends, as in mIRC.
 pub(super) const MENU_ID_TOOLS_OPTIONS: usize = 40038;
+pub(super) const MENU_ID_ROOM_NOTIFY_ALL: usize = 40039;
+pub(super) const MENU_ID_ROOM_NOTIFY_MENTIONS: usize = 40040;
+pub(super) const MENU_ID_ROOM_NOTIFY_MUTE: usize = 40041;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
@@ -114,6 +117,52 @@ pub(super) fn view_menu_bar(id: usize) -> Option<Bar> {
         .iter()
         .find(|(_, item)| *item == id)
         .map(|(bar, _)| *bar)
+}
+
+/// The room menu's Notifications submenu: one radio item per Matrix mode,
+/// in this order, the room's own mode checked.
+pub(super) const ROOM_NOTIFICATIONS_MENU: [(RoomNotificationMode, usize, &str); 3] = [
+    (
+        RoomNotificationMode::AllMessages,
+        MENU_ID_ROOM_NOTIFY_ALL,
+        "&All Messages",
+    ),
+    (
+        RoomNotificationMode::MentionsAndKeywordsOnly,
+        MENU_ID_ROOM_NOTIFY_MENTIONS,
+        "&Mentions and Keywords",
+    ),
+    (
+        RoomNotificationMode::Mute,
+        MENU_ID_ROOM_NOTIFY_MUTE,
+        "M&ute",
+    ),
+];
+
+/// The mode a Notifications item sets.
+pub(super) fn notification_menu_mode(id: usize) -> Option<RoomNotificationMode> {
+    ROOM_NOTIFICATIONS_MENU
+        .iter()
+        .find(|(_, item, _)| *item == id)
+        .map(|(mode, _, _)| *mode)
+}
+
+/// The Notifications item that shows a mode.
+pub(super) fn notification_menu_id(mode: RoomNotificationMode) -> usize {
+    ROOM_NOTIFICATIONS_MENU
+        .iter()
+        .find(|(item_mode, _, _)| *item_mode == mode)
+        .map(|(_, id, _)| *id)
+        .expect("every mode has a Notifications item")
+}
+
+/// A mode's name as its Notifications item reads, without the mnemonic.
+pub(super) fn notification_mode_label(mode: RoomNotificationMode) -> String {
+    ROOM_NOTIFICATIONS_MENU
+        .iter()
+        .find(|(item_mode, _, _)| *item_mode == mode)
+        .map(|(_, _, label)| label.replace('&', ""))
+        .expect("every mode has a Notifications item")
 }
 
 pub(super) const TOOLS_MENU: &[MenuEntry] = &[
@@ -501,6 +550,28 @@ mod tests {
     }
 
     #[test]
+    fn notification_items_map_to_their_modes_and_back() {
+        for (mode, id, label) in [
+            (
+                RoomNotificationMode::AllMessages,
+                MENU_ID_ROOM_NOTIFY_ALL,
+                "All Messages",
+            ),
+            (
+                RoomNotificationMode::MentionsAndKeywordsOnly,
+                MENU_ID_ROOM_NOTIFY_MENTIONS,
+                "Mentions and Keywords",
+            ),
+            (RoomNotificationMode::Mute, MENU_ID_ROOM_NOTIFY_MUTE, "Mute"),
+        ] {
+            assert_eq!(notification_menu_mode(id), Some(mode));
+            assert_eq!(notification_menu_id(mode), id);
+            assert_eq!(notification_mode_label(mode), label);
+        }
+        assert_eq!(notification_menu_mode(MENU_ID_ROOM_PART), None);
+    }
+
+    #[test]
     fn menu_ids_are_unique() {
         let mut ids = [FILE_MENU, VIEW_MENU, TOOLS_MENU, WINDOW_MENU, HELP_MENU]
             .into_iter()
@@ -510,6 +581,7 @@ mod tests {
                 Separator => None,
             })
             .chain((0..COMMANDS_MENU.len()).map(|index| MENU_ID_COMMANDS_FIRST + index))
+            .chain(ROOM_NOTIFICATIONS_MENU.iter().map(|(_, id, _)| *id))
             .collect::<Vec<_>>();
         let count = ids.len();
         ids.sort_unstable();

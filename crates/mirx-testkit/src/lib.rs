@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mirx_core::{E2eeStatus, RoomMemberRank, RoomMembership};
+use mirx_core::{E2eeStatus, RoomMemberRank, RoomMembership, RoomNotificationMode};
 #[cfg(windows)]
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -155,6 +155,9 @@ pub enum ContextMenuCommand {
     AcceptInvite,
     RejectInvite,
     PartRoom,
+    NotifyAllMessages,
+    NotifyMentionsAndKeywords,
+    NotifyMute,
     ReplyMessage,
     GoToOriginal,
     EditMessage,
@@ -375,6 +378,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_file_commands: Vec<SubmittedFileCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_notification_commands: Vec<SubmittedNotificationCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_redaction_commands: Vec<SubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_history_commands: Vec<SubmittedHistoryCommand>,
@@ -486,6 +491,21 @@ pub struct SubmittedReplyCommand {
     pub body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<SubmittedReplyThreadTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SubmittedNotificationCommand {
+    SetRoomNotificationMode {
+        room_id: String,
+        mode: RoomNotificationMode,
+    },
+    AddHighlightWord {
+        word: String,
+    },
+    RemoveHighlightWord {
+        word: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1341,6 +1361,8 @@ pub struct RoomMenuState {
     pub accept_invite_enabled: bool,
     pub reject_invite_enabled: bool,
     pub part_room_enabled: bool,
+    pub notification_mode: Option<RoomNotificationMode>,
+    pub notification_items_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
