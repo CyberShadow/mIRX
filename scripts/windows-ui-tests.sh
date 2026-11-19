@@ -19,7 +19,7 @@ fi
 
 export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
 export WINEARCH="${WINEARCH:-win64}"
-export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=;winedbg.exe=d}"
 # Timestamps show local time: pin it so the output is the same everywhere.
 export TZ=UTC
 

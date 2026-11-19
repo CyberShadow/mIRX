@@ -54,7 +54,10 @@
           export CXX_x86_64_pc_windows_gnu="x86_64-w64-mingw32-g++"
           export CFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
           export CXXFLAGS_x86_64_pc_windows_gnu="-I$PTHREADS/include"
-          export WINEDLLOVERRIDES="mscoree,mshtml="
+          # No winedbg: a crash ends the process with Wine's one-line
+          # report instead of stalling while winedbg --auto reads the debug
+          # info of a 1 GB test executable.
+          export WINEDLLOVERRIDES="mscoree,mshtml=;winedbg.exe=d"
           export MIRX_WINE_FONTS="${wineFonts}"
 
           ln -sfn "$PTHREADS" "$MIRX_ROOT/.nix-pthreads"

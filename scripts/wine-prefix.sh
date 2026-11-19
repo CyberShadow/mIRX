@@ -10,7 +10,7 @@ ensure_wineprefix() {
   : "${MIRX_WINE_FONTS:?run inside nix develop}"
   export WINEPREFIX="${WINEPREFIX:-$default_prefix}"
   export WINEARCH="${WINEARCH:-win64}"
-  export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+  export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=;winedbg.exe=d}"
   export WINEDEBUG="${WINEDEBUG:--all}"
   # Timestamps show local time: pin it so the output is the same everywhere.
   export TZ=UTC
