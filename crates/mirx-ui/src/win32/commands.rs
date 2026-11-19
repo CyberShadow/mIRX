@@ -72,6 +72,9 @@ pub(super) enum SlashCommand {
     Verify {
         action: VerificationAction,
     },
+    Help {
+        topic: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +118,7 @@ impl SlashCommand {
             Self::Clear => "clear",
             Self::E2ee(_) => "e2ee",
             Self::Verify { .. } => "verify",
+            Self::Help { .. } => "help",
         }
     }
 }
@@ -149,6 +153,117 @@ impl fmt::Display for CommandError {
         write!(formatter, "* /{}: {}", self.command, self.reason)
     }
 }
+
+pub(super) struct CommandSpec {
+    pub(super) name: &'static str,
+    /// The parameters after the name, empty for none.
+    pub(super) usage: &'static str,
+    pub(super) summary: &'static str,
+}
+
+/// Every command the editbox knows, sorted by name.
+pub(super) const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "accept",
+        usage: "[room]",
+        summary: "accept a room invite",
+    },
+    CommandSpec {
+        name: "clear",
+        usage: "",
+        summary: "clear this window",
+    },
+    CommandSpec {
+        name: "e2ee",
+        usage: "[status|refresh|recover|setup [wait] [passphrase <passphrase>]]",
+        summary: "show or manage end-to-end encryption",
+    },
+    CommandSpec {
+        name: "edit",
+        usage: "<event-id> <text>",
+        summary: "replace the text of your message",
+    },
+    CommandSpec {
+        name: "find",
+        usage: "<text>",
+        summary: "find text in this window",
+    },
+    CommandSpec {
+        name: "help",
+        usage: "[command]",
+        summary: "list the commands, or show one's usage",
+    },
+    CommandSpec {
+        name: "join",
+        usage: "<room-id-or-alias>",
+        summary: "join a room",
+    },
+    CommandSpec {
+        name: "me",
+        usage: "<action>",
+        summary: "send an action",
+    },
+    CommandSpec {
+        name: "part",
+        usage: "[room]",
+        summary: "leave this room, or the named one",
+    },
+    CommandSpec {
+        name: "query",
+        usage: "<user-id>",
+        summary: "open a query with a user",
+    },
+    CommandSpec {
+        name: "react",
+        usage: "<event-id> <key>",
+        summary: "react to a message",
+    },
+    CommandSpec {
+        name: "redact",
+        usage: "<event-id>",
+        summary: "delete a message",
+    },
+    CommandSpec {
+        name: "reject",
+        usage: "[room]",
+        summary: "reject a room invite",
+    },
+    CommandSpec {
+        name: "reply",
+        usage: "<event-id> <message>",
+        summary: "reply to a message",
+    },
+    CommandSpec {
+        name: "sendfile",
+        usage: "<path>",
+        summary: "send a file to this room",
+    },
+    CommandSpec {
+        name: "status",
+        usage: "",
+        summary: "activate the Status window",
+    },
+    CommandSpec {
+        name: "topic",
+        usage: "<text>",
+        summary: "set this room's topic",
+    },
+    CommandSpec {
+        name: "unreact",
+        usage: "<reaction-event-id>",
+        summary: "remove your reaction",
+    },
+    CommandSpec {
+        name: "verify",
+        usage: "<accept|cancel|confirm|reject>",
+        summary: "answer a device verification",
+    },
+    CommandSpec {
+        name: "window",
+        usage: "<room>",
+        summary: "activate a room's window",
+    },
+];
 
 /// Classifies editbox input: text, `//text` (literal slash), `/me`, or a
 /// command.
@@ -284,6 +399,9 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "clear" => no_parameters(SlashCommand::Clear),
         "e2ee" => parse_e2ee(argument).map(SlashCommand::E2ee),
         "verify" => parse_verify(argument),
+        "help" => Ok(SlashCommand::Help {
+            topic: optional(argument),
+        }),
         _ => Err(CommandError::unknown(name)),
     }
 }
@@ -362,6 +480,35 @@ fn parse_verify(argument: &str) -> Result<SlashCommand, CommandError> {
         }
     };
     Ok(SlashCommand::Verify { action })
+}
+
+/// `/help`: every command, or one command's usage.
+pub(super) fn help_lines(topic: Option<&str>) -> Result<Vec<String>, String> {
+    let Some(topic) = topic else {
+        let names = COMMANDS
+            .iter()
+            .map(|spec| format!("/{}", spec.name))
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Ok(vec![
+            format!("* Commands: {names}"),
+            "* /help <command> for usage".to_owned(),
+        ]);
+    };
+    let name = topic
+        .strip_prefix('/')
+        .unwrap_or(topic)
+        .to_ascii_lowercase();
+    let spec = COMMANDS
+        .iter()
+        .find(|spec| spec.name == name)
+        .ok_or_else(|| format!("no such command: {topic}"))?;
+    let usage = if spec.usage.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", spec.usage)
+    };
+    Ok(vec![format!("* /{}{usage} — {}", spec.name, spec.summary)])
 }
 
 /// What Up recalls for a submitted command. Commands that may carry an
@@ -737,5 +884,80 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn commands_table_is_sorted_and_every_entry_parses() {
+        assert!(
+            COMMANDS.windows(2).all(|pair| pair[0].name < pair[1].name),
+            "COMMANDS must be sorted by name without duplicates"
+        );
+        for spec in COMMANDS {
+            let input = format!("/{}", spec.name);
+            if let ComposeSubmission::LocalCommand(Err(error)) = parse_compose_submission(&input) {
+                assert_ne!(error.reason, "unknown command", "{input}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_command_variant_is_in_the_commands_table() {
+        // One sample per variant; `SlashCommand::name` is exhaustive, so a
+        // new variant needs a name, and a sample here.
+        let samples = [
+            "/status",
+            "/find x",
+            "/window x",
+            "/join x",
+            "/query x",
+            "/accept",
+            "/reject",
+            "/part",
+            "/react $e k",
+            "/reply $e t",
+            "/sendfile p",
+            "/edit $e t",
+            "/redact $e",
+            "/unreact $e",
+            "/topic t",
+            "/clear",
+            "/e2ee",
+            "/verify accept",
+            "/help",
+        ];
+        for input in samples {
+            let name = parse(input).expect(input).name();
+            assert!(
+                COMMANDS.iter().any(|spec| spec.name == name),
+                "{name} is missing from COMMANDS"
+            );
+        }
+    }
+
+    #[test]
+    fn help_lists_every_command_or_shows_one() {
+        let lines = help_lines(None).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with("* Commands: /accept /clear /e2ee"));
+        assert!(lines[0].contains(" /help "));
+        assert_eq!(lines[1], "* /help <command> for usage");
+        assert_eq!(
+            help_lines(Some("join")),
+            Ok(vec!["* /join <room-id-or-alias> — join a room".to_owned()])
+        );
+        assert_eq!(
+            help_lines(Some("/CLEAR")),
+            Ok(vec!["* /clear — clear this window".to_owned()])
+        );
+        assert_eq!(
+            help_lines(Some("nope")),
+            Err("no such command: nope".to_owned())
+        );
+        assert_eq!(
+            parse("/help kick"),
+            Ok(SlashCommand::Help {
+                topic: Some("kick".to_owned()),
+            })
+        );
     }
 }

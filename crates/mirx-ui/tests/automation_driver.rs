@@ -14026,7 +14026,14 @@ fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std
     assert_eq!(app.compose_text()?, "");
 
     let ui_state = app.dump_ui_state()?;
-    assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
+    let beta = room_identity("!beta:example");
+    assert_eq!(ui_state.mdi.active, beta);
+    // mIRC prints a command's error in the window it was typed in.
+    let echo = only_view_line_containing(find_view(&ui_state, &beta), "/doesnotexist");
+    assert!(
+        echo.ends_with("] * /doesnotexist: unknown command"),
+        "{echo:?}"
+    );
     assert!(
         ui_state
             .status_bar

@@ -2,7 +2,9 @@
 //! log of connection, notice and error lines, kept across disconnects until
 //! the user clears it.
 //!
-//! Builders return line bodies; the window draws each as `[hh:mm] * body`.
+//! Builders return line bodies, which `log_status` stores as `* body`. A
+//! line holds the text after its `[hh:mm]` timestamp, so a command's echo
+//! may print other lines too, such as `-> *Alice* hi`.
 
 use mirx_core::{E2eeStatus, VerificationState, VerificationStateEvent};
 

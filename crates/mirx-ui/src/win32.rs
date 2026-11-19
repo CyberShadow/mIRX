@@ -130,6 +130,7 @@ use crate::{
 };
 
 mod commands;
+mod echo;
 mod mdi;
 mod nick_completion;
 mod status_log;
@@ -139,6 +140,7 @@ use commands::{
     CommandError, ComposeSubmission, E2eeSlashCommand, SlashCommand, VerificationAction,
     local_command_history_entry, parse_compose_submission,
 };
+use echo::{EchoLine, EchoLog};
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
 
@@ -330,6 +332,10 @@ enum TimelineRowIdentity {
     },
     /// A Status log line; identical lines stay distinct.
     StatusLine {
+        sequence: u64,
+    },
+    /// A command's line in a room or thread window.
+    EchoLine {
         sequence: u64,
     },
 }
@@ -634,6 +640,7 @@ struct RoomViewModel {
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
     history: RoomHistoryBackfillState,
+    echo: EchoLog,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -748,6 +755,7 @@ impl RoomViewModel {
             )
         });
         self.reactions_by_target.clear();
+        self.echo.clear_room_window();
         self.retain_preview_media_for_visible_activities();
         self.rebuild_threads();
     }
@@ -8155,7 +8163,7 @@ fn log_status(state: &mut WindowState, kind: StatusLineKind, text: String) {
     state
         .model
         .status_log
-        .push(state.clock.now_ms(), kind, text);
+        .push(state.clock.now_ms(), kind, context_line(&text));
     if state.active_view != ViewId::Status {
         let level = match kind {
             StatusLineKind::Info => ViewActivityLevel::Event,
@@ -8489,22 +8497,52 @@ fn push_room_activity_row(
 
 fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
+    let room_view = model.room_views.get(room_id);
     if is_invited_room(room) {
-        return build_invite_timeline_rows(room);
+        let mut rows = build_invite_timeline_rows(room);
+        if let Some(room_view) = room_view {
+            rows.extend(room_view.echo.lines_for(None).map(echo_row));
+        }
+        return rows;
     }
     let mut rows = Vec::new();
-    let room_view = model.room_views.get(room_id);
     push_room_context_rows(&mut rows, room, room_view);
 
     if let Some(room_view) = room_view {
         push_room_history_backfill_row(&mut rows, &room_view.history);
-        for activity in &room_view.activities {
-            push_room_activity_row(&mut rows, Some(room_view), activity);
-        }
+        push_activity_rows_with_echo(&mut rows, room_view, room_view.activities.iter(), None);
         push_room_typing_row(&mut rows, room_view);
     }
 
     rows
+}
+
+/// The window's activity rows with its echo lines merged by time: an echo
+/// line goes before the first activity newer than it, so it stays below
+/// what the user saw when typing the command.
+fn push_activity_rows_with_echo<'a>(
+    rows: &mut Vec<TimelineRow>,
+    room_view: &RoomViewModel,
+    activities: impl Iterator<Item = &'a RoomActivity>,
+    thread_root: Option<&str>,
+) {
+    let mut echo = room_view.echo.lines_for(thread_root).peekable();
+    for activity in activities {
+        while let Some(line) = echo.next_if(|line| line.timestamp_ms < activity.timestamp_ms) {
+            rows.push(echo_row(line));
+        }
+        push_room_activity_row(rows, Some(room_view), activity);
+    }
+    rows.extend(echo.map(echo_row));
+}
+
+fn echo_row(line: &EchoLine) -> TimelineRow {
+    let timestamp = format!("[{}]", format_timestamp_hhmm_utc(line.timestamp_ms));
+    TimelineRow::log(TimelineRowKind::Info, format!("{timestamp} {}", line.text)).with_identity(
+        TimelineRowIdentity::EchoLine {
+            sequence: line.sequence,
+        },
+    )
 }
 
 fn build_thread_timeline_rows(
@@ -8519,11 +8557,15 @@ fn build_thread_timeline_rows(
         .expect("thread view must target an existing room view");
     let mut rows = Vec::new();
     push_room_context_rows(&mut rows, room, Some(room_view));
-    for activity in &room_view.activities {
-        if room_activity_belongs_to_thread(activity, thread_root_event_id) {
-            push_room_activity_row(&mut rows, Some(room_view), activity);
-        }
-    }
+    push_activity_rows_with_echo(
+        &mut rows,
+        room_view,
+        room_view
+            .activities
+            .iter()
+            .filter(|activity| room_activity_belongs_to_thread(activity, thread_root_event_id)),
+        Some(thread_root_event_id),
+    );
     push_room_typing_row(&mut rows, room_view);
     rows
 }
@@ -8649,7 +8691,7 @@ fn build_status_timeline_rows(status_log: &StatusLog) -> Vec<TimelineRow> {
                 StatusLineKind::Error => TimelineRowKind::Error,
             };
             let timestamp = format!("[{}]", format_timestamp_hhmm_utc(line.timestamp_ms));
-            TimelineRow::log(kind, event_line(&timestamp, &line.text))
+            TimelineRow::log(kind, format!("{timestamp} {}", line.text))
                 .with_identity(TimelineRowIdentity::status_line(line.sequence))
         })
         .collect()
@@ -12995,6 +13037,10 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 Ok(None)
             }
         },
+        SlashCommand::Help { topic } => {
+            echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
+            Ok(None)
+        }
         SlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
             match action {
@@ -13011,9 +13057,48 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
     }
 }
 
-/// A typed command's error, for the window it was typed in.
+/// A typed command's error, printed in the window it was typed in; the
+/// status bar says the same.
 unsafe fn report_command_error(hwnd: HWND, error: CommandError) -> Result<(), String> {
-    set_local_command_status(hwnd, error.to_string())
+    let text = error.to_string();
+    echo_in_active_view(hwnd, [text.clone()])?;
+    set_local_command_status(hwnd, text)
+}
+
+/// Prints a command's lines in the active window. They are its newest lines,
+/// in the window the user is looking at, so they raise no activity.
+unsafe fn echo_in_active_view(
+    hwnd: HWND,
+    lines: impl IntoIterator<Item = String>,
+) -> Result<(), String> {
+    let view = state_ref(hwnd).active_view.clone();
+    {
+        let state = state_mut(hwnd);
+        let now = state.clock.now_ms();
+        for text in lines {
+            match &view {
+                ViewId::Status => state.model.status_log.push(now, StatusLineKind::Info, text),
+                ViewId::Room(room_id) => state
+                    .model
+                    .room_views
+                    .entry(room_id.clone())
+                    .or_default()
+                    .echo
+                    .push(now, None, text),
+                ViewId::Thread {
+                    room_id,
+                    thread_root_event_id,
+                } => state
+                    .model
+                    .room_views
+                    .get_mut(room_id)
+                    .expect("a thread window's room must have a view")
+                    .echo
+                    .push(now, Some(thread_root_event_id.clone()), text),
+            }
+        }
+    }
+    refresh_view_content(hwnd, &view)
 }
 
 unsafe fn set_local_command_status(hwnd: HWND, message: String) -> Result<(), String> {
@@ -15903,6 +15988,45 @@ mod tests {
         DestroyWindow(status_bar);
         drop(Box::from_raw(state_ptr));
         result
+    }
+
+    /// Gives the stand-in active view the content window its kind has: the
+    /// timeline itself for Status, a room content window otherwise.
+    unsafe fn install_test_view_content(hwnd: HWND) {
+        let instance = GetModuleHandleW(null());
+        register_room_content_class(instance).unwrap();
+        register_timeline_class(instance).unwrap();
+        let active_view = state_ref(hwnd).active_view.clone();
+        let class_name = match active_view {
+            ViewId::Status => TIMELINE_CLASS_NAME,
+            ViewId::Room(_) | ViewId::Thread { .. } => ROOM_CONTENT_CLASS_NAME,
+        };
+        let content = CreateWindowExW(
+            0,
+            wide_null(class_name).as_ptr(),
+            wide_null("").as_ptr(),
+            WS_CHILD | WS_VISIBLE,
+            0,
+            0,
+            0,
+            0,
+            hwnd,
+            null_mut(),
+            instance,
+            null_mut(),
+        );
+        assert!(!content.is_null(), "test view content must be created");
+        state_mut(hwnd)
+            .views
+            .get_mut(&active_view)
+            .expect("the test compose window must track the active view")
+            .content = content;
+    }
+
+    /// Types `input` into the active editbox and presses Return.
+    unsafe fn type_compose_line(hwnd: HWND, input: &str) {
+        set_compose_text(hwnd, input).unwrap();
+        submit_compose_from_edit(hwnd).unwrap();
     }
 
     unsafe fn install_test_active_timeline_event(hwnd: HWND, event_id: &str) {
@@ -20364,17 +20488,17 @@ mod tests {
         log.push(
             0,
             StatusLineKind::Info,
-            "Synced rooms: 1 joined, 0 invited".to_owned(),
+            "* Synced rooms: 1 joined, 0 invited".to_owned(),
         );
         log.push(
             0,
             StatusLineKind::Info,
-            "E2EE status not yet known".to_owned(),
+            "* E2EE status not yet known".to_owned(),
         );
         log.push(
             0,
             StatusLineKind::Info,
-            "E2EE status not yet known".to_owned(),
+            "* E2EE status not yet known".to_owned(),
         );
         let rows = build_status_timeline_rows(&log);
 
@@ -21682,6 +21806,7 @@ mod tests {
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
                 history: RoomHistoryBackfillState::default(),
+                echo: EchoLog::default(),
             },
         );
         state.model.last_activity = Some(LastMessageActivity {
@@ -24818,6 +24943,196 @@ mod tests {
             Err("unknown room id: !missing:example".to_owned())
         );
         assert_eq!(state.model.selected_room, Some("!room:example".to_owned()));
+    }
+
+    #[test]
+    fn command_error_echoes_in_the_room_window_and_the_status_bar() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state
+            .model
+            .room_views
+            .insert("!room:example".to_owned(), RoomViewModel::default());
+        state.active_view = room_view_id("!room:example");
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/react");
+                let lines = render_room_lines(&state_ref(hwnd).model, "!room:example");
+                assert_eq!(
+                    lines.last().map(String::as_str),
+                    Some("[22:12] * /react: insufficient parameters")
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "* /react: insufficient parameters"
+                );
+                assert!(state_ref(hwnd).model.status_log.lines().is_empty());
+                assert_eq!(state_ref(hwnd).room_activity, BTreeMap::new());
+                assert_eq!(dump_compose_text(hwnd).unwrap(), "");
+            });
+        }
+    }
+
+    #[test]
+    fn command_error_in_status_echoes_in_the_status_log() {
+        let state = test_state();
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/wat now");
+                let rows = build_status_timeline_rows(&state_ref(hwnd).model.status_log);
+                assert_eq!(
+                    project_timeline_rows(&rows),
+                    vec!["[22:12] * /wat: unknown command".to_owned()]
+                );
+                assert_eq!(rows[0].kind, TimelineRowKind::Info);
+                assert_eq!(state_ref(hwnd).model.status, "* /wat: unknown command");
+            });
+        }
+    }
+
+    #[test]
+    fn help_prints_the_command_list_in_the_active_window() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state
+            .model
+            .room_views
+            .insert("!room:example".to_owned(), RoomViewModel::default());
+        state.active_view = room_view_id("!room:example");
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/help");
+                type_compose_line(hwnd, "/help clear");
+                type_compose_line(hwnd, "/help nope");
+                let lines = render_room_lines(&state_ref(hwnd).model, "!room:example");
+                let echo = &lines[lines.len() - 4..];
+                assert!(echo[0].starts_with("[22:12] * Commands: /accept /clear "));
+                assert_eq!(echo[1], "[22:12] * /help <command> for usage");
+                assert_eq!(echo[2], "[22:12] * /clear — clear this window");
+                assert_eq!(echo[3], "[22:12] * /help: no such command: nope");
+            });
+        }
+    }
+
+    #[test]
+    fn echo_lines_merge_into_the_room_timeline_by_time() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        for (event_id, body, timestamp_ms) in [
+            ("$first", "first", 1_700_000_060_000),
+            ("$second", "second", 1_700_000_180_000),
+        ] {
+            apply_core_event(
+                &mut state,
+                timeline_with_transaction_id("!ops:example", event_id, None, body, timestamp_ms),
+            )
+            .unwrap();
+        }
+        let echo = &mut state.model.room_views.get_mut("!ops:example").unwrap().echo;
+        echo.push(1_700_000_000_000, None, "* before".to_owned());
+        echo.push(1_700_000_120_000, None, "* between".to_owned());
+        // A tie stays after the activity the user already saw.
+        echo.push(1_700_000_180_000, None, "* tie".to_owned());
+        echo.push(1_700_000_240_000, None, "* tie".to_owned());
+
+        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let texts = project_timeline_rows(&rows);
+        let tail = &texts[texts.len() - 6..];
+        assert_eq!(
+            tail,
+            [
+                "[22:13] * before",
+                "[22:14] <@alice:example> first",
+                "[22:15] * between",
+                "[22:16] <@alice:example> second",
+                "[22:16] * tie",
+                "[22:17] * tie",
+            ]
+        );
+        let identities = rows[rows.len() - 2..]
+            .iter()
+            .map(|row| row.identity.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            identities,
+            vec![
+                TimelineRowIdentity::EchoLine { sequence: 2 },
+                TimelineRowIdentity::EchoLine { sequence: 3 },
+            ]
+        );
+    }
+
+    #[test]
+    fn thread_echo_shows_only_in_its_thread_and_survives_room_clear() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$thread-root",
+                None,
+                "root msg",
+                1_700_000_060_000,
+            ),
+        )
+        .unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$thread-1", "$thread-root", "thread rep"),
+        )
+        .unwrap();
+        let room_view = state.model.room_views.get_mut("!ops:example").unwrap();
+        room_view.echo.push(
+            1_700_000_200_000,
+            Some("$thread-root".to_owned()),
+            "* /clear: nothing to clear in thread view".to_owned(),
+        );
+        room_view
+            .echo
+            .push(1_700_000_200_000, None, "* room line".to_owned());
+
+        let thread_lines = project_timeline_rows(&build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+        ));
+        assert!(
+            thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
+        );
+        assert!(!thread_lines.contains(&"[22:16] * room line".to_owned()));
+        let room_lines = render_room_lines(&state.model, "!ops:example");
+        assert!(room_lines.contains(&"[22:16] * room line".to_owned()));
+        assert!(
+            !room_lines
+                .iter()
+                .any(|line| line.contains("nothing to clear"))
+        );
+
+        state
+            .model
+            .room_views
+            .get_mut("!ops:example")
+            .unwrap()
+            .clear_visible_entries();
+        assert!(
+            !render_room_lines(&state.model, "!ops:example")
+                .contains(&"[22:16] * room line".to_owned())
+        );
+        let thread_lines = project_timeline_rows(&build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+        ));
+        assert!(
+            thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
+        );
     }
 
     #[test]
