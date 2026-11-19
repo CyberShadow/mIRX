@@ -140,26 +140,26 @@ use crate::{
         DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
         DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
-        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
-        DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
-        DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
-        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
-        DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
-        FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
-        ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState, MdiView,
-        MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationPathSegment, ParsedCommand,
-        PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
-        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
-        SwitchbarState, UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState,
-        UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect,
-        UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState, UiTextFont, UiTimestamp,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
+        DumpSubmittedMembershipCommand, DumpSubmittedPowerLevelCommand,
+        DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRecoveryCommand,
+        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
+        DumpSubmittedRoomListRequest, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
+        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
+        NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
+        RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiComposeTarget,
+        UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu,
+        UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState,
+        UiTextFont, UiTimestamp, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -176,6 +176,7 @@ mod options;
 mod options_dialog;
 mod replies;
 mod room_list;
+mod send_file;
 mod settings;
 mod status_log;
 mod switchbar;
@@ -257,6 +258,9 @@ const SYSMENU_FONT_LABEL: &str = "&Font...";
 /// The window menu's Find Text item, mIRC's window-menu Find.
 const SYSMENU_ID_FIND: usize = 0x0120;
 const SYSMENU_FIND_LABEL: &str = "Find &Text...\tCtrl+F";
+/// A room window's window-menu Send File..., mIRC's DCC Send dialog.
+const SYSMENU_ID_SEND_FILE: usize = 0x0130;
+const SYSMENU_SEND_FILE_LABEL: &str = "Send &File...";
 const COMPOSE_EDIT_STYLE: WINDOW_STYLE = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL as u32;
 const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
@@ -4044,6 +4048,25 @@ unsafe extern "system" fn mdi_child_window_proc(
             let frame = frame_window_for(hwnd);
             if let Err(message) = begin_find_dialog(frame) {
                 show_error_message(frame, "Find", &message);
+            }
+            0
+        }
+        WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_SEND_FILE => {
+            let frame = frame_window_for(hwnd);
+            let ViewId::Room(room_id) = state_ref(frame)
+                .hwnd_views
+                .get(&(hwnd as isize))
+                .cloned()
+                .expect("every MDI child is a tracked view")
+            else {
+                unreachable!("only room windows have Send File...");
+            };
+            let sent = run_send_file_dialog(frame, room_id).and_then(|status| match status {
+                Some(status) => set_local_command_status(frame, status),
+                None => Ok(()),
+            });
+            if let Err(message) = sent {
+                show_error_message(frame, "Send File", &message);
             }
             0
         }
@@ -10775,16 +10798,25 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
         }
     }
     // mIRC's window menu has Find Text and the font too. The Rooms List
-    // has no text of its own to find.
+    // has no text of its own to find. Only a room takes files: a thread
+    // cannot hold an attachment yet.
     let find_label = wide_null(SYSMENU_FIND_LABEL);
+    let send_file_label = wide_null(SYSMENU_SEND_FILE_LABEL);
     let font_label = wide_null(SYSMENU_FONT_LABEL);
     if AppendMenuW(system_menu, MF_SEPARATOR, 0, null()) == 0
         || (view_has_editbox(view_id)
             && AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FIND, find_label.as_ptr()) == 0)
+        || (matches!(view_id, ViewId::Room(_))
+            && AppendMenuW(
+                system_menu,
+                MF_STRING,
+                SYSMENU_ID_SEND_FILE,
+                send_file_label.as_ptr(),
+            ) == 0)
         || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FONT, font_label.as_ptr()) == 0
     {
         return Err(last_os_error(
-            "AppendMenuW window menu Find Text... and Font...",
+            "AppendMenuW window menu Find Text..., Send File... and Font...",
         ));
     }
 
@@ -14517,32 +14549,57 @@ struct ComposeDestination {
     thread: Option<SendMessageThreadTarget>,
 }
 
-fn submit_send_file_slash_command(state: &mut WindowState, path: String) -> Result<String, String> {
-    let room_id = match &state.active_view {
-        ViewId::Room(room_id) if sendable_room_by_id(&state.model.rooms, room_id).is_some() => {
-            room_id.clone()
-        }
-        ViewId::Room(room_id) => return Err(format!("room is not joined: {room_id}")),
-        ViewId::Thread { .. } => {
-            return Err("file attachments cannot target threads yet".to_owned());
-        }
-        ViewId::Status | ViewId::RoomList => return Err("no room selected".to_owned()),
-    };
-    let command = Command::SendFile(SendFileRequest {
-        room_id: room_id.clone(),
-        path: PathBuf::from(path),
-        filename: None,
-        content_type: None,
-    });
-    state
-        .command_sender
-        .as_ref()
-        .ok_or_else(|| "core command sender is not available".to_owned())?
-        .send(command.clone())
-        .map_err(|err| format!("failed to enqueue send file command: {err}"))?;
-    #[cfg(test)]
-    state.recorded_commands.push(command);
+/// The room `/sendfile` sends to: the active window's.
+fn send_file_room_id(state: &WindowState) -> Result<String, String> {
+    match &state.active_view {
+        ViewId::Room(room_id) => Ok(room_id.clone()),
+        ViewId::Thread { .. } => Err("file attachments cannot target threads yet".to_owned()),
+        ViewId::Status | ViewId::RoomList => Err("no room selected".to_owned()),
+    }
+}
+
+/// The joined room a file goes to; an invite or a room left meanwhile
+/// takes none.
+fn sendable_file_room<'a>(
+    state: &'a WindowState,
+    room_id: &str,
+) -> Result<&'a RoomSummary, String> {
+    sendable_room_by_id(&state.model.rooms, room_id)
+        .ok_or_else(|| format!("room is not joined: {room_id}"))
+}
+
+/// `/sendfile <path>` and the Send File dialog's OK: uploads the file to
+/// the room, with the core choosing its type from the name.
+fn submit_send_file(
+    state: &mut WindowState,
+    room_id: String,
+    path: PathBuf,
+) -> Result<String, String> {
+    sendable_file_room(state, &room_id)?;
+    enqueue_command(
+        state,
+        Command::SendFile(SendFileRequest {
+            room_id: room_id.clone(),
+            path,
+            filename: None,
+            content_type: None,
+        }),
+    )?;
     Ok(format!("File queued for {room_id}"))
+}
+
+/// The Send File dialog for `room_id`, which the caller captured before
+/// the dialog opens, so activating another window meanwhile does not
+/// redirect the file. `None` when cancelled.
+unsafe fn run_send_file_dialog(frame: HWND, room_id: String) -> Result<Option<String>, String> {
+    let room_name = sendable_file_room(state_ref(frame), &room_id)?
+        .display_name
+        .clone();
+    // Modal: core events keep arriving, so nothing is held across it.
+    match send_file::choose_file_to_send(frame, &room_name)? {
+        Some(path) => submit_send_file(state_mut(frame), room_id, path).map(Some),
+        None => Ok(None),
+    }
 }
 
 fn resolve_compose_destination(
@@ -14884,7 +14941,13 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             Ok(Some(format!("Reply queued for {target_event_id}")))
         }
         SlashCommand::SendFile { path } => {
-            submit_send_file_slash_command(state_mut(hwnd), path).map(Some)
+            let room_id = send_file_room_id(state_ref(hwnd))?;
+            match path {
+                Some(path) => {
+                    submit_send_file(state_mut(hwnd), room_id, PathBuf::from(path)).map(Some)
+                }
+                None => run_send_file_dialog(hwnd, room_id),
+            }
         }
         SlashCommand::Edit {
             target_event_id,
@@ -16107,6 +16170,20 @@ fn dump_submitted_reply_command(command: &Command) -> Option<DumpSubmittedReplyC
     }
 }
 
+fn dump_submitted_file_command(command: &Command) -> Option<DumpSubmittedFileCommand> {
+    match command {
+        Command::SendFile(request) => Some(DumpSubmittedFileCommand {
+            room_id: request.room_id.clone(),
+            path: request
+                .path
+                .to_str()
+                .expect("file paths come from UTF-16 text")
+                .to_owned(),
+        }),
+        _ => None,
+    }
+}
+
 fn dump_submitted_redaction_command(command: &Command) -> Option<DumpSubmittedRedactionCommand> {
     match command {
         Command::RedactEvent(request) => Some(DumpSubmittedRedactionCommand {
@@ -16199,6 +16276,14 @@ fn submitted_reply_commands_from_state(state: &WindowState) -> Vec<DumpSubmitted
         .recorded_commands
         .iter()
         .filter_map(dump_submitted_reply_command)
+        .collect()
+}
+
+fn submitted_file_commands_from_state(state: &WindowState) -> Vec<DumpSubmittedFileCommand> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(dump_submitted_file_command)
         .collect()
 }
 
@@ -16311,6 +16396,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_reaction_commands: submitted_reaction_commands_from_state(state),
         submitted_edit_commands: submitted_edit_commands_from_state(state),
         submitted_reply_commands: submitted_reply_commands_from_state(state),
+        submitted_file_commands: submitted_file_commands_from_state(state),
         submitted_redaction_commands: submitted_redaction_commands_from_state(state),
         submitted_history_commands: submitted_history_commands_from_state(state),
         submitted_verification_actions: submitted_verification_actions_from_state(state),
@@ -29122,6 +29208,53 @@ mod tests {
                 save_attachment_enabled: false,
             }
         );
+    }
+
+    #[test]
+    fn sendfile_goes_to_the_active_joined_room_and_lets_the_core_type_it() {
+        let mut state = test_state();
+        let (sender, commands) = inert_command_sender();
+        std::mem::forget(commands);
+        state.command_sender = Some(sender);
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            invited_room("!new:example", "New"),
+        ];
+
+        state.active_view = ViewId::Room("!ops:example".to_owned());
+        let room_id = send_file_room_id(&state).unwrap();
+        assert_eq!(
+            submit_send_file(&mut state, room_id, PathBuf::from("C:\\shot.png")),
+            Ok("File queued for !ops:example".to_owned())
+        );
+        assert_eq!(
+            state.recorded_commands,
+            [Command::SendFile(SendFileRequest {
+                room_id: "!ops:example".to_owned(),
+                path: PathBuf::from("C:\\shot.png"),
+                filename: None,
+                content_type: None,
+            })]
+        );
+
+        assert_eq!(
+            submit_send_file(&mut state, "!new:example".to_owned(), PathBuf::from("a")),
+            Err("room is not joined: !new:example".to_owned())
+        );
+        state.active_view = ViewId::Thread {
+            room_id: "!ops:example".to_owned(),
+            thread_root_event_id: "$root".to_owned(),
+        };
+        assert_eq!(
+            send_file_room_id(&state),
+            Err("file attachments cannot target threads yet".to_owned())
+        );
+        state.active_view = ViewId::Status;
+        assert_eq!(
+            send_file_room_id(&state),
+            Err("no room selected".to_owned())
+        );
+        assert_eq!(state.recorded_commands.len(), 1);
     }
 
     /// The Ops room, active, with Alice's question `$q`, the user's text

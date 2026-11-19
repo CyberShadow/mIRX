@@ -372,6 +372,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_reply_commands: Vec<SubmittedReplyCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_file_commands: Vec<SubmittedFileCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_redaction_commands: Vec<SubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_history_commands: Vec<SubmittedHistoryCommand>,
@@ -483,6 +485,13 @@ pub struct SubmittedReplyCommand {
     pub body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<SubmittedReplyThreadTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedFileCommand {
+    pub room_id: String,
+    pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

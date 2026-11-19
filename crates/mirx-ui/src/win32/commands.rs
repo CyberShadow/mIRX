@@ -112,8 +112,9 @@ pub(super) enum SlashCommand {
         target_event_id: String,
         body: Option<String>,
     },
+    /// Without a path, opens the Send File dialog.
     SendFile {
-        path: String,
+        path: Option<String>,
     },
     /// Without a body, arms the editbox with the message to edit.
     Edit {
@@ -445,8 +446,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "sendfile",
-        usage: "<path>",
-        summary: "send a file to this room",
+        usage: "[path]",
+        summary: "send a file to this room (no path: choose one)",
     },
     CommandSpec {
         name: "server",
@@ -689,7 +690,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             })
         }
         "sendfile" => Ok(SlashCommand::SendFile {
-            path: required(argument)?,
+            path: optional(argument),
         }),
         "edit" => {
             let (target_event_id, body) = event_and_optional_text(&name, argument)?;
@@ -1519,9 +1520,12 @@ mod tests {
         assert_eq!(
             parse("/sendfile C:\\some file.txt"),
             Ok(SlashCommand::SendFile {
-                path: "C:\\some file.txt".to_owned(),
+                path: Some("C:\\some file.txt".to_owned()),
             })
         );
+        for input in ["/sendfile", "/sendfile   "] {
+            assert_eq!(parse(input), Ok(SlashCommand::SendFile { path: None }));
+        }
     }
 
     #[test]
@@ -1559,7 +1563,6 @@ mod tests {
             ("/find   ", "find"),
             ("/topic", "topic"),
             ("/topic   ", "topic"),
-            ("/sendfile", "sendfile"),
             ("/react", "react"),
             ("/react $react-normal", "react"),
             ("/react $react-normal   ", "react"),

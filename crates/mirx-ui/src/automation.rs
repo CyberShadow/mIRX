@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 38;
+pub(crate) const PROTOCOL_VERSION: u32 = 39;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1415,6 +1415,8 @@ pub(crate) struct DumpModel {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_reply_commands: Vec<DumpSubmittedReplyCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_file_commands: Vec<DumpSubmittedFileCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_redaction_commands: Vec<DumpSubmittedRedactionCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_history_commands: Vec<DumpSubmittedHistoryCommand>,
@@ -1526,6 +1528,13 @@ pub(crate) struct DumpSubmittedReplyCommand {
     pub(crate) body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) thread: Option<DumpSubmittedReplyThreadTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedFileCommand {
+    pub(crate) room_id: String,
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2961,8 +2970,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_38() {
-        assert_eq!(PROTOCOL_VERSION, 38);
+    fn protocol_version_is_39() {
+        assert_eq!(PROTOCOL_VERSION, 39);
     }
 
     #[test]
@@ -4772,7 +4781,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":38,
+                    "protocol_version":39,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4834,6 +4843,7 @@ mod tests {
                     submitted_reaction_commands: Vec::new(),
                     submitted_edit_commands: Vec::new(),
                     submitted_reply_commands: Vec::new(),
+                    submitted_file_commands: Vec::new(),
                     submitted_redaction_commands: Vec::new(),
                     submitted_history_commands: Vec::new(),
                     submitted_verification_actions: Vec::new(),
@@ -5577,6 +5587,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5663,6 +5674,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5719,6 +5731,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5782,6 +5795,7 @@ mod tests {
                 body: "replacement text".to_owned(),
             }],
             submitted_reply_commands: Vec::new(),
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5870,6 +5884,7 @@ mod tests {
                 body: "reply text".to_owned(),
                 thread: None,
             }],
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -5965,6 +5980,7 @@ mod tests {
                     latest_event_id: "$latest:example".to_owned(),
                 }),
             }],
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: Vec::new(),
             submitted_verification_actions: Vec::new(),
@@ -6062,6 +6078,7 @@ mod tests {
             }],
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: vec![DumpSubmittedRedactionCommand {
                 room_id: "!ops:example".to_owned(),
                 event_id: "$reaction:example".to_owned(),
@@ -6184,6 +6201,7 @@ mod tests {
             submitted_reaction_commands: Vec::new(),
             submitted_edit_commands: Vec::new(),
             submitted_reply_commands: Vec::new(),
+            submitted_file_commands: Vec::new(),
             submitted_redaction_commands: Vec::new(),
             submitted_history_commands: vec![
                 DumpSubmittedHistoryCommand {
@@ -6269,6 +6287,7 @@ mod tests {
                 submitted_reaction_commands: Vec::new(),
                 submitted_edit_commands: Vec::new(),
                 submitted_reply_commands: Vec::new(),
+                submitted_file_commands: Vec::new(),
                 submitted_redaction_commands: Vec::new(),
                 submitted_history_commands: Vec::new(),
                 submitted_verification_actions: Vec::new(),

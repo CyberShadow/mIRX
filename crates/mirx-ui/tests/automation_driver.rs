@@ -37,15 +37,15 @@ use mirx_testkit::{
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
     RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
     RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
-    SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
-    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
-    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu,
-    UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    SubmittedFileCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
+    SubmittedMembershipCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedVerificationAction,
+    SwitchbarItem, TestkitError, UiComposeTarget, UiComposeTargetKind, UiError,
+    UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UiTimestamp, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -69,7 +69,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
     SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
-    WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2858,7 +2858,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 38);
+    assert_eq!(version.protocol_version, 39);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -4390,8 +4390,7 @@ fn close_view_without_prompt(
     Ok(child)
 }
 
-/// The MessageBox the frame owns, or null.
-/// The MessageBox `owner` shows, if any.
+/// The dialog box (MessageBox or common dialog) `owner` shows, if any.
 unsafe fn owned_message_box(owner: HWND) -> HWND {
     let thread_id = unsafe { GetWindowThreadProcessId(owner, std::ptr::null_mut()) };
     let mut search = (owner, 0 as HWND);
@@ -4422,19 +4421,27 @@ fn wait_for_message_box(app: &MirxApp) -> (HWND, String) {
 
 /// Waits for the MessageBox `owner` shows and returns it with its text.
 fn wait_for_owned_message_box(owner: HWND) -> (HWND, String) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let (dialog, _) = wait_for_owned_dialog(owner);
+    // MessageBox's text is the static control with ID 0xFFFF.
+    let text = unsafe { read_window_text(GetDlgItem(dialog, 0xFFFF)) };
+    (dialog, text)
+}
+
+/// Waits for the dialog box (`#32770`: a MessageBox or a common dialog)
+/// `owner` shows and returns it with its caption.
+fn wait_for_owned_dialog(owner: HWND) -> (HWND, String) {
+    // The file dialog loads the shell first, so it can take a while.
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let dialog = unsafe { owned_message_box(owner) };
         // The box exists before WM_INITDIALOG fills it; a dialog box shows
         // only once that is done.
         if !dialog.is_null() && unsafe { IsWindowVisible(dialog) } != 0 {
-            // MessageBox's text is the static control with ID 0xFFFF.
-            let text = unsafe { read_window_text(GetDlgItem(dialog, 0xFFFF)) };
-            return (dialog, text);
+            return (dialog, unsafe { read_window_text(dialog) });
         }
         assert!(
             Instant::now() < deadline,
-            "message box did not appear within five seconds"
+            "dialog box did not appear within ten seconds"
         );
         std::thread::sleep(POLL_INTERVAL);
     }
@@ -7961,6 +7968,143 @@ fn automation_driver_send_file_target_uses_explicit_joined_room()
         )?,
         "!ops:example"
     );
+    Ok(())
+}
+
+/// The window menu's Send File... (`SYSMENU_ID_SEND_FILE` in win32.rs).
+const SYSMENU_ID_SEND_FILE: WPARAM = 0x0130;
+/// The Explorer-style Open dialog's file name box: Wine's comdlg32 keeps the
+/// ComboBoxEx `cmb13` and destroys the edit `edt1` unless a hook or a
+/// template is given (`filename_is_edit`).
+const OPEN_DIALOG_FILE_NAME_ID: i32 = 0x047C;
+
+/// Launches thread-hierarchy with a real file to send in the test's own
+/// `LOCALAPPDATA`, a Windows path the app can open.
+fn launch_send_file_app() -> Result<(GuiTestApp, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    app.load_events(&fs::read_to_string(fixture_state_path(
+        "thread-hierarchy.json",
+    ))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    fs::create_dir_all(&local_app_data)?;
+    let file = local_app_data.join("shot.png");
+    fs::write(&file, b"not really a png")?;
+    Ok((app, local_app_data, file))
+}
+
+/// Waits for the frame's Send File dialog and checks its caption.
+fn wait_for_send_file_dialog(app: &MirxApp, room_name: &str) -> HWND {
+    let (dialog, caption) = wait_for_owned_dialog(app.automation_frame_hwnd() as HWND);
+    assert_eq!(caption, format!("Send File to {room_name}"));
+    dialog
+}
+
+/// Types `path` into the open Send File dialog and presses Open.
+fn choose_file_in_send_file_dialog(
+    app: &MirxApp,
+    dialog: HWND,
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let name = unsafe { GetDlgItem(dialog, OPEN_DIALOG_FILE_NAME_ID) };
+    assert!(!name.is_null(), "the Open dialog has its file name box");
+    let text = wide_null(path.to_str().expect("UTF-8 test path"));
+    unsafe { SendMessageW(name, WM_SETTEXT, 0, text.as_ptr() as isize) };
+    assert_eq!(
+        unsafe { read_window_text(name) },
+        path.to_str().expect("UTF-8 test path")
+    );
+    answer_message_box(app, dialog, IDOK)
+}
+
+#[test]
+fn send_file_dialog_from_the_window_menu_sends_the_chosen_file()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data, file) = launch_send_file_app()?;
+    let ops = room_identity("!ops:example");
+    app.select_view(ops.clone())?;
+    let items = app.dump_ui_state()?.active_system_menu_items;
+    let find = items
+        .iter()
+        .position(|item| item == "Find &Text...\tCtrl+F")
+        .expect("room window menu has Find Text...");
+    assert_eq!(
+        items[find..],
+        ["Find &Text...\tCtrl+F", "Send &File...", "&Font..."]
+    );
+    let child = view_child_hwnd(&app, &ops)?;
+    let status_before = app.dump_model()?.status;
+
+    // Cancel sends nothing and leaves the status bar alone.
+    assert_ne!(
+        unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_SEND_FILE, 0) },
+        0
+    );
+    let dialog = wait_for_send_file_dialog(&app, "Ops");
+    answer_message_box(&app, dialog, IDCANCEL)?;
+    let model = app.dump_model()?;
+    assert!(model.submitted_file_commands.is_empty());
+    assert_eq!(model.status, status_before);
+
+    // The file goes to the window's own room, even when another window is
+    // activated while the dialog is open.
+    assert_ne!(
+        unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_SEND_FILE, 0) },
+        0
+    );
+    let dialog = wait_for_send_file_dialog(&app, "Ops");
+    app.select_status_view()?;
+    choose_file_in_send_file_dialog(&app, dialog, &file)?;
+    assert_eq!(
+        app.dump_model()?.submitted_file_commands,
+        [SubmittedFileCommand {
+            room_id: "!ops:example".to_owned(),
+            path: file.to_str().expect("UTF-8 test path").to_owned(),
+        }]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn sendfile_without_a_path_opens_the_send_file_dialog() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data, file) = launch_send_file_app()?;
+    app.select_view(room_identity("!ops:example"))?;
+    app.set_compose_text("/sendfile")?;
+    // Posted: Return runs the command, whose dialog is a modal loop.
+    let edit = unsafe { compose_edit_hwnd(&app) };
+    assert_ne!(
+        unsafe { PostMessageW(edit, WM_KEYDOWN, VK_RETURN as WPARAM, 0) },
+        0
+    );
+    let dialog = wait_for_send_file_dialog(&app, "Ops");
+    choose_file_in_send_file_dialog(&app, dialog, &file)?;
+    assert_eq!(
+        app.dump_model()?.submitted_file_commands,
+        [SubmittedFileCommand {
+            room_id: "!ops:example".to_owned(),
+            path: file.to_str().expect("UTF-8 test path").to_owned(),
+        }]
+    );
+
+    // A thread window has no Send File..., and /sendfile there refuses
+    // before any dialog.
+    app.select_view(thread_identity("!ops:example", "$thread-root"))?;
+    assert!(
+        !app.dump_ui_state()?
+            .active_system_menu_items
+            .contains(&"Send &File...".to_owned())
+    );
+    type_commands(&app, &["/sendfile"])?;
+    assert_eq!(
+        app.dump_model()?.status,
+        "* /sendfile: file attachments cannot target threads yet"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
