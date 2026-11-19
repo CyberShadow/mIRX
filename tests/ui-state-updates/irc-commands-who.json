@@ -1,0 +1,20 @@
+[
+  {
+    "IgnoredUsers": [
+      "@spam:example"
+    ]
+  },
+  {
+    "UserProfile": {
+      "user_id": "@bob:example",
+      "display_name": "Bob Builder"
+    }
+  },
+  {
+    "Error": {
+      "operation": "SetRoomMemberPowerLevel",
+      "room_id": "!ops:example",
+      "message": "you are not allowed to change power levels"
+    }
+  }
+]

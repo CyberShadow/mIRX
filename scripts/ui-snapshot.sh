@@ -1716,6 +1716,50 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    irc-commands-who)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      # Rooms named by alias, the ignore list and a server's answers, at
+      # the fixed 22:12 clock. The server's answers are appended: the
+      # snapshot core is not signed in and would refuse a typed /ignore
+      # <nick> or /whois at no fixed moment.
+      ordered_actions=(
+        'input:/topic'
+        'input:/topic #hall'
+        'input:/msg #lobby see ops'
+        'input:/ignore'
+        "append:$root_dir/tests/ui-state-updates/irc-commands-who.json"
+        'input:/ignore'
+      )
+      room_expect_args=(
+        --expect-room '!ops:example'
+        --expect-room '!lobby:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::[22:12] * Topic is '"'"'incident review'"'"''
+        --expect-room-view '!ops:example::[22:12] * No topic is set'
+        --expect-room-view '!ops:example::[22:12] -> *#lobby* see ops'
+        --expect-room-view '!ops:example::[22:12] * Ignore list is empty'
+        --expect-room-view '!ops:example::[22:12] * Added Spam (@spam:example) to ignore list'
+        --expect-room-view '!ops:example::[22:12] * Bob is @bob:example * Bob Builder'
+        --expect-room-view '!ops:example::[22:12] * Bob on Ops Lobby'
+        --expect-room-view '!ops:example::[22:12] * Bob using example'
+        --expect-room-view '!ops:example::[22:12] * Bob End of /WHOIS list'
+        --expect-room-view '!ops:example::[22:12] * Error during set room member power level: you are not allowed to change power levels'
+        --expect-room-view '!ops:example::[22:12] * Ignore list:'
+        --expect-room-view '!ops:example::[22:12] *   Spam (@spam:example)'
+      )
+      # The appended error is the last thing to set the status.
+      status_bar_expect_args=(
+        --expect-status-bar 'error during set room member power level'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'room:!lobby:example::Lobby'
+      )
+      expect_switchbar_active='room:!ops:example'
+      ;;
     room-list|room-list-listing)
       expect_active_view='room_list'
       # `/list` opens the Rooms List over the room; the directory's one

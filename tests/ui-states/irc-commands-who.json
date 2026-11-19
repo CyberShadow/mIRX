@@ -1,0 +1,218 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": "incident review",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": "#ops:example",
+        "alt_aliases": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!lobby:example",
+        "display_name": "Lobby",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages",
+        "canonical_alias": "#lobby:example",
+        "alt_aliases": [
+          "#hall:example"
+        ],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-1",
+      "timestamp_ms": 1699999800000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@creator:example",
+          "display_name": "Creator",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "welcome to ops",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-2",
+      "timestamp_ms": 1699999860000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "who is around?",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-1",
+      "timestamp_ms": 1699999800000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "lunch?",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!ops:example",
+      "members": [
+        {
+          "user_id": "@creator:example",
+          "display_name": "Creator",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "creator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@admin:example",
+          "display_name": "Admin",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "administrator",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@mod:example",
+          "display_name": "Mod",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "moderator",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@voice:example",
+          "display_name": "Voice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "voiced",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@alan:example",
+          "display_name": "Alan",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": true,
+          "can_ban": true
+        }
+      ]
+    }
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!lobby:example",
+      "members": [
+        {
+          "user_id": "@admin:example",
+          "display_name": "Admin",
+          "display_name_ambiguous": false,
+          "is_own_user": true,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@spam:example",
+          "display_name": "Spam",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  },
+  {
+    "IgnoredUsers": []
+  }
+]
