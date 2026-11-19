@@ -4245,6 +4245,90 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
     Ok(())
 }
 
+fn settings_file_path(local_app_data: &Path) -> PathBuf {
+    local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("mirx.ini")
+}
+
+/// Types each command in the active window and waits for it to run.
+fn type_commands(app: &MirxApp, inputs: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+    for input in inputs {
+        app.set_compose_text(input)?;
+        app.send_compose_key(ComposeKey::Return)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        assert_eq!(app.compose_text()?, "", "{input}");
+    }
+    Ok(())
+}
+
+#[test]
+fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let launch = || -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+        let app = launch_app_with_options(
+            &exe_path,
+            &[OsString::from("--automation")],
+            launch_options(Some(local_app_data.clone())),
+        )?;
+        app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+        let mut events = close_lifecycle_events();
+        // 2023-11-14 22:13:20 UTC; the harness runs in UTC.
+        events.push(text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_000_000,
+            "timestamped hello",
+        ));
+        app.load_events(&serde_json::to_string(&events)?)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        app.select_view(room_identity("!beta:example"))?;
+        Ok(app)
+    };
+    let beta = room_identity("!beta:example");
+    let hello_line = |app: &GuiTestApp| -> Result<String, Box<dyn std::error::Error>> {
+        let ui_state = app.dump_ui_state()?;
+        Ok(only_view_line_containing(find_view(&ui_state, &beta), "timestamped hello").to_owned())
+    };
+
+    let app = launch()?;
+    assert!(hello_line(&app)?.starts_with("[22:13] <"));
+    type_commands(&app, &["/timestamp off"])?;
+    assert!(hello_line(&app)?.starts_with("<"), "{}", hello_line(&app)?);
+    assert_eq!(app.dump_ui_state()?.status_bar.text, "timestamp: off");
+    type_commands(&app, &["/timestamp -f [HH:nn:ss]", "/timestamp on"])?;
+    assert!(hello_line(&app)?.starts_with("[22:13:20] <"));
+    type_commands(&app, &["/timestamp"])?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        only_view_line_containing(find_view(&ui_state, &beta), "* Timestamp is")
+            .ends_with("] * Timestamp is on ([HH:nn:ss])")
+    );
+    // Timestamps change in every window, not just the active one.
+    let status_lines = &find_view(&ui_state, &ViewIdentity::Status).lines;
+    assert!(!status_lines.is_empty());
+    assert!(
+        status_lines
+            .iter()
+            .all(|line| line.starts_with('[') && line.as_bytes()[9] == b']'),
+        "{status_lines:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(settings_file_path(&local_app_data))?,
+        "[fonts]\r\ntext=Fixedsys,9\r\n[timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n"
+    );
+    drop(app);
+
+    let app = launch()?;
+    assert!(hello_line(&app)?.starts_with("[22:13:20] <"));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
 fn ranked_member(
     user_id: &str,
     display_name: &str,

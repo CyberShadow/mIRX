@@ -144,20 +144,22 @@ mod timeline_text;
 mod timestamp;
 
 use commands::{
-    CommandError, ComposeSubmission, E2eeSlashCommand, SlashCommand, VerificationAction,
-    local_command_history_entry, parse_compose_submission,
+    CommandError, ComposeSubmission, E2eeSlashCommand, SlashCommand, TimestampCommand,
+    VerificationAction, local_command_history_entry, parse_compose_submission,
 };
 use echo::{EchoLine, EchoLog};
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
 
-use settings::FontSetting;
+use settings::{FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use timeline_text::{
     ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
     member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
     rank_prefix, topic_change_text, topic_is_text,
 };
-use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
+#[cfg(test)]
+use timestamp::TimestampSetting;
+use timestamp::{LocalTime, LocalTimeFn, TimestampStyle};
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
@@ -2632,8 +2634,7 @@ struct WindowState {
     automation: Option<AutomationState>,
     render_state_mode: bool,
     clock: UiClock,
-    /// How line timestamps are shown.
-    timestamp: TimestampSetting,
+    settings: SettingsStore,
     /// The time zone timestamps are shown in.
     local_time: LocalTimeFn,
     text_font: TextFont,
@@ -2683,7 +2684,7 @@ const RENDER_STATE_CLOCK_MS: u64 = 1_699_999_920_000;
 
 impl WindowState {
     fn timestamps(&self) -> TimestampStyle<'_> {
-        TimestampStyle::new(&self.timestamp, self.local_time)
+        TimestampStyle::new(&self.settings.settings().timestamp, self.local_time)
     }
 }
 
@@ -2835,7 +2836,9 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
     let (gdiplus_session, gdiplus_startup_error) = initialize_gdiplus_state();
-    let text_font = unsafe { TextFont::create(&FontSetting::default())? };
+    let settings = load_settings(render_state_mode)
+        .inspect_err(|message| show_error_message(null_mut(), FRAME_TITLE, message))?;
+    let text_font = unsafe { TextFont::create(&settings.settings().text_font)? };
 
     let state = Box::new(WindowState {
         controls: Controls::default(),
@@ -2849,7 +2852,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         } else {
             UiClock::System
         },
-        timestamp: TimestampSetting::default(),
+        settings,
         local_time: system_local_time,
         text_font,
         exit_code: Arc::clone(&exit_code),
@@ -2951,6 +2954,16 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     Ok(ExitCode::from(
         exit_code.load(Ordering::Relaxed).clamp(0, 255) as u8,
     ))
+}
+
+/// The user's `mirx.ini`; render-state snapshots use the defaults and never
+/// touch a profile. A file mirx cannot read stops startup: running on would
+/// overwrite it with the next change.
+fn load_settings(render_state_mode: bool) -> Result<SettingsStore, String> {
+    if render_state_mode {
+        return Ok(SettingsStore::in_memory());
+    }
+    SettingsStore::load(profile_dir()?.join(SETTINGS_FILE_NAME))
 }
 
 fn start_core_bridge(hwnd: HWND, queue: Arc<Mutex<VecDeque<Event>>>) -> Result<CoreBridge, String> {
@@ -4422,11 +4435,11 @@ impl TextFont {
         let dpi = GetDeviceCaps(screen, LOGPIXELSY as i32);
         ReleaseDC(null_mut(), screen);
 
-        let face = setting.face.encode_utf16().collect::<Vec<_>>();
+        let face = setting.face().encode_utf16().collect::<Vec<_>>();
         let mut logfont = LOGFONTW {
             // Negative: the character height, as points are measured.
-            lfHeight: -((i32::from(setting.points) * dpi + 36) / 72),
-            lfWeight: if setting.bold { FW_BOLD } else { FW_NORMAL } as i32,
+            lfHeight: -((i32::from(setting.points()) * dpi + 36) / 72),
+            lfWeight: if setting.bold() { FW_BOLD } else { FW_NORMAL } as i32,
             lfCharSet: DEFAULT_CHARSET,
             ..LOGFONTW::default()
         };
@@ -10440,6 +10453,14 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
     Ok(())
 }
 
+unsafe fn refresh_every_view_content(hwnd: HWND) -> Result<(), String> {
+    let view_ids = state_ref(hwnd).views.keys().cloned().collect::<Vec<_>>();
+    for view_id in &view_ids {
+        refresh_view_content(hwnd, view_id)?;
+    }
+    Ok(())
+}
+
 struct AppliedActivation {
     child: HWND,
     cleared_view_activity: bool,
@@ -10557,10 +10578,7 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
         ensure_room_view(hwnd, &room_id)?;
     }
 
-    let view_ids = state_ref(hwnd).views.keys().cloned().collect::<Vec<_>>();
-    for view_id in &view_ids {
-        refresh_view_content(hwnd, view_id)?;
-    }
+    refresh_every_view_content(hwnd)?;
 
     let active_view = {
         let state = state_mut(hwnd);
@@ -13492,6 +13510,28 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
             Ok(None)
         }
+        SlashCommand::Timestamp(command) => match command {
+            TimestampCommand::Show => {
+                let timestamp = &state_ref(hwnd).settings.settings().timestamp;
+                let line = format!(
+                    "* Timestamp is {} ({})",
+                    on_off(timestamp.show),
+                    timestamp.format
+                );
+                echo_in_active_view(hwnd, [line])?;
+                Ok(None)
+            }
+            TimestampCommand::On | TimestampCommand::Off => {
+                let show = command == TimestampCommand::On;
+                change_timestamp_setting(hwnd, |timestamp| timestamp.show = show)?;
+                Ok(Some(format!("timestamp: {}", on_off(show))))
+            }
+            TimestampCommand::Format(format) => {
+                let status = format!("timestamp format: {format}");
+                change_timestamp_setting(hwnd, |timestamp| timestamp.format = format)?;
+                Ok(Some(status))
+            }
+        },
         SlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
             match action {
@@ -13506,6 +13546,22 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             )))
         }
     }
+}
+
+/// Saves a timestamp change and restamps every window's lines, which keep
+/// their times rather than stamped text.
+unsafe fn change_timestamp_setting(
+    hwnd: HWND,
+    change: impl FnOnce(&mut timestamp::TimestampSetting),
+) -> Result<(), String> {
+    state_mut(hwnd)
+        .settings
+        .update(|settings| change(&mut settings.timestamp))?;
+    refresh_every_view_content(hwnd)
+}
+
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
 }
 
 /// A typed command's error, printed in the window it was typed in; the
@@ -16471,7 +16527,7 @@ mod tests {
             automation: None,
             render_state_mode: false,
             clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
-            timestamp: TimestampSetting::default(),
+            settings: SettingsStore::in_memory(),
             local_time: timestamp::utc_local_time,
             text_font: unsafe { TextFont::create(&FontSetting::default()).unwrap() },
             exit_code: Arc::new(AtomicI32::new(0)),
@@ -19272,7 +19328,10 @@ mod tests {
             "* ready".to_owned(),
         );
 
-        state.timestamp.show = false;
+        state
+            .settings
+            .update(|settings| settings.timestamp.show = false)
+            .unwrap();
         assert_eq!(
             render_room_lines(&state, "!ops:example"),
             vec![
@@ -19289,10 +19348,15 @@ mod tests {
         );
         assert_eq!(state.timestamps().indent_sample(), "");
 
-        state.timestamp = TimestampSetting {
-            show: true,
-            format: timestamp::TimestampFormat::parse("[HH:nn:ss]").unwrap(),
-        };
+        state
+            .settings
+            .update(|settings| {
+                settings.timestamp = TimestampSetting {
+                    show: true,
+                    format: timestamp::TimestampFormat::parse("[HH:nn:ss]").unwrap(),
+                }
+            })
+            .unwrap();
         assert_eq!(
             render_room_lines(&state, "!ops:example")[1],
             "[22:13:20] <@alice:example> hi"
@@ -25990,6 +26054,69 @@ mod tests {
                 assert_eq!(echo[3], "[22:12] * /help: no such command: nope");
             });
         }
+    }
+
+    #[test]
+    fn timestamp_command_restamps_every_window() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!room:example", "Room", false)];
+        state
+            .model
+            .room_views
+            .insert("!room:example".to_owned(), RoomViewModel::default());
+        state.active_view = room_view_id("!room:example");
+
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                type_compose_line(hwnd, "/timestamp");
+                type_compose_line(hwnd, "/timestamp off");
+                assert_eq!(state_ref(hwnd).model.status, "timestamp: off");
+                type_compose_line(hwnd, "/timestamp -f [HH:nn:ss]");
+                assert_eq!(state_ref(hwnd).model.status, "timestamp format: [HH:nn:ss]");
+                type_compose_line(hwnd, "/timestamp");
+                type_compose_line(hwnd, "/timestamp on");
+                let lines = render_room_lines(state_ref(hwnd), "!room:example");
+                assert_eq!(
+                    &lines[lines.len() - 2..],
+                    [
+                        "[22:12:00] * Timestamp is on ([HH:nn])",
+                        "[22:12:00] * Timestamp is off ([HH:nn:ss])",
+                    ]
+                );
+                let timeline = room_content_timeline(
+                    state_ref(hwnd).views[&state_ref(hwnd).active_view].content,
+                );
+                assert_eq!(timeline_state_ref(timeline).indent_sample, "[00:00:00] ");
+                assert_eq!(
+                    timeline_state_ref(timeline)
+                        .source_rows
+                        .last()
+                        .unwrap()
+                        .logical_text,
+                    "[22:12:00] * Timestamp is off ([HH:nn:ss])"
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn settings_load_from_the_profile_except_in_render_state_mode() {
+        with_local_app_data(|root| {
+            let profile = root.join("mirx").join("ui-shell");
+            fs::create_dir_all(&profile).unwrap();
+            fs::write(profile.join(SETTINGS_FILE_NAME), "[timestamp]\nshow=off\n").unwrap();
+            assert!(!load_settings(false).unwrap().settings().timestamp.show);
+            assert!(load_settings(true).unwrap().settings().timestamp.show);
+
+            fs::write(profile.join(SETTINGS_FILE_NAME), "[bogus]\n").unwrap();
+            assert!(
+                load_settings(false)
+                    .err()
+                    .unwrap()
+                    .ends_with("mirx.ini line 1: unknown section [bogus]")
+            );
+        });
     }
 
     #[test]

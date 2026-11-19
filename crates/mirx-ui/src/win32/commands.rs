@@ -12,6 +12,7 @@ use mirx_core::{MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessageP
 
 use super::nick_completion::member_mention_text;
 use super::timeline_text::rank_prefix;
+use super::timestamp::TimestampFormat;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ComposeSubmission<'a> {
@@ -120,6 +121,16 @@ pub(super) enum SlashCommand {
     Help {
         topic: Option<String>,
     },
+    Timestamp(TimestampCommand),
+}
+
+/// `/timestamp [on|off|-f format]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TimestampCommand {
+    Show,
+    On,
+    Off,
+    Format(TimestampFormat),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,6 +203,7 @@ impl SlashCommand {
             Self::E2ee(_) => "e2ee",
             Self::Verify { .. } => "verify",
             Self::Help { .. } => "help",
+            Self::Timestamp(_) => "timestamp",
         }
     }
 }
@@ -375,6 +387,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "status",
         usage: "",
         summary: "activate the Status window",
+    },
+    CommandSpec {
+        name: "timestamp",
+        usage: "[on|off|-f format]",
+        summary: "show, turn on or off, or format line timestamps",
     },
     CommandSpec {
         name: "topic",
@@ -608,6 +625,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "help" => Ok(SlashCommand::Help {
             topic: optional(argument),
         }),
+        "timestamp" => parse_timestamp(argument).map(SlashCommand::Timestamp),
         _ => Err(CommandError::unknown(name)),
     }
 }
@@ -669,6 +687,23 @@ fn parse_e2ee_setup(argument: &str) -> Option<E2eeSlashCommand> {
         passphrase: Some(passphrase.to_owned()),
         wait_for_backups_to_upload,
     })
+}
+
+fn parse_timestamp(argument: &str) -> Result<TimestampCommand, CommandError> {
+    let (word, rest) = split_word(argument);
+    match word.to_ascii_lowercase().as_str() {
+        "" => Ok(TimestampCommand::Show),
+        "on" if rest.is_empty() => Ok(TimestampCommand::On),
+        "off" if rest.is_empty() => Ok(TimestampCommand::Off),
+        "-f" if rest.is_empty() => Err(CommandError::insufficient_parameters("timestamp")),
+        "-f" => TimestampFormat::parse(rest)
+            .map(TimestampCommand::Format)
+            .map_err(|reason| CommandError::new("timestamp", reason)),
+        _ => Err(CommandError::new(
+            "timestamp",
+            "usage: /timestamp [on|off|-f format]",
+        )),
+    }
 }
 
 fn parse_verify(argument: &str) -> Result<SlashCommand, CommandError> {
@@ -1319,6 +1354,35 @@ mod tests {
                 "{name} is missing from COMMANDS"
             );
         }
+    }
+
+    #[test]
+    fn timestamp_shows_toggles_or_formats() {
+        let timestamp = |command| Ok(SlashCommand::Timestamp(command));
+        assert_eq!(parse("/timestamp"), timestamp(TimestampCommand::Show));
+        assert_eq!(parse("/timestamp on"), timestamp(TimestampCommand::On));
+        assert_eq!(parse("/TIMESTAMP OFF"), timestamp(TimestampCommand::Off));
+        assert_eq!(
+            parse("/timestamp -f [H:nn] <x>"),
+            timestamp(TimestampCommand::Format(
+                TimestampFormat::parse("[H:nn] <x>").unwrap()
+            ))
+        );
+        assert_eq!(parse("/timestamp -f"), insufficient("timestamp"));
+        for input in ["/timestamp maybe", "/timestamp on now", "/timestamp -x"] {
+            assert_eq!(
+                parse(input),
+                error("timestamp", "usage: /timestamp [on|off|-f format]"),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            help_lines(Some("timestamp")),
+            Ok(vec![
+                "* /timestamp [on|off|-f format] — show, turn on or off, or format line timestamps"
+                    .to_owned()
+            ])
+        );
     }
 
     #[test]
