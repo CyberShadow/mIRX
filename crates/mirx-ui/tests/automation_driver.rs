@@ -11648,6 +11648,36 @@ fn post_left_click(hwnd: HWND, point: &UiPoint, double: bool) {
     }
 }
 
+/// Like `post_left_click`, but sent: the click is handled before this
+/// returns, so a later automation request cannot overtake it
+/// (`.cydo/memory/posted-input-vs-sent-automation-race.md`). Only for
+/// clicks that open nothing modal.
+fn send_left_click(hwnd: HWND, point: &UiPoint, double: bool) {
+    let lparam = mouse_lparam(point);
+    let mut messages = vec![(WM_LBUTTONDOWN, MK_LBUTTON), (WM_LBUTTONUP, 0)];
+    if double {
+        messages.extend([(WM_LBUTTONDBLCLK, MK_LBUTTON), (WM_LBUTTONUP, 0)]);
+    }
+    for (message, buttons) in messages {
+        let mut result = 0;
+        assert_ne!(
+            unsafe {
+                SendMessageTimeoutW(
+                    hwnd,
+                    message,
+                    buttons as WPARAM,
+                    lparam,
+                    SMTO_NORMAL,
+                    5_000,
+                    &mut result,
+                )
+            },
+            0,
+            "the control must handle the click without blocking"
+        );
+    }
+}
+
 fn room_list_rows(ui_state: &UiState) -> Vec<Vec<String>> {
     ui_state
         .room_list
@@ -12391,8 +12421,7 @@ fn enter_highlight_words(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let word = unsafe { GetDlgItem(dialog, OPTIONS_HIGHLIGHT_WORD_ID) };
     unsafe { set_options_text(dialog, OPTIONS_HIGHLIGHT_WORD_ID, text) };
-    post_left_click(word, &UiPoint { x: 4, y: 4 }, false);
-    app.wait_idle(Duration::from_secs(5))?;
+    send_left_click(word, &UiPoint { x: 4, y: 4 }, false);
     assert_eq!(unsafe { focused_hwnd(app) }, word);
     assert_ne!(
         unsafe { PostMessageW(word, WM_KEYDOWN, VK_RETURN as WPARAM, 0) },
@@ -15500,33 +15529,12 @@ fn double_click_quote_of(
                 && line.event_id.as_deref() == Some(reply_event_id)
         })
         .unwrap_or_else(|| panic!("the quote of {reply_event_id} is on screen: {timeline:?}"));
-    // Sent, not posted: the click is handled before this returns, and the
-    // jump opens nothing modal.
-    let timeline = unsafe { active_room_timeline_hwnd(app) };
-    let lparam = mouse_lparam(&quote.click_point);
-    for (message, buttons) in [
-        (WM_LBUTTONDOWN, MK_LBUTTON),
-        (WM_LBUTTONUP, 0),
-        (WM_LBUTTONDBLCLK, MK_LBUTTON),
-        (WM_LBUTTONUP, 0),
-    ] {
-        let mut result = 0;
-        assert_ne!(
-            unsafe {
-                SendMessageTimeoutW(
-                    timeline,
-                    message,
-                    buttons as WPARAM,
-                    lparam,
-                    SMTO_NORMAL,
-                    5_000,
-                    &mut result,
-                )
-            },
-            0,
-            "the timeline must handle the click without blocking"
-        );
-    }
+    // The jump opens nothing modal, so the click can be sent.
+    send_left_click(
+        unsafe { active_room_timeline_hwnd(app) },
+        &quote.click_point,
+        true,
+    );
     app.wait_idle(Duration::from_secs(5))?;
     Ok(())
 }
