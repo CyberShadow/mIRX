@@ -1,0 +1,262 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!replies:example",
+        "display_name": "Replies",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      }
+    ]
+  },
+  {
+    "RoomMembers": {
+      "room_id": "!replies:example",
+      "members": [
+        {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        },
+        {
+          "user_id": "@dave:example",
+          "display_name": "Dave",
+          "display_name_ambiguous": false,
+          "is_own_user": false,
+          "rank": "member",
+          "can_kick": false,
+          "can_ban": false
+        }
+      ]
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-question",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-question",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "are we deploying today? the build looks green on every platform now",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-answer",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$replies-question"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-answer",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "yes, after lunch",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-emote",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$replies-answer"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-emote",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "emote",
+        "body": "cheers",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-fallback",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$replies-question"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-fallback",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@dave:example",
+          "display_name": "Dave",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "I will tag the release",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-window",
+      "timestamp_ms": 1700000240000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-window",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "the deploy window is 13:00 UTC",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivityUpdate": {
+      "room_id": "!replies:example",
+      "target": {
+        "type": "event",
+        "event_id": "$replies-window"
+      },
+      "kind": {
+        "type": "message_replaced",
+        "replacement_event_id": "$replies-window-edit",
+        "sender": "@alice:example",
+        "timestamp_ms": 1700000250000,
+        "presentation": "text",
+        "body": "the deploy window is 14:00 UTC"
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-old-reply",
+      "timestamp_ms": 1700000300000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$not-loaded"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-old-reply",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "that one was fixed last week",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!replies:example",
+      "activity_id": "event:$replies-unknown-reply",
+      "timestamp_ms": 1700000360000,
+      "highlight": false,
+      "relation": {
+        "type": "reply",
+        "in_reply_to_event_id": "$replies-unknown"
+      },
+      "kind": {
+        "type": "message",
+        "event_id": "$replies-unknown-reply",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "still seeing it here",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

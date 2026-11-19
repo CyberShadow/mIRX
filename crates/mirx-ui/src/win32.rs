@@ -157,6 +157,7 @@ mod glyph_runs;
 mod mdi;
 mod menus;
 mod nick_completion;
+mod replies;
 mod settings;
 mod status_log;
 mod timeline_text;
@@ -371,6 +372,10 @@ enum TimelineRowIdentity {
     ActivityReactionSummary {
         activity_id: String,
     },
+    /// The quote line above a reply.
+    ActivityReplyQuote {
+        activity_id: String,
+    },
     Synthetic {
         label: TimelineSyntheticRowLabel,
         logical_text: String,
@@ -406,6 +411,12 @@ impl TimelineRowIdentity {
 
     fn activity_reaction_summary(activity_id: &str) -> Self {
         Self::ActivityReactionSummary {
+            activity_id: activity_id.to_owned(),
+        }
+    }
+
+    fn activity_reply_quote(activity_id: &str) -> Self {
+        Self::ActivityReplyQuote {
             activity_id: activity_id.to_owned(),
         }
     }
@@ -496,6 +507,8 @@ enum TimelineRowKind {
     Error,
     Typing,
     ReactionSummary,
+    /// What a reply answers, above it.
+    ReplyQuote,
     Message {
         presentation: RoomMessagePresentationKind,
         send_state: TimelineMessageSendState,
@@ -5599,7 +5612,8 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         TimelineRowKind::Info => MIRC_NAVY,
         TimelineRowKind::Error => MIRC_RED,
         TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
-        TimelineRowKind::ReactionSummary => rgb(0x6B, 0x6B, 0x6B),
+        // Dim annotations around a message.
+        TimelineRowKind::ReactionSummary | TimelineRowKind::ReplyQuote => rgb(0x6B, 0x6B, 0x6B),
         TimelineRowKind::Message {
             send_state: TimelineMessageSendState::Pending,
             ..
@@ -8905,12 +8919,87 @@ fn push_room_history_backfill_row(rows: &mut Vec<TimelineRow>, history: &RoomHis
 
 fn push_room_activity_row(
     rows: &mut Vec<TimelineRow>,
-    room_view: Option<&RoomViewModel>,
+    room_view: &RoomViewModel,
     activity: &RoomActivity,
     timestamps: TimestampStyle,
 ) {
-    let timestamp = timestamps.prefix(activity.timestamp_ms);
-    let (kind, line, image_state) = match &activity.kind {
+    push_reply_quote_row(rows, room_view, activity);
+    let (kind, line, image_state) = activity_line_text(
+        room_view,
+        activity,
+        &timestamps.prefix(activity.timestamp_ms),
+    );
+    let mut row = TimelineRow::log(kind, line)
+        .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
+        .with_event_id(room_activity_event_id(activity));
+    row.image_state = image_state;
+    rows.push(row);
+
+    let Some(event_id) = room_activity_event_id(activity) else {
+        return;
+    };
+    if matches!(activity.kind, RoomActivityKind::Redacted(_)) {
+        return;
+    }
+    let summaries = room_view.reaction_summaries_for_event(event_id);
+    if summaries.is_empty() {
+        return;
+    }
+    let summary_text = summaries
+        .iter()
+        .map(|summary| format!("{} x{}", summary.key, summary.count))
+        .collect::<Vec<_>>()
+        .join("  ");
+    let logical_text = format!("    reactions: {summary_text}");
+    rows.push(
+        TimelineRow::full_width(TimelineRowKind::ReactionSummary, logical_text).with_identity(
+            TimelineRowIdentity::activity_reaction_summary(&activity.activity_id),
+        ),
+    );
+}
+
+/// The line above a reply quoting what it answers. It carries the reply's
+/// event, so clicking it selects the reply.
+fn push_reply_quote_row(
+    rows: &mut Vec<TimelineRow>,
+    room_view: &RoomViewModel,
+    activity: &RoomActivity,
+) {
+    let Some(target_event_id) = activity
+        .relation
+        .as_ref()
+        .and_then(replies::reply_quote_target)
+    else {
+        return;
+    };
+    let quoted = match room_view
+        .find_activity_index_by_event_id(target_event_id)
+        .map(|index| &room_view.activities[index])
+    {
+        Some(RoomActivity {
+            kind: RoomActivityKind::Redacted(_),
+            ..
+        }) => replies::QUOTE_REDACTED_TEXT.to_owned(),
+        Some(target) => replies::quote_excerpt(&activity_line_text(room_view, target, "").1),
+        None => replies::QUOTE_LOADING_TEXT.to_owned(),
+    };
+    rows.push(
+        TimelineRow::full_width(TimelineRowKind::ReplyQuote, replies::quote_line(&quoted))
+            .with_identity(TimelineRowIdentity::activity_reply_quote(
+                &activity.activity_id,
+            ))
+            .with_event_id(room_activity_event_id(activity)),
+    );
+}
+
+/// An activity's line after the timestamp `prefix`, with its row kind and
+/// image preview state.
+fn activity_line_text(
+    room_view: &RoomViewModel,
+    activity: &RoomActivity,
+    timestamp: &str,
+) -> (TimelineRowKind, String, Option<TimelineImageState>) {
+    match &activity.kind {
         RoomActivityKind::Message(message) => {
             let suffix = match &message.send_state {
                 RoomMessageSendState::Pending => " (sending)",
@@ -8924,7 +9013,7 @@ fn push_room_activity_row(
                     highlight: activity.highlight,
                 },
                 message_line(
-                    &timestamp,
+                    timestamp,
                     message.presentation,
                     &message.sender,
                     &format!("{}{suffix}", message.body),
@@ -8936,15 +9025,17 @@ fn push_room_activity_row(
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_image_metadata_suffix(message.info.as_ref());
             let format = timeline_thumbnail_format();
-            let image_state = room_view.map(|view| {
-                view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
-            });
+            let image_state = Some(room_view.projected_preview_state(
+                &activity.activity_id,
+                &message.event_id,
+                &format,
+            ));
             (
                 TimelineRowKind::Image {
                     highlight: activity.highlight,
                 },
                 action_line(
-                    &timestamp,
+                    timestamp,
                     &message.sender,
                     &format!("sent image: {display_name}{metadata_suffix}"),
                 ),
@@ -8959,7 +9050,7 @@ fn push_room_activity_row(
                     highlight: activity.highlight,
                 },
                 action_line(
-                    &timestamp,
+                    timestamp,
                     &message.sender,
                     &format!("sent file: {display_name}{metadata_suffix}"),
                 ),
@@ -8974,7 +9065,7 @@ fn push_room_activity_row(
                     highlight: activity.highlight,
                 },
                 action_line(
-                    &timestamp,
+                    timestamp,
                     &message.sender,
                     &format!("sent audio: {display_name}{metadata_suffix}"),
                 ),
@@ -8985,17 +9076,15 @@ fn push_room_activity_row(
             let display_name = message.filename.as_deref().unwrap_or(message.body.as_str());
             let metadata_suffix = format_room_video_metadata_suffix(message.info.as_ref());
             let format = timeline_thumbnail_format();
-            let image_state = timeline_video_preview_source(message).and_then(|_| {
-                room_view.map(|view| {
-                    view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
-                })
+            let image_state = timeline_video_preview_source(message).map(|_| {
+                room_view.projected_preview_state(&activity.activity_id, &message.event_id, &format)
             });
             (
                 TimelineRowKind::Video {
                     highlight: activity.highlight,
                 },
                 action_line(
-                    &timestamp,
+                    timestamp,
                     &message.sender,
                     &format!("sent video: {display_name}{metadata_suffix}"),
                 ),
@@ -9007,7 +9096,7 @@ fn push_room_activity_row(
                 highlight: activity.highlight,
             },
             action_line(
-                &timestamp,
+                timestamp,
                 &message.sender,
                 &format!("sent unsupported {}: {}", message.msgtype, message.body),
             ),
@@ -9016,7 +9105,7 @@ fn push_room_activity_row(
         RoomActivityKind::UnableToDecrypt(message) => (
             TimelineRowKind::UnableToDecrypt,
             action_line(
-                &timestamp,
+                timestamp,
                 &message.sender,
                 "sent an encrypted message that could not be decrypted",
             ),
@@ -9045,47 +9134,17 @@ fn push_room_activity_row(
                 TimelineRowKind::StateNotice {
                     highlight: activity.highlight,
                 },
-                event_line(&timestamp, &body),
+                event_line(timestamp, &body),
                 None,
             )
         }
         // The redacted line no longer says what made it a highlight.
         RoomActivityKind::Redacted(_) => (
             TimelineRowKind::StateNotice { highlight: false },
-            event_line(&timestamp, "message redacted"),
+            event_line(timestamp, "message redacted"),
             None,
         ),
-    };
-    let mut row = TimelineRow::log(kind, line)
-        .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-        .with_event_id(room_activity_event_id(activity));
-    row.image_state = image_state;
-    rows.push(row);
-
-    let Some(room_view) = room_view else {
-        return;
-    };
-    let Some(event_id) = room_activity_event_id(activity) else {
-        return;
-    };
-    if matches!(activity.kind, RoomActivityKind::Redacted(_)) {
-        return;
     }
-    let summaries = room_view.reaction_summaries_for_event(event_id);
-    if summaries.is_empty() {
-        return;
-    }
-    let summary_text = summaries
-        .iter()
-        .map(|summary| format!("{} x{}", summary.key, summary.count))
-        .collect::<Vec<_>>()
-        .join("  ");
-    let logical_text = format!("    reactions: {summary_text}");
-    rows.push(
-        TimelineRow::full_width(TimelineRowKind::ReactionSummary, logical_text).with_identity(
-            TimelineRowIdentity::activity_reaction_summary(&activity.activity_id),
-        ),
-    );
 }
 
 fn build_room_timeline_rows(
@@ -9140,7 +9199,7 @@ fn push_activity_rows_with_echo<'a>(
         while let Some(line) = echo.next_if(|line| line.timestamp_ms < activity.timestamp_ms) {
             rows.push(echo_row(line, timestamps));
         }
-        push_room_activity_row(rows, Some(room_view), activity, timestamps);
+        push_room_activity_row(rows, room_view, activity, timestamps);
     }
     rows.extend(echo.map(|line| echo_row(line, timestamps)));
 }
@@ -17827,6 +17886,125 @@ mod tests {
         assert!(!rendered.contains("late body"));
     }
 
+    /// The Ops room with `$q` ("are we deploying today?") and Bob's reply
+    /// to `target`.
+    fn reply_quote_state(target: &str) -> WindowState {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            timeline_with_transaction_id(
+                "!ops:example",
+                "$q",
+                None,
+                "are we deploying today?\nsecond line",
+                1_700_000_000_000,
+            ),
+        )
+        .unwrap();
+        let mut reply = sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$a",
+            None,
+            Some(reply_relation(target)),
+            RoomMessagePresentationKind::Text,
+            "yes, after lunch",
+            1_700_000_060_000,
+        );
+        let RoomActivityKind::Message(message) = &mut reply.kind else {
+            unreachable!()
+        };
+        message.sender = user_profile("@bob:example");
+        apply_core_event(&mut state, Event::RoomActivity(Box::new(reply))).unwrap();
+        state
+    }
+
+    fn room_lines(state: &WindowState) -> Vec<String> {
+        project_timeline_rows(&build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+        ))
+    }
+
+    #[test]
+    fn a_reply_quotes_its_loaded_target_above_it_with_the_replys_event() {
+        let state = reply_quote_state("$q");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
+        assert_eq!(
+            project_timeline_rows(&rows)[2..],
+            [
+                "    > <@alice:example> are we deploying today?".to_owned(),
+                "[22:14] <@bob:example> yes, after lunch".to_owned(),
+            ]
+        );
+        assert_eq!(rows[2].kind, TimelineRowKind::ReplyQuote);
+        assert_eq!(rows[2].event_id.as_deref(), Some("$a"));
+        assert_eq!(
+            rows[2].identity,
+            TimelineRowIdentity::activity_reply_quote("event:$a")
+        );
+    }
+
+    #[test]
+    fn a_reply_quote_follows_its_targets_edits_and_redaction() {
+        let mut state = reply_quote_state("$q");
+        apply_core_event(
+            &mut state,
+            incoming_replaced(
+                "!ops:example",
+                "$q",
+                "$q-edit",
+                RoomMessagePresentationKind::Emote,
+                "asks whether we deploy today, because the build looks green to me",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            room_lines(&state)[2],
+            "    > * @alice:example asks whether we deploy today, because the b..."
+        );
+        apply_core_event(
+            &mut state,
+            incoming_redacted("!ops:example", "$q", "$q-gone"),
+        )
+        .unwrap();
+        assert_eq!(room_lines(&state)[2], "    > message redacted");
+    }
+
+    #[test]
+    fn a_reply_to_a_message_not_loaded_says_it_is_loading() {
+        let state = reply_quote_state("$elsewhere");
+        assert_eq!(
+            room_lines(&state)[2],
+            "    > (loading the replied-to message...)"
+        );
+    }
+
+    #[test]
+    fn a_thread_reply_to_its_root_has_no_quote() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(&mut state, timeline("!ops:example", "root")).unwrap();
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$t1", "$!ops:example:root", "in thread"),
+        )
+        .unwrap();
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$!ops:example:root",
+            state.timestamps(),
+        );
+        assert!(
+            rows.iter()
+                .all(|row| row.kind != TimelineRowKind::ReplyQuote),
+            "{:?}",
+            project_timeline_rows(&rows)
+        );
+    }
+
     #[test]
     fn reaction_projection_renders_single_summary_row_after_annotated_activity() {
         let mut state = test_state();
@@ -24444,14 +24622,24 @@ mod tests {
             "ping",
             1,
         ));
-        push_room_activity_row(&mut rows, None, &mention, utc_timestamps());
+        push_room_activity_row(
+            &mut rows,
+            &RoomViewModel::default(),
+            &mention,
+            utc_timestamps(),
+        );
         let redacted = RoomActivity {
             kind: RoomActivityKind::Redacted(RoomRedactedActivity {
                 event_id: "$m".to_owned(),
             }),
             ..mention.clone()
         };
-        push_room_activity_row(&mut rows, None, &redacted, utc_timestamps());
+        push_room_activity_row(
+            &mut rows,
+            &RoomViewModel::default(),
+            &redacted,
+            utc_timestamps(),
+        );
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),

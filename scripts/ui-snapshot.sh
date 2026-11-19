@@ -724,7 +724,8 @@ configure_case_expectations() {
         --expect-no-view 'thread:!find-thread:example|$find-thread-root::room-only lobby note'
       )
       status_bar_expect_args=(
-        --expect-status-bar 'find: 1/2 "thread needle"'
+        # The second reply quotes the first: the quote is window text too.
+        --expect-status-bar 'find: 1/3 "thread needle"'
       )
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
@@ -994,6 +995,25 @@ configure_case_expectations() {
         --expect-navigation-text 'Reactions'
         --expect-navigation-text 'thread reaction root'
       )
+      ;;
+    replies)
+      expect_selected='!replies:example'
+      expect_active_view='room:!replies:example'
+      room_expect_args=(
+        --expect-room '!replies:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!replies:example::    > <Alice> are we deploying today? the build looks green on eve...'
+        --expect-room-view '!replies:example::[22:14] <Bob> yes, after lunch'
+        --expect-room-view '!replies:example::    > <Bob> yes, after lunch'
+        --expect-room-view '!replies:example::[22:15] * Carol cheers'
+        --expect-room-view '!replies:example::[22:16] <Dave> I will tag the release'
+        --expect-room-view '!replies:example::    > (loading the replied-to message...)'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+      )
+      expect_switchbar_active='room:!replies:example'
       ;;
     redactions)
       expect_selected='!redactions:example'

@@ -14562,7 +14562,16 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
 
     let thread_state = app.dump_ui_state()?;
     let thread_view = find_view(&thread_state, &thread_view_identity);
-    let selected_text = only_view_line_containing(thread_view, "thread rep");
+    // The pending draft replies to "thread rep", so its quote line matches
+    // too, below the line itself.
+    assert_eq!(
+        view_lines_containing(thread_view, "thread rep"),
+        [
+            "[22:16] <@dave:example> thread rep",
+            "    > <@dave:example> thread rep"
+        ]
+    );
+    let selected_text = "[22:16] <@dave:example> thread rep";
 
     let positive = app.find_active_view("thread rep")?;
     assert_find_result(
@@ -14571,7 +14580,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
             active: &thread_view_identity,
             query: "thread rep",
             matched: true,
-            match_count: 1,
+            match_count: 2,
             current_match_index: Some(0),
             selected_text: Some(selected_text),
             history_search: UiFindHistorySearchState::LocalOnly,
@@ -14585,7 +14594,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
             active: &thread_identity("!ops:example", "$thread-root"),
             query: "thread rep",
             matched: true,
-            match_count: 1,
+            match_count: 2,
             current_match_index: Some(0),
             selected_text: Some(selected_text),
             history_search: UiFindHistorySearchState::LocalOnly,
@@ -14595,7 +14604,7 @@ fn automation_driver_find_active_thread_timeline_scopes_to_thread()
         positive_state
             .status_bar
             .text
-            .contains("find: 1/1 \"thread rep\"")
+            .contains("find: 1/2 \"thread rep\"")
     );
 
     let scoped_miss = app.find_active_view("lobby")?;
