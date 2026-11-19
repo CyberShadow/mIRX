@@ -2709,6 +2709,7 @@ fn automation_driver_reports_failed_outgoing_text_state() -> Result<(), Box<dyn 
         message_failed_update_event("!ops:example", "txn-1", "send failed", true),
         Event::Error(mirx_core::CoreErrorEvent {
             operation: mirx_core::Operation::SendMessage,
+            room_id: Some("!ops:example".to_owned()),
             message: "send failed".to_owned(),
         }),
     ])?;
@@ -6614,6 +6615,7 @@ fn custom_room_timeline_history_backfill_failure_is_visible_and_retryable()
     app.append_synthetic_events(&serde_json::to_string(&vec![Event::Error(
         mirx_core::CoreErrorEvent {
             operation: mirx_core::Operation::BackfillRoomHistory,
+            room_id: Some("!beta:example".to_owned()),
             message: "homeserver unavailable".to_owned(),
         },
     )])?)?;

@@ -554,9 +554,10 @@ async fn handle_accept_room_invite(
     request: AcceptRoomInviteRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::AcceptRoomInvite,
+            &request.room_id,
             "accept room invitation requires an authenticated session",
         );
         return false;
@@ -572,7 +573,9 @@ async fn handle_accept_room_invite(
             )
             .await
         }
-        Err(err) => emit_matrix_error(event_tx, Operation::AcceptRoomInvite, err),
+        Err(err) => {
+            emit_room_matrix_error(event_tx, Operation::AcceptRoomInvite, &request.room_id, err)
+        }
     }
 
     false
@@ -635,7 +638,8 @@ async fn handle_create_room(
 
 /// Emits the room snapshot that lists a room just joined, then
 /// `RoomJoined`, so the UI knows the room by the time it opens its window.
-/// A failed snapshot is the operation's error, and no `RoomJoined` follows.
+/// A failed snapshot is the operation's error about the room, and no
+/// `RoomJoined` follows.
 async fn emit_snapshot_then_room_joined(
     client: &Client,
     event_tx: &EventSender,
@@ -644,7 +648,7 @@ async fn emit_snapshot_then_room_joined(
 ) {
     match matrix::emit_room_snapshot(client, event_tx).await {
         Ok(()) => emit_event(event_tx, Event::RoomJoined(RoomJoined { room_id })),
-        Err(err) => emit_matrix_error(event_tx, operation, err),
+        Err(err) => emit_room_matrix_error(event_tx, operation, &room_id, err),
     }
 }
 
@@ -654,21 +658,22 @@ async fn handle_leave_room(
     request: LeaveRoomRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::LeaveRoom,
+            &request.room_id,
             "leave room requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::leave_joined_room(client, &request.room_id).await {
-        emit_matrix_error(event_tx, Operation::LeaveRoom, err);
+        emit_room_matrix_error(event_tx, Operation::LeaveRoom, &request.room_id, err);
         return false;
     }
 
     if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
-        emit_matrix_error(event_tx, Operation::LeaveRoom, err);
+        emit_room_matrix_error(event_tx, Operation::LeaveRoom, &request.room_id, err);
     }
 
     false
@@ -680,23 +685,24 @@ async fn handle_kick_room_member(
     request: KickRoomMemberRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::KickRoomMember,
+            &request.room_id,
             "kick room member requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::kick_room_member(client, &request).await {
-        emit_matrix_error(event_tx, Operation::KickRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::KickRoomMember, &request.room_id, err);
         return false;
     }
 
     if let Err(err) =
         matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
     {
-        emit_matrix_error(event_tx, Operation::KickRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::KickRoomMember, &request.room_id, err);
     }
 
     false
@@ -708,23 +714,24 @@ async fn handle_ban_room_member(
     request: BanRoomMemberRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::BanRoomMember,
+            &request.room_id,
             "ban room member requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::ban_room_member(client, &request).await {
-        emit_matrix_error(event_tx, Operation::BanRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::BanRoomMember, &request.room_id, err);
         return false;
     }
 
     if let Err(err) =
         matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
     {
-        emit_matrix_error(event_tx, Operation::BanRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::BanRoomMember, &request.room_id, err);
     }
 
     false
@@ -736,23 +743,24 @@ async fn handle_unban_room_member(
     request: UnbanRoomMemberRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::UnbanRoomMember,
+            &request.room_id,
             "unban room member requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::unban_room_member(client, &request).await {
-        emit_matrix_error(event_tx, Operation::UnbanRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::UnbanRoomMember, &request.room_id, err);
         return false;
     }
 
     if let Err(err) =
         matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
     {
-        emit_matrix_error(event_tx, Operation::UnbanRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::UnbanRoomMember, &request.room_id, err);
     }
 
     false
@@ -764,23 +772,24 @@ async fn handle_invite_room_member(
     request: InviteRoomMemberRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::InviteRoomMember,
+            &request.room_id,
             "invite room member requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::invite_room_member(client, &request).await {
-        emit_matrix_error(event_tx, Operation::InviteRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::InviteRoomMember, &request.room_id, err);
         return false;
     }
 
     if let Err(err) =
         matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
     {
-        emit_matrix_error(event_tx, Operation::InviteRoomMember, err);
+        emit_room_matrix_error(event_tx, Operation::InviteRoomMember, &request.room_id, err);
     }
 
     false
@@ -792,23 +801,34 @@ async fn handle_set_room_member_power_level(
     request: SetRoomMemberPowerLevelRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::SetRoomMemberPowerLevel,
+            &request.room_id,
             "set room member power level requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::set_room_member_power_level(client, &request).await {
-        emit_matrix_error(event_tx, Operation::SetRoomMemberPowerLevel, err);
+        emit_room_matrix_error(
+            event_tx,
+            Operation::SetRoomMemberPowerLevel,
+            &request.room_id,
+            err,
+        );
         return false;
     }
 
     if let Err(err) =
         matrix::emit_joined_room_members_snapshot(client, event_tx, &request.room_id).await
     {
-        emit_matrix_error(event_tx, Operation::SetRoomMemberPowerLevel, err);
+        emit_room_matrix_error(
+            event_tx,
+            Operation::SetRoomMemberPowerLevel,
+            &request.room_id,
+            err,
+        );
     }
 
     false
@@ -841,21 +861,22 @@ async fn handle_reject_room_invite(
     request: RejectRoomInviteRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::RejectRoomInvite,
+            &request.room_id,
             "reject room invitation requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::reject_room_invite(client, &request.room_id).await {
-        emit_matrix_error(event_tx, Operation::RejectRoomInvite, err);
+        emit_room_matrix_error(event_tx, Operation::RejectRoomInvite, &request.room_id, err);
         return false;
     }
 
     if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
-        emit_matrix_error(event_tx, Operation::RejectRoomInvite, err);
+        emit_room_matrix_error(event_tx, Operation::RejectRoomInvite, &request.room_id, err);
     }
 
     false
@@ -867,16 +888,18 @@ async fn handle_send_message(
     request: crate::api::SendMessageRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::SendMessage,
+            &request.room_id,
             "send message requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::send_message(client, request).await {
-        emit_matrix_error(event_tx, Operation::SendMessage, err);
+        emit_room_matrix_error(event_tx, Operation::SendMessage, &room_id, err);
     }
 
     false
@@ -888,16 +911,18 @@ async fn handle_send_file(
     request: crate::api::SendFileRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::SendFile,
+            &request.room_id,
             "send file requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::send_file(client, request).await {
-        emit_matrix_error(event_tx, Operation::SendFile, err);
+        emit_room_matrix_error(event_tx, Operation::SendFile, &room_id, err);
     }
 
     false
@@ -909,16 +934,18 @@ async fn handle_send_reaction(
     request: SendReactionRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::SendReaction,
+            &request.room_id,
             "send reaction requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::send_reaction(client, request).await {
-        emit_matrix_error(event_tx, Operation::SendReaction, err);
+        emit_room_matrix_error(event_tx, Operation::SendReaction, &room_id, err);
     }
 
     false
@@ -930,16 +957,18 @@ async fn handle_edit_message(
     request: EditMessageRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::EditMessage,
+            &request.room_id,
             "edit message requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::edit_message(client, request).await {
-        emit_matrix_error(event_tx, Operation::EditMessage, err);
+        emit_room_matrix_error(event_tx, Operation::EditMessage, &room_id, err);
     }
 
     false
@@ -951,16 +980,18 @@ async fn handle_redact_event(
     request: RedactEventRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::RedactEvent,
+            &request.room_id,
             "redact event requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::redact_event(client, request).await {
-        emit_matrix_error(event_tx, Operation::RedactEvent, err);
+        emit_room_matrix_error(event_tx, Operation::RedactEvent, &room_id, err);
     }
 
     false
@@ -972,16 +1003,18 @@ async fn handle_set_room_topic(
     request: SetRoomTopicRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::SetRoomTopic,
+            &request.room_id,
             "set room topic requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::set_room_topic(client, request).await {
-        emit_matrix_error(event_tx, Operation::SetRoomTopic, err);
+        emit_room_matrix_error(event_tx, Operation::SetRoomTopic, &room_id, err);
     }
 
     false
@@ -993,16 +1026,18 @@ async fn handle_set_room_notification_mode(
     request: SetRoomNotificationModeRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::SetRoomNotificationMode,
+            &request.room_id,
             "set room notification mode requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     if let Err(err) = matrix::set_room_notification_mode(client, request).await {
-        emit_matrix_error(event_tx, Operation::SetRoomNotificationMode, err);
+        emit_room_matrix_error(event_tx, Operation::SetRoomNotificationMode, &room_id, err);
     }
 
     false
@@ -1056,16 +1091,17 @@ async fn handle_mark_room_read(
     request: MarkRoomReadRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::MarkRoomRead,
+            &request.room_id,
             "mark room read requires an authenticated session",
         );
         return false;
     };
 
     if let Err(err) = matrix::mark_room_read(client, &request).await {
-        emit_matrix_error(event_tx, Operation::MarkRoomRead, err);
+        emit_room_matrix_error(event_tx, Operation::MarkRoomRead, &request.room_id, err);
     }
 
     false
@@ -1077,17 +1113,19 @@ async fn handle_backfill_room_history(
     request: BackfillRoomHistoryRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::BackfillRoomHistory,
+            &request.room_id,
             "backfill room history requires an authenticated session",
         );
         return false;
     };
 
+    let room_id = request.room_id.clone();
     match matrix::backfill_room_history(client, request).await {
         Ok(backfill) => emit_event(event_tx, Event::RoomHistoryBackfill(backfill)),
-        Err(err) => emit_matrix_error(event_tx, Operation::BackfillRoomHistory, err),
+        Err(err) => emit_room_matrix_error(event_tx, Operation::BackfillRoomHistory, &room_id, err),
     }
 
     false
@@ -1099,9 +1137,10 @@ async fn handle_fetch_room_media(
     request: crate::api::FetchRoomMediaRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::FetchRoomMedia,
+            &request.room_id,
             "fetch room media requires an authenticated session",
         );
         return false;
@@ -1119,9 +1158,10 @@ async fn handle_fetch_room_event(
     request: crate::api::FetchRoomEventRequest,
 ) -> bool {
     let WorkerState::Ready { client, .. } = state else {
-        emit_invalid_state(
+        emit_room_invalid_state(
             event_tx,
             Operation::FetchRoomEvent,
+            &request.room_id,
             "fetch room event requires an authenticated session",
         );
         return false;
@@ -1519,6 +1559,7 @@ fn start_room_read_state_update_task_or_placeholder(
                 event_tx,
                 Event::Error(CoreErrorEvent {
                     operation: Operation::RoomReadState,
+                    room_id: None,
                     message: format!(
                         "failed to subscribe Matrix event cache for room read-state updates: {err}"
                     ),
@@ -1540,6 +1581,7 @@ fn start_room_list_update_task_or_placeholder(
                 event_tx,
                 Event::Error(CoreErrorEvent {
                     operation: Operation::RoomList,
+                    room_id: None,
                     message: format!(
                         "failed to subscribe Matrix event cache for room-list updates: {err}"
                     ),
@@ -1554,24 +1596,50 @@ pub(crate) fn emit_event(event_tx: &EventSender, event: Event) {
     let _ = event_tx.send(event);
 }
 
-fn emit_invalid_state(event_tx: &EventSender, operation: Operation, message: &str) {
+fn emit_error(
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: Option<&str>,
+    message: String,
+) {
     emit_event(
         event_tx,
         Event::Error(CoreErrorEvent {
             operation,
-            message: message.to_owned(),
+            room_id: room_id.map(str::to_owned),
+            message,
         }),
     );
 }
 
+/// An account-wide operation's refusal.
+fn emit_invalid_state(event_tx: &EventSender, operation: Operation, message: &str) {
+    emit_error(event_tx, operation, None, message.to_owned());
+}
+
+/// An account-wide operation's failure.
 fn emit_matrix_error(event_tx: &EventSender, operation: Operation, err: MatrixCoreError) {
-    emit_event(
-        event_tx,
-        Event::Error(CoreErrorEvent {
-            operation,
-            message: err.to_string(),
-        }),
-    );
+    emit_error(event_tx, operation, None, err.to_string());
+}
+
+/// The refusal of a request about a room.
+fn emit_room_invalid_state(
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: &str,
+    message: &str,
+) {
+    emit_error(event_tx, operation, Some(room_id), message.to_owned());
+}
+
+/// The failure of a request about a room.
+fn emit_room_matrix_error(
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: &str,
+    err: MatrixCoreError,
+) {
+    emit_error(event_tx, operation, Some(room_id), err.to_string());
 }
 
 #[cfg(test)]
@@ -2030,8 +2098,49 @@ mod tests {
             assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
 
             match drain_events(&event_rx).as_slice() {
-                [Event::Error(error)] => assert_eq!(error.operation, Operation::JoinRoom),
+                [Event::Error(error)] => {
+                    assert_eq!(error.operation, Operation::JoinRoom);
+                    // A join may name an alias: it has no room yet.
+                    assert_eq!(error.room_id, None);
+                }
                 other => panic!("expected one join error, got {other:?}"),
+            }
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn kick_failure_error_carries_the_room() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server.sync_joined_room(&client, &room_id()).await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path_regex(
+                    r"^/_matrix/client/v3/rooms/.*/kick$",
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(403).set_body_json(
+                    serde_json::json!({ "errcode": "M_FORBIDDEN", "error": "not an op" }),
+                ))
+                .expect(1)
+                .mount(mock_server.server())
+                .await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+            let command = Command::KickRoomMember(KickRoomMemberRequest {
+                room_id: room_id().to_string(),
+                user_id: "@bob:example.org".to_owned(),
+                reason: None,
+            });
+            assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+
+            match drain_events(&event_rx).as_slice() {
+                [Event::Error(error)] => {
+                    assert_eq!(error.operation, Operation::KickRoomMember);
+                    assert_eq!(error.room_id.as_deref(), Some("!room:example.org"));
+                    assert!(error.message.contains("not an op"), "{}", error.message);
+                }
+                other => panic!("expected one kick error, got {other:?}"),
             }
             shutdown_state(&mut state).await;
         });

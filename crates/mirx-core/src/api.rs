@@ -1244,11 +1244,45 @@ pub struct VerificationDecimals {
     pub third: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoreErrorEvent {
     pub operation: Operation,
+    /// The room the failed request was about; `None` for account-wide
+    /// operations. Always `Some` for an operation that names a room.
+    pub room_id: Option<String>,
     pub message: String,
+}
+
+impl<'de> serde::Deserialize<'de> for CoreErrorEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireCoreErrorEvent {
+            operation: Operation,
+            room_id: serde_json::Value,
+            message: String,
+        }
+
+        let error = WireCoreErrorEvent::deserialize(deserializer)?;
+        let room_id = match error.room_id {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(room_id) => Some(room_id),
+            room_id => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid room_id for {:?} error: expected string or null, got {room_id}",
+                    error.operation
+                )));
+            }
+        };
+        Ok(Self {
+            operation: error.operation,
+            room_id,
+            message: error.message,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1287,6 +1321,9 @@ pub enum Operation {
     ListPublicRooms,
     RoomList,
     RoomReadState,
+    /// The send queue itself: restoring its local echoes, or a missed
+    /// update. Errors of one send are that send's operation.
+    SendQueue,
     E2eeStatus,
     SetupE2eeRecovery,
     RecoverE2ee,

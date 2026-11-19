@@ -19,6 +19,7 @@
   {
     "Error": {
       "operation": "RecoverE2ee",
+      "room_id": null,
       "message": "failed to recover E2EE secrets: invalid recovery key or passphrase"
     }
   }

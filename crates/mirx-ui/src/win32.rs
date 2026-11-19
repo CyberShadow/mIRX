@@ -17487,6 +17487,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::ListPublicRooms => "list rooms",
         Operation::RoomList => "room list",
         Operation::RoomReadState => "room read state",
+        Operation::SendQueue => "send queue",
         Operation::E2eeStatus => "e2ee status",
         Operation::RecoverE2ee => "e2ee recovery",
         Operation::SetupE2eeRecovery => "e2ee recovery setup",
@@ -17835,6 +17836,7 @@ mod tests {
                 (
                     Event::Error(CoreErrorEvent {
                         operation: Operation::RestoreSession,
+                        room_id: None,
                         message: "initial Matrix sync failed".to_owned(),
                     }),
                     ConnectionState::SignedIn,
@@ -17843,6 +17845,7 @@ mod tests {
                 (
                     Event::Error(CoreErrorEvent {
                         operation: Operation::StartSync,
+                        room_id: None,
                         message: "continuous sync is already running".to_owned(),
                     }),
                     ConnectionState::Syncing,
@@ -23598,6 +23601,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::SendMessage,
+                room_id: Some("!left:example".to_owned()),
                 message: "message send failed".to_owned(),
             }),
         )
@@ -24554,6 +24558,7 @@ mod tests {
         state.model.status = "error during send text".to_owned();
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendMessage,
+            room_id: Some("!room:example".to_owned()),
             message: "message send failed".to_owned(),
         });
 
@@ -24601,6 +24606,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::JoinRoom,
+                room_id: None,
                 message: "join room requires an authenticated session".to_owned(),
             }),
         )
@@ -24612,6 +24618,7 @@ mod tests {
             state.model.last_error,
             Some(CoreErrorEvent {
                 operation: Operation::JoinRoom,
+                room_id: None,
                 message: "join room requires an authenticated session".to_owned(),
             })
         );
@@ -24622,6 +24629,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::AcceptRoomInvite,
+                room_id: Some("!invite:example".to_owned()),
                 message: "accept room invitation requires an authenticated session".to_owned(),
             }),
         )
@@ -24633,6 +24641,7 @@ mod tests {
             state.model.last_error,
             Some(CoreErrorEvent {
                 operation: Operation::AcceptRoomInvite,
+                room_id: Some("!invite:example".to_owned()),
                 message: "accept room invitation requires an authenticated session".to_owned(),
             })
         );
@@ -24643,6 +24652,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::LeaveRoom,
+                room_id: Some("!beta:example".to_owned()),
                 message: "leave room requires an authenticated session".to_owned(),
             }),
         )
@@ -24654,6 +24664,7 @@ mod tests {
             state.model.last_error,
             Some(CoreErrorEvent {
                 operation: Operation::LeaveRoom,
+                room_id: Some("!beta:example".to_owned()),
                 message: "leave room requires an authenticated session".to_owned(),
             })
         );
@@ -24664,6 +24675,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::RejectRoomInvite,
+                room_id: Some("!invite:example".to_owned()),
                 message: "reject room invitation requires an authenticated session".to_owned(),
             }),
         )
@@ -24675,6 +24687,7 @@ mod tests {
             state.model.last_error,
             Some(CoreErrorEvent {
                 operation: Operation::RejectRoomInvite,
+                room_id: Some("!invite:example".to_owned()),
                 message: "reject room invitation requires an authenticated session".to_owned(),
             })
         );
@@ -24685,6 +24698,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::CreateDirectRoom,
+                room_id: None,
                 message: "create direct room requires an authenticated session".to_owned(),
             }),
         )
@@ -24696,6 +24710,7 @@ mod tests {
             state.model.last_error,
             Some(CoreErrorEvent {
                 operation: Operation::CreateDirectRoom,
+                room_id: None,
                 message: "create direct room requires an authenticated session".to_owned(),
             })
         );
@@ -24706,6 +24721,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::SetRoomTopic,
+                room_id: Some("!ops:example.org".to_owned()),
                 message: "set room topic requires an authenticated session".to_owned(),
             }),
         )
@@ -24720,6 +24736,7 @@ mod tests {
             state.model.last_error,
             Some(CoreErrorEvent {
                 operation: Operation::SetRoomTopic,
+                room_id: Some("!ops:example.org".to_owned()),
                 message: "set room topic requires an authenticated session".to_owned(),
             })
         );
@@ -24736,6 +24753,7 @@ mod tests {
         });
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendMessage,
+            room_id: Some("!room:example".to_owned()),
             message: "message send failed".to_owned(),
         });
 
@@ -25145,6 +25163,7 @@ mod tests {
         });
         state.model.last_error = Some(CoreErrorEvent {
             operation: Operation::SendMessage,
+            room_id: Some("!room:example".to_owned()),
             message: "failed".to_owned(),
         });
         state.find_states.insert(
@@ -29665,6 +29684,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::BackfillRoomHistory,
+                room_id: Some("!room:example".to_owned()),
                 message: "temporary backfill failure".to_owned(),
             }),
         )
@@ -31735,6 +31755,7 @@ mod tests {
                 &mut state,
                 Event::Error(CoreErrorEvent {
                     operation: Operation::RestoreSession,
+                    room_id: None,
                     message: "restore failed".to_owned(),
                 }),
             )
@@ -31744,6 +31765,7 @@ mod tests {
                 state.model.last_error,
                 Some(CoreErrorEvent {
                     operation: Operation::RestoreSession,
+                    room_id: None,
                     message: "restore failed".to_owned(),
                 })
             );
@@ -31827,6 +31849,7 @@ mod tests {
             &mut state,
             Event::Error(CoreErrorEvent {
                 operation: Operation::SendMessage,
+                room_id: Some("!left:example".to_owned()),
                 message: "message send failed".to_owned(),
             }),
         )
@@ -32765,6 +32788,7 @@ mod tests {
                     hwnd,
                     vec![Event::Error(CoreErrorEvent {
                         operation: Operation::BackfillRoomHistory,
+                        room_id: Some("!ops:example".to_owned()),
                         message: "offline".to_owned(),
                     })],
                 )

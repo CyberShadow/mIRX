@@ -116,11 +116,59 @@ fn assert_invalid_verification_command(command: Command) {
     handle.join().expect("join worker");
 }
 
+/// The room a command's error names: the room of every request about one,
+/// `None` for account-wide commands and joins (whose target may be an alias).
+fn error_room_id(command: &Command) -> Option<&str> {
+    match command {
+        Command::AcceptRoomInvite(request) => Some(&request.room_id),
+        Command::LeaveRoom(request) => Some(&request.room_id),
+        Command::KickRoomMember(request) => Some(&request.room_id),
+        Command::BanRoomMember(request) => Some(&request.room_id),
+        Command::UnbanRoomMember(request) => Some(&request.room_id),
+        Command::InviteRoomMember(request) => Some(&request.room_id),
+        Command::SetRoomMemberPowerLevel(request) => Some(&request.room_id),
+        Command::RejectRoomInvite(request) => Some(&request.room_id),
+        Command::SetRoomTopic(request) => Some(&request.room_id),
+        Command::SetRoomNotificationMode(request) => Some(&request.room_id),
+        Command::SendMessage(request) => Some(&request.room_id),
+        Command::SendFile(request) => Some(&request.room_id),
+        Command::EditMessage(request) => Some(&request.room_id),
+        Command::SendReaction(request) => Some(&request.room_id),
+        Command::RedactEvent(request) => Some(&request.room_id),
+        Command::MarkRoomRead(request) => Some(&request.room_id),
+        Command::BackfillRoomHistory(request) => Some(&request.room_id),
+        Command::FetchRoomMedia(request) => Some(&request.room_id),
+        Command::FetchRoomEvent(request) => Some(&request.room_id),
+        Command::Login(_)
+        | Command::RestoreSession(_)
+        | Command::StartSync
+        | Command::StopSync
+        | Command::JoinRoom(_)
+        | Command::CreateDirectRoom(_)
+        | Command::CreateRoom(_)
+        | Command::SetDisplayName(_)
+        | Command::AddHighlightWord(_)
+        | Command::RemoveHighlightWord(_)
+        | Command::ListPublicRooms(_)
+        | Command::RefreshE2eeStatus
+        | Command::SetupE2eeRecovery(_)
+        | Command::RecoverE2ee(_)
+        | Command::AcceptVerification(_)
+        | Command::CancelVerification(_)
+        | Command::ConfirmVerificationSas(_)
+        | Command::RejectVerificationSas(_)
+        | Command::Logout
+        | Command::Shutdown => None,
+    }
+}
+
 fn assert_invalid_authenticated_command(
     command: Command,
     expected_operation: Operation,
     expected_message: &str,
 ) {
+    let expected_room_id = error_room_id(&command).map(str::to_owned);
+    let expected_room_id = expected_room_id.as_deref();
     let (_temp_dir, config) = test_config();
     let handle = start(config).expect("start core");
 
@@ -144,6 +192,7 @@ fn assert_invalid_authenticated_command(
     {
         Event::Error(err) => {
             assert_eq!(err.operation, expected_operation);
+            assert_eq!(err.room_id.as_deref(), expected_room_id);
             assert_eq!(err.message, expected_message);
         }
         other => panic!("expected authenticated command error, got {other:?}"),
@@ -3533,4 +3582,46 @@ fn login_server_prefers_the_typed_server_then_the_user_id() {
         mirx_core::login_server("", "alice"),
         Err("enter a server, or a full user ID like @alice:matrix.org".to_owned())
     );
+}
+
+#[test]
+fn core_error_event_requires_a_room_id_that_is_null_or_a_string() {
+    let missing = serde_json::from_str::<Event>(
+        r#"{"Error":{"operation":"KickRoomMember","message":"refused"}}"#,
+    )
+    .expect_err("an error without room_id must be rejected");
+    assert!(
+        missing.to_string().contains("missing field `room_id`"),
+        "{missing}"
+    );
+
+    let numeric = serde_json::from_str::<Event>(
+        r#"{"Error":{"operation":"KickRoomMember","room_id":3,"message":"refused"}}"#,
+    )
+    .expect_err("a non-string room_id must be rejected");
+    assert!(
+        numeric
+            .to_string()
+            .contains("invalid room_id for KickRoomMember error: expected string or null, got 3"),
+        "{numeric}"
+    );
+
+    for error in [
+        mirx_core::CoreErrorEvent {
+            operation: Operation::KickRoomMember,
+            room_id: Some("!ops:example.org".to_owned()),
+            message: "refused".to_owned(),
+        },
+        mirx_core::CoreErrorEvent {
+            operation: Operation::Logout,
+            room_id: None,
+            message: "failed".to_owned(),
+        },
+    ] {
+        let json = serde_json::to_string(&Event::Error(error.clone())).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Event>(&json).unwrap(),
+            Event::Error(error)
+        );
+    }
 }

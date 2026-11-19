@@ -2,6 +2,7 @@
   {
     "Error": {
       "operation": "BackfillRoomHistory",
+      "room_id": "!history:example",
       "message": "homeserver unavailable"
     }
   }

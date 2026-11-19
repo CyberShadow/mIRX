@@ -49,6 +49,7 @@
   {
     "Error": {
       "operation": "SendMessage",
+      "room_id": "!left:example",
       "message": "message send failed"
     }
   }

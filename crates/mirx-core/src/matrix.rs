@@ -990,6 +990,7 @@ async fn emit_room_snapshot_or_room_list_error(client: &Client, events: &EventSe
             events,
             Event::Error(CoreErrorEvent {
                 operation: Operation::RoomList,
+                room_id: None,
                 message: err.to_string(),
             }),
         );
@@ -1276,6 +1277,7 @@ fn emit_sync_error(events: &EventSender, err: MatrixCoreError) {
         events,
         Event::Error(CoreErrorEvent {
             operation: Operation::StartSync,
+            room_id: None,
             message: err.to_string(),
         }),
     );
@@ -1311,6 +1313,7 @@ pub(crate) fn start_e2ee_recovery_state_task(
                     &events,
                     Event::Error(CoreErrorEvent {
                         operation: Operation::E2eeStatus,
+                        room_id: None,
                         message: err.to_string(),
                     }),
                 ),
@@ -1332,6 +1335,7 @@ pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) 
                         &events,
                         Event::Error(CoreErrorEvent {
                             operation: Operation::E2eeStatus,
+                            room_id: None,
                             message: err.to_string(),
                         }),
                     ),
@@ -1340,6 +1344,7 @@ pub(crate) fn start_e2ee_backup_state_task(client: Client, events: EventSender) 
                     &events,
                     Event::Error(CoreErrorEvent {
                         operation: Operation::E2eeStatus,
+                        room_id: None,
                         message: "missed Matrix backup state update".to_owned(),
                     }),
                 ),
@@ -2704,6 +2709,7 @@ async fn hand_off_request_state(
                         events,
                         Event::Error(CoreErrorEvent {
                             operation: Operation::Verification,
+                            room_id: None,
                             message: format!("failed to start SAS verification: {err}"),
                         }),
                     );
@@ -2930,6 +2936,7 @@ pub(crate) fn start_room_read_state_update_task(
                     if events
                         .send(Event::Error(CoreErrorEvent {
                             operation: Operation::RoomReadState,
+                            room_id: None,
                             message: "missed Matrix room read-state update".to_owned(),
                         }))
                         .is_err()
@@ -2964,6 +2971,7 @@ pub(crate) fn start_room_list_update_task(
                     &events,
                     Event::Error(CoreErrorEvent {
                         operation: Operation::RoomList,
+                        room_id: None,
                         message: "missed Matrix room-list update".to_owned(),
                     }),
                 ),
@@ -2996,6 +3004,7 @@ pub(crate) fn start_session_update_task(client: Client, events: EventSender) -> 
                     &events,
                     Event::Error(CoreErrorEvent {
                         operation: Operation::SessionUpdate,
+                        room_id: None,
                         message: "missed Matrix session change notification".to_owned(),
                     }),
                 ),
@@ -3022,7 +3031,8 @@ pub(crate) fn start_send_queue_update_task(
             Err(err) => emit_event(
                 &events,
                 Event::Error(CoreErrorEvent {
-                    operation: Operation::SendMessage,
+                    operation: Operation::SendQueue,
+                    room_id: None,
                     message: format!("failed to hydrate Matrix send queue local echoes: {err}"),
                 }),
             ),
@@ -3031,6 +3041,7 @@ pub(crate) fn start_send_queue_update_task(
         loop {
             match updates.recv().await {
                 Ok(update) => {
+                    let room_id = update.room_id.to_string();
                     match own_room_user_profile(&client, &update.room_id, &current_user_id)
                         .await
                         .and_then(|own_profile| {
@@ -3045,6 +3056,7 @@ pub(crate) fn start_send_queue_update_task(
                             &events,
                             Event::Error(CoreErrorEvent {
                                 operation: Operation::SendMessage,
+                                room_id: Some(room_id),
                                 message: format!("failed to map Matrix send queue update: {err}"),
                             }),
                         ),
@@ -3054,7 +3066,8 @@ pub(crate) fn start_send_queue_update_task(
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => emit_event(
                     &events,
                     Event::Error(CoreErrorEvent {
-                        operation: Operation::SendMessage,
+                        operation: Operation::SendQueue,
+                        room_id: None,
                         message: "missed Matrix send queue update".to_owned(),
                     }),
                 ),
@@ -3125,7 +3138,7 @@ fn map_send_queue_update(
             Ok(match take_pending_outgoing_kind(pending, &transaction_id) {
                 Some(PendingOutgoingKind::Message) => vec![
                     Event::RoomActivityUpdate(RoomActivityUpdate {
-                        room_id,
+                        room_id: room_id.clone(),
                         target: RoomActivityUpdateTarget::Transaction { transaction_id },
                         kind: RoomActivityUpdateKind::MessageFailed {
                             message: message.clone(),
@@ -3134,25 +3147,30 @@ fn map_send_queue_update(
                     }),
                     Event::Error(CoreErrorEvent {
                         operation: Operation::SendMessage,
+                        room_id: Some(room_id),
                         message,
                     }),
                 ],
                 Some(PendingOutgoingKind::MessageEdit { .. }) => {
                     vec![Event::Error(CoreErrorEvent {
                         operation: Operation::EditMessage,
+                        room_id: Some(room_id),
                         message,
                     })]
                 }
                 Some(PendingOutgoingKind::Reaction { .. }) => vec![Event::Error(CoreErrorEvent {
                     operation: Operation::SendReaction,
+                    room_id: Some(room_id),
                     message,
                 })],
                 Some(PendingOutgoingKind::Redaction { .. }) => vec![Event::Error(CoreErrorEvent {
                     operation: Operation::RedactEvent,
+                    room_id: Some(room_id),
                     message,
                 })],
                 None => vec![Event::Error(CoreErrorEvent {
                     operation: Operation::SendMessage,
+                    room_id: Some(room_id),
                     message,
                 })],
             })
@@ -3243,6 +3261,7 @@ fn map_local_echo(
             if let Some(send_error) = send_error {
                 events.push(Event::Error(CoreErrorEvent {
                     operation: Operation::RedactEvent,
+                    room_id: Some(room_id),
                     message: send_error.to_string(),
                 }));
             }
@@ -3273,6 +3292,7 @@ fn outgoing_events_from_local_echo_event(
         if let Some(send_error) = send_error {
             events.push(Event::Error(CoreErrorEvent {
                 operation: Operation::EditMessage,
+                room_id: Some(room_id),
                 message: send_error,
             }));
         }
@@ -3296,7 +3316,7 @@ fn outgoing_events_from_local_echo_event(
         let mut events = vec![Event::RoomActivity(Box::new(activity))];
         if let Some(send_error) = send_error {
             events.push(Event::RoomActivityUpdate(RoomActivityUpdate {
-                room_id,
+                room_id: room_id.clone(),
                 target: RoomActivityUpdateTarget::Transaction { transaction_id },
                 kind: RoomActivityUpdateKind::MessageFailed {
                     message: send_error.clone(),
@@ -3305,6 +3325,7 @@ fn outgoing_events_from_local_echo_event(
             }));
             events.push(Event::Error(CoreErrorEvent {
                 operation: Operation::SendMessage,
+                room_id: Some(room_id),
                 message: send_error,
             }));
         }
@@ -3331,6 +3352,7 @@ fn outgoing_events_from_local_echo_event(
     if let Some(send_error) = send_error {
         events.push(Event::Error(CoreErrorEvent {
             operation: Operation::SendReaction,
+            room_id: Some(room_id),
             message: send_error,
         }));
     }
@@ -11392,6 +11414,7 @@ mod tests {
                 }),
                 Event::Error(CoreErrorEvent {
                     operation: Operation::SendMessage,
+                    room_id: Some("!room:example.org".to_owned()),
                     message: "Other unrecoverable error: wedged".to_owned(),
                 }),
             ]
@@ -11426,6 +11449,7 @@ mod tests {
             events,
             vec![Event::Error(CoreErrorEvent {
                 operation: Operation::EditMessage,
+                room_id: Some("!room:example.org".to_owned()),
                 message: "edit send failed".to_owned(),
             })]
         );
@@ -11472,6 +11496,7 @@ mod tests {
                 }),
                 Event::Error(CoreErrorEvent {
                     operation: Operation::SendMessage,
+                    room_id: Some("!room:example.org".to_owned()),
                     message: "send failed".to_owned(),
                 }),
             ]
@@ -11509,6 +11534,7 @@ mod tests {
             events,
             vec![Event::Error(CoreErrorEvent {
                 operation: Operation::EditMessage,
+                room_id: Some("!room:example.org".to_owned()),
                 message: "edit send failed".to_owned(),
             })]
         );
@@ -11546,6 +11572,7 @@ mod tests {
             events,
             vec![Event::Error(CoreErrorEvent {
                 operation: Operation::SendReaction,
+                room_id: Some("!room:example.org".to_owned()),
                 message: "reaction send failed".to_owned(),
             })]
         );
@@ -11582,6 +11609,7 @@ mod tests {
             events,
             vec![Event::Error(CoreErrorEvent {
                 operation: Operation::RedactEvent,
+                room_id: Some("!room:example.org".to_owned()),
                 message: "redaction send failed".to_owned(),
             })]
         );

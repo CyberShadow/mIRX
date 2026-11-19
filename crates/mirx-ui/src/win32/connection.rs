@@ -100,6 +100,7 @@ mod tests {
     fn error(operation: Operation) -> Event {
         Event::Error(CoreErrorEvent {
             operation,
+            room_id: None,
             message: "failed".to_owned(),
         })
     }

@@ -2027,6 +2027,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::ListPublicRooms => "list_public_rooms",
         Operation::RoomList => "room_list",
         Operation::RoomReadState => "room_read_state",
+        Operation::SendQueue => "send_queue",
         Operation::E2eeStatus => "e2ee_status",
         Operation::RecoverE2ee => "recover_e2ee",
         Operation::SetupE2eeRecovery => "setup_e2ee_recovery",
@@ -4154,6 +4155,7 @@ mod tests {
             }),
             Event::Error(CoreErrorEvent {
                 operation: Operation::SendMessage,
+                room_id: Some("!room:example".to_owned()),
                 message: "send failed".to_owned(),
             }),
         ];
@@ -4165,7 +4167,7 @@ mod tests {
                 {"SyncedRooms":[{"room_id":"!one:example","display_name":"One","topic":null,"membership":"join","encrypted":false,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},
                 {"VerificationRequest":{"flow_id":"flow-1","user_id":"@alice:example"}},
                 {"RoomReadState":{"room_id":"!ops:example","latest_active_event_id":"$latest:example","fully_read_event_id":"$fully-read:example","marked_unread":true,"num_unread":7,"num_notifications":3,"num_mentions":1}},
-                {"Error":{"operation":"SendMessage","message":"send failed"}}
+                {"Error":{"operation":"SendMessage","room_id":"!room:example","message":"send failed"}}
             ])
         );
     }
@@ -7465,6 +7467,7 @@ mod tests {
         assert_eq!(
             super::dump_error_from_core(&CoreErrorEvent {
                 operation: Operation::SendMessage,
+                room_id: Some("!room:example".to_owned()),
                 message: "failed".to_owned(),
             }),
             super::DumpError {
@@ -7475,6 +7478,7 @@ mod tests {
         assert_eq!(
             super::dump_error_from_core(&CoreErrorEvent {
                 operation: Operation::MarkRoomRead,
+                room_id: Some("!room:example".to_owned()),
                 message: "failed".to_owned(),
             }),
             super::DumpError {
