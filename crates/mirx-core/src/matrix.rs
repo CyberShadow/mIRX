@@ -33,8 +33,8 @@ use matrix_sdk::{
         RoomId, RoomOrAliasId, UInt, UserId,
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
-            AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, SyncStateEvent,
-            TimelineEventType, ToDeviceEvent,
+            AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, Mentions,
+            SyncStateEvent, TimelineEventType, ToDeviceEvent,
             direct::{DirectEvent, DirectEventContent},
             key::verification::{
                 VerificationMethod, request::ToDeviceKeyVerificationRequestEventContent,
@@ -3294,13 +3294,85 @@ fn owned_event_id_from_str(event_id: &str) -> Result<OwnedEventId, MatrixCoreErr
         .map(|event_id| event_id.to_owned())
 }
 
+/// Whom a reply mentions (MSC3952), so it notifies them as clients that
+/// rely on `m.mentions` expect: see `reply_mention_user_ids`.
+async fn reply_mentions(
+    client: &Client,
+    room: &Room,
+    reply: &SendMessageReplyTarget,
+    body: &str,
+) -> Result<Mentions, MatrixCoreError> {
+    let replied_to_sender = UserId::parse(&reply.sender_user_id)
+        .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
+    let members = room
+        .members_no_sync(RoomMemberships::JOIN)
+        .await
+        .map_err(|err| {
+            MatrixCoreError::new(format!(
+                "failed to read cached joined Matrix room members: {err}"
+            ))
+        })?;
+    Ok(Mentions::with_user_ids(reply_mention_user_ids(
+        body,
+        members
+            .iter()
+            .map(|member| (member.user_id(), member.display_name())),
+        client.user_id().expect("a client that sends is logged in"),
+        &replied_to_sender,
+    )))
+}
+
+/// The users a reply mentions: the sender of the message it replies to,
+/// and each joined member the body names the way the legacy push rules
+/// would notice, by user ID anywhere or by display name as a whole word
+/// (`.m.rule.contains_display_name`), ignoring case. Never the user.
+fn reply_mention_user_ids<'a>(
+    body: &str,
+    members: impl IntoIterator<Item = (&'a UserId, Option<&'a str>)>,
+    own_user_id: &UserId,
+    replied_to_sender: &UserId,
+) -> BTreeSet<OwnedUserId> {
+    let body = body.to_lowercase();
+    members
+        .into_iter()
+        .filter(|(user_id, display_name)| {
+            body.contains(&user_id.as_str().to_lowercase())
+                || display_name.is_some_and(|name| contains_word(&body, &name.to_lowercase()))
+        })
+        .map(|(user_id, _)| user_id)
+        .chain([replied_to_sender])
+        .filter(|user_id| *user_id != own_user_id)
+        .map(UserId::to_owned)
+        .collect()
+}
+
+/// Whether `word` occurs in `text` bounded by the start or end of `text` or
+/// by characters outside `[A-Za-z0-9_]`, as push rules define word
+/// boundaries.
+fn contains_word(text: &str, word: &str) -> bool {
+    let is_word_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    !word.is_empty()
+        && text.match_indices(word).any(|(start, _)| {
+            let end = start + word.len();
+            !text[..start].chars().next_back().is_some_and(is_word_char)
+                && !text[end..].chars().next().is_some_and(is_word_char)
+        })
+}
+
 pub(crate) async fn send_message(
     client: &Client,
     request: SendMessageRequest,
 ) -> Result<(), MatrixCoreError> {
     let room = joined_room_by_id(client, &request.room_id)?;
 
+    // Only replies carry `m.mentions`: once present, it replaces the legacy
+    // body-name push rules for the event, which plain sends still rely on.
+    let mentions = match &request.reply {
+        Some(reply) => Some(reply_mentions(client, &room, reply, &request.body).await?),
+        None => None,
+    };
     let mut content = room_message_event_content(request.presentation, request.body);
+    content.mentions = mentions;
     match (request.thread, request.reply) {
         (None, None) => {}
         (Some(thread), None) => attach_thread_relation(&mut content, thread)?,
@@ -3760,7 +3832,7 @@ pub(crate) fn stored_session_from_matrix_session(session: MatrixSession) -> Stor
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -3778,8 +3850,8 @@ mod tests {
         map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
-        reaction_event_content, read_file_bytes, register_event_handlers, restore_session,
-        room_activity_from_sync_member, room_activity_from_sync_message,
+        reaction_event_content, read_file_bytes, register_event_handlers, reply_mention_user_ids,
+        restore_session, room_activity_from_sync_member, room_activity_from_sync_message,
         room_activity_from_sync_topic, room_activity_update_from_indexed_reaction_redaction,
         room_activity_update_from_sync_message_replacement,
         room_activity_update_from_sync_reaction, room_activity_update_from_sync_redaction,
@@ -3789,10 +3861,10 @@ mod tests {
         room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
-        room_unable_to_decrypt_reason_from_sdk, set_display_name, set_room_member_power_level,
-        sorted_room_member_summaries_from_parts, sync_message_replacement, unban_room_member,
-        verification_flow_id_from_to_device, verification_request_from_to_device,
-        verification_requested_state_event,
+        room_unable_to_decrypt_reason_from_sdk, send_message, set_display_name,
+        set_room_member_power_level, sorted_room_member_summaries_from_parts,
+        sync_message_replacement, unban_room_member, verification_flow_id_from_to_device,
+        verification_request_from_to_device, verification_requested_state_event,
     };
 
     #[test]
@@ -4193,12 +4265,26 @@ mod tests {
         mock_server: &MatrixMockServer,
         suffix: &str,
     ) -> Vec<serde_json::Value> {
+        request_bodies_where(mock_server, |path| path.ends_with(suffix)).await
+    }
+
+    async fn request_bodies_containing(
+        mock_server: &MatrixMockServer,
+        part: &str,
+    ) -> Vec<serde_json::Value> {
+        request_bodies_where(mock_server, |path| path.contains(part)).await
+    }
+
+    async fn request_bodies_where(
+        mock_server: &MatrixMockServer,
+        path_matches: impl Fn(&str) -> bool,
+    ) -> Vec<serde_json::Value> {
         mock_server
             .received_requests()
             .await
             .expect("request recording enabled")
             .iter()
-            .filter(|request| request.url.path().ends_with(suffix))
+            .filter(|request| path_matches(request.url.path()))
             .map(|request| {
                 request
                     .body_json::<serde_json::Value>()
@@ -5071,10 +5157,10 @@ mod tests {
         RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
         RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
-        RoomVideoInfo, SendMessageReplyTarget, SendMessageThreadTarget, SetDisplayNameRequest,
-        SetRoomMemberPowerLevelRequest, StoredSession, UnbanRoomMemberRequest,
-        UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji,
-        VerificationRequest, VerificationState, VerificationStateEvent,
+        RoomVideoInfo, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+        SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, StoredSession,
+        UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
+        VerificationEmoji, VerificationRequest, VerificationState, VerificationStateEvent,
     };
     use matrix_sdk::{
         Client, Room, RoomMemberships, SessionMeta,
@@ -5087,7 +5173,7 @@ mod tests {
         media::{MediaFormat, MediaThumbnailSettings},
         ruma::{
             Int, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
-            OwnedUserId, UInt,
+            OwnedUserId, UInt, UserId,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent,
@@ -10226,6 +10312,137 @@ mod tests {
                 message: "redaction send failed".to_owned(),
             })]
         );
+    }
+
+    #[test]
+    fn a_reply_mentions_its_target_and_the_members_it_names() {
+        let user = |id: &str| OwnedUserId::try_from(id).expect("valid user id");
+        let (me, alice, bob, bobby, carol) = (
+            user("@me:example.org"),
+            user("@alice:example.org"),
+            user("@bob:example.org"),
+            user("@bobby:example.org"),
+            user("@carol:example.org"),
+        );
+        let members = [
+            (me.as_ref(), Some("Me")),
+            (alice.as_ref(), Some("Alice")),
+            (bob.as_ref(), Some("Bob")),
+            (bobby.as_ref(), Some("Bobby")),
+            (carol.as_ref(), None),
+        ];
+        let mentions = |body: &str, replied_to: &UserId| {
+            reply_mention_user_ids(body, members, &me, replied_to)
+        };
+
+        assert_eq!(mentions("sure", &alice), BTreeSet::from([alice.clone()]));
+        assert_eq!(
+            mentions("sure", &me),
+            BTreeSet::new(),
+            "replying to oneself mentions nobody"
+        );
+        assert_eq!(
+            mentions("BOB: ask me, alice", &carol),
+            BTreeSet::from([alice.clone(), bob.clone(), carol.clone()]),
+            "display names match as words, ignoring case; the user never"
+        );
+        assert_eq!(
+            mentions("bobby_tables and Bobbyx", &alice),
+            BTreeSet::from([alice.clone()]),
+            "a display name inside a longer word is no mention"
+        );
+        assert_eq!(
+            mentions("ping @Carol:example.org!", &alice),
+            BTreeSet::from([alice.clone(), carol.clone()]),
+            "a user ID anywhere in the body is one"
+        );
+        assert_eq!(
+            mentions("Bobby, Bob", &alice),
+            BTreeSet::from([alice, bob, bobby])
+        );
+    }
+
+    #[test]
+    fn only_replies_send_m_mentions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                )
+                .await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            mock_server
+                .mock_room_send()
+                .ok(OwnedEventId::try_from("$sent:localhost").expect("valid event id"))
+                .mount()
+                .await;
+            let send = |body: &str, reply: Option<SendMessageReplyTarget>| {
+                send_message(
+                    &client,
+                    SendMessageRequest {
+                        room_id: room_id().to_string(),
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: body.to_owned(),
+                        thread: None,
+                        reply,
+                    },
+                )
+            };
+
+            send(
+                "Sam: are you on it?",
+                Some(SendMessageReplyTarget {
+                    event_id: "$question:localhost".to_owned(),
+                    sender_user_id: "@bob:localhost".to_owned(),
+                }),
+            )
+            .await
+            .expect("send the reply");
+            send("plain line", None).await.expect("send the line");
+
+            // The send queue sends in the background, in order.
+            let bodies = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let bodies =
+                        request_bodies_containing(&mock_server, "/send/m.room.message/").await;
+                    if bodies.len() == 2 {
+                        return bodies;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("both messages are sent");
+            assert_eq!(
+                bodies[0]["m.mentions"],
+                serde_json::json!({
+                    "user_ids": ["@bob:localhost", "@sam1:localhost", "@sam2:localhost"]
+                })
+            );
+            assert_eq!(
+                bodies[0]["m.relates_to"],
+                serde_json::json!({ "m.in_reply_to": { "event_id": "$question:localhost" } })
+            );
+            assert_eq!(bodies[1]["body"], "plain line");
+            assert!(
+                bodies[1].get("m.mentions").is_none(),
+                "a plain send keeps the legacy push rules: {}",
+                bodies[1]
+            );
+        });
     }
 
     #[test]
