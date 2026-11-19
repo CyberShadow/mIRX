@@ -147,6 +147,15 @@ const TOKENS: &[(&str, Token)] = &[
     ),
 ];
 
+/// The format's tokens, space-separated: what the Options dialog lists.
+pub(super) fn format_tokens() -> String {
+    TOKENS
+        .iter()
+        .map(|(text, _)| *text)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A parsed timestamp format such as `[HH:nn]`. Every character that does
 /// not start a token is literal, as in mIRC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,6 +354,14 @@ mod tests {
 
     fn at_hour(hour: u8) -> LocalTime {
         LocalTime { hour, ..TIME }
+    }
+
+    #[test]
+    fn the_format_tokens_are_listed_longest_first() {
+        assert_eq!(
+            format_tokens(),
+            "yyyy yy HH H hh h nn n ss s tt TT dd d mm m"
+        );
     }
 
     #[test]

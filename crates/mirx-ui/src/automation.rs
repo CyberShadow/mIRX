@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 37;
+pub(crate) const PROTOCOL_VERSION: u32 = 38;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -921,6 +921,21 @@ pub(crate) struct UiState {
     pub(crate) compose_target: Option<UiComposeTarget>,
     /// The Rooms List window, read back from its list control.
     pub(crate) room_list: Option<UiRoomList>,
+    /// The Options dialog while it is open, read back from its controls.
+    pub(crate) options_dialog: Option<UiOptionsDialog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiOptionsDialog {
+    /// Every tree item's path, `Connect/Options`, top to bottom.
+    pub(crate) tree: Vec<String>,
+    /// The selected item's path.
+    pub(crate) selected: String,
+    /// The shown page's heading, `Connect > Options`.
+    pub(crate) heading: String,
+    /// The ids of the shown page's controls.
+    pub(crate) visible_controls: Vec<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2946,8 +2961,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_37() {
-        assert_eq!(PROTOCOL_VERSION, 37);
+    fn protocol_version_is_38() {
+        assert_eq!(PROTOCOL_VERSION, 38);
     }
 
     #[test]
@@ -4757,7 +4772,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":37,
+                    "protocol_version":38,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5361,6 +5376,12 @@ mod tests {
                         visible_row_click_points: vec![super::UiPoint { x: 12, y: 24 }],
                         top_row: 0,
                     }),
+                    options_dialog: Some(super::UiOptionsDialog {
+                        tree: vec!["Connect".to_owned(), "Connect/Options".to_owned()],
+                        selected: "Connect/Options".to_owned(),
+                        heading: "Connect > Options".to_owned(),
+                        visible_controls: vec![6101],
+                    }),
                 },
             ))
             .unwrap(),
@@ -5507,6 +5528,12 @@ mod tests {
                         "column_click_points":[{"x":10,"y":8}],
                         "visible_row_click_points":[{"x":12,"y":24}],
                         "top_row":0
+                    },
+                    "options_dialog":{
+                        "tree":["Connect","Connect/Options"],
+                        "selected":"Connect/Options",
+                        "heading":"Connect > Options",
+                        "visible_controls":[6101]
                     }
                 }
             })

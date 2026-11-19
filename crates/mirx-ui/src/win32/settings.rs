@@ -86,8 +86,23 @@ pub(super) fn parse_points(text: &str) -> Result<u8, String> {
 pub(super) struct Settings {
     pub(super) text_font: FontSetting,
     pub(super) timestamp: TimestampSetting,
+    pub(super) connect: ConnectSetting,
     pub(super) switchbar: SwitchbarSetting,
     pub(super) treebar: TreebarSetting,
+}
+
+/// mIRC's Options > Connect > Options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ConnectSetting {
+    /// Whether a saved session syncs at startup. Off, mirx starts signed in
+    /// but disconnected, until File > Connect or `/server`.
+    pub(super) on_startup: bool,
+}
+
+impl Default for ConnectSetting {
+    fn default() -> Self {
+        Self { on_startup: true }
+    }
 }
 
 impl Settings {
@@ -134,12 +149,52 @@ impl Bar {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SwitchbarSetting {
     pub(super) show: bool,
+    pub(super) buttons: ButtonWidth,
 }
 
 impl Default for SwitchbarSetting {
     fn default() -> Self {
-        Self { show: true }
+        Self {
+            show: true,
+            buttons: ButtonWidth::new(120).expect("the default button width must be valid"),
+        }
     }
+}
+
+/// How wide every switchbar button is, mIRC's Options > Display "Buttons".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ButtonWidth(u16);
+
+impl ButtonWidth {
+    const PIXELS: std::ops::RangeInclusive<u16> = 40..=400;
+
+    /// 40-400 pixels.
+    pub(super) fn new(pixels: u16) -> Result<Self, String> {
+        if Self::PIXELS.contains(&pixels) {
+            Ok(Self(pixels))
+        } else {
+            Err(BUTTON_WIDTH_ERROR.to_owned())
+        }
+    }
+
+    pub(super) fn pixels(self) -> i32 {
+        i32::from(self.0)
+    }
+}
+
+impl std::fmt::Display for ButtonWidth {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+const BUTTON_WIDTH_ERROR: &str = "buttons must be 40-400";
+
+/// Parses a button width: `buttons must be 40-400` for anything else.
+pub(super) fn parse_button_width(text: &str) -> Result<ButtonWidth, String> {
+    text.parse::<u16>()
+        .map_err(|_| BUTTON_WIDTH_ERROR.to_owned())
+        .and_then(ButtonWidth::new)
 }
 
 /// The treebar, mIRC's View > Treebar and `/treebar`.
@@ -158,6 +213,7 @@ impl Default for TreebarSetting {
 enum Section {
     Fonts,
     Timestamp,
+    Connect,
     Switchbar,
     Treebar,
 }
@@ -180,6 +236,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             section = Some(match name.to_ascii_lowercase().as_str() {
                 "fonts" => Section::Fonts,
                 "timestamp" => Section::Timestamp,
+                "connect" => Section::Connect,
                 "switchbar" => Section::Switchbar,
                 "treebar" => Section::Treebar,
                 _ => return Err(error(format!("unknown section [{name}]"))),
@@ -208,8 +265,14 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Timestamp, "format") => {
                 settings.timestamp.format = TimestampFormat::parse(value).map_err(error)?;
             }
+            (Section::Connect, "startup") => {
+                settings.connect.on_startup = parse_on_off(value, "startup").map_err(error)?;
+            }
             (Section::Switchbar, "show") => {
                 settings.switchbar.show = parse_on_off(value, "show").map_err(error)?;
+            }
+            (Section::Switchbar, "buttons") => {
+                settings.switchbar.buttons = parse_button_width(value.trim_end()).map_err(error)?;
             }
             (Section::Treebar, "show") => {
                 settings.treebar.show = parse_on_off(value, "show").map_err(error)?;
@@ -248,13 +311,16 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     format!(
         "[fonts]\r\ntext={},{}{bold}\r\n\
          [timestamp]\r\nshow={}\r\nformat={}\r\n\
-         [switchbar]\r\nshow={}\r\n\
+         [connect]\r\nstartup={}\r\n\
+         [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          [treebar]\r\nshow={}\r\n",
         font.face,
         font.points,
         on_off(settings.timestamp.show),
         settings.timestamp.format,
+        on_off(settings.connect.on_startup),
         on_off(settings.switchbar.show),
+        settings.switchbar.buttons,
         on_off(settings.treebar.show),
     )
 }
@@ -330,7 +396,8 @@ mod tests {
 
     const DEFAULT_INI: &str = "[fonts]\r\ntext=Fixedsys,9\r\n\
         [timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n\
-        [switchbar]\r\nshow=on\r\n\
+        [connect]\r\nstartup=on\r\n\
+        [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
         [treebar]\r\nshow=on\r\n";
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -367,14 +434,19 @@ mod tests {
     }
 
     #[test]
-    fn hidden_bars_round_trip() {
+    fn connect_and_bar_settings_round_trip() {
         let settings = Settings {
-            switchbar: SwitchbarSetting { show: false },
+            connect: ConnectSetting { on_startup: false },
+            switchbar: SwitchbarSetting {
+                show: false,
+                buttons: ButtonWidth::new(90).unwrap(),
+            },
             treebar: TreebarSetting { show: false },
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[switchbar]\r\nshow=off\r\n"));
+        assert!(text.contains("[connect]\r\nstartup=off\r\n"));
+        assert!(text.contains("[switchbar]\r\nshow=off\r\nbuttons=90\r\n"));
         assert!(text.contains("[treebar]\r\nshow=off\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
     }
@@ -438,10 +510,38 @@ mod tests {
             ("[treebar]\n\nshow=1", "line 3: show must be on or off"),
             ("[treebar]\nshow=on\nshow=off", "line 3: duplicate key show"),
             ("[switchbar]\nwidth=9", "line 2: unknown key width"),
+            (
+                "[connect]\nstartup=maybe",
+                "line 2: startup must be on or off",
+            ),
+            ("[switchbar]\nbuttons=39", "line 2: buttons must be 40-400"),
+            ("[switchbar]\nbuttons=401", "line 2: buttons must be 40-400"),
+            (
+                "[switchbar]\nbuttons=wide",
+                "line 2: buttons must be 40-400",
+            ),
+            ("[switchbar]\nbuttons=-5", "line 2: buttons must be 40-400"),
+            (
+                "[switchbar]\nbuttons=90\nbuttons=90",
+                "line 3: duplicate key buttons",
+            ),
             ("[timestamp]\nformat=", "line 2: format cannot be empty"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");
         }
+    }
+
+    #[test]
+    fn button_widths_are_40_to_400_pixels() {
+        assert_eq!(ButtonWidth::new(40).map(ButtonWidth::pixels), Ok(40));
+        assert_eq!(ButtonWidth::new(400).map(ButtonWidth::pixels), Ok(400));
+        assert!(ButtonWidth::new(39).is_err());
+        assert!(ButtonWidth::new(401).is_err());
+        assert_eq!(parse_button_width("120"), ButtonWidth::new(120));
+        assert_eq!(
+            parse_button_width("70000"),
+            Err("buttons must be 40-400".to_owned())
+        );
     }
 
     #[test]

@@ -58,10 +58,10 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
-    VK_MENU, VK_RETURN,
+    VK_DOWN, VK_ESCAPE, VK_MENU, VK_RETURN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
+    BM_SETCHECK, EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
     GetClientRect, GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow,
     IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED,
@@ -2858,7 +2858,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 37);
+    assert_eq!(version.protocol_version, 38);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3181,6 +3181,44 @@ fn startup_with_saved_session_restores_and_syncs() -> Result<(), Box<dyn std::er
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
     assert!(status_view_contains(&app, "* Syncing with the homeserver")?);
     assert!(!status_view_contains(&app, CONNECT_HINT)?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn startup_with_connect_on_startup_off_restores_without_syncing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    fs::write(
+        settings_file_path(&local_app_data),
+        "[connect]\r\nstartup=off\r\n",
+    )?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+
+    app.wait_for_connection("signed_in", Duration::from_secs(30))?;
+    assert!(status_view_contains(
+        &app,
+        "* Connect on startup is off; File > Connect or /server connects"
+    )?);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+    assert!(!status_view_contains(
+        &app,
+        "* Syncing with the homeserver"
+    )?);
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -4353,9 +4391,10 @@ fn close_view_without_prompt(
 }
 
 /// The MessageBox the frame owns, or null.
-unsafe fn frame_message_box(frame: HWND) -> HWND {
-    let thread_id = unsafe { GetWindowThreadProcessId(frame, std::ptr::null_mut()) };
-    let mut search = (frame, 0 as HWND);
+/// The MessageBox `owner` shows, if any.
+unsafe fn owned_message_box(owner: HWND) -> HWND {
+    let thread_id = unsafe { GetWindowThreadProcessId(owner, std::ptr::null_mut()) };
+    let mut search = (owner, 0 as HWND);
     unsafe {
         EnumThreadWindows(
             thread_id,
@@ -4378,10 +4417,14 @@ unsafe extern "system" fn find_owned_message_box(hwnd: HWND, lparam: isize) -> i
 
 /// Waits for the frame's MessageBox and returns it with its text.
 fn wait_for_message_box(app: &MirxApp) -> (HWND, String) {
-    let frame = app.automation_frame_hwnd() as HWND;
+    wait_for_owned_message_box(app.automation_frame_hwnd() as HWND)
+}
+
+/// Waits for the MessageBox `owner` shows and returns it with its text.
+fn wait_for_owned_message_box(owner: HWND) -> (HWND, String) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let dialog = unsafe { frame_message_box(frame) };
+        let dialog = unsafe { owned_message_box(owner) };
         // The box exists before WM_INITDIALOG fills it; a dialog box shows
         // only once that is done.
         if !dialog.is_null() && unsafe { IsWindowVisible(dialog) } != 0 {
@@ -4846,7 +4889,8 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
         fs::read_to_string(settings_file_path(&local_app_data))?,
         "[fonts]\r\ntext=Fixedsys,9\r\n\
          [timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n\
-         [switchbar]\r\nshow=on\r\n\
+         [connect]\r\nstartup=on\r\n\
+         [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          [treebar]\r\nshow=on\r\n"
     );
     drop(app);
@@ -11702,6 +11746,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("Confirm &SAS", false),
                 ("Re&ject SAS", false),
                 ("&Cancel Verification", false),
+                ("&Options...\tAlt+O", true),
             ],
         ),
         menu(
@@ -11828,6 +11873,217 @@ fn view_menu_hides_and_shows_the_bars_and_persists_them() -> Result<(), Box<dyn 
         shown.switchbar.expect("the switchbar is shown").bottom()
     );
     assert!(ui_state.menu_bar.contains(&view_menu(true, true)));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+const MENU_ID_TOOLS_OPTIONS: usize = 40038;
+const OPTIONS_CONNECT_ON_STARTUP_ID: i32 = 6101;
+const OPTIONS_TIMESTAMP_SHOW_ID: i32 = 6201;
+const OPTIONS_TIMESTAMP_FORMAT_ID: i32 = 6202;
+const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
+const OPTIONS_SWITCHBAR_BUTTONS_ID: i32 = 6301;
+
+/// Waits for the Options dialog to be open and shown, and returns it.
+fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
+    let dialog = wait_for_window(&wide_null("mirxWin32OptionsDialog"), "Options dialog")?;
+    app.wait_for_ui_state("the Options dialog", Duration::from_secs(5), |ui_state| {
+        ui_state.options_dialog.is_some()
+    })?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "mirx Options");
+    Ok(dialog)
+}
+
+/// Opens Tools > Options... from another thread, which the menu command
+/// blocks until the dialog closes.
+fn open_options_from_menu(app: &MirxApp) -> std::thread::JoinHandle<()> {
+    let frame_value = app.automation_frame_hwnd();
+    std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            MENU_ID_TOOLS_OPTIONS as WPARAM,
+            0,
+        );
+    })
+}
+
+unsafe fn set_options_check(dialog: HWND, id: i32, checked: bool) {
+    unsafe { SendMessageW(GetDlgItem(dialog, id), BM_SETCHECK, checked as WPARAM, 0) };
+}
+
+unsafe fn set_options_text(dialog: HWND, id: i32, text: &str) {
+    let text = wide_null(text);
+    unsafe { SetWindowTextW(GetDlgItem(dialog, id), text.as_ptr()) };
+}
+
+fn post_options_command(dialog: HWND, id: i32) -> Result<(), Box<dyn std::error::Error>> {
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, id as WPARAM, 0) },
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    send_key_chord(VK_MENU, u16::from(b'O'));
+    let dialog = wait_for_options_dialog(&app)?;
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open");
+    assert_eq!(
+        options.tree,
+        [
+            "Connect",
+            "Connect/Options",
+            "IRC",
+            "IRC/Messages",
+            "Display"
+        ]
+    );
+    assert_eq!(options.selected, "Connect/Options");
+    assert_eq!(options.heading, "Connect > Options");
+    assert_eq!(
+        options.visible_controls,
+        [OPTIONS_CONNECT_ON_STARTUP_ID as u16]
+    );
+
+    // Down from Connect/Options is the IRC category, which shows its page.
+    let tree = unsafe { GetDlgItem(dialog, 6001) };
+    assert_ne!(
+        unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
+        0
+    );
+    let ui_state = app.wait_for_ui_state("IRC > Messages", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .options_dialog
+            .as_ref()
+            .is_some_and(|options| options.selected == "IRC/Messages")
+    })?;
+    let options = ui_state.options_dialog.expect("the dialog is open");
+    assert_eq!(options.heading, "IRC > Messages");
+    assert_eq!(
+        options.visible_controls,
+        [
+            OPTIONS_TIMESTAMP_SHOW_ID as u16,
+            OPTIONS_TIMESTAMP_FORMAT_ID as u16,
+            OPTIONS_TIMESTAMP_TOKENS_ID,
+        ]
+    );
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_TIMESTAMP_FORMAT_ID)) },
+        "[HH:nn]"
+    );
+
+    // Controls on hidden pages take their values too.
+    unsafe {
+        set_options_check(dialog, OPTIONS_CONNECT_ON_STARTUP_ID, false);
+        set_options_check(dialog, OPTIONS_TIMESTAMP_SHOW_ID, false);
+        set_options_text(dialog, OPTIONS_TIMESTAMP_FORMAT_ID, "[HH:nn:ss]");
+        set_options_text(dialog, OPTIONS_SWITCHBAR_BUTTONS_ID, "90");
+    }
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.options_dialog, None);
+    assert_eq!(
+        ui_state.timestamp,
+        UiTimestamp {
+            show: false,
+            format: "[HH:nn:ss]".to_owned(),
+        }
+    );
+    assert!(!ui_state.switchbar.items.is_empty());
+    assert!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.rect.width == 90),
+        "{:?}",
+        ui_state.switchbar
+    );
+    assert_eq!(ui_state.status_bar.text, "options saved");
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    for line in [
+        "[timestamp]\r\nshow=off\r\nformat=[HH:nn:ss]\r\n",
+        "[connect]\r\nstartup=off\r\n",
+        "buttons=90\r\n",
+    ] {
+        assert!(ini.contains(line), "{line:?} in {ini:?}");
+    }
+
+    // The menu item opens it too, with what was saved.
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_SWITCHBAR_BUTTONS_ID)) },
+        "90"
+    );
+    post_options_command(dialog, IDCANCEL)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let before = app.dump_ui_state()?;
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    unsafe { set_options_text(dialog, OPTIONS_SWITCHBAR_BUTTONS_ID, "20") };
+    post_options_command(dialog, IDOK)?;
+    let (message_box, text) = wait_for_owned_message_box(dialog);
+    assert_eq!(text, "Switchbar buttons must be 40-400");
+    assert_eq!(unsafe { read_window_text(message_box) }, "mirx Options");
+    // The dialog shows the wrong field's page.
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog stays open");
+    assert_eq!(options.selected, "Display");
+    assert_eq!(
+        options.visible_controls,
+        [OPTIONS_SWITCHBAR_BUTTONS_ID as u16]
+    );
+    answer_message_box(&app, message_box, IDOK)?;
+    assert_ne!(unsafe { IsWindow(dialog) }, 0);
+    assert!(!settings_file_path(&local_app_data).exists());
+
+    post_options_command(dialog, IDCANCEL)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+
+    // Esc in a field cancels too.
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    let format = unsafe { GetDlgItem(dialog, OPTIONS_TIMESTAMP_FORMAT_ID) };
+    unsafe { set_options_text(dialog, OPTIONS_TIMESTAMP_FORMAT_ID, "") };
+    assert_ne!(
+        unsafe { PostMessageW(format, WM_KEYDOWN, VK_ESCAPE as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let after = app.dump_ui_state()?;
+    assert_eq!(after.timestamp, before.timestamp);
+    assert_eq!(after.switchbar, before.switchbar);
+    assert!(!settings_file_path(&local_app_data).exists());
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

@@ -37,10 +37,10 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
     TestkitError, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
-    UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState,
-    UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
-    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
+    UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
+    UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -874,6 +874,12 @@ fn data_models_round_trip_through_json() {
             visible_row_click_points: vec![UiPoint { x: 6, y: 7 }],
             top_row: 0,
         }),
+        options_dialog: Some(UiOptionsDialog {
+            tree: vec!["Display".to_owned()],
+            selected: "Display".to_owned(),
+            heading: "Display".to_owned(),
+            visible_controls: vec![6301],
+        }),
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1121,6 +1127,12 @@ fn data_models_round_trip_through_json() {
                 "column_click_points": [{"x": 4, "y": 5}],
                 "visible_row_click_points": [{"x": 6, "y": 7}],
                 "top_row": 0,
+            },
+            "options_dialog": {
+                "tree": ["Display"],
+                "selected": "Display",
+                "heading": "Display",
+                "visible_controls": [6301],
             },
             "rooms": [
                 {
@@ -6412,6 +6424,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         menu_bar: vec![],
         compose_target: None,
         room_list: None,
+        options_dialog: None,
     };
 
     let identity = ViewIdentity::Room {

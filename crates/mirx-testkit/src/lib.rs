@@ -1146,6 +1146,21 @@ pub struct UiState {
     pub compose_target: Option<UiComposeTarget>,
     /// The Rooms List window, read back from its list control.
     pub room_list: Option<UiRoomList>,
+    /// The Options dialog while it is open, read back from its controls.
+    pub options_dialog: Option<UiOptionsDialog>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiOptionsDialog {
+    /// Every tree item's path, `Connect/Options`, top to bottom.
+    pub tree: Vec<String>,
+    /// The selected item's path.
+    pub selected: String,
+    /// The shown page's heading, `Connect > Options`.
+    pub heading: String,
+    /// The ids of the shown page's controls.
+    pub visible_controls: Vec<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

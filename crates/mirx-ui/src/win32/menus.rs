@@ -44,6 +44,8 @@ pub(super) const MENU_ID_HELP_TOPICS: usize = 40034;
 pub(super) const MENU_ID_HELP_ABOUT: usize = 40035;
 pub(super) const MENU_ID_VIEW_SWITCHBAR: usize = 40036;
 pub(super) const MENU_ID_VIEW_TREEBAR: usize = 40037;
+/// Options..., which Alt+O sends, as in mIRC.
+pub(super) const MENU_ID_TOOLS_OPTIONS: usize = 40038;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
@@ -139,6 +141,11 @@ pub(super) const TOOLS_MENU: &[MenuEntry] = &[
         id: MENU_ID_VERIFY_CANCEL,
         label: "&Cancel Verification",
     },
+    Separator,
+    Item {
+        id: MENU_ID_TOOLS_OPTIONS,
+        label: "&Options...\tAlt+O",
+    },
 ];
 
 pub(super) const WINDOW_MENU: &[MenuEntry] = &[
@@ -172,8 +179,8 @@ pub(super) const HELP_MENU: &[MenuEntry] = &[
     },
 ];
 
-/// The menubar's menus, left to right. No mnemonic is `E` or `L`: Alt+E
-/// is Select Server and Alt+L List rooms, as in mIRC.
+/// The menubar's menus, left to right. No mnemonic is `E`, `L` or `O`:
+/// Alt+E is Select Server, Alt+L List rooms and Alt+O Options, as in mIRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BarMenu {
     File,
@@ -451,6 +458,20 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(mnemonics, ['F', 'V', 'T', 'C', 'W', 'H']);
+    }
+
+    #[test]
+    fn tools_ends_with_options() {
+        assert_eq!(
+            TOOLS_MENU[TOOLS_MENU.len() - 2..],
+            [
+                Separator,
+                Item {
+                    id: MENU_ID_TOOLS_OPTIONS,
+                    label: "&Options...\tAlt+O",
+                },
+            ]
+        );
     }
 
     #[test]

@@ -172,6 +172,8 @@ mod glyph_runs;
 mod mdi;
 mod menus;
 mod nick_completion;
+mod options;
+mod options_dialog;
 mod replies;
 mod room_list;
 mod settings;
@@ -195,18 +197,18 @@ use menus::{
     MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT,
     MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
     MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
-    MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
-    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VIEW_SWITCHBAR,
-    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
-    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU, VIEW_MENU,
-    WINDOW_MENU, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
-    verification_menu_action_enabled, view_menu_bar, view_menu_checks,
+    MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_OPTIONS, MENU_ID_VERIFY_ACCEPT,
+    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
+    MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
+    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
+    MenuEntry, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, commands_menu_item, commands_menu_line,
+    commands_menu_title, file_menu_state, verification_menu_action_enabled, view_menu_bar,
+    view_menu_checks,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
 use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
 use status_log::{StatusLineKind, StatusLog};
-use switchbar::SWITCHBAR_BUTTON_WIDTH;
 
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use timeline_text::{
@@ -2819,6 +2821,8 @@ struct WindowState {
     submitted_setup_e2ee_recovery: Vec<SubmittedSetupE2eeRecovery>,
     pending_attachment_saves: BTreeMap<String, PendingAttachmentSave>,
     last_attachment_save: Option<AttachmentSaveResult>,
+    /// The Options dialog while it is open, for the automation dump.
+    options_dialog: Option<HWND>,
 }
 
 /// Where Status lines get their arrival time. Render-state snapshots must not
@@ -2983,6 +2987,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     register_recovery_key_handoff_dialog_class(instance)?;
     register_find_dialog_class(instance)?;
     register_about_dialog_class(instance)?;
+    options_dialog::register_class(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -3032,6 +3037,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         submitted_setup_e2ee_recovery: Vec::new(),
         pending_attachment_saves: BTreeMap::new(),
         last_attachment_save: None,
+        options_dialog: None,
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;
@@ -3047,7 +3053,15 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
                 state_mut(hwnd).command_sender = Some(bridge.command_sender.clone());
                 let session_saved = session_path()?.is_file();
                 if session_saved {
-                    submit_restore_saved_session(state_mut(hwnd), true)?;
+                    let on_startup = state_ref(hwnd).settings.settings().connect.on_startup;
+                    submit_restore_saved_session(state_mut(hwnd), on_startup)?;
+                    if !on_startup {
+                        log_status(
+                            state_mut(hwnd),
+                            StatusLineKind::Info,
+                            status_log::STARTUP_CONNECT_OFF.to_owned(),
+                        );
+                    }
                     refresh_status_bar(hwnd)?;
                 } else {
                     log_status(
@@ -6322,9 +6336,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         // The frame lays the switchbar out. Without CCS_NORESIZE the toolbar
         // sizes itself to its ideal height and overlaps the MDI client's top
         // edge, painting over it whenever the switchbar repaints. Its
-        // buttons wrap onto more rows on its own WM_SIZE (TBSTYLE_WRAPABLE),
-        // and `layout_controls` sizes it to them.
-        // `layout_controls` shows it, as the settings say.
+        // buttons wrap onto more rows on its own WM_SIZE (TBSTYLE_WRAPABLE);
+        // `layout_controls` shows it as the settings say and sizes it to
+        // its rows.
         WS_CHILD | TBSTYLE_FLAT | TBSTYLE_WRAPABLE | CCS_NORESIZE as u32 | CCS_NOPARENTALIGN as u32,
         0,
         0,
@@ -6350,7 +6364,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         0,
         TBSTYLE_EX_MIXEDBUTTONS as LPARAM,
     );
-    set_switchbar_button_width(state.controls.switchbar, SWITCHBAR_BUTTON_WIDTH);
+    set_switchbar_button_width(
+        state.controls.switchbar,
+        state.settings.settings().switchbar.buttons.pixels(),
+    );
     // One line per label, cut with "..." when it is wider than its button.
     SendMessageW(state.controls.switchbar, TB_SETMAXTEXTROWS, 1, 0);
     let text_flags = DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
@@ -6548,6 +6565,11 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
             fVirt: FALT | FVIRTKEY,
             key: u16::from(b'L'),
             cmd: MENU_ID_COMMANDS_LIST as u16,
+        },
+        ACCEL {
+            fVirt: FALT | FVIRTKEY,
+            key: u16::from(b'O'),
+            cmd: MENU_ID_TOOLS_OPTIONS as u16,
         },
     ];
     let accelerator_table =
@@ -7174,6 +7196,7 @@ unsafe fn menu_command_result(
             run_local_command(hwnd, SlashCommand::Help { topic: None }).map(|_| Some(())),
         ),
         MENU_ID_HELP_ABOUT => ("Help", show_about_dialog(hwnd).map(|()| Some(()))),
+        MENU_ID_TOOLS_OPTIONS => ("Options", run_options_dialog(hwnd).map(|()| Some(()))),
         MENU_ID_VIEW_SWITCHBAR | MENU_ID_VIEW_TREEBAR => {
             let bar = view_menu_bar(command_id).expect("View items show and hide a bar");
             let command = if state_ref(hwnd).settings.settings().bar_shown(bar) {
@@ -8636,6 +8659,33 @@ unsafe fn show_single_field_dialog(
         .lock()
         .expect("find dialog result mutex poisoned")
         .clone())
+}
+
+/// Tools > Options... (Alt+O): saves what OK saves in one write, then
+/// applies only what changed.
+unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
+    let dialog = options_dialog::OptionsDialog::open(hwnd, state_ref(hwnd).settings.settings())?;
+    state_mut(hwnd).options_dialog = Some(dialog.hwnd());
+    let saved = dialog.run();
+    state_mut(hwnd).options_dialog = None;
+    let Some(new) = saved else {
+        return Ok(());
+    };
+    let old = state_ref(hwnd).settings.settings().clone();
+    state_mut(hwnd)
+        .settings
+        .update(|settings| *settings = new.clone())?;
+    if new.timestamp != old.timestamp {
+        refresh_every_view_content(hwnd)?;
+    }
+    if new.switchbar.buttons != old.switchbar.buttons {
+        set_switchbar_button_width(
+            state_ref(hwnd).controls.switchbar,
+            new.switchbar.buttons.pixels(),
+        );
+        layout_controls(hwnd);
+    }
+    set_local_command_status(hwnd, "options saved".to_owned())
 }
 
 /// Help > About mirx: modal over `owner`; OK, Enter and Esc close it.
@@ -13803,6 +13853,10 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .views
             .get(&ViewId::RoomList)
             .map(|view| dump_room_list(view.content)),
+        options_dialog: state
+            .options_dialog
+            .map(|dialog| options_dialog::dump(dialog))
+            .transpose()?,
         navigation,
         mdi,
         status_bar,
@@ -18272,6 +18326,7 @@ mod tests {
             submitted_setup_e2ee_recovery: Vec::new(),
             pending_attachment_saves: BTreeMap::new(),
             last_attachment_save: None,
+            options_dialog: None,
         }
     }
 
@@ -31595,7 +31650,15 @@ mod tests {
                         index,
                         &mut button as *mut RECT as LPARAM,
                     );
-                    assert_eq!(button.right - button.left, SWITCHBAR_BUTTON_WIDTH);
+                    assert_eq!(
+                        button.right - button.left,
+                        state_ref(hwnd)
+                            .settings
+                            .settings()
+                            .switchbar
+                            .buttons
+                            .pixels()
+                    );
                     assert!(button.right <= bar.width, "button {index} is clipped");
                 }
 

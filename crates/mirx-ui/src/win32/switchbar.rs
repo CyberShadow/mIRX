@@ -7,9 +7,6 @@
 /// The height of a one-row switchbar.
 pub(super) const SWITCHBAR_ROW_HEIGHT: i32 = 28;
 
-/// The width of every switchbar button, mIRC's Display "Buttons" size.
-pub(super) const SWITCHBAR_BUTTON_WIDTH: i32 = 120;
-
 /// How tall the switchbar is with `rows` rows of buttons `button_height`
 /// tall: one row is `SWITCHBAR_ROW_HEIGHT`, and each further row adds a
 /// button height, so the last row is the one a single row shows.
