@@ -2099,6 +2099,30 @@ impl MirxApp {
         }
     }
 
+    /// Polls the UI state until `done` holds and returns that state.
+    pub fn wait_for_ui_state(
+        &self,
+        what: &str,
+        timeout: Duration,
+        done: impl Fn(&UiState) -> bool,
+    ) -> Result<UiState, TestkitError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            self.wait_idle(remaining)?;
+            let ui_state = self.dump_ui_state()?;
+            if done(&ui_state) {
+                return Ok(ui_state);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(TestkitError::Timeout(format!(
+                    "UI state never showed {what}"
+                )));
+            }
+            std::thread::sleep(DEFAULT_POLL_INTERVAL);
+        }
+    }
+
     pub fn wait_for_min_rooms(
         &self,
         min_rooms: usize,

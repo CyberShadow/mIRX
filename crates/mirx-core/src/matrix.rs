@@ -29,8 +29,8 @@ use matrix_sdk::{
     room::edit::EditedContent,
     room::{MessagesOptions, Receipts, RoomMemberRole},
     ruma::{
-        EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedUserId,
-        RoomId, RoomOrAliasId, UInt, UserId,
+        EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedRoomId,
+        OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt, UserId,
         api::client::media::get_content_thumbnail::v3::Method,
         events::{
             AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, Mentions,
@@ -79,7 +79,7 @@ use tokio::task::JoinHandle;
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest,
+    Event, FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
     KickRoomMemberRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
@@ -467,16 +467,30 @@ pub(crate) async fn summarize_rooms(client: &Client) -> Result<Vec<RoomSummary>,
     Ok(rooms)
 }
 
-pub(crate) async fn join_room(client: &Client, room_or_alias: &str) -> Result<(), MatrixCoreError> {
-    let room_or_alias = <&RoomOrAliasId>::try_from(room_or_alias)
+/// Joins the room and returns its ID; an alias resolves to the room it
+/// names.
+pub(crate) async fn join_room(
+    client: &Client,
+    request: &JoinRoomRequest,
+) -> Result<OwnedRoomId, MatrixCoreError> {
+    let room_or_alias = <&RoomOrAliasId>::try_from(request.room_or_alias.as_str())
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix room id or alias: {err}")))?;
+    let via = request
+        .via
+        .iter()
+        .map(|server| {
+            ServerName::parse(server).map_err(|err| {
+                MatrixCoreError::new(format!("invalid Matrix server name {server}: {err}"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    client
-        .join_room_by_id_or_alias(room_or_alias, &[])
+    let room = client
+        .join_room_by_id_or_alias(room_or_alias, &via)
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to join Matrix room: {err}")))?;
 
-    Ok(())
+    Ok(room.room_id().to_owned())
 }
 
 pub(crate) async fn accept_room_invite(
@@ -499,18 +513,19 @@ pub(crate) async fn accept_room_invite(
     Ok(())
 }
 
+/// Creates the direct room and returns its ID.
 pub(crate) async fn create_direct_room(
     client: &Client,
     user_id: &str,
-) -> Result<(), MatrixCoreError> {
+) -> Result<OwnedRoomId, MatrixCoreError> {
     let user_id = <&UserId>::try_from(user_id)
         .map_err(|err| MatrixCoreError::new(format!("invalid Matrix user id: {err}")))?;
 
-    client.create_dm(user_id).await.map_err(|err| {
+    let room = client.create_dm(user_id).await.map_err(|err| {
         MatrixCoreError::new(format!("failed to create Matrix direct room: {err}"))
     })?;
 
-    Ok(())
+    Ok(room.room_id().to_owned())
 }
 
 pub(crate) async fn leave_joined_room(

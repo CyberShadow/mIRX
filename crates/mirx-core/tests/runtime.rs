@@ -365,6 +365,7 @@ fn join_room_before_login_emits_join_room_error() {
     assert_invalid_authenticated_command(
         Command::JoinRoom(JoinRoomRequest {
             room_or_alias: "#ops:example.org".to_owned(),
+            via: Vec::new(),
         }),
         Operation::JoinRoom,
         "join room requires an authenticated session",
@@ -861,11 +862,15 @@ fn stored_session_rejects_unknown_fields() {
 #[test]
 fn join_room_request_round_trips_through_serde() {
     let request = JoinRoomRequest {
-        room_or_alias: "#ops:example.org".to_owned(),
+        room_or_alias: "!ops:example.org".to_owned(),
+        via: vec!["other.example".to_owned()],
     };
 
     let json = serde_json::to_string(&request).expect("serialize join room request");
-    assert_eq!(json, r##"{"room_or_alias":"#ops:example.org"}"##);
+    assert_eq!(
+        json,
+        r##"{"room_or_alias":"!ops:example.org","via":["other.example"]}"##
+    );
 
     let restored: JoinRoomRequest =
         serde_json::from_str(&json).expect("deserialize join room request");
@@ -2715,7 +2720,7 @@ fn e2ee_dtos_reject_unknown_fields() {
 fn join_room_request_rejects_unknown_fields() {
     assert!(
         serde_json::from_str::<JoinRoomRequest>(
-            r##"{"room_or_alias":"#ops:example.org","unexpected":"value"}"##
+            r##"{"room_or_alias":"#ops:example.org","via":[],"unexpected":"value"}"##
         )
         .is_err(),
         "join room request must reject unknown fields"

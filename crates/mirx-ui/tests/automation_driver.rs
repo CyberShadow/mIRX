@@ -614,6 +614,26 @@ fn spawn_mock_homeserver(
                 continue;
             }
 
+            // `/join #new:example` (the SDK percent-encodes `#`). The room
+            // has no state yet; the snapshot after the join reads its
+            // encryption state.
+            if path == "/_matrix/client/v3/join/%23new:example" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({ "room_id": "!new:example" }),
+                );
+                continue;
+            }
+            if path == "/_matrix/client/v3/rooms/!new:example/state/m.room.encryption/" {
+                respond_json(
+                    &mut stream,
+                    404,
+                    &serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "not found" }),
+                );
+                continue;
+            }
+
             if path.contains("/rooms/%21beta%3Aexample/members")
                 || path.contains("/rooms/!beta:example/members")
             {
@@ -10994,6 +11014,42 @@ fn automation_driver_slash_join_records_submitted_membership_without_creating_ro
             .all(|item| item.title != "#ops:example.org")
     );
     assert!(!serde_json::to_string(&ui_state.navigation)?.contains("#ops:example.org"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_slash_join_activates_the_joined_room() -> Result<(), Box<dyn std::error::Error>>
+{
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.set_compose_text("/join #new:example")?;
+    app.send_compose_key(ComposeKey::Return)?;
+    let ui_state = app.wait_for_ui_state(
+        "the joined room active",
+        Duration::from_secs(10),
+        |ui_state| ui_state.mdi.active == room_identity("!new:example"),
+    )?;
+
+    find_view(&ui_state, &room_identity("!new:example"));
+    find_view(&ui_state, &room_identity("!beta:example"));
+    assert_eq!(app.dump_model()?.last_error, None);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

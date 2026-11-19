@@ -151,6 +151,9 @@ pub struct RedactEventRequest {
 #[serde(deny_unknown_fields)]
 pub struct JoinRoomRequest {
     pub room_or_alias: String,
+    /// Servers to join a room ID through, when the user's homeserver is
+    /// not in the room; an alias resolves its own servers.
+    pub via: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -789,6 +792,12 @@ pub enum RoomEventFetchResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct RoomJoined {
+    pub room_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoomTyping {
     pub room_id: String,
     pub user_ids: Vec<String>,
@@ -1142,6 +1151,10 @@ pub enum Event {
     RoomHistoryBackfill(RoomHistoryBackfill),
     RoomMedia(RoomMedia),
     RoomEvent(RoomEventFetch),
+    /// A join the user asked for (`JoinRoom`, `AcceptRoomInvite`,
+    /// `CreateDirectRoom`) succeeded; it follows the `SyncedRooms` that
+    /// lists the room.
+    RoomJoined(RoomJoined),
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),

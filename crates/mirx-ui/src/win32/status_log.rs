@@ -90,6 +90,11 @@ pub(super) fn disconnected(reason: &SyncStopReason) -> (StatusLineKind, String) 
     }
 }
 
+/// A space has no window to open on joining; it shows as a treebar folder.
+pub(super) fn joined_space(name: &str) -> String {
+    format!("Joined space {name}")
+}
+
 pub(super) fn synced(joined: usize, invited: usize) -> String {
     format!("Synced rooms: {joined} joined, {invited} invited")
 }

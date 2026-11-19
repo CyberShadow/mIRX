@@ -8786,6 +8786,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
         Event::RoomMedia(media) => apply_room_media_event(state, media),
         Event::RoomEvent(fetch) => apply_room_event_fetch(state, fetch),
+        Event::RoomJoined(joined) => apply_room_joined_event(state, &joined.room_id)?,
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
@@ -8879,6 +8880,32 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         }
     }
     Ok(false)
+}
+
+/// A join the user asked for opens the room's window and makes it active,
+/// as `/join` does in mIRC; the next view sync realizes it. A space has no
+/// window, so the Status window notes the join instead.
+fn apply_room_joined_event(state: &mut WindowState, room_id: &str) -> Result<(), String> {
+    // The core sends the snapshot listing the room right before.
+    let room = state
+        .model
+        .rooms
+        .iter()
+        .find(|room| room.room_id == room_id)
+        .ok_or_else(|| format!("joined room {room_id} is not in the room list"))?;
+    if room.is_space {
+        let line = status_log::joined_space(&room.display_name);
+        log_status(state, StatusLineKind::Info, line);
+        return Ok(());
+    }
+    let view_id = ViewId::Room(room_id.to_owned());
+    state.closed_queries.remove(room_id);
+    state.model.selected_room = Some(room_id.to_owned());
+    if state.active_view != view_id {
+        state.selected_timeline_event = None;
+        state.active_view = view_id;
+    }
+    Ok(())
 }
 
 fn apply_verification_event(state: &mut WindowState, event: VerificationStateEvent) {
@@ -14711,6 +14738,7 @@ fn resolve_invite_command_room_id(
 fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<String, String> {
     let command = Command::JoinRoom(JoinRoomRequest {
         room_or_alias: target.clone(),
+        via: Vec::new(),
     });
     let sender = state
         .command_sender
@@ -24873,6 +24901,84 @@ mod tests {
         assert!(state.closed_queries.is_empty());
     }
 
+    fn room_joined(room_id: &str) -> Event {
+        Event::RoomJoined(mirx_core::RoomJoined {
+            room_id: room_id.to_owned(),
+        })
+    }
+
+    #[test]
+    fn room_joined_makes_the_joined_room_the_active_view() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            room("!new:example", "New", false),
+        ];
+        state.active_view = room_view_id("!ops:example");
+        state.model.selected_room = Some("!ops:example".to_owned());
+
+        apply_core_event(&mut state, room_joined("!new:example")).unwrap();
+
+        assert_eq!(state.active_view, room_view_id("!new:example"));
+        assert_eq!(state.model.selected_room.as_deref(), Some("!new:example"));
+        assert_eq!(
+            resolve_active_view(
+                &state.active_view,
+                state.model.selected_room.as_deref(),
+                &state.model,
+                &state.closed_queries,
+            ),
+            room_view_id("!new:example"),
+            "the view sync keeps the joined room active"
+        );
+    }
+
+    #[test]
+    fn room_joined_reopens_a_closed_query() {
+        let mut state = test_state();
+        state.model.rooms = vec![query("!dm:example", "Alice", "@alice:example")];
+        state.closed_queries.insert("!dm:example".to_owned());
+        state.active_view = ViewId::Status;
+
+        apply_core_event(&mut state, room_joined("!dm:example")).unwrap();
+
+        assert!(state.closed_queries.is_empty());
+        assert_eq!(state.active_view, room_view_id("!dm:example"));
+    }
+
+    #[test]
+    fn room_joined_for_a_space_logs_it_and_keeps_the_active_view() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            space("!space:example", "Rust Space"),
+        ];
+        state.active_view = room_view_id("!ops:example");
+
+        apply_core_event(&mut state, room_joined("!space:example")).unwrap();
+
+        assert_eq!(state.active_view, room_view_id("!ops:example"));
+        assert_eq!(
+            state
+                .model
+                .status_log
+                .lines()
+                .last()
+                .map(|line| line.text.as_str()),
+            Some("* Joined space Rust Space")
+        );
+    }
+
+    #[test]
+    fn room_joined_for_a_room_missing_from_the_room_list_is_an_error() {
+        let mut state = test_state();
+
+        assert_eq!(
+            apply_core_event(&mut state, room_joined("!gone:example")),
+            Err("joined room !gone:example is not in the room list".to_owned())
+        );
+    }
+
     #[test]
     fn closed_queries_drop_rooms_that_stop_being_queries() {
         let mut state = test_state();
@@ -27664,6 +27770,7 @@ mod tests {
             state.recorded_commands,
             vec![Command::JoinRoom(JoinRoomRequest {
                 room_or_alias: "#ops:example.org".to_owned(),
+                via: Vec::new(),
             })]
         );
 

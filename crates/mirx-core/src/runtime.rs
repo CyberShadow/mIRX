@@ -15,7 +15,7 @@ use crate::api::{
     E2eeRecoverySucceeded, EditMessageRequest, Event, InviteRoomMemberRequest, JoinRoomRequest,
     KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, Operation,
     RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
-    RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
+    RoomJoined, RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
     SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
@@ -513,13 +513,12 @@ async fn handle_join_room(
         return false;
     };
 
-    if let Err(err) = matrix::join_room(client, &request.room_or_alias).await {
-        emit_matrix_error(event_tx, Operation::JoinRoom, err);
-        return false;
-    }
-
-    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
-        emit_matrix_error(event_tx, Operation::JoinRoom, err);
+    match matrix::join_room(client, &request).await {
+        Ok(room_id) => {
+            emit_snapshot_then_room_joined(client, event_tx, Operation::JoinRoom, room_id.into())
+                .await
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::JoinRoom, err),
     }
 
     false
@@ -539,13 +538,17 @@ async fn handle_accept_room_invite(
         return false;
     };
 
-    if let Err(err) = matrix::accept_room_invite(client, &request.room_id).await {
-        emit_matrix_error(event_tx, Operation::AcceptRoomInvite, err);
-        return false;
-    }
-
-    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
-        emit_matrix_error(event_tx, Operation::AcceptRoomInvite, err);
+    match matrix::accept_room_invite(client, &request.room_id).await {
+        Ok(()) => {
+            emit_snapshot_then_room_joined(
+                client,
+                event_tx,
+                Operation::AcceptRoomInvite,
+                request.room_id,
+            )
+            .await
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::AcceptRoomInvite, err),
     }
 
     false
@@ -565,16 +568,35 @@ async fn handle_create_direct_room(
         return false;
     };
 
-    if let Err(err) = matrix::create_direct_room(client, &request.user_id).await {
-        emit_matrix_error(event_tx, Operation::CreateDirectRoom, err);
-        return false;
-    }
-
-    if let Err(err) = matrix::emit_room_snapshot(client, event_tx).await {
-        emit_matrix_error(event_tx, Operation::CreateDirectRoom, err);
+    match matrix::create_direct_room(client, &request.user_id).await {
+        Ok(room_id) => {
+            emit_snapshot_then_room_joined(
+                client,
+                event_tx,
+                Operation::CreateDirectRoom,
+                room_id.into(),
+            )
+            .await
+        }
+        Err(err) => emit_matrix_error(event_tx, Operation::CreateDirectRoom, err),
     }
 
     false
+}
+
+/// Emits the room snapshot that lists a room just joined, then
+/// `RoomJoined`, so the UI knows the room by the time it opens its window.
+/// A failed snapshot is the operation's error, and no `RoomJoined` follows.
+async fn emit_snapshot_then_room_joined(
+    client: &Client,
+    event_tx: &EventSender,
+    operation: Operation,
+    room_id: String,
+) {
+    match matrix::emit_room_snapshot(client, event_tx).await {
+        Ok(()) => emit_event(event_tx, Event::RoomJoined(RoomJoined { room_id })),
+        Err(err) => emit_matrix_error(event_tx, operation, err),
+    }
 }
 
 async fn handle_leave_room(
@@ -1430,7 +1452,8 @@ mod tests {
     };
     use crate::api::CoreConfig;
     use crate::api::{
-        BanRoomMemberRequest, Command, Event, KickRoomMemberRequest, LoginRequest, Operation,
+        AcceptRoomInviteRequest, BanRoomMemberRequest, Command, CreateDirectRoomRequest, Event,
+        JoinRoomRequest, KickRoomMemberRequest, LoginRequest, Operation, RoomJoined,
         RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState, RoomSummary,
         SyncStopReason,
     };
@@ -1442,7 +1465,7 @@ mod tests {
         },
         test_utils::mocks::MatrixMockServer,
     };
-    use matrix_sdk_test::JoinedRoomBuilder;
+    use matrix_sdk_test::{InvitedRoomBuilder, JoinedRoomBuilder};
 
     fn room_id() -> OwnedRoomId {
         OwnedRoomId::try_from("!room:example.org").expect("valid room id")
@@ -1693,6 +1716,231 @@ mod tests {
                 }),
                 Operation::BanRoomMember,
                 "/ban",
+            )
+            .await;
+        });
+    }
+
+    fn test_config() -> CoreConfig {
+        CoreConfig {
+            profile_dir: std::env::temp_dir().join("mirx-core-runtime-test"),
+            store_passphrase: "test-store-passphrase".to_owned(),
+        }
+    }
+
+    /// Mounts `POST /join/<target>` answering with `room_id`; `target` is
+    /// as it appears in the URL, percent-encoded.
+    async fn mock_join(mock_server: &MatrixMockServer, target: &str, room_id: &str) {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(format!(
+                "/_matrix/client/v3/join/{target}"
+            )))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "room_id": room_id })),
+            )
+            .expect(1)
+            .mount(mock_server.server())
+            .await;
+    }
+
+    /// Runs `command` against a ready client and asserts that the room
+    /// snapshot listing `room_id` comes first, then `RoomJoined`.
+    async fn assert_join_emits_snapshot_then_room_joined(
+        mock_server: &MatrixMockServer,
+        client: matrix_sdk::Client,
+        command: Command,
+        room_id: &str,
+    ) {
+        // The snapshot reads each room's encryption state.
+        mock_server
+            .mock_room_state_encryption()
+            .plain()
+            .mount()
+            .await;
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut state = ready_state(client);
+        assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+
+        let events = drain_events(&event_rx);
+        match events.as_slice() {
+            [Event::SyncedRooms(rooms), Event::RoomJoined(joined)] => {
+                assert!(
+                    rooms.iter().any(|room| room.room_id == room_id),
+                    "the snapshot must list the joined room: {rooms:?}"
+                );
+                assert_eq!(
+                    joined,
+                    &RoomJoined {
+                        room_id: room_id.to_owned()
+                    }
+                );
+            }
+            other => panic!("expected SyncedRooms then RoomJoined, got {other:?}"),
+        }
+        mock_server.server().verify().await;
+        shutdown_state(&mut state).await;
+    }
+
+    #[test]
+    fn join_room_emits_snapshot_then_room_joined_with_the_alias_room_id() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_join(&mock_server, "%23ops:example.org", "!ops:example.org").await;
+
+            assert_join_emits_snapshot_then_room_joined(
+                &mock_server,
+                client,
+                Command::JoinRoom(JoinRoomRequest {
+                    room_or_alias: "#ops:example.org".to_owned(),
+                    via: Vec::new(),
+                }),
+                "!ops:example.org",
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn join_room_passes_via_servers() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path(
+                    "/_matrix/client/v3/join/!ops:other.example",
+                ))
+                .and(wiremock::matchers::query_param("via", "other.example"))
+                .respond_with(
+                    wiremock::ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({ "room_id": "!ops:other.example" })),
+                )
+                .expect(1)
+                .mount(mock_server.server())
+                .await;
+
+            assert_join_emits_snapshot_then_room_joined(
+                &mock_server,
+                client,
+                Command::JoinRoom(JoinRoomRequest {
+                    room_or_alias: "!ops:other.example".to_owned(),
+                    via: vec!["other.example".to_owned()],
+                }),
+                "!ops:other.example",
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn join_room_rejects_an_invalid_via_server_without_a_request() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+            let command = Command::JoinRoom(JoinRoomRequest {
+                room_or_alias: "!ops:other.example".to_owned(),
+                via: vec!["not a server".to_owned()],
+            });
+            assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+
+            match drain_events(&event_rx).as_slice() {
+                [Event::Error(error)] => {
+                    assert_eq!(error.operation, Operation::JoinRoom);
+                    assert!(
+                        error
+                            .message
+                            .contains("invalid Matrix server name not a server"),
+                        "{}",
+                        error.message
+                    );
+                }
+                other => panic!("expected one join error, got {other:?}"),
+            }
+            assert!(
+                mock_server
+                    .received_requests()
+                    .await
+                    .expect("request recording enabled")
+                    .is_empty()
+            );
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn failed_join_room_emits_the_error_and_no_room_joined() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path(
+                    "/_matrix/client/v3/join/%23gone:example.org",
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "No such room" }),
+                ))
+                .mount(mock_server.server())
+                .await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+            let command = Command::JoinRoom(JoinRoomRequest {
+                room_or_alias: "#gone:example.org".to_owned(),
+                via: Vec::new(),
+            });
+            assert!(!handle_command(command, &test_config(), &event_tx, &mut state).await);
+
+            match drain_events(&event_rx).as_slice() {
+                [Event::Error(error)] => assert_eq!(error.operation, Operation::JoinRoom),
+                other => panic!("expected one join error, got {other:?}"),
+            }
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn create_direct_room_emits_snapshot_then_room_joined() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server.mock_create_room().ok().expect(1).mount().await;
+
+            assert_join_emits_snapshot_then_room_joined(
+                &mock_server,
+                client,
+                Command::CreateDirectRoom(CreateDirectRoomRequest {
+                    user_id: "@friend:example.org".to_owned(),
+                }),
+                "!room:example.org",
+            )
+            .await;
+        });
+    }
+
+    #[test]
+    fn accept_room_invite_emits_snapshot_then_room_joined() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(&client, InvitedRoomBuilder::new(room_id().as_ref()))
+                .await;
+            mock_server
+                .mock_room_join(room_id().as_ref())
+                .ok()
+                .expect(1)
+                .mount()
+                .await;
+
+            assert_join_emits_snapshot_then_room_joined(
+                &mock_server,
+                client,
+                Command::AcceptRoomInvite(AcceptRoomInviteRequest {
+                    room_id: room_id().to_string(),
+                }),
+                room_id().as_str(),
             )
             .await;
         });
