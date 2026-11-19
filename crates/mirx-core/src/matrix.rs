@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use futures_util::StreamExt;
 use matrix_sdk::{
     Client, LoopCtrl, Room, RoomMemberships, SessionChange, SessionMeta, SessionTokens,
-    attachment::{AttachmentConfig, AttachmentInfo, BaseFileInfo},
+    attachment::{
+        AttachmentConfig, AttachmentInfo, BaseAudioInfo, BaseFileInfo, BaseImageInfo, BaseVideoInfo,
+    },
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     deserialized_responses::{
@@ -3475,18 +3477,71 @@ pub(crate) async fn send_file(
     let mime = match request.content_type {
         Some(content_type) => Mime::from_str(&content_type)
             .map_err(|err| MatrixCoreError::new(format!("invalid file content type: {err}")))?,
-        None => mime::APPLICATION_OCTET_STREAM,
+        None => content_type_for_file_name(&filename),
     };
     let size = UInt::new(size)
         .ok_or_else(|| MatrixCoreError::new(format!("file size cannot fit Matrix UInt: {size}")))?;
-    let config =
-        AttachmentConfig::new().info(AttachmentInfo::File(BaseFileInfo { size: Some(size) }));
+    let config = AttachmentConfig::new().info(attachment_info(&mime, size));
 
     room.send_attachment(filename, &mime, bytes, config)
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to send Matrix file: {err}")))?;
 
     Ok(())
+}
+
+/// The content type a file is sent with when the caller names none, from the
+/// file name's extension (case-insensitive). The SDK picks the message type
+/// (`m.image`, `m.video`, `m.audio`, `m.file`) from it. `svg` stays
+/// `application/octet-stream` on purpose: an SVG shown as an image is a
+/// script vector in some clients.
+fn content_type_for_file_name(file_name: &str) -> Mime {
+    let extension = std::path::Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    let content_type = match extension.as_deref() {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("bmp") => "image/bmp",
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("mov") => "video/quicktime",
+        Some("mkv") => "video/x-matroska",
+        Some("mp3") => "audio/mpeg",
+        Some("ogg" | "oga" | "opus") => "audio/ogg",
+        Some("m4a") => "audio/mp4",
+        Some("wav") => "audio/wav",
+        Some("flac") => "audio/flac",
+        Some("pdf") => "application/pdf",
+        Some("txt" | "log") => "text/plain",
+        Some("zip") => "application/zip",
+        _ => "application/octet-stream",
+    };
+    Mime::from_str(content_type).expect("the extension table holds valid MIME types")
+}
+
+/// The attachment metadata variant that matches the message type the SDK
+/// derives from `mime`, so the event keeps the file size for every kind.
+fn attachment_info(mime: &Mime, size: UInt) -> AttachmentInfo {
+    let size = Some(size);
+    match mime.type_() {
+        mime::IMAGE => AttachmentInfo::Image(BaseImageInfo {
+            size,
+            ..Default::default()
+        }),
+        mime::VIDEO => AttachmentInfo::Video(BaseVideoInfo {
+            size,
+            ..Default::default()
+        }),
+        mime::AUDIO => AttachmentInfo::Audio(BaseAudioInfo {
+            size,
+            ..Default::default()
+        }),
+        _ => AttachmentInfo::File(BaseFileInfo { size }),
+    }
 }
 
 fn read_file_bytes(path: &std::path::Path) -> Result<(Vec<u8>, u64), MatrixCoreError> {
@@ -3957,13 +4012,14 @@ mod tests {
         LocalEchoMessageDetails, PendingOutgoingKind, PendingOutgoingRegistry, PowerLevelsChange,
         ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
         attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
-        backfill_room_history, ban_room_member, cancelled_state, create_room,
-        direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
-        fetch_room_media, insert_pending_outgoing_kind, invite_room_member, joined_room_members,
-        joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
-        list_public_rooms, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
-        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
-        map_local_message_activity, map_send_queue_update, member_target_display_name,
+        backfill_room_history, ban_room_member, cancelled_state, content_type_for_file_name,
+        create_room, direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync,
+        fetch_room_event, fetch_room_media, insert_pending_outgoing_kind, invite_room_member,
+        joined_room_members, joined_room_members_no_sync, joined_room_update_changes_members,
+        kick_room_member, list_public_rooms, map_cross_signing_status, map_decimals,
+        map_e2ee_backup_state, map_e2ee_recovery_state, map_emoji_array,
+        map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
+        map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, reply_mention_user_ids,
@@ -3977,14 +4033,14 @@ mod tests {
         room_members_from_parts, room_message_event_content,
         room_message_event_content_without_relation, room_read_state_from_parts,
         room_read_update_is_relevant, room_tag_summaries_from_tags, room_typing_from_sync_typing,
-        room_unable_to_decrypt_reason_from_sdk, send_message, set_display_name,
+        room_unable_to_decrypt_reason_from_sdk, send_file, send_message, set_display_name,
         set_room_member_power_level, sorted_room_member_summaries_from_parts,
         sync_message_replacement, unban_room_member, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, ListPublicRoomsRequest, PublicRoom,
-        PublicRoomsPage, PublicRoomsResult,
+        PublicRoomsPage, PublicRoomsResult, SendFileRequest,
     };
 
     #[test]
@@ -5292,8 +5348,8 @@ mod tests {
         },
         media::{MediaFormat, MediaThumbnailSettings},
         ruma::{
-            Int, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedRoomId, OwnedTransactionId,
-            OwnedUserId, UInt, UserId,
+            Int, MilliSecondsSinceUnixEpoch, OwnedEventId, OwnedMxcUri, OwnedRoomId,
+            OwnedTransactionId, OwnedUserId, UInt, UserId,
             api::client::media::get_content_thumbnail::v3::Method,
             events::{
                 AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent,
@@ -10747,6 +10803,138 @@ mod tests {
             mentions("Bobby, Bob", &alice),
             BTreeSet::from([alice, bob, bobby])
         );
+    }
+
+    #[test]
+    fn content_type_comes_from_the_file_name_extension() {
+        for (name, expected) in [
+            ("shot.png", "image/png"),
+            ("a.jpg", "image/jpeg"),
+            ("a.jpeg", "image/jpeg"),
+            ("a.gif", "image/gif"),
+            ("a.webp", "image/webp"),
+            ("a.bmp", "image/bmp"),
+            ("a.mp4", "video/mp4"),
+            ("a.m4v", "video/mp4"),
+            ("a.webm", "video/webm"),
+            ("a.mov", "video/quicktime"),
+            ("a.mkv", "video/x-matroska"),
+            ("a.mp3", "audio/mpeg"),
+            ("a.ogg", "audio/ogg"),
+            ("a.oga", "audio/ogg"),
+            ("a.opus", "audio/ogg"),
+            ("a.m4a", "audio/mp4"),
+            ("a.wav", "audio/wav"),
+            ("a.flac", "audio/flac"),
+            ("a.pdf", "application/pdf"),
+            ("a.txt", "text/plain"),
+            ("a.log", "text/plain"),
+            ("a.zip", "application/zip"),
+            ("PHOTO.PNG", "image/png"),
+            ("README", "application/octet-stream"),
+            ("archive.tar.gz", "application/octet-stream"),
+            ("drawing.svg", "application/octet-stream"),
+            ("notes.bin", "application/octet-stream"),
+        ] {
+            assert_eq!(
+                content_type_for_file_name(name).as_ref(),
+                expected,
+                "content type of {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn send_file_infers_image_and_falls_back_to_octet_stream() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(&client, JoinedRoomBuilder::new(room_id().as_ref()))
+                .await;
+            mock_server
+                .mock_room_state_encryption()
+                .plain()
+                .mount()
+                .await;
+            mock_server
+                .mock_authenticated_media_config()
+                .ok_default()
+                .mount()
+                .await;
+            mock_server
+                .mock_upload()
+                .ok(&OwnedMxcUri::from("mxc://localhost/uploaded"))
+                .mount()
+                .await;
+            mock_server
+                .mock_room_send()
+                .ok(OwnedEventId::try_from("$sent:localhost").expect("valid event id"))
+                .mount()
+                .await;
+            let dir = tempfile::tempdir().expect("temporary directory");
+            let send = |name: &str, content_type: Option<&str>| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, b"0123456789").expect("write the file to send");
+                send_file(
+                    &client,
+                    SendFileRequest {
+                        room_id: room_id().to_string(),
+                        path,
+                        filename: None,
+                        content_type: content_type.map(str::to_owned),
+                    },
+                )
+            };
+
+            send("shot.png", None).await.expect("send the picture");
+            send("notes.bin", None).await.expect("send the file");
+            send("forced.png", Some("text/plain"))
+                .await
+                .expect("send the typed file");
+
+            let bodies = request_bodies_containing(&mock_server, "/send/m.room.message/").await;
+            assert_eq!(bodies.len(), 3, "{bodies:?}");
+            assert_eq!(bodies[0]["msgtype"], "m.image");
+            assert_eq!(bodies[0]["body"], "shot.png");
+            assert_eq!(
+                bodies[0]["info"],
+                serde_json::json!({ "mimetype": "image/png", "size": 10 })
+            );
+            assert_eq!(bodies[1]["msgtype"], "m.file");
+            assert_eq!(
+                bodies[1]["info"],
+                serde_json::json!({ "mimetype": "application/octet-stream", "size": 10 })
+            );
+            assert_eq!(bodies[2]["msgtype"], "m.file");
+            assert_eq!(bodies[2]["info"]["mimetype"], "text/plain");
+
+            let upload_types = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled")
+                .iter()
+                .filter(|request| request.url.path() == "/_matrix/media/v3/upload")
+                .map(|request| {
+                    request
+                        .headers
+                        .get("content-type")
+                        .expect("upload has a content type")
+                        .to_str()
+                        .expect("ASCII content type")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                upload_types,
+                ["image/png", "application/octet-stream", "text/plain"]
+            );
+        });
     }
 
     #[test]
