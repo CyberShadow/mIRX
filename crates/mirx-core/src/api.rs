@@ -49,7 +49,9 @@ pub enum Command {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoginRequest {
-    pub homeserver_url: String,
+    /// A server name (`matrix.org`, `example.org:8448`) or a homeserver URL;
+    /// the client URL is discovered from it. See `login_server`.
+    pub server: String,
     pub username: String,
     pub password: String,
     pub device_display_name: String,
@@ -59,10 +61,25 @@ pub struct LoginRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreSessionRequest {
+    /// The exact homeserver URL `Event::LoggedIn` reported; never
+    /// rediscovered.
     pub homeserver_url: String,
     pub session: StoredSession,
     /// Start continuous sync once the session is ready, as `StartSync` would.
     pub start_sync: bool,
+}
+
+/// The server to log in to: the one the user typed, else the server part of
+/// a full user ID such as `@alice:matrix.org`, as Element and other clients
+/// accept.
+pub fn login_server(server: &str, username: &str) -> Result<String, String> {
+    let server = server.trim();
+    if !server.is_empty() {
+        return Ok(server.to_owned());
+    }
+    matrix_sdk::ruma::UserId::parse(username.trim())
+        .map(|user_id| user_id.server_name().to_string())
+        .map_err(|_| "enter a server, or a full user ID like @alice:matrix.org".to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1073,8 +1090,15 @@ pub enum SyncStopReason {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
-    LoggedIn { session: StoredSession },
-    SessionUpdated { session: StoredSession },
+    /// `homeserver_url` is the client URL discovered from
+    /// `LoginRequest.server`, which a later `RestoreSessionRequest` uses.
+    LoggedIn {
+        session: StoredSession,
+        homeserver_url: String,
+    },
+    SessionUpdated {
+        session: StoredSession,
+    },
     RestoredSession,
     SyncStarted,
     SyncStopped(SyncStopReason),

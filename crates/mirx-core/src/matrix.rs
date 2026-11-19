@@ -135,16 +135,28 @@ pub(crate) enum BackupServerStatusMode {
     Cached,
 }
 
+/// Where the client finds its homeserver.
+pub(crate) enum HomeserverSpec<'a> {
+    /// Login: a server name or URL, resolved through `.well-known` and a
+    /// `/versions` check.
+    Discover(&'a str),
+    /// Restore: the URL a login resolved, used as is.
+    Url(&'a str),
+}
+
 pub(crate) async fn build_client(
     config: &CoreConfig,
-    homeserver_url: &str,
+    homeserver: HomeserverSpec<'_>,
 ) -> Result<Client, MatrixCoreError> {
     let store_path = config.profile_dir.join("matrix-store");
     std::fs::create_dir_all(&store_path)
         .map_err(|err| MatrixCoreError::new(format!("failed to create store directory: {err}")))?;
 
-    Client::builder()
-        .homeserver_url(homeserver_url)
+    let builder = match homeserver {
+        HomeserverSpec::Discover(server) => Client::builder().server_name_or_homeserver_url(server),
+        HomeserverSpec::Url(url) => Client::builder().homeserver_url(url),
+    };
+    builder
         .sqlite_store(&store_path, Some(config.store_passphrase.as_str()))
         .with_encryption_settings(encryption_settings())
         .handle_refresh_tokens()

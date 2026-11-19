@@ -31,7 +31,7 @@ use mirx_core::{
     SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
     UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, start,
+    VerificationState, VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -280,7 +280,7 @@ const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";
 const STORE_PASSPHRASE_FILE_NAME: &str = "store-passphrase.dpapi";
 const PROTECTED_STORE_PASSPHRASE_MAGIC: &[u8] = b"mirx-ui-store-secret:v1\0";
 const STORE_PASSPHRASE_DPAPI_ENTROPY: &[u8] = b"mirx-ui/store-passphrase/v1";
-const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mirx-ui";
+const DEFAULT_DEVICE_DISPLAY_NAME: &str = "mirx";
 const VK_RETURN_KEY: WPARAM = 13;
 const VK_UP_KEY: WPARAM = 38;
 const VK_DOWN_KEY: WPARAM = 40;
@@ -2485,7 +2485,7 @@ struct SavedSession {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LoginForm {
-    homeserver_url: String,
+    server: String,
     username: String,
     password: String,
     device_display_name: String,
@@ -2493,8 +2493,8 @@ struct LoginForm {
 
 struct LoginDialogState {
     result: Arc<Mutex<Option<LoginForm>>>,
-    homeserver_label: HWND,
-    homeserver_url_edit: HWND,
+    server_label: HWND,
+    server_edit: HWND,
     username_label: HWND,
     username_edit: HWND,
     password_label: HWND,
@@ -2658,7 +2658,6 @@ struct WindowState {
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
     synthetic_load_in_progress: bool,
-    pending_login_homeserver_url: Option<String>,
     current_session_homeserver_url: Option<String>,
     tree_items: BTreeMap<isize, ViewId>,
     primary_tree_items: BTreeMap<ViewId, isize>,
@@ -2875,7 +2874,6 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         event_generation: 0,
         last_idle_probe_generation: None,
         synthetic_load_in_progress: false,
-        pending_login_homeserver_url: None,
         current_session_homeserver_url: None,
         tree_items: BTreeMap::new(),
         primary_tree_items: BTreeMap::new(),
@@ -5750,11 +5748,17 @@ unsafe extern "system" fn login_dialog_window_proc(
                         return 0;
                     };
                     let form = LoginForm {
-                        homeserver_url: read_window_text(state.homeserver_url_edit),
+                        server: read_window_text(state.server_edit),
                         username: read_window_text(state.username_edit),
                         password: read_window_text(state.password_edit),
                         device_display_name: read_window_text(state.device_display_name_edit),
                     };
+                    // Like mIRC's dialogs, a form that cannot work stays
+                    // open with the reason.
+                    if let Err(message) = login_server(&form.server, &form.username) {
+                        show_error_message(hwnd, "Select Server", &message);
+                        return 0;
+                    }
                     *state
                         .result
                         .lock()
@@ -7204,7 +7208,7 @@ unsafe fn show_login_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     };
     submit_login(
         state_mut(hwnd),
-        form.homeserver_url,
+        form.server,
         form.username,
         form.password,
         form.device_display_name,
@@ -7308,16 +7312,16 @@ unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
     let state = login_dialog_state_mut(hwnd).expect("login dialog state must exist");
 
-    state.homeserver_label = create_login_dialog_control(
+    state.server_label = create_login_dialog_control(
         hwnd,
         STATIC_CLASS_NAME,
-        "Homeserver URL",
+        "Server (matrix.org, or leave empty for a full user ID)",
         WS_CHILD | WS_VISIBLE,
         0,
         0,
         instance,
     )?;
-    state.homeserver_url_edit = create_login_dialog_control(
+    state.server_edit = create_login_dialog_control(
         hwnd,
         EDIT_CLASS_NAME,
         "",
@@ -7330,7 +7334,7 @@ unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
     state.username_label = create_login_dialog_control(
         hwnd,
         STATIC_CLASS_NAME,
-        "Username",
+        "User (alice or @alice:matrix.org)",
         WS_CHILD | WS_VISIBLE,
         0,
         0,
@@ -7368,7 +7372,7 @@ unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
     state.device_display_name_label = create_login_dialog_control(
         hwnd,
         STATIC_CLASS_NAME,
-        "Device Display Name",
+        "Device name",
         WS_CHILD | WS_VISIBLE,
         0,
         0,
@@ -7377,7 +7381,7 @@ unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
     state.device_display_name_edit = create_login_dialog_control(
         hwnd,
         EDIT_CLASS_NAME,
-        "",
+        DEFAULT_DEVICE_DISPLAY_NAME,
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
         WS_EX_CLIENTEDGE,
         LOGIN_DIALOG_DEVICE_ID,
@@ -7635,7 +7639,7 @@ unsafe fn layout_login_dialog(hwnd: HWND) {
         return;
     };
     let labels = [
-        state.homeserver_label,
+        state.server_label,
         state.username_label,
         state.password_label,
         state.device_display_name_label,
@@ -7645,7 +7649,7 @@ unsafe fn layout_login_dialog(hwnd: HWND) {
         MoveWindow(*hwnd_control, label_x, y, label_width, label_height, 1);
     }
     MoveWindow(
-        state.homeserver_url_edit,
+        state.server_edit,
         input_x,
         16 + label_height + spacing,
         input_width,
@@ -7703,8 +7707,8 @@ unsafe fn show_login_dialog(owner: HWND) -> Result<Option<LoginForm>, String> {
     let result = Arc::new(Mutex::new(None));
     let dialog_state = Box::new(LoginDialogState {
         result: Arc::clone(&result),
-        homeserver_label: null_mut(),
-        homeserver_url_edit: null_mut(),
+        server_label: null_mut(),
+        server_edit: null_mut(),
         username_label: null_mut(),
         username_edit: null_mut(),
         password_label: null_mut(),
@@ -8322,7 +8326,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
                 state.model.lifecycle_state = LifecycleState::CoreStarted;
             }
         }
-        Event::LoggedIn { session } => {
+        Event::LoggedIn {
+            session,
+            homeserver_url,
+        } => {
             if let Some(own_user_id) = &state.model.own_user_id
                 && *own_user_id != session.user_id
             {
@@ -8331,12 +8338,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
                     session.user_id
                 ));
             }
-            if let Some(homeserver_url) = state.pending_login_homeserver_url.clone() {
-                state.current_session_homeserver_url = Some(homeserver_url.clone());
+            // A replayed event load must not overwrite the saved session.
+            if !state.synthetic_load_in_progress {
                 save_session(&homeserver_url, &session)?;
-                state.pending_login_homeserver_url = None;
-            } else if !state.synthetic_load_in_progress {
-                return Err("received LoggedIn event without a pending homeserver URL".to_owned());
+                state.current_session_homeserver_url = Some(homeserver_url);
             }
             log_status(
                 state,
@@ -8455,7 +8460,6 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::VerificationState(event) => apply_verification_event(state, event),
         Event::LoggedOut => {
             delete_saved_session()?;
-            state.pending_login_homeserver_url = None;
             state.current_session_homeserver_url = None;
             state.model.own_user_id = None;
             state.model.status = "logged out".to_owned();
@@ -13057,7 +13061,6 @@ unsafe fn apply_synthetic_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> 
 unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usize), String> {
     {
         let state = state_mut(hwnd);
-        state.pending_login_homeserver_url = None;
         state.current_session_homeserver_url = None;
         state.room_activity.clear();
         state.closed_queries.clear();
@@ -14294,14 +14297,12 @@ unsafe fn navigate_compose_history(
 
 fn submit_login(
     state: &mut WindowState,
-    homeserver_url: String,
+    server: String,
     username: String,
     password: String,
     device_display_name: String,
 ) -> Result<(), String> {
-    if homeserver_url.is_empty() {
-        return Err("homeserver URL must not be empty".to_owned());
-    }
+    let server = login_server(&server, &username)?;
     if username.is_empty() {
         return Err("username must not be empty".to_owned());
     }
@@ -14319,10 +14320,10 @@ fn submit_login(
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
-    let connecting = status_log::connecting(&homeserver_url, &username);
+    let connecting = status_log::connecting(&server, &username);
     sender
         .send(Command::Login(LoginRequest {
-            homeserver_url: homeserver_url.clone(),
+            server,
             username,
             password,
             device_display_name,
@@ -14332,7 +14333,6 @@ fn submit_login(
 
     log_status(state, StatusLineKind::Info, connecting);
 
-    state.pending_login_homeserver_url = Some(homeserver_url);
     state.model.status = "logging in".to_owned();
     state.model.lifecycle_state = LifecycleState::LoggingIn;
     Ok(())
@@ -14375,7 +14375,6 @@ fn submit_restore_session(
         status_log::restoring(&homeserver_url, &user_id),
     );
     state.model.own_user_id = Some(user_id);
-    state.pending_login_homeserver_url = None;
     state.current_session_homeserver_url = Some(homeserver_url);
     state.model.status = "restoring saved session".to_owned();
     state.model.lifecycle_state = LifecycleState::Restoring;
@@ -16760,7 +16759,6 @@ mod tests {
             event_generation: 0,
             last_idle_probe_generation: None,
             synthetic_load_in_progress: false,
-            pending_login_homeserver_url: None,
             current_session_homeserver_url: None,
             tree_items: BTreeMap::new(),
             primary_tree_items: BTreeMap::new(),
@@ -28560,7 +28558,6 @@ mod tests {
     fn lifecycle_events_update_model_and_persist_login_session() {
         with_local_app_data(|root| {
             let mut state = test_state();
-            state.pending_login_homeserver_url = Some("https://matrix.example".to_owned());
 
             apply_core_event(&mut state, Event::Started).unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::CoreStarted);
@@ -28569,12 +28566,12 @@ mod tests {
                 &mut state,
                 Event::LoggedIn {
                     session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
                 },
             )
             .unwrap();
             assert_eq!(state.model.lifecycle_state, LifecycleState::Authenticated);
             assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
-            assert_eq!(state.pending_login_homeserver_url, None);
             assert_eq!(
                 state.current_session_homeserver_url,
                 Some("https://matrix.example".to_owned())
@@ -28641,6 +28638,7 @@ mod tests {
                 &mut state,
                 Event::LoggedIn {
                     session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
                 },
             )
             .unwrap();
@@ -28710,21 +28708,6 @@ mod tests {
     }
 
     #[test]
-    fn logged_in_event_requires_pending_homeserver_url() {
-        let mut state = test_state();
-
-        assert_eq!(
-            apply_core_event(
-                &mut state,
-                Event::LoggedIn {
-                    session: stored_session(),
-                },
-            ),
-            Err("received LoggedIn event without a pending homeserver URL".to_owned())
-        );
-    }
-
-    #[test]
     fn logged_in_event_for_another_account_is_rejected() {
         let mut state = test_state();
         state.synthetic_load_in_progress = true;
@@ -28735,6 +28718,7 @@ mod tests {
                 &mut state,
                 Event::LoggedIn {
                     session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
                 },
             ),
             Err("received LoggedIn for @alice:example while signed in as @me:example".to_owned())
@@ -28752,6 +28736,7 @@ mod tests {
                 &mut state,
                 Event::LoggedIn {
                     session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
                 },
             )
             .unwrap();
@@ -28956,11 +28941,11 @@ mod tests {
             String::new(),
         )
         .unwrap();
-        assert_eq!(
-            state.pending_login_homeserver_url,
-            Some("https://matrix.example".to_owned())
-        );
         assert_eq!(state.model.lifecycle_state, LifecycleState::LoggingIn);
+        assert_eq!(
+            status_log_lines(&state).last().map(String::as_str),
+            Some("[22:12] * Connecting to https://matrix.example as @alice:example")
+        );
 
         submit_restore_session(
             &mut state,
@@ -28979,11 +28964,11 @@ mod tests {
             submit_login(
                 &mut state,
                 String::new(),
-                "@alice:example".to_owned(),
+                "alice".to_owned(),
                 "secret".to_owned(),
                 String::new(),
             ),
-            Err("homeserver URL must not be empty".to_owned())
+            Err("enter a server, or a full user ID like @alice:matrix.org".to_owned())
         );
         assert_eq!(
             submit_restore_session(&mut state, String::new(), stored_session()),

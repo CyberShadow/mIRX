@@ -28,7 +28,7 @@ pub use api::{
     SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
     UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent,
+    VerificationRequest, VerificationState, VerificationStateEvent, login_server,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

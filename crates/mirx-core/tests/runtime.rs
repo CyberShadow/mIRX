@@ -759,7 +759,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
     handle
         .command_sender()
         .send(Command::Login(LoginRequest {
-            homeserver_url: "https://example.invalid".to_owned(),
+            server: "https://example.invalid".to_owned(),
             username: "user".to_owned(),
             password: "password".to_owned(),
             device_display_name: "mirx runtime test".to_owned(),
@@ -1347,12 +1347,13 @@ fn logged_in_event_serializes_and_deserializes_session_payload() {
     };
     let event = Event::LoggedIn {
         session: session.clone(),
+        homeserver_url: "https://matrix-client.example.org/".to_owned(),
     };
 
     let json = serde_json::to_string(&event).expect("serialize logged-in event");
     assert_eq!(
         json,
-        r#"{"LoggedIn":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"}}}"#
+        r#"{"LoggedIn":{"session":{"user_id":"@user:example.org","device_id":"DEVICE","access_token":"access-token","refresh_token":"refresh-token"},"homeserver_url":"https://matrix-client.example.org/"}}"#
     );
 
     let restored: Event = serde_json::from_str(&json).expect("deserialize logged-in event");
@@ -3171,5 +3172,30 @@ fn room_state_notice_content_mismatch_is_unrepresentable() {
         )
         .is_err(),
         "tagged room state notice content must reject mismatched payloads"
+    );
+}
+
+#[test]
+fn login_server_prefers_the_typed_server_then_the_user_id() {
+    assert_eq!(
+        mirx_core::login_server("matrix.org", "alice"),
+        Ok("matrix.org".to_owned())
+    );
+    assert_eq!(
+        mirx_core::login_server("", "@alice:example.org"),
+        Ok("example.org".to_owned())
+    );
+    assert_eq!(
+        mirx_core::login_server("https://hs.example", "@alice:other.org"),
+        Ok("https://hs.example".to_owned())
+    );
+    assert_eq!(mirx_core::login_server("  ", "@a:b"), Ok("b".to_owned()));
+    assert_eq!(
+        mirx_core::login_server(" matrix.org ", "alice"),
+        Ok("matrix.org".to_owned())
+    );
+    assert_eq!(
+        mirx_core::login_server("", "alice"),
+        Err("enter a server, or a full user ID like @alice:matrix.org".to_owned())
     );
 }

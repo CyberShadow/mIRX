@@ -98,7 +98,7 @@ fn live_send_login(
     handle
         .command_sender()
         .send(Command::Login(LoginRequest {
-            homeserver_url,
+            server: homeserver_url,
             username,
             password,
             device_display_name: device_display_name.to_owned(),
@@ -118,7 +118,7 @@ fn wait_for_live_login_and_synced_rooms(handle: &CoreHandle) {
             .recv_timeout(Duration::from_secs(2))
             .expect("login event")
         {
-            Event::LoggedIn { session } => {
+            Event::LoggedIn { session, .. } => {
                 assert_non_empty_session(&session, "session");
                 saw_logged_in = true;
             }

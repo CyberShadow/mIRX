@@ -7,7 +7,8 @@
         "device_id": "MIRXDEVICE",
         "access_token": "fixture-access-token",
         "refresh_token": null
-      }
+      },
+      "homeserver_url": "https://matrix.example/"
     }
   },
   "SyncStarted",

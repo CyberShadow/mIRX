@@ -2948,6 +2948,7 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
         Event::Started,
         Event::LoggedIn {
             session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
         },
     ])?)?;
     app.wait_for_lifecycle_state("authenticated", Duration::from_secs(5))?;
@@ -8898,6 +8899,7 @@ fn automation_driver_own_messages_do_not_colour_the_switchbar()
         Event::Started,
         Event::LoggedIn {
             session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
         },
         Event::SyncedRooms(vec![
             room_summary("!lobby:example", "Lobby", false),

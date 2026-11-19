@@ -19,7 +19,7 @@ use crate::api::{
     SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
-use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
+use crate::matrix::{self, BackupServerStatusMode, HomeserverSpec, MatrixCoreError};
 
 pub(crate) type EventSender = mpsc::Sender<Event>;
 
@@ -265,7 +265,8 @@ async fn handle_login(
         return false;
     }
 
-    let client = match matrix::build_client(config, &request.homeserver_url).await {
+    let client = match matrix::build_client(config, HomeserverSpec::Discover(&request.server)).await
+    {
         Ok(client) => client,
         Err(err) => {
             emit_matrix_error(event_tx, Operation::Login, err);
@@ -303,7 +304,13 @@ async fn handle_login(
         .as_ref()
         .ok()
         .map(|_| matrix::summarize_joined_room_read_states(&client));
-    emit_event(event_tx, Event::LoggedIn { session });
+    emit_event(
+        event_tx,
+        Event::LoggedIn {
+            session,
+            homeserver_url: client.homeserver().to_string(),
+        },
+    );
     match rooms {
         Ok(rooms) => match room_members.expect("room members exist after successful sync") {
             Ok(room_members) => emit_initial_synced_rooms_members_and_read_states(
@@ -361,13 +368,14 @@ async fn handle_restore_session(
         return false;
     }
 
-    let client = match matrix::build_client(config, &request.homeserver_url).await {
-        Ok(client) => client,
-        Err(err) => {
-            emit_matrix_error(event_tx, Operation::RestoreSession, err);
-            return false;
-        }
-    };
+    let client =
+        match matrix::build_client(config, HomeserverSpec::Url(&request.homeserver_url)).await {
+            Ok(client) => client,
+            Err(err) => {
+                emit_matrix_error(event_tx, Operation::RestoreSession, err);
+                return false;
+            }
+        };
 
     matrix::register_event_handlers(&client, event_tx.clone());
 
@@ -2112,7 +2120,7 @@ mod tests {
 
     fn login_request(mock_server: &MatrixMockServer, start_sync: bool) -> LoginRequest {
         LoginRequest {
-            homeserver_url: mock_server.uri(),
+            server: mock_server.uri(),
             username: "example".to_owned(),
             password: "wordpass".to_owned(),
             device_display_name: "mirx".to_owned(),
@@ -2160,14 +2168,20 @@ mod tests {
     }
 
     #[test]
-    fn login_with_start_sync_emits_logged_in_then_sync_started() {
+    fn login_with_start_sync_emits_logged_in_with_resolved_homeserver_then_sync_started() {
         run_local(async {
             let mock_server = mock_login_server().await;
             let (_profile, mut state, events) = login_events(&mock_server, true).await;
 
-            let logged_in =
-                event_position(&events, |event| matches!(event, Event::LoggedIn { .. }))
-                    .unwrap_or_else(|| panic!("LoggedIn in {events:?}"));
+            // The SDK normalises the discovered URL with a trailing slash.
+            let resolved = format!("{}/", mock_server.uri());
+            let logged_in = event_position(&events, |event| {
+                matches!(
+                    event,
+                    Event::LoggedIn { homeserver_url, .. } if *homeserver_url == resolved
+                )
+            })
+            .unwrap_or_else(|| panic!("LoggedIn at {resolved} in {events:?}"));
             let synced_rooms =
                 event_position(&events, |event| matches!(event, Event::SyncedRooms(_)))
                     .unwrap_or_else(|| panic!("SyncedRooms in {events:?}"));
