@@ -70,6 +70,8 @@ format=[HH:nn]
 
 `/font [-b] <size> <font name>` (or `/font` and every window's system-menu `Font...` for the font dialog) sets the one text font used by every window's text area, nick list and editbox; mIRC's default is Fixedsys 9. `/timestamp [on|off|-f format]` shows, toggles or formats line timestamps, which are in local time; the format takes mIRC `$asctime` tokens (`HH H hh h nn n ss s tt TT dd d mm m yy yyyy`, everything else literal). A missing file means the defaults; a file mirx cannot parse stops startup with an error naming the line, rather than being overwritten. The Wine test scripts pin `TZ=UTC` so timestamps are deterministic.
 
+Like mIRC, a character the text font has no glyph for draws in the first fallback font that has one, at the text font's height and on its baseline, in every text area and nick list: Segoe UI, Tahoma, Segoe UI Symbol, Segoe UI Emoji, Noto Emoji, then the Windows script fonts (Nirmala UI, Microsoft YaHei, Yu Gothic, Malgun Gothic and others), whichever are installed. Emoji are monochrome; sequences (ZWJ families, skin tones, flags) draw as their component glyphs, and invisible format characters such as variation selectors are not drawn. The Wine test prefixes get the monochrome Noto Emoji font from the devshell (`MIRX_WINE_FONTS`), so the harness chain is Fixedsys, Tahoma, Noto Emoji.
+
 Find is UI-scoped. Status and Thread Find search only loaded text, while Room Find searches loaded text first and can page older room history through backfill. `/find <text>`, `Edit > Find...`, and `Ctrl+F` all invoke the same behavior; Find does not use Matrix server-side search.
 
 ## Release Measurement
