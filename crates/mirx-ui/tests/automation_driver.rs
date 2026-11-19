@@ -6976,7 +6976,7 @@ fn automation_driver_sendfile_slash_rejects_active_thread() -> Result<(), Box<dy
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(
         app.dump_model()?.status,
-        "file attachments cannot target threads yet"
+        "* /sendfile: file attachments cannot target threads yet"
     );
     Ok(())
 }
@@ -10453,7 +10453,10 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
     let after_topic = app.dump_model()?;
-    assert_eq!(after_topic.status, "room is not joined: !invite:example");
+    assert_eq!(
+        after_topic.status,
+        "* /topic: room is not joined: !invite:example"
+    );
     assert!(after_topic.submitted_room_topic_commands.is_empty());
 
     app.set_compose_text("/reply $invite-root hello there")?;
@@ -10461,7 +10464,10 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
     let after_reply = app.dump_model()?;
-    assert_eq!(after_reply.status, "room is not joined: !invite:example");
+    assert_eq!(
+        after_reply.status,
+        "* /reply: room is not joined: !invite:example"
+    );
     assert!(after_reply.submitted_reply_commands.is_empty());
 
     app.set_compose_text("/react $invite-root +1")?;
@@ -10469,7 +10475,10 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
     let after_react = app.dump_model()?;
-    assert_eq!(after_react.status, "room is not joined: !invite:example");
+    assert_eq!(
+        after_react.status,
+        "* /react: room is not joined: !invite:example"
+    );
     assert!(after_react.submitted_reaction_commands.is_empty());
 
     app.set_compose_text("/part")?;
@@ -10477,7 +10486,10 @@ fn automation_driver_invited_room_is_navigable_but_not_sendable()
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
     let after_part = app.dump_model()?;
-    assert_eq!(after_part.status, "room is not joined: !invite:example");
+    assert_eq!(
+        after_part.status,
+        "* /part: room is not joined: !invite:example"
+    );
     assert!(after_part.submitted_membership_commands.is_empty());
     assert_eq!(after_part.last_error, None);
     assert!(
@@ -10951,7 +10963,7 @@ fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
     let ambiguous = app.dump_model()?;
     assert_eq!(
         ambiguous.status,
-        "accept failed: ambiguous invited room target: Shared"
+        "* /accept: accept failed: ambiguous invited room target: Shared"
     );
     assert_eq!(
         ambiguous.submitted_membership_commands,
@@ -10965,7 +10977,7 @@ fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
     let joined_target = app.dump_model()?;
     assert_eq!(
         joined_target.status,
-        "reject failed: room is not invited: !beta:example"
+        "* /reject: reject failed: room is not invited: !beta:example"
     );
     assert_eq!(
         joined_target.submitted_membership_commands,
@@ -10979,7 +10991,7 @@ fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
     let missing = app.dump_model()?;
     assert_eq!(
         missing.status,
-        "accept failed: invited room not found: Missing"
+        "* /accept: accept failed: invited room not found: Missing"
     );
     assert_eq!(
         missing.submitted_membership_commands,
@@ -10992,7 +11004,10 @@ fn automation_driver_slash_accept_and_reject_targets_only_resolve_invites()
     app.wait_idle(Duration::from_secs(5))?;
     assert_eq!(app.compose_text()?, "");
     let no_target = app.dump_model()?;
-    assert_eq!(no_target.status, "reject failed: no invited room selected");
+    assert_eq!(
+        no_target.status,
+        "* /reject: reject failed: no invited room selected"
+    );
     assert_eq!(
         no_target.submitted_membership_commands,
         rejected.submitted_membership_commands
@@ -11237,7 +11252,10 @@ fn automation_driver_slash_query_reports_ambiguous_existing_direct_room_matches(
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "ambiguous query target: @alice:example.org");
+    assert_eq!(
+        model.status,
+        "* /query: ambiguous query target: @alice:example.org"
+    );
     assert!(model.submitted_direct_room_commands.is_empty());
 
     let ui_state = app.dump_ui_state()?;
@@ -11413,7 +11431,10 @@ fn automation_driver_slash_query_ambiguous_direct_room_reports_local_error()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "ambiguous query target: @alice:example.org");
+    assert_eq!(
+        model.status,
+        "* /query: ambiguous query target: @alice:example.org"
+    );
     assert!(model.submitted_direct_room_commands.is_empty());
     assert_eq!(model.selected_room.as_deref(), Some("!beta:example"));
     assert_eq!(
@@ -11527,7 +11548,7 @@ fn automation_driver_slash_part_from_status_reports_no_room_selected()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "no room selected");
+    assert_eq!(model.status, "* /part: no room selected");
     assert!(model.submitted_membership_commands.is_empty());
     assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
 
@@ -11940,7 +11961,7 @@ fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "usage: /reply <event-id> <message>");
+    assert_eq!(model.status, "* /reply: insufficient parameters");
     assert!(model.submitted_reply_commands.is_empty());
     assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_edit_commands.is_empty());
@@ -11954,7 +11975,7 @@ fn automation_driver_invalid_reply_reports_usage_without_recording_commands()
         ui_state
             .status_bar
             .text
-            .contains("usage: /reply <event-id> <message>")
+            .contains("* /reply: insufficient parameters")
     );
 
     drop(app);
@@ -12065,7 +12086,7 @@ fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "usage: /redact <event-id>");
+    assert_eq!(model.status, "* /redact: insufficient parameters");
     assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
     assert_eq!(model.last_error, None);
@@ -12077,7 +12098,7 @@ fn automation_driver_invalid_redact_reports_usage_without_recording_commands()
         ui_state
             .status_bar
             .text
-            .contains("usage: /redact <event-id>")
+            .contains("* /redact: insufficient parameters")
     );
 
     drop(app);
@@ -12108,7 +12129,7 @@ fn automation_driver_invalid_react_reports_usage_without_recording_commands()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "usage: /react <event-id> <key>");
+    assert_eq!(model.status, "* /react: insufficient parameters");
     assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
     assert_eq!(model.last_error, None);
@@ -12120,7 +12141,7 @@ fn automation_driver_invalid_react_reports_usage_without_recording_commands()
         ui_state
             .status_bar
             .text
-            .contains("usage: /react <event-id> <key>")
+            .contains("* /react: insufficient parameters")
     );
 
     drop(app);
@@ -12151,7 +12172,7 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
     assert_eq!(app.compose_text()?, "");
 
     let model = app.dump_model()?;
-    assert_eq!(model.status, "usage: /edit <event-id> <replacement text>");
+    assert_eq!(model.status, "* /edit: insufficient parameters");
     assert!(model.submitted_edit_commands.is_empty());
     assert!(model.submitted_reaction_commands.is_empty());
     assert!(model.submitted_redaction_commands.is_empty());
@@ -12164,7 +12185,7 @@ fn automation_driver_invalid_edit_reports_usage_without_recording_commands()
         ui_state
             .status_bar
             .text
-            .contains("usage: /edit <event-id> <replacement text>")
+            .contains("* /edit: insufficient parameters")
     );
 
     drop(app);
@@ -13702,12 +13723,12 @@ fn automation_driver_find_active_view_empty_query_matches_slash_find_validation(
         slash_ui_state
             .status_bar
             .text
-            .contains("usage: /find <text>")
+            .contains("* /find: insufficient parameters")
     );
 
     let slash_model = app.dump_model()?;
     assert_eq!(slash_model.selected_room.as_deref(), Some("!beta:example"));
-    assert_eq!(slash_model.status, "usage: /find <text>");
+    assert_eq!(slash_model.status, "* /find: insufficient parameters");
     assert_eq!(slash_model.last_error, None);
     assert_no_submitted_commands(&slash_model);
 
@@ -14010,7 +14031,7 @@ fn automation_driver_slash_unknown_feedback_is_local() -> Result<(), Box<dyn std
         ui_state
             .status_bar
             .text
-            .contains("unknown command: /doesnotexist")
+            .contains("* /doesnotexist: unknown command")
     );
     assert!(
         !ui_state
@@ -14062,7 +14083,7 @@ fn automation_driver_literal_slash_submission_is_sent_as_text()
         !app.dump_ui_state()?
             .status_bar
             .text
-            .contains("usage: /me <action>")
+            .contains("* /me: insufficient parameters")
     );
 
     app.send_compose_key(ComposeKey::Up)?;
@@ -14136,7 +14157,7 @@ fn automation_driver_empty_me_reports_usage_without_sending()
         app.dump_ui_state()?
             .status_bar
             .text
-            .contains("usage: /me <action>")
+            .contains("* /me: insufficient parameters")
     );
 
     app.send_compose_key(ComposeKey::Up)?;

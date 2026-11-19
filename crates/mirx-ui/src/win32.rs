@@ -1,6 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{OsStr, c_void};
 use std::fs;
@@ -130,11 +129,16 @@ use crate::{
     },
 };
 
+mod commands;
 mod mdi;
 mod nick_completion;
 mod status_log;
 mod timeline_text;
 
+use commands::{
+    CommandError, ComposeSubmission, E2eeSlashCommand, SlashCommand, VerificationAction,
+    local_command_history_entry, parse_compose_submission,
+};
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
 
@@ -2577,84 +2581,6 @@ enum ComposeHistoryDirection {
     Next,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ComposeSubmission<'a> {
-    Message {
-        presentation: RoomMessagePresentationKind,
-        body: Cow<'a, str>,
-    },
-    LocalCommand(LocalSlashCommand<'a>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum LocalSlashCommand<'a> {
-    Status,
-    Find {
-        query: String,
-    },
-    Window {
-        target: &'a str,
-    },
-    Join {
-        target: String,
-    },
-    Query {
-        user_id: String,
-    },
-    Accept {
-        target: Option<String>,
-    },
-    Reject {
-        target: Option<String>,
-    },
-    Part {
-        target: Option<String>,
-    },
-    React {
-        target_event_id: String,
-        key: String,
-    },
-    Reply {
-        target_event_id: String,
-        body: String,
-    },
-    SendFile {
-        path: String,
-    },
-    Edit {
-        target_event_id: String,
-        body: String,
-    },
-    Redact {
-        event_id: String,
-    },
-    Unreact {
-        reaction_event_id: String,
-    },
-    Topic {
-        topic: String,
-    },
-    Clear,
-    E2ee(E2eeSlashCommand),
-    Verify {
-        action: VerificationAction,
-    },
-    Invalid {
-        feedback: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum E2eeSlashCommand {
-    ShowStatus,
-    Refresh,
-    RecoverDialog,
-    Setup {
-        passphrase: Option<String>,
-        wait_for_backups_to_upload: bool,
-    },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WindowTargetError {
     Unknown,
@@ -2666,14 +2592,6 @@ enum QueryTargetResolution {
     None,
     Single(String),
     Ambiguous,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VerificationAction {
-    Accept,
-    Cancel,
-    Confirm,
-    Reject,
 }
 
 struct WindowState {
@@ -12700,9 +12618,13 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
                 None,
             )?;
         }
-        ComposeSubmission::LocalCommand(command) => {
-            let history_entry = local_command_history_entry(&input, &command);
-            execute_local_slash_command(hwnd, command)?;
+        ComposeSubmission::LocalCommand(parsed) => {
+            let history_entry = local_command_history_entry(&input, &parsed);
+            match parsed.and_then(|command| execute_slash_command(hwnd, command)) {
+                Ok(Some(status)) => set_local_command_status(hwnd, status)?,
+                Ok(None) => {}
+                Err(error) => report_command_error(hwnd, error)?,
+            }
             if let Some(entry) = history_entry {
                 state_mut(hwnd).compose_history.record_submission(entry);
             }
@@ -12766,312 +12688,6 @@ unsafe fn submit_compose_from_control(
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
     Ok(room_id)
-}
-
-fn parse_compose_submission(input: &str) -> ComposeSubmission<'_> {
-    if !input.starts_with('/') {
-        return ComposeSubmission::Message {
-            presentation: RoomMessagePresentationKind::Text,
-            body: Cow::Borrowed(input),
-        };
-    }
-
-    if input.starts_with("//") {
-        return ComposeSubmission::Message {
-            presentation: RoomMessagePresentationKind::Text,
-            body: Cow::Owned(input[1..].to_owned()),
-        };
-    }
-
-    let command_end = input
-        .bytes()
-        .position(|byte| byte.is_ascii_whitespace())
-        .unwrap_or(input.len());
-    let command_name = &input[1..command_end];
-    if command_name.eq_ignore_ascii_case("me") {
-        let action = input[command_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
-        if action.is_empty() {
-            return ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
-                feedback: "usage: /me <action>".to_owned(),
-            });
-        }
-        return ComposeSubmission::Message {
-            presentation: RoomMessagePresentationKind::Emote,
-            body: Cow::Borrowed(action),
-        };
-    }
-
-    ComposeSubmission::LocalCommand(parse_slash_command(input))
-}
-
-fn parse_slash_command(input: &str) -> LocalSlashCommand<'_> {
-    let command_end = input
-        .bytes()
-        .position(|byte| byte.is_ascii_whitespace())
-        .unwrap_or(input.len());
-    let command_name = &input[1..command_end];
-    let argument = input[command_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
-
-    match command_name.to_ascii_lowercase().as_str() {
-        "status" if argument.is_empty() => LocalSlashCommand::Status,
-        "status" => LocalSlashCommand::Invalid {
-            feedback: "usage: /status".to_owned(),
-        },
-        "find" if !argument.is_empty() => LocalSlashCommand::Find {
-            query: argument.to_owned(),
-        },
-        "find" => LocalSlashCommand::Invalid {
-            feedback: "usage: /find <text>".to_owned(),
-        },
-        "window" if !argument.is_empty() => LocalSlashCommand::Window { target: argument },
-        "window" => LocalSlashCommand::Invalid {
-            feedback: "usage: /window <room-id-or-display-name>".to_owned(),
-        },
-        "join" if !argument.is_empty() => LocalSlashCommand::Join {
-            target: argument.to_owned(),
-        },
-        "join" => LocalSlashCommand::Invalid {
-            feedback: "usage: /join <room-id-or-alias>".to_owned(),
-        },
-        "query" if !argument.is_empty() => LocalSlashCommand::Query {
-            user_id: argument.to_owned(),
-        },
-        "query" => LocalSlashCommand::Invalid {
-            feedback: "usage: /query <mxid>".to_owned(),
-        },
-        "accept" if argument.is_empty() => LocalSlashCommand::Accept { target: None },
-        "accept" => LocalSlashCommand::Accept {
-            target: Some(argument.to_owned()),
-        },
-        "reject" if argument.is_empty() => LocalSlashCommand::Reject { target: None },
-        "reject" => LocalSlashCommand::Reject {
-            target: Some(argument.to_owned()),
-        },
-        "part" if argument.is_empty() => LocalSlashCommand::Part { target: None },
-        "part" => LocalSlashCommand::Part {
-            target: Some(argument.to_owned()),
-        },
-        "react" => parse_react_slash_command(argument),
-        "reply" => parse_reply_slash_command(argument),
-        "sendfile" if !argument.is_empty() => LocalSlashCommand::SendFile {
-            path: argument.to_owned(),
-        },
-        "sendfile" => LocalSlashCommand::Invalid {
-            feedback: "usage: /sendfile <path>".to_owned(),
-        },
-        "edit" => parse_edit_slash_command(argument),
-        "redact" => parse_redact_slash_command(argument),
-        "unreact" => parse_unreact_slash_command(argument),
-        "topic" if !argument.is_empty() => LocalSlashCommand::Topic {
-            topic: argument.to_owned(),
-        },
-        "topic" => LocalSlashCommand::Invalid {
-            feedback: "usage: /topic <text>".to_owned(),
-        },
-        "clear" if argument.is_empty() => LocalSlashCommand::Clear,
-        "clear" => LocalSlashCommand::Invalid {
-            feedback: "usage: /clear".to_owned(),
-        },
-        "e2ee" => match argument.to_ascii_lowercase().as_str() {
-            "" | "status" => LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus),
-            "refresh" => LocalSlashCommand::E2ee(E2eeSlashCommand::Refresh),
-            "recover" => LocalSlashCommand::E2ee(E2eeSlashCommand::RecoverDialog),
-            _ => parse_e2ee_setup_slash_command(argument),
-        },
-        "verify" => match argument.to_ascii_lowercase().as_str() {
-            "accept" => LocalSlashCommand::Verify {
-                action: VerificationAction::Accept,
-            },
-            "cancel" => LocalSlashCommand::Verify {
-                action: VerificationAction::Cancel,
-            },
-            "confirm" => LocalSlashCommand::Verify {
-                action: VerificationAction::Confirm,
-            },
-            "reject" => LocalSlashCommand::Verify {
-                action: VerificationAction::Reject,
-            },
-            _ => LocalSlashCommand::Invalid {
-                feedback: "usage: /verify accept|cancel|confirm|reject".to_owned(),
-            },
-        },
-        _ => LocalSlashCommand::Invalid {
-            feedback: format!("unknown command: {}", &input[..command_end]),
-        },
-    }
-}
-
-fn parse_e2ee_setup_slash_command(argument: &str) -> LocalSlashCommand<'_> {
-    let action_end = argument
-        .bytes()
-        .position(|byte| byte.is_ascii_whitespace())
-        .unwrap_or(argument.len());
-    let action = &argument[..action_end];
-    if !action.eq_ignore_ascii_case("setup") {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /e2ee [status|refresh|recover|setup]".to_owned(),
-        };
-    }
-
-    let remainder = argument[action_end..].trim_start();
-    if remainder.is_empty() {
-        return LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-            passphrase: None,
-            wait_for_backups_to_upload: false,
-        });
-    }
-
-    let keyword_end = remainder
-        .bytes()
-        .position(|byte| byte.is_ascii_whitespace())
-        .unwrap_or(remainder.len());
-    let keyword = &remainder[..keyword_end];
-    let tail = remainder[keyword_end..].trim_start();
-    if keyword.eq_ignore_ascii_case("wait") && tail.is_empty() {
-        return LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-            passphrase: None,
-            wait_for_backups_to_upload: true,
-        });
-    }
-
-    let (wait_for_backups_to_upload, passphrase_text) =
-        if keyword.eq_ignore_ascii_case("passphrase") {
-            (false, tail)
-        } else if keyword.eq_ignore_ascii_case("wait") {
-            let passphrase_keyword_end = tail
-                .bytes()
-                .position(|byte| byte.is_ascii_whitespace())
-                .unwrap_or(tail.len());
-            let passphrase_keyword = &tail[..passphrase_keyword_end];
-            if !passphrase_keyword.eq_ignore_ascii_case("passphrase") {
-                return LocalSlashCommand::Invalid {
-                    feedback: "usage: /e2ee setup [wait] [passphrase <passphrase>]".to_owned(),
-                };
-            }
-            (true, tail[passphrase_keyword_end..].trim_start())
-        } else {
-            return LocalSlashCommand::Invalid {
-                feedback: "usage: /e2ee setup [wait] [passphrase <passphrase>]".to_owned(),
-            };
-        };
-
-    if passphrase_text.is_empty() {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /e2ee setup [wait] [passphrase <passphrase>]".to_owned(),
-        };
-    }
-
-    LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-        passphrase: Some(passphrase_text.to_owned()),
-        wait_for_backups_to_upload,
-    })
-}
-
-fn parse_react_slash_command(argument: &str) -> LocalSlashCommand<'_> {
-    let Some(target_end) = argument.bytes().position(|byte| byte.is_ascii_whitespace()) else {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /react <event-id> <key>".to_owned(),
-        };
-    };
-    let target_event_id = &argument[..target_end];
-    let key = argument[target_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
-    if target_event_id.is_empty() || key.is_empty() {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /react <event-id> <key>".to_owned(),
-        };
-    }
-    LocalSlashCommand::React {
-        target_event_id: target_event_id.to_owned(),
-        key: key.to_owned(),
-    }
-}
-
-fn parse_edit_slash_command(argument: &str) -> LocalSlashCommand<'_> {
-    let Some(target_end) = argument.bytes().position(|byte| byte.is_ascii_whitespace()) else {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
-        };
-    };
-    let target_event_id = &argument[..target_end];
-    let body = argument[target_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
-    if target_event_id.is_empty() || body.is_empty() {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
-        };
-    }
-    LocalSlashCommand::Edit {
-        target_event_id: target_event_id.to_owned(),
-        body: body.to_owned(),
-    }
-}
-
-fn parse_reply_slash_command(argument: &str) -> LocalSlashCommand<'_> {
-    let Some(target_end) = argument.bytes().position(|byte| byte.is_ascii_whitespace()) else {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /reply <event-id> <message>".to_owned(),
-        };
-    };
-    let target_event_id = &argument[..target_end];
-    let body = argument[target_end..].trim_matches(|ch: char| ch.is_ascii_whitespace());
-    if target_event_id.is_empty() || body.is_empty() {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /reply <event-id> <message>".to_owned(),
-        };
-    }
-    LocalSlashCommand::Reply {
-        target_event_id: target_event_id.to_owned(),
-        body: body.to_owned(),
-    }
-}
-
-fn parse_unreact_slash_command(argument: &str) -> LocalSlashCommand<'_> {
-    if argument.is_empty() || argument.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /unreact <reaction-event-id>".to_owned(),
-        };
-    }
-    LocalSlashCommand::Unreact {
-        reaction_event_id: argument.to_owned(),
-    }
-}
-
-fn parse_redact_slash_command(argument: &str) -> LocalSlashCommand<'_> {
-    if argument.is_empty() || argument.bytes().any(|byte| byte.is_ascii_whitespace()) {
-        return LocalSlashCommand::Invalid {
-            feedback: "usage: /redact <event-id>".to_owned(),
-        };
-    }
-    LocalSlashCommand::Redact {
-        event_id: argument.to_owned(),
-    }
-}
-
-fn local_command_history_entry(input: &str, command: &LocalSlashCommand<'_>) -> Option<String> {
-    if (matches!(command, LocalSlashCommand::Invalid { .. }) && is_e2ee_command_input(input))
-        || matches!(
-            command,
-            LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-                passphrase: Some(_),
-                ..
-            })
-        )
-    {
-        return None;
-    }
-
-    Some(input.to_owned())
-}
-
-fn is_e2ee_command_input(input: &str) -> bool {
-    if !input.starts_with('/') {
-        return false;
-    }
-
-    let command_end = input
-        .bytes()
-        .position(|byte| byte.is_ascii_whitespace())
-        .unwrap_or(input.len());
-    input[1..command_end].eq_ignore_ascii_case("e2ee")
 }
 
 fn submit_compose(
@@ -13232,164 +12848,90 @@ fn latest_durable_thread_event_id(
     latest_event_id.to_owned()
 }
 
-unsafe fn execute_local_slash_command(
+/// Runs a typed command. `Ok(Some(status))` is feedback for the status bar;
+/// `Ok(None)` means the command reported (or needs) nothing.
+unsafe fn execute_slash_command(
     hwnd: HWND,
-    command: LocalSlashCommand<'_>,
-) -> Result<(), String> {
+    command: SlashCommand,
+) -> Result<Option<String>, CommandError> {
+    let name = command.name();
+    run_slash_command(hwnd, command).map_err(|reason| CommandError::new(name, reason))
+}
+
+unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<String>, String> {
     match command {
-        LocalSlashCommand::Status => {
+        SlashCommand::Status => {
             activate_view(hwnd, &ViewId::Status, None)?;
-            set_local_command_status(hwnd, "status window active".to_owned())
+            Ok(Some("status window active".to_owned()))
         }
-        LocalSlashCommand::Find { query } => match execute_active_view_find(hwnd, &query) {
-            Ok(_) => Ok(()),
-            Err(message) => set_local_command_status(hwnd, message),
-        },
-        LocalSlashCommand::Window { target } => {
-            let room_id = match resolve_room_command_target(&state_ref(hwnd).model.rooms, target) {
+        SlashCommand::Find { query } => {
+            execute_active_view_find(hwnd, &query)?;
+            Ok(None)
+        }
+        SlashCommand::Window { target } => {
+            let room_id = match resolve_room_command_target(&state_ref(hwnd).model.rooms, &target) {
                 Ok(room_id) => room_id,
                 Err(WindowTargetError::Unknown) => {
-                    return set_local_command_status(
-                        hwnd,
-                        format!("unknown window target: {target}"),
-                    );
+                    return Err(format!("unknown window target: {target}"));
                 }
                 Err(WindowTargetError::Ambiguous) => {
-                    return set_local_command_status(
-                        hwnd,
-                        format!("ambiguous window target: {target}"),
-                    );
+                    return Err(format!("ambiguous window target: {target}"));
                 }
             };
             activate_view(hwnd, &ViewId::Room(room_id), None)?;
-            set_local_command_status(hwnd, format!("window active: {target}"))
+            Ok(Some(format!("window active: {target}")))
         }
-        LocalSlashCommand::Join { target } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_join_slash_command(state, target)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        SlashCommand::Join { target } => {
+            submit_join_slash_command(state_mut(hwnd), target).map(Some)
         }
-        LocalSlashCommand::Query { user_id } => {
+        SlashCommand::Query { user_id } => {
             match resolve_direct_room_query_target(&state_ref(hwnd).model, &user_id) {
                 QueryTargetResolution::Single(room_id) => {
                     activate_view(hwnd, &ViewId::Room(room_id), None)?;
-                    set_local_command_status(hwnd, format!("query opened: {user_id}"))
+                    Ok(Some(format!("query opened: {user_id}")))
                 }
                 QueryTargetResolution::Ambiguous => {
-                    set_local_command_status(hwnd, format!("ambiguous query target: {user_id}"))
+                    Err(format!("ambiguous query target: {user_id}"))
                 }
                 QueryTargetResolution::None => {
-                    let result = {
-                        let state = state_mut(hwnd);
-                        submit_query_slash_command(state, user_id)
-                    };
-                    match result {
-                        Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-                    }
+                    submit_query_slash_command(state_mut(hwnd), user_id).map(Some)
                 }
             }
         }
-        LocalSlashCommand::Accept { target } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_accept_slash_command(state, target.as_deref())
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        SlashCommand::Accept { target } => {
+            submit_accept_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
         }
-        LocalSlashCommand::Reject { target } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_reject_slash_command(state, target.as_deref())
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        SlashCommand::Reject { target } => {
+            submit_reject_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
         }
-        LocalSlashCommand::Part { target } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_part_slash_command(state, target.as_deref())
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        SlashCommand::Part { target } => {
+            submit_part_slash_command(state_mut(hwnd), target.as_deref()).map(Some)
         }
-        LocalSlashCommand::React {
+        SlashCommand::React {
             target_event_id,
             key,
-        } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_react_slash_command(state, target_event_id, key)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
-        }
-        LocalSlashCommand::Reply {
+        } => submit_react_slash_command(state_mut(hwnd), target_event_id, key).map(Some),
+        SlashCommand::Reply {
             target_event_id,
             body,
-        } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_reply_slash_command(state, target_event_id, body)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        } => submit_reply_slash_command(state_mut(hwnd), target_event_id, body).map(Some),
+        SlashCommand::SendFile { path } => {
+            submit_send_file_slash_command(state_mut(hwnd), path).map(Some)
         }
-        LocalSlashCommand::SendFile { path } => {
-            let result = submit_send_file_slash_command(state_mut(hwnd), path);
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
-        }
-        LocalSlashCommand::Edit {
+        SlashCommand::Edit {
             target_event_id,
             body,
-        } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_edit_slash_command(state, target_event_id, body)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        } => submit_edit_slash_command(state_mut(hwnd), target_event_id, body).map(Some),
+        SlashCommand::Redact { event_id } => {
+            submit_redact_slash_command(state_mut(hwnd), event_id).map(Some)
         }
-        LocalSlashCommand::Redact { event_id } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_redact_slash_command(state, event_id)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        SlashCommand::Unreact { reaction_event_id } => {
+            submit_unreact_slash_command(state_mut(hwnd), reaction_event_id).map(Some)
         }
-        LocalSlashCommand::Unreact { reaction_event_id } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_unreact_slash_command(state, reaction_event_id)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
+        SlashCommand::Topic { topic } => {
+            submit_topic_slash_command(state_mut(hwnd), topic).map(Some)
         }
-        LocalSlashCommand::Topic { topic } => {
-            let result = {
-                let state = state_mut(hwnd);
-                submit_topic_slash_command(state, topic)
-            };
-            match result {
-                Ok(message) | Err(message) => set_local_command_status(hwnd, message),
-            }
-        }
-        LocalSlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
+        SlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
             ViewId::Room(room_id) => {
                 {
                     let state = state_mut(hwnd);
@@ -13399,18 +12941,16 @@ unsafe fn execute_local_slash_command(
                     prune_decoded_images(state);
                 }
                 refresh_view_content(hwnd, &ViewId::Room(room_id.clone()))?;
-                set_local_command_status(hwnd, format!("cleared window: {room_id}"))
+                Ok(Some(format!("cleared window: {room_id}")))
             }
-            ViewId::Thread { .. } => {
-                set_local_command_status(hwnd, "nothing to clear in thread view".to_owned())
-            }
+            ViewId::Thread { .. } => Err("nothing to clear in thread view".to_owned()),
             ViewId::Status => {
                 state_mut(hwnd).model.status_log.clear();
                 refresh_view_content(hwnd, &ViewId::Status)?;
-                set_local_command_status(hwnd, "cleared window: status".to_owned())
+                Ok(Some("cleared window: status".to_owned()))
             }
         },
-        LocalSlashCommand::E2ee(command) => match command {
+        SlashCommand::E2ee(command) => match command {
             E2eeSlashCommand::ShowStatus => {
                 let state = state_mut(hwnd);
                 let lines = match &state.model.last_e2ee_status {
@@ -13421,70 +12961,59 @@ unsafe fn execute_local_slash_command(
                     log_status(state, StatusLineKind::Info, line);
                 }
                 activate_view(hwnd, &ViewId::Status, None)?;
-                set_local_command_status(hwnd, "e2ee status shown".to_owned())
+                Ok(Some("e2ee status shown".to_owned()))
             }
             E2eeSlashCommand::Refresh => {
+                let state = state_mut(hwnd);
                 let command = Command::RefreshE2eeStatus;
-                let result = {
-                    let state = state_mut(hwnd);
-                    let sender = match state.command_sender.as_ref() {
-                        Some(sender) => sender,
-                        None => {
-                            return set_local_command_status(
-                                hwnd,
-                                "core command sender is not available".to_owned(),
-                            );
-                        }
-                    };
-                    sender.send(command.clone()).map_err(|err| {
+                state
+                    .command_sender
+                    .as_ref()
+                    .ok_or_else(|| "core command sender is not available".to_owned())?
+                    .send(command.clone())
+                    .map_err(|err| {
                         format!("failed to enqueue refresh e2ee status command: {err}")
                     })?;
-                    #[cfg(test)]
-                    state.recorded_commands.push(command);
-                    Ok::<(), String>(())
-                };
-                match result {
-                    Ok(()) => set_local_command_status(hwnd, "e2ee refresh submitted".to_owned()),
-                    Err(message) => set_local_command_status(hwnd, message),
-                }
+                #[cfg(test)]
+                state.recorded_commands.push(command);
+                Ok(Some("e2ee refresh submitted".to_owned()))
             }
-            E2eeSlashCommand::RecoverDialog => match show_recover_e2ee_menu_dialog(hwnd) {
-                Ok(_) => Ok(()),
-                Err(message) => set_local_command_status(hwnd, message),
-            },
+            E2eeSlashCommand::RecoverDialog => {
+                show_recover_e2ee_menu_dialog(hwnd)?;
+                Ok(None)
+            }
             E2eeSlashCommand::Setup {
                 passphrase,
                 wait_for_backups_to_upload,
-            } => match submit_setup_e2ee_recovery(
-                state_mut(hwnd),
-                passphrase,
-                wait_for_backups_to_upload,
-            ) {
-                Ok(()) => refresh_status_bar(hwnd),
-                Err(message) => set_local_command_status(hwnd, message),
-            },
+            } => {
+                submit_setup_e2ee_recovery(
+                    state_mut(hwnd),
+                    passphrase,
+                    wait_for_backups_to_upload,
+                )?;
+                refresh_status_bar(hwnd)?;
+                Ok(None)
+            }
         },
-        LocalSlashCommand::Verify { action } => {
+        SlashCommand::Verify { action } => {
             let state = state_mut(hwnd);
-            let result = match action {
+            match action {
                 VerificationAction::Accept => submit_accept_verification(state),
                 VerificationAction::Cancel => submit_cancel_verification(state),
                 VerificationAction::Confirm => submit_confirm_verification_sas(state),
                 VerificationAction::Reject => submit_reject_verification_sas(state),
-            };
-            match result {
-                Ok(()) => set_local_command_status(
-                    hwnd,
-                    format!(
-                        "verification {} submitted",
-                        verification_action_label(action)
-                    ),
-                ),
-                Err(message) => set_local_command_status(hwnd, message),
-            }
+            }?;
+            Ok(Some(format!(
+                "verification {} submitted",
+                verification_action_label(action)
+            )))
         }
-        LocalSlashCommand::Invalid { feedback } => set_local_command_status(hwnd, feedback),
     }
+}
+
+/// A typed command's error, for the window it was typed in.
+unsafe fn report_command_error(hwnd: HWND, error: CommandError) -> Result<(), String> {
+    set_local_command_status(hwnd, error.to_string())
 }
 
 unsafe fn set_local_command_status(hwnd: HWND, message: String) -> Result<(), String> {
@@ -25292,116 +24821,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_compose_submission_distinguishes_text_emote_literal_slash_and_commands() {
-        assert_eq!(
-            parse_compose_submission("hello"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Borrowed("hello"),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("/me waves"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Emote,
-                body: Cow::Borrowed("waves"),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("/ME    waves"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Emote,
-                body: Cow::Borrowed("waves"),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("/me"),
-            ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
-                feedback: "usage: /me <action>".to_owned(),
-            })
-        );
-        assert_eq!(
-            parse_compose_submission("/me    "),
-            ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
-                feedback: "usage: /me <action>".to_owned(),
-            })
-        );
-        assert_eq!(
-            parse_compose_submission("//me waves"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/me waves".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//status"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/status".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//find needle"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/find needle".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//react $react-normal +1"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/react $react-normal +1".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//edit $event replacement text"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/edit $event replacement text".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//reply $event thanks"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/reply $event thanks".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//accept"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/accept".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("//reject"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("/reject".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("///status"),
-            ComposeSubmission::Message {
-                presentation: RoomMessagePresentationKind::Text,
-                body: Cow::Owned("//status".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_compose_submission("/status"),
-            ComposeSubmission::LocalCommand(LocalSlashCommand::Status)
-        );
-        assert_eq!(
-            parse_compose_submission("/"),
-            ComposeSubmission::LocalCommand(LocalSlashCommand::Invalid {
-                feedback: "unknown command: /".to_owned(),
-            })
-        );
-    }
-
-    #[test]
     fn invalid_e2ee_recover_form_is_not_recorded_or_recalled_in_compose_history() {
         let mut state = test_state();
         let input = "/e2ee recover secret phrase".to_owned();
@@ -25474,437 +24893,6 @@ mod tests {
                 .entries
                 .iter()
                 .any(|entry| entry.contains("secret phrase"))
-        );
-    }
-
-    #[test]
-    fn parse_slash_command_accepts_verify_forms_and_rejects_bad_forms() {
-        assert_eq!(parse_slash_command("/StAtUs"), LocalSlashCommand::Status);
-        assert_eq!(
-            parse_slash_command("/FIND Mixed Case"),
-            LocalSlashCommand::Find {
-                query: "Mixed Case".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus)
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee status"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::ShowStatus)
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee refresh"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::Refresh)
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee recover"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::RecoverDialog)
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee setup"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-                passphrase: None,
-                wait_for_backups_to_upload: false,
-            })
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee setup wait"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-                passphrase: None,
-                wait_for_backups_to_upload: true,
-            })
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee setup passphrase secret phrase"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-                passphrase: Some("secret phrase".to_owned()),
-                wait_for_backups_to_upload: false,
-            })
-        );
-        assert_eq!(
-            parse_slash_command("/e2ee setup wait passphrase secret phrase"),
-            LocalSlashCommand::E2ee(E2eeSlashCommand::Setup {
-                passphrase: Some("secret phrase".to_owned()),
-                wait_for_backups_to_upload: true,
-            })
-        );
-        assert_eq!(
-            parse_slash_command("/verify accept"),
-            LocalSlashCommand::Verify {
-                action: VerificationAction::Accept,
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/verify cancel"),
-            LocalSlashCommand::Verify {
-                action: VerificationAction::Cancel,
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/verify confirm"),
-            LocalSlashCommand::Verify {
-                action: VerificationAction::Confirm,
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/verify reject"),
-            LocalSlashCommand::Verify {
-                action: VerificationAction::Reject,
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/wat now"),
-            LocalSlashCommand::Invalid {
-                feedback: "unknown command: /wat".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/status now"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /status".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/find"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /find <text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/window"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /window <room-id-or-display-name>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/clear now"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /clear".to_owned(),
-            }
-        );
-        let rejected = parse_slash_command("/e2ee recover secret");
-        assert_eq!(
-            rejected,
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /e2ee [status|refresh|recover|setup]".to_owned(),
-            }
-        );
-        match rejected {
-            LocalSlashCommand::Invalid { feedback } => {
-                assert!(!feedback.contains("secret"));
-            }
-            other => panic!("expected invalid e2ee usage, got {other:?}"),
-        }
-        assert_eq!(
-            parse_slash_command("/verify"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /verify accept|cancel|confirm|reject".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/verify maybe"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /verify accept|cancel|confirm|reject".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_slash_command_accepts_join_and_part_forms() {
-        assert_eq!(
-            parse_slash_command("/join #ops:example.org"),
-            LocalSlashCommand::Join {
-                target: "#ops:example.org".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/join !room:example.org"),
-            LocalSlashCommand::Join {
-                target: "!room:example.org".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/query @alice:example.org"),
-            LocalSlashCommand::Query {
-                user_id: "@alice:example.org".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/query   @alice:example.org   "),
-            LocalSlashCommand::Query {
-                user_id: "@alice:example.org".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/find needle"),
-            LocalSlashCommand::Find {
-                query: "needle".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/find   two   words   here   "),
-            LocalSlashCommand::Find {
-                query: "two   words   here".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/part"),
-            LocalSlashCommand::Part { target: None }
-        );
-        assert_eq!(
-            parse_slash_command("/part !room:example.org"),
-            LocalSlashCommand::Part {
-                target: Some("!room:example.org".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/react $react-normal +1"),
-            LocalSlashCommand::React {
-                target_event_id: "$react-normal".to_owned(),
-                key: "+1".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/react $react-normal eyes"),
-            LocalSlashCommand::React {
-                target_event_id: "$react-normal".to_owned(),
-                key: "eyes".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/react $react-normal two words"),
-            LocalSlashCommand::React {
-                target_event_id: "$react-normal".to_owned(),
-                key: "two words".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/edit $event-to-edit replacement text"),
-            LocalSlashCommand::Edit {
-                target_event_id: "$event-to-edit".to_owned(),
-                body: "replacement text".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/reply $event-to-reply hello there"),
-            LocalSlashCommand::Reply {
-                target_event_id: "$event-to-reply".to_owned(),
-                body: "hello there".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/EDIT   $event-to-edit   replacement text   "),
-            LocalSlashCommand::Edit {
-                target_event_id: "$event-to-edit".to_owned(),
-                body: "replacement text".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/REPLY   $event-to-reply   hello there   "),
-            LocalSlashCommand::Reply {
-                target_event_id: "$event-to-reply".to_owned(),
-                body: "hello there".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/unreact $reaction-alice-plus-one"),
-            LocalSlashCommand::Unreact {
-                reaction_event_id: "$reaction-alice-plus-one".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/redact $redaction-target"),
-            LocalSlashCommand::Redact {
-                event_id: "$redaction-target".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/topic incident review"),
-            LocalSlashCommand::Topic {
-                topic: "incident review".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/topic   incident review   "),
-            LocalSlashCommand::Topic {
-                topic: "incident review".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_slash_command_accepts_accept_and_reject_forms() {
-        assert_eq!(
-            parse_slash_command("/accept"),
-            LocalSlashCommand::Accept { target: None }
-        );
-        assert_eq!(
-            parse_slash_command("/accept    "),
-            LocalSlashCommand::Accept { target: None }
-        );
-        assert_eq!(
-            parse_slash_command("/accept !room:example.org"),
-            LocalSlashCommand::Accept {
-                target: Some("!room:example.org".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/accept Invite Name"),
-            LocalSlashCommand::Accept {
-                target: Some("Invite Name".to_owned()),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/reject"),
-            LocalSlashCommand::Reject { target: None }
-        );
-        assert_eq!(
-            parse_slash_command("/reject Invite Name"),
-            LocalSlashCommand::Reject {
-                target: Some("Invite Name".to_owned()),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_slash_command_keeps_verification_accept_and_reject_distinct_from_invite_commands() {
-        assert_eq!(
-            parse_slash_command("/verify accept"),
-            LocalSlashCommand::Verify {
-                action: VerificationAction::Accept,
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/verify reject"),
-            LocalSlashCommand::Verify {
-                action: VerificationAction::Reject,
-            }
-        );
-    }
-
-    #[test]
-    fn parse_slash_command_rejects_join_without_target() {
-        assert_eq!(
-            parse_slash_command("/join"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /join <room-id-or-alias>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/query"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /query <mxid>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/query   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /query <mxid>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/find   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /find <text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/topic"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /topic <text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/topic   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /topic <text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/react"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /react <event-id> <key>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/react $react-normal"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /react <event-id> <key>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/react $react-normal   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /react <event-id> <key>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/edit"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/edit $event-to-edit"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/edit $event-to-edit   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /edit <event-id> <replacement text>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/reply"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /reply <event-id> <message>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/reply $event-to-reply"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /reply <event-id> <message>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/reply $event-to-reply   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /reply <event-id> <message>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/unreact"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /unreact <reaction-event-id>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/unreact $one $two"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /unreact <reaction-event-id>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/redact"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /redact <event-id>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/redact   "),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /redact <event-id>".to_owned(),
-            }
-        );
-        assert_eq!(
-            parse_slash_command("/redact $event extra"),
-            LocalSlashCommand::Invalid {
-                feedback: "usage: /redact <event-id>".to_owned(),
-            }
         );
     }
 
