@@ -101,32 +101,32 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
-    CLIENTCREATESTRUCT, CREATESTRUCTW, CW_USEDEFAULT, CallWindowProcW, CheckMenuItem, CreateMenu,
-    CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW, DestroyMenu,
-    DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE,
-    ES_PASSWORD, ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO,
-    FlashWindowEx, GA_ROOT, GWL_STYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW, GetClientRect,
-    GetDlgItem, GetForegroundWindow, GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent,
-    GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW,
-    IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL,
-    LB_GETITEMRECT, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
-    LB_SETITEMHEIGHT, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW,
-    MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
-    MDITILE_VERTICAL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP,
-    MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP,
-    SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SHOW_WINDOW_CMD,
-    SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE, SW_SHOW,
-    SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
+    CLIENTCREATESTRUCT, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT, CallWindowProcW, CheckMenuItem,
+    CreateMenu, CreatePopupMenu, CreateWindowExW, DefFrameProcW, DefMDIChildProcW, DefWindowProcW,
+    DestroyMenu, DestroyWindow, DispatchMessageW, DrawMenuBar, ES_AUTOHSCROLL, ES_AUTOVSCROLL,
+    ES_MULTILINE, ES_PASSWORD, ES_READONLY, EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY,
+    FLASHWINFO, FlashWindowEx, GA_ROOT, GWL_STYLE, GWLP_WNDPROC, GetAncestor, GetClassNameW,
+    GetClientRect, GetDlgItem, GetForegroundWindow, GetMenuItemCount, GetMenuStringW, GetMessageW,
+    GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret,
+    IDC_ARROW, IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
+    LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT,
+    LB_SETCURSEL, LB_SETITEMHEIGHT, LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED,
+    LoadCursorW, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW,
+    MDITILE_HORIZONTAL, MDITILE_VERTICAL, MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED,
+    MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MF_UNCHECKED, MSG, MessageBoxW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP,
+    SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
+    SHOW_WINDOW_CMD, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS, SW_HIDE, SW_MINIMIZE,
+    SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW, ShowWindow,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel, TranslateMessage,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
     WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
-    WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS,
-    WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC,
-    WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED,
-    WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
+    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
+    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
+    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
+    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
+    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -152,14 +152,15 @@ use crate::{
         LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
         NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
         RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiComposeTarget,
-        UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu,
-        UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState, UiState,
-        UiTextFont, UiTimestamp, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
-        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
-        dump_room_from_summary, dump_room_message_send_state_from_core,
-        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
-        parse_command_request, success_response,
+        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiActiveTimeline,
+        UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiFrameLayout,
+        UiMenu, UiMenuItem, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomState,
+        UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimestamp,
+        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
+        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
+        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
+        dump_verification_from_state_event, failure_response, parse_command_request,
+        success_response,
     },
 };
 
@@ -197,16 +198,16 @@ use menus::{
     MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT,
     MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS,
     MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION,
-    MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT,
-    MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
-    MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
-    MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_TOOLS_OPTIONS, MENU_ID_VERIFY_ACCEPT,
-    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
-    MENU_ID_VIEW_SWITCHBAR, MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS,
-    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
-    MenuEntry, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, commands_menu_item, commands_menu_line,
-    commands_menu_title, file_menu_state, verification_menu_action_enabled, view_menu_bar,
-    view_menu_checks,
+    MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL,
+    MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY,
+    MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
+    MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY,
+    MENU_ID_TOOLS_OPTIONS, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
+    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VIEW_SWITCHBAR,
+    MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
+    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU, VIEW_MENU,
+    WINDOW_MENU, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
+    verification_menu_action_enabled, view_menu_bar, view_menu_checks,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
@@ -2816,6 +2817,8 @@ struct WindowState {
     active_view: ViewId,
     selected_timeline_event: Option<SelectedTimelineEvent>,
     find_states: BTreeMap<ViewId, ViewFindState>,
+    /// The Go to Original waiting for older history; one at a time.
+    pending_original_jump: Option<replies::OriginalJump>,
     switchbar_views: Vec<ViewId>,
     room_activity: BTreeMap<ViewId, ViewActivityLevel>,
     /// Joined queries whose window the user closed. Like mIRC's closed query
@@ -3036,6 +3039,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         active_view: ViewId::Status,
         selected_timeline_event: None,
         find_states: BTreeMap::new(),
+        pending_original_jump: None,
         switchbar_views: Vec::new(),
         room_activity: BTreeMap::new(),
         closed_queries: BTreeSet::new(),
@@ -3652,7 +3656,8 @@ fn register_timeline_class(instance: *mut c_void) -> Result<(), String> {
     let class_name = wide_null(TIMELINE_CLASS_NAME);
     let window_class = WNDCLASSEXW {
         cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
+        // A double-click on a quote line goes to the message it quotes.
+        style: CS_DBLCLKS,
         lpfnWndProc: Some(timeline_window_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
@@ -4268,6 +4273,20 @@ unsafe extern "system" fn timeline_window_proc(
         WM_VSCROLL => scroll_timeline(hwnd, wparam),
         WM_LBUTTONDOWN => {
             select_timeline_row(hwnd, lparam);
+            0
+        }
+        // The second click of a double-click: it selects as a click does,
+        // and on a quote line goes to the quoted message.
+        WM_LBUTTONDBLCLK => {
+            select_timeline_row(hwnd, lparam);
+            let y = ((lparam >> 16) as i16) as i32;
+            let on_quote = timeline_source_row_index_at_client_y(hwnd, y).is_some_and(|index| {
+                timeline_state_ref(hwnd).source_rows[index].kind == TimelineRowKind::ReplyQuote
+            });
+            let frame = frame_window_for(hwnd);
+            if on_quote && let Err(message) = go_to_original_of_selected_message(frame) {
+                show_error_message(frame, "Message", &message);
+            }
             0
         }
         WM_CONTEXTMENU => {
@@ -4977,7 +4996,8 @@ unsafe fn select_timeline_row(hwnd: HWND, lparam: LPARAM) {
     select_timeline_event_at_client_y(hwnd, y);
 }
 
-unsafe fn timeline_event_id_at_client_y(hwnd: HWND, y: i32) -> Option<String> {
+/// The source row of the line at client `y`, if a line is there.
+unsafe fn timeline_source_row_index_at_client_y(hwnd: HWND, y: i32) -> Option<usize> {
     let state = timeline_state_ref(hwnd);
     let line_index = y
         .checked_sub(state.vertical_padding)
@@ -4986,8 +5006,19 @@ unsafe fn timeline_event_id_at_client_y(hwnd: HWND, y: i32) -> Option<String> {
     line_index
         .and_then(|index| state.paint_lines.get(index))
         .and_then(|line| line.source_row_index)
-        .and_then(|index| state.source_rows.get(index))
-        .and_then(|row| row.event_id.clone())
+}
+
+unsafe fn timeline_event_id_at_client_y(hwnd: HWND, y: i32) -> Option<String> {
+    timeline_source_row_index_at_client_y(hwnd, y)
+        .and_then(|index| timeline_state_ref(hwnd).source_rows[index].event_id.clone())
+}
+
+/// The first row of the event's lines: its quote line if it is a reply.
+unsafe fn timeline_source_row_index_of_event(hwnd: HWND, event_id: &str) -> Option<usize> {
+    timeline_state_ref(hwnd)
+        .source_rows
+        .iter()
+        .position(|row| row.event_id.as_deref() == Some(event_id))
 }
 
 unsafe fn select_timeline_event_at_client_y(hwnd: HWND, y: i32) {
@@ -5058,6 +5089,7 @@ unsafe fn show_timeline_message_context_menu(
         action_state.selected_event_id.is_none()
             || (command == MENU_ID_MESSAGE_EDIT && !action_state.edit_enabled)
             || (command == MENU_ID_MESSAGE_SAVE_ATTACHMENT && !action_state.save_attachment_enabled)
+            || (command == MENU_ID_MESSAGE_GO_TO_ORIGINAL && !action_state.go_to_original_enabled)
     }) {
         return Err("message context menu action is disabled".to_owned());
     }
@@ -5585,6 +5617,9 @@ unsafe fn restore_room_history_backfill_anchor(hwnd: HWND, anchor: TimelineBackf
 }
 
 unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
+    // The user scrolling a window drops its pending Go to Original; the
+    // jump's own scroll sets the top line without WM_VSCROLL.
+    cancel_original_jump_for_timeline(hwnd);
     let command = (wparam & 0xffff) as i32;
     let visible_rows = timeline_visible_rows(hwnd);
     let max_top_line = {
@@ -6449,6 +6484,7 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     let message_menu = create_popup_menu()?;
     for (id, label) in [
         (MENU_ID_MESSAGE_REPLY, "Reply to Message"),
+        (MENU_ID_MESSAGE_GO_TO_ORIGINAL, "Go to Original Message"),
         (MENU_ID_MESSAGE_EDIT, "Edit Message"),
         (MENU_ID_MESSAGE_REACT, "React to Message"),
         (MENU_ID_MESSAGE_REDACT, "Redact Message"),
@@ -6619,6 +6655,19 @@ struct MessageActionState {
     /// The selected message is the user's own text or emote.
     edit_enabled: bool,
     save_attachment_enabled: bool,
+    /// The selected message is a reply with a quote line.
+    go_to_original_enabled: bool,
+}
+
+/// The message the selected reply quotes, if it has a quote line.
+fn selected_message_quote_target<'a>(
+    state: &'a WindowState,
+    selected_event_id: Option<&str>,
+) -> Option<&'a str> {
+    window_message(&state.model, &state.active_view, selected_event_id?)?
+        .relation
+        .as_ref()
+        .and_then(replies::reply_quote_target)
 }
 
 fn selected_message_editable(state: &WindowState, selected_event_id: Option<&str>) -> bool {
@@ -6714,6 +6763,8 @@ fn active_message_action_state(state: &WindowState) -> MessageActionState {
     let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
     MessageActionState {
         edit_enabled: selected_message_editable(state, selected_event_id.as_deref()),
+        go_to_original_enabled: selected_message_quote_target(state, selected_event_id.as_deref())
+            .is_some(),
         selected_event_id,
         save_attachment_enabled,
     }
@@ -6728,6 +6779,8 @@ unsafe fn active_message_action_state_for_automation(hwnd: HWND) -> MessageActio
     let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
     MessageActionState {
         edit_enabled: selected_message_editable(state, selected_event_id.as_deref()),
+        go_to_original_enabled: selected_message_quote_target(state, selected_event_id.as_deref())
+            .is_some(),
         selected_event_id,
         save_attachment_enabled,
     }
@@ -6766,6 +6819,15 @@ unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<()
             MF_GRAYED
         };
     if EnableMenuItem(popup_menu, MENU_ID_MESSAGE_SAVE_ATTACHMENT as u32, flags) == -1 {
+        return Err(last_os_error("EnableMenuItem"));
+    }
+    let flags = MF_BYCOMMAND
+        | if action_state.go_to_original_enabled {
+            MF_ENABLED
+        } else {
+            MF_GRAYED
+        };
+    if EnableMenuItem(popup_menu, MENU_ID_MESSAGE_GO_TO_ORIGINAL as u32, flags) == -1 {
         return Err(last_os_error("EnableMenuItem"));
     }
     Ok(())
@@ -7045,6 +7107,7 @@ unsafe fn dump_message_menu_state(hwnd: HWND) -> Result<DumpMessageMenuState, St
         react_enabled: enabled,
         redact_enabled: enabled,
         save_attachment_enabled: action_state.save_attachment_enabled,
+        go_to_original_enabled: action_state.go_to_original_enabled,
         selected_event_id: action_state.selected_event_id,
     })
 }
@@ -7112,6 +7175,10 @@ unsafe fn menu_command_result(
                 event_id,
             })
             .map(|_| Some(())),
+        ),
+        MENU_ID_MESSAGE_GO_TO_ORIGINAL => (
+            "Message",
+            go_to_original_of_selected_message(hwnd).map(|_| Some(())),
         ),
         MENU_ID_MESSAGE_EDIT => (
             "Message",
@@ -7354,6 +7421,7 @@ fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
         ContextMenuCommand::RejectInvite => MENU_ID_ROOM_REJECT_INVITE,
         ContextMenuCommand::PartRoom => MENU_ID_ROOM_PART,
         ContextMenuCommand::ReplyMessage => MENU_ID_MESSAGE_REPLY,
+        ContextMenuCommand::GoToOriginal => MENU_ID_MESSAGE_GO_TO_ORIGINAL,
         ContextMenuCommand::EditMessage => MENU_ID_MESSAGE_EDIT,
         ContextMenuCommand::ReactMessage => MENU_ID_MESSAGE_REACT,
         ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
@@ -7390,6 +7458,7 @@ unsafe fn invoke_timeline_context_menu_for_automation(
     if !matches!(
         command_id,
         MENU_ID_MESSAGE_REPLY
+            | MENU_ID_MESSAGE_GO_TO_ORIGINAL
             | MENU_ID_MESSAGE_EDIT
             | MENU_ID_MESSAGE_REACT
             | MENU_ID_MESSAGE_REDACT
@@ -10092,7 +10161,6 @@ unsafe fn apply_find_to_active_view(hwnd: HWND, view_id: &ViewId) -> Result<(), 
     Ok(())
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 unsafe fn scroll_timeline_to_source_row_index(hwnd: HWND, source_row_index: usize) {
     let top_line = {
         let timeline_state = timeline_state_ref(hwnd);
@@ -10295,6 +10363,7 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
 
     for view_id in &stale_view_ids {
         state.find_states.remove(view_id);
+        cancel_original_jump_for_view(state, view_id);
     }
 
     let removed = stale_view_ids
@@ -10927,6 +10996,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
         .remove(&view_id)
         .expect("HWND-to-view registry must match tracked views");
     state.find_states.remove(&view_id);
+    cancel_original_jump_for_view(state, &view_id);
     assert_eq!(
         removed.child, child,
         "tracked child HWND must match registry"
@@ -13691,6 +13761,63 @@ unsafe fn menu_item_count(menu: HMENU) -> Result<u32, String> {
     u32::try_from(GetMenuItemCount(menu)).map_err(|_| last_os_error("GetMenuItemCount"))
 }
 
+/// The lines `timeline` shows now, with the click point of each: the
+/// arithmetic `timeline_source_row_index_at_client_y` inverts.
+unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
+    let state = timeline_state_ref(timeline);
+    let visible_rows = timeline_visible_rows(timeline);
+    let visible_lines = state
+        .paint_lines
+        .iter()
+        .enumerate()
+        .skip(state.top_line)
+        .take(visible_rows)
+        .map(|(line_index, line)| {
+            UiTimelineLine {
+                text: match &line.visual {
+                    TimelinePaintLineVisual::Text { text, .. } => text.clone(),
+                    TimelinePaintLineVisual::ImageSlot => String::new(),
+                },
+                kind: ui_timeline_line_kind(&line.kind),
+                // Text set as a whole (WM_SETTEXT) has no rows.
+                event_id: line
+                    .source_row_index
+                    .and_then(|index| state.source_rows[index].event_id.clone()),
+                click_point: UiPoint {
+                    x: 8,
+                    y: state.vertical_padding
+                        + (line_index - state.top_line) as i32 * state.line_height
+                        + state.line_height / 2,
+                },
+            }
+        })
+        .collect();
+    UiActiveTimeline {
+        top_line: state.top_line,
+        visible_lines,
+    }
+}
+
+fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
+    match kind {
+        TimelineRowKind::Event => UiTimelineLineKind::Event,
+        TimelineRowKind::Info => UiTimelineLineKind::Info,
+        TimelineRowKind::Error => UiTimelineLineKind::Error,
+        TimelineRowKind::Typing => UiTimelineLineKind::Typing,
+        TimelineRowKind::ReactionSummary => UiTimelineLineKind::ReactionSummary,
+        TimelineRowKind::ReplyQuote => UiTimelineLineKind::ReplyQuote,
+        TimelineRowKind::Message { .. } => UiTimelineLineKind::Message,
+        TimelineRowKind::Image { .. } => UiTimelineLineKind::Image,
+        TimelineRowKind::File { .. } => UiTimelineLineKind::File,
+        TimelineRowKind::Audio { .. } => UiTimelineLineKind::Audio,
+        TimelineRowKind::Video { .. } => UiTimelineLineKind::Video,
+        TimelineRowKind::Unsupported { .. } => UiTimelineLineKind::Unsupported,
+        TimelineRowKind::UnableToDecrypt => UiTimelineLineKind::UnableToDecrypt,
+        TimelineRowKind::StateNotice { .. } => UiTimelineLineKind::StateNotice,
+        TimelineRowKind::Plain => UiTimelineLineKind::Plain,
+    }
+}
+
 unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let navigation = dump_navigation_tree(hwnd)?;
     let mdi = dump_mdi_state(hwnd)?;
@@ -13738,6 +13865,13 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             .options_dialog
             .map(|dialog| options_dialog::dump(dialog))
             .transpose()?,
+        active_timeline: match &state.active_view {
+            ViewId::RoomList => None,
+            view_id => Some(dump_active_timeline(view_timeline(
+                view_id,
+                active_view.content,
+            ))),
+        },
         navigation,
         mdi,
         status_bar,
@@ -14202,6 +14336,8 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
 
     let mut history_backfill_anchor = None;
     let mut history_backfill_views = Vec::new();
+    let mut backfill_result = false;
+    let mut failed_backfill_room_id = None;
     let mut wants_attention = false;
     for event in events {
         if let Event::E2eeRecoverySetupSucceeded(result) = &event {
@@ -14230,7 +14366,14 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
             Event::Error(error) if error.operation == Operation::BackfillRoomHistory
         ) {
             history_backfill_views.extend(pending_timeline_find_history_views(state));
+            // The error names no room: it is the one request in flight's.
+            failed_backfill_room_id = loading_room_history_room_id(&state.model.room_views);
         }
+        backfill_result |= matches!(&event, Event::RoomHistoryBackfill(_))
+            || matches!(
+                &event,
+                Event::Error(error) if error.operation == Operation::BackfillRoomHistory
+            );
         wants_attention |= apply_core_event(state, event)?;
         state.event_generation += 1;
     }
@@ -14247,7 +14390,153 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
     for view_id in history_backfill_views {
         continue_timeline_find_history_search_after_refresh(hwnd, &view_id)?;
     }
+    // After the anchor, so the jump's scroll wins.
+    if backfill_result {
+        continue_original_jump(hwnd, failed_backfill_room_id.as_deref())?;
+    }
     Ok(())
+}
+
+/// Status bar text while Go to Original pages older history.
+const FINDING_ORIGINAL_STATUS: &str = "finding the original message...";
+
+/// The message menu's Go to Original Message, and a double-click on a
+/// quote line (which selects its reply): scrolls to the message the
+/// selected reply quotes, loading older history until it is found.
+unsafe fn go_to_original_of_selected_message(hwnd: HWND) -> Result<(), String> {
+    let state = state_ref(hwnd);
+    let target_event_id = selected_message_quote_target(state, selected_timeline_event_id(state))
+        .ok_or_else(|| "the selected message is not a reply".to_owned())?
+        .to_owned();
+    let view_id = state.active_view.clone();
+    // A new jump replaces a pending one.
+    state_mut(hwnd).pending_original_jump = Some(replies::OriginalJump {
+        view_id,
+        target_event_id,
+    });
+    continue_original_jump(hwnd, None)
+}
+
+/// Takes the pending Go to Original's next step, when it starts and after
+/// every history result. `failed_backfill_room_id`: the room whose request
+/// for older messages just failed.
+unsafe fn continue_original_jump(
+    hwnd: HWND,
+    failed_backfill_room_id: Option<&str>,
+) -> Result<(), String> {
+    let Some(jump) = state_ref(hwnd).pending_original_jump.clone() else {
+        return Ok(());
+    };
+    let room_id = jump
+        .view_id
+        .room_id()
+        .expect("only room and thread windows quote")
+        .to_owned();
+    let step = {
+        let state = state_ref(hwnd);
+        let view = state
+            .views
+            .get(&jump.view_id)
+            .expect("closing a window drops its jump");
+        let in_view_rows = timeline_source_row_index_of_event(
+            view_timeline(&jump.view_id, view.content),
+            &jump.target_event_id,
+        )
+        .is_some();
+        let room_view = state
+            .model
+            .room_views
+            .get(&room_id)
+            .expect("a reply's room has its timeline");
+        let history = match &room_view.history.status {
+            RoomHistoryBackfillStatus::Idle => replies::JumpHistory::Idle,
+            RoomHistoryBackfillStatus::Loading { .. } => replies::JumpHistory::Loading,
+            RoomHistoryBackfillStatus::Exhausted => replies::JumpHistory::Exhausted,
+            RoomHistoryBackfillStatus::Failed { message, .. } => replies::JumpHistory::Failed {
+                message: message.clone(),
+                just_now: failed_backfill_room_id == Some(room_id.as_str()),
+            },
+        };
+        let another_backfill_loading = loading_room_history_room_id(&state.model.room_views)
+            .is_some_and(|loading_room_id| loading_room_id != room_id);
+        replies::original_jump_step(
+            &jump.view_id,
+            in_view_rows,
+            room_view
+                .find_activity_index_by_event_id(&jump.target_event_id)
+                .is_some(),
+            history,
+            another_backfill_loading,
+        )
+    };
+    let status = match step {
+        replies::OriginalJumpStep::Show(view_id) => {
+            state_mut(hwnd).pending_original_jump = None;
+            show_original_message(hwnd, &view_id, &jump.target_event_id)?;
+            "original message found".to_owned()
+        }
+        replies::OriginalJumpStep::LoadOlder => {
+            let submitted = submit_backfill_room_history_for_room(state_mut(hwnd), &room_id)?;
+            assert!(
+                submitted,
+                "a joined room with history left and none loading takes a request"
+            );
+            FINDING_ORIGINAL_STATUS.to_owned()
+        }
+        replies::OriginalJumpStep::Wait => FINDING_ORIGINAL_STATUS.to_owned(),
+        replies::OriginalJumpStep::NotFound => {
+            state_mut(hwnd).pending_original_jump = None;
+            "* the original message is not in this room's history".to_owned()
+        }
+        replies::OriginalJumpStep::Failed(message) => {
+            state_mut(hwnd).pending_original_jump = None;
+            format!("* could not load older messages: {message}")
+        }
+    };
+    set_local_command_status(hwnd, status)
+}
+
+/// Scrolls `view_id`'s window, activated first, so the message's first line
+/// is at the top (as low as the end allows), and selects it.
+unsafe fn show_original_message(
+    hwnd: HWND,
+    view_id: &ViewId,
+    event_id: &str,
+) -> Result<(), String> {
+    if state_ref(hwnd).active_view != *view_id {
+        activate_view(hwnd, view_id, None)?;
+    }
+    let timeline = view_timeline(view_id, state_ref(hwnd).views[view_id].content);
+    let source_row_index = timeline_source_row_index_of_event(timeline, event_id)
+        .expect("the jump shows a message its window holds");
+    scroll_timeline_to_source_row_index(timeline, source_row_index);
+    state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+        view_id: view_id.clone(),
+        event_id: event_id.to_owned(),
+    });
+    InvalidateRect(timeline, null(), 1);
+    Ok(())
+}
+
+fn cancel_original_jump_for_view(state: &mut WindowState, view_id: &ViewId) {
+    if state
+        .pending_original_jump
+        .as_ref()
+        .is_some_and(|jump| jump.view_id == *view_id)
+    {
+        state.pending_original_jump = None;
+    }
+}
+
+unsafe fn cancel_original_jump_for_timeline(timeline: HWND) {
+    let frame = frame_window_for(timeline);
+    let state = state_mut(frame);
+    let Some(jump) = &state.pending_original_jump else {
+        return;
+    };
+    if view_timeline(&jump.view_id, state.views[&jump.view_id].content) == timeline {
+        state.pending_original_jump = None;
+    }
 }
 
 /// Flashes the taskbar button until the user brings mIRC to the foreground;
@@ -18241,6 +18530,7 @@ mod tests {
             active_view: ViewId::Status,
             selected_timeline_event: None,
             find_states: BTreeMap::new(),
+            pending_original_jump: None,
             switchbar_views: Vec::new(),
             room_activity: BTreeMap::new(),
             room_activity_read_targets: BTreeMap::new(),
@@ -29219,6 +29509,7 @@ mod tests {
                 selected_event_id: None,
                 edit_enabled: false,
                 save_attachment_enabled: false,
+                go_to_original_enabled: false,
             }
         );
 
@@ -29237,6 +29528,7 @@ mod tests {
                 selected_event_id: None,
                 edit_enabled: false,
                 save_attachment_enabled: false,
+                go_to_original_enabled: false,
             }
         );
 
@@ -29262,6 +29554,7 @@ mod tests {
                 selected_event_id: Some("$event:example".to_owned()),
                 edit_enabled: false,
                 save_attachment_enabled: false,
+                go_to_original_enabled: false,
             }
         );
     }
@@ -31912,5 +32205,273 @@ mod tests {
     fn bar_lines_name_the_bar() {
         assert_eq!(bar_is_line(Bar::Switchbar, true), "* Switchbar is on");
         assert_eq!(bar_is_line(Bar::Treebar, false), "* Treebar is off");
+    }
+
+    /// A real frame showing Ops: Alice's question `$q`, filler lines, and
+    /// Bob's reply `$a` to `target` last, selected, with a sender whose
+    /// commands wait.
+    unsafe fn with_original_jump_frame(target: &str, test: impl FnOnce(HWND)) {
+        with_test_frame(600, 400, |hwnd| {
+            let (sender, commands) = inert_command_sender();
+            std::mem::forget(commands);
+            state_mut(hwnd).command_sender = Some(sender);
+            state_mut(hwnd).model.rooms = vec![room("!ops:example", "Ops", false)];
+            sync_views_and_tree(hwnd).unwrap();
+            let mut events = vec![timeline_with_transaction_id(
+                "!ops:example",
+                "$q",
+                None,
+                "are we deploying today?",
+                1_700_000_000_000,
+            )];
+            for index in 0..40 {
+                events.push(timeline_with_transaction_id(
+                    "!ops:example",
+                    &format!("$filler{index}"),
+                    None,
+                    &format!("filler {index}"),
+                    1_700_000_001_000 + index * 1_000,
+                ));
+            }
+            events.push(timeline_with_relation_and_presentation(
+                "!ops:example",
+                "$a",
+                None,
+                Some(reply_relation(target)),
+                RoomMessagePresentationKind::Text,
+                "yes, after lunch",
+                1_700_000_100_000,
+            ));
+            apply_events_and_refresh(hwnd, events).unwrap();
+            activate_view(hwnd, &room_view_id("!ops:example"), None).unwrap();
+            state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+                view_id: room_view_id("!ops:example"),
+                event_id: "$a".to_owned(),
+            });
+            test(hwnd);
+        });
+    }
+
+    unsafe fn ops_timeline(hwnd: HWND, view_id: &ViewId) -> HWND {
+        view_timeline(view_id, state_ref(hwnd).views[view_id].content)
+    }
+
+    /// The event whose line is the timeline's top line.
+    unsafe fn top_line_event_id(timeline: HWND) -> Option<String> {
+        let state = timeline_state_ref(timeline);
+        state.paint_lines[state.top_line]
+            .source_row_index
+            .and_then(|index| state.source_rows[index].event_id.clone())
+    }
+
+    fn backfill_requests(state: &WindowState) -> usize {
+        state
+            .recorded_commands
+            .iter()
+            .filter(|command| matches!(command, Command::BackfillRoomHistory(_)))
+            .count()
+    }
+
+    #[test]
+    fn go_to_original_scrolls_to_a_loaded_target_and_selects_it() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                assert_ne!(
+                    top_line_event_id(timeline).as_deref(),
+                    Some("$q"),
+                    "the window starts at its end"
+                );
+                go_to_original_of_selected_message(hwnd).unwrap();
+                assert_eq!(top_line_event_id(timeline).as_deref(), Some("$q"));
+                assert_eq!(selected_timeline_event_id(state_ref(hwnd)), Some("$q"));
+                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).model.status, "original message found");
+                assert_eq!(backfill_requests(state_ref(hwnd)), 0);
+            });
+        }
+    }
+
+    #[test]
+    fn go_to_original_pages_history_until_the_target_arrives() {
+        unsafe {
+            with_original_jump_frame("$old", |hwnd| {
+                go_to_original_of_selected_message(hwnd).unwrap();
+                assert_eq!(
+                    state_ref(hwnd).pending_original_jump,
+                    Some(replies::OriginalJump {
+                        view_id: room_view_id("!ops:example"),
+                        target_event_id: "$old".to_owned(),
+                    })
+                );
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+                assert_eq!(state_ref(hwnd).model.status, FINDING_ORIGINAL_STATUS);
+
+                // A page without it asks for the next.
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill(
+                        "!ops:example",
+                        "t0",
+                        Some("t1"),
+                        vec![],
+                    )],
+                )
+                .unwrap();
+                assert!(state_ref(hwnd).pending_original_jump.is_some());
+                assert_eq!(backfill_requests(state_ref(hwnd)), 2);
+
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill(
+                        "!ops:example",
+                        "t1",
+                        Some("t2"),
+                        vec![history_backfill_event_from_event(
+                            timeline_with_transaction_id(
+                                "!ops:example",
+                                "$old",
+                                None,
+                                "the old question",
+                                1_699_999_000_000,
+                            ),
+                        )],
+                    )],
+                )
+                .unwrap();
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                // The jump's scroll wins over the backfill anchor.
+                assert_eq!(top_line_event_id(timeline).as_deref(), Some("$old"));
+                assert_eq!(selected_timeline_event_id(state_ref(hwnd)), Some("$old"));
+                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(state_ref(hwnd).model.status, "original message found");
+                assert_eq!(backfill_requests(state_ref(hwnd)), 2);
+            });
+        }
+    }
+
+    #[test]
+    fn go_to_original_stops_at_the_start_of_history_or_a_failure() {
+        unsafe {
+            with_original_jump_frame("$old", |hwnd| {
+                go_to_original_of_selected_message(hwnd).unwrap();
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill("!ops:example", "t0", None, vec![])],
+                )
+                .unwrap();
+                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "* the original message is not in this room's history"
+                );
+                assert_eq!(selected_timeline_event_id(state_ref(hwnd)), Some("$a"));
+            });
+            with_original_jump_frame("$old", |hwnd| {
+                go_to_original_of_selected_message(hwnd).unwrap();
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![Event::Error(CoreErrorEvent {
+                        operation: Operation::BackfillRoomHistory,
+                        message: "offline".to_owned(),
+                    })],
+                )
+                .unwrap();
+                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "* could not load older messages: offline"
+                );
+                // A failure left from before is retried by the next jump.
+                go_to_original_of_selected_message(hwnd).unwrap();
+                assert!(state_ref(hwnd).pending_original_jump.is_some());
+                assert_eq!(backfill_requests(state_ref(hwnd)), 2);
+            });
+        }
+    }
+
+    #[test]
+    fn scrolling_the_window_drops_its_pending_go_to_original() {
+        unsafe {
+            with_original_jump_frame("$old", |hwnd| {
+                go_to_original_of_selected_message(hwnd).unwrap();
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                SendMessageW(timeline, WM_VSCROLL, SB_LINEUP as WPARAM, 0);
+                assert_eq!(state_ref(hwnd).pending_original_jump, None);
+                // The page it asked for arrives and changes nothing.
+                let top_line = timeline_state_ref(timeline).top_line;
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![room_history_backfill("!ops:example", "t0", None, vec![])],
+                )
+                .unwrap();
+                assert_ne!(top_line_event_id(timeline).as_deref(), Some("$old"));
+                assert!(timeline_state_ref(timeline).top_line >= top_line);
+            });
+        }
+    }
+
+    #[test]
+    fn go_to_original_from_a_thread_shows_a_target_outside_it_in_the_room() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                let thread = thread_view_id("!ops:example", "$filler0");
+                apply_events_and_refresh(
+                    hwnd,
+                    vec![timeline_with_relation_and_presentation(
+                        "!ops:example",
+                        "$t1",
+                        None,
+                        Some(RoomActivityRelation::Thread {
+                            thread_root_event_id: "$filler0".to_owned(),
+                            in_reply_to_event_id: Some("$q".to_owned()),
+                            is_falling_back: false,
+                        }),
+                        RoomMessagePresentationKind::Text,
+                        "in the thread",
+                        1_700_000_200_000,
+                    )],
+                )
+                .unwrap();
+                activate_view(hwnd, &thread, None).unwrap();
+                state_mut(hwnd).selected_timeline_event = Some(SelectedTimelineEvent {
+                    view_id: thread.clone(),
+                    event_id: "$t1".to_owned(),
+                });
+                assert!(active_message_action_state(state_ref(hwnd)).go_to_original_enabled);
+                go_to_original_of_selected_message(hwnd).unwrap();
+                assert_eq!(state_ref(hwnd).active_view, room_view_id("!ops:example"));
+                assert_eq!(selected_timeline_event_id(state_ref(hwnd)), Some("$q"));
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                assert_eq!(top_line_event_id(timeline).as_deref(), Some("$q"));
+            });
+        }
+    }
+
+    #[test]
+    fn go_to_original_is_offered_only_for_a_reply_with_a_quote_line() {
+        let mut state = reply_quote_state("$q");
+        apply_core_event(
+            &mut state,
+            thread_timeline("!ops:example", "$t", "$q", "thread reply"),
+        )
+        .unwrap();
+        state.active_view = room_view_id("!ops:example");
+        let enabled = |state: &mut WindowState, view_id: ViewId, event_id: &str| {
+            state.active_view = view_id.clone();
+            state.selected_timeline_event = Some(SelectedTimelineEvent {
+                view_id,
+                event_id: event_id.to_owned(),
+            });
+            active_message_action_state(state).go_to_original_enabled
+        };
+        assert!(enabled(&mut state, room_view_id("!ops:example"), "$a"));
+        assert!(!enabled(&mut state, room_view_id("!ops:example"), "$q"));
+        // A thread message replying to its root has no quote line.
+        assert!(!enabled(
+            &mut state,
+            thread_view_id("!ops:example", "$q"),
+            "$t"
+        ));
     }
 }

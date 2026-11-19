@@ -4,13 +4,20 @@
 //! Replying to or editing a message arms the window's editbox with it, so
 //! the next line typed there is the reply or the new text.
 //!
+//! Go to Original (double-click a quote line, or the message menu) scrolls
+//! to the message a reply quotes, paging older room history until it is
+//! loaded.
+//!
 //! Pure code: which relation quotes which event, the one-line excerpt of
-//! the quoted line, and which messages the user can edit.
+//! the quoted line, which messages the user can edit, and the next step of
+//! a Go to Original.
 
 use mirx_core::{
     RoomActivity, RoomActivityKind, RoomActivityRelation, RoomMessageActivity,
     RoomMessagePresentationKind,
 };
+
+use super::ViewId;
 
 /// How many characters of the quoted line a quote shows.
 const QUOTE_EXCERPT_CHARS: usize = 60;
@@ -118,6 +125,81 @@ pub(super) fn compose_text_for_edit(message: &RoomMessageActivity) -> String {
         RoomMessagePresentationKind::Notice => {
             panic!("notices are not editable; editable_message rejects them")
         }
+    }
+}
+
+/// A Go to Original waiting for older history: the window it started in
+/// and the message it looks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct OriginalJump {
+    pub(super) view_id: ViewId,
+    pub(super) target_event_id: String,
+}
+
+/// The room's history paging, as a Go to Original sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum JumpHistory {
+    Idle,
+    Loading,
+    Exhausted,
+    /// The last request for older messages failed. `just_now` when the
+    /// failure is the result the jump was waiting for, rather than one
+    /// left from before, which the jump retries.
+    Failed {
+        message: String,
+        just_now: bool,
+    },
+}
+
+/// What a Go to Original does next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum OriginalJumpStep {
+    /// Show the message in this window: the one the jump started in, or
+    /// its room's.
+    Show(ViewId),
+    /// Ask for older messages and wait for them.
+    LoadOlder,
+    /// Wait for the older messages already asked for, by this room or
+    /// another (one request is in flight at a time).
+    Wait,
+    /// The whole history is loaded without the message.
+    NotFound,
+    /// Older messages could not be loaded.
+    Failed(String),
+}
+
+/// The next step of a Go to Original that started in `view_id`.
+/// `in_view_rows`: the window shows the message. `in_room_model`: the
+/// room's timeline holds it, maybe outside this (thread) window.
+pub(super) fn original_jump_step(
+    view_id: &ViewId,
+    in_view_rows: bool,
+    in_room_model: bool,
+    history: JumpHistory,
+    another_backfill_loading: bool,
+) -> OriginalJumpStep {
+    if in_view_rows {
+        return OriginalJumpStep::Show(view_id.clone());
+    }
+    if in_room_model {
+        return match view_id {
+            ViewId::Thread { room_id, .. } => OriginalJumpStep::Show(ViewId::Room(room_id.clone())),
+            ViewId::Room(_) => unreachable!("a room window shows every activity of its room"),
+            ViewId::Status | ViewId::RoomList => unreachable!("only room and thread windows quote"),
+        };
+    }
+    match history {
+        JumpHistory::Exhausted => OriginalJumpStep::NotFound,
+        JumpHistory::Failed {
+            message,
+            just_now: true,
+        } => OriginalJumpStep::Failed(message),
+        JumpHistory::Loading => OriginalJumpStep::Wait,
+        _ if another_backfill_loading => OriginalJumpStep::Wait,
+        JumpHistory::Idle
+        | JumpHistory::Failed {
+            just_now: false, ..
+        } => OriginalJumpStep::LoadOlder,
     }
 }
 
@@ -262,5 +344,81 @@ mod tests {
     #[test]
     fn quote_lines_are_indented_like_reaction_rows() {
         assert_eq!(quote_line("<Alice> hi"), "    > <Alice> hi");
+    }
+
+    fn thread_view() -> ViewId {
+        ViewId::Thread {
+            room_id: "!ops:example".to_owned(),
+            thread_root_event_id: "$root".to_owned(),
+        }
+    }
+
+    fn room_view() -> ViewId {
+        ViewId::Room("!ops:example".to_owned())
+    }
+
+    fn failed(just_now: bool) -> JumpHistory {
+        JumpHistory::Failed {
+            message: "offline".to_owned(),
+            just_now,
+        }
+    }
+
+    #[test]
+    fn a_loaded_original_shows_in_its_window_or_the_thread_s_room() {
+        for view_id in [room_view(), thread_view()] {
+            assert_eq!(
+                original_jump_step(&view_id, true, true, JumpHistory::Loading, true),
+                OriginalJumpStep::Show(view_id.clone())
+            );
+        }
+        // A thread message replying to a message outside the thread.
+        assert_eq!(
+            original_jump_step(&thread_view(), false, true, JumpHistory::Exhausted, false),
+            OriginalJumpStep::Show(room_view())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a room window shows every activity of its room")]
+    fn a_room_window_shows_every_loaded_original() {
+        original_jump_step(&room_view(), false, true, JumpHistory::Idle, false);
+    }
+
+    #[test]
+    fn an_original_not_loaded_pages_history_until_it_is_exhausted() {
+        let step = |history, another_loading| {
+            original_jump_step(&room_view(), false, false, history, another_loading)
+        };
+        assert_eq!(step(JumpHistory::Idle, false), OriginalJumpStep::LoadOlder);
+        assert_eq!(step(JumpHistory::Loading, false), OriginalJumpStep::Wait);
+        // One request at a time: another room's comes first.
+        assert_eq!(step(JumpHistory::Idle, true), OriginalJumpStep::Wait);
+        assert_eq!(
+            step(JumpHistory::Exhausted, false),
+            OriginalJumpStep::NotFound
+        );
+        assert_eq!(
+            step(JumpHistory::Exhausted, true),
+            OriginalJumpStep::NotFound
+        );
+    }
+
+    #[test]
+    fn an_earlier_failure_is_retried_and_the_awaited_one_reported() {
+        let step = |history, another_loading| {
+            original_jump_step(&thread_view(), false, false, history, another_loading)
+        };
+        assert_eq!(step(failed(false), false), OriginalJumpStep::LoadOlder);
+        assert_eq!(step(failed(false), true), OriginalJumpStep::Wait);
+        assert_eq!(
+            step(failed(true), false),
+            OriginalJumpStep::Failed("offline".to_owned())
+        );
+        // Even when another request started meanwhile.
+        assert_eq!(
+            step(failed(true), true),
+            OriginalJumpStep::Failed("offline".to_owned())
+        );
     }
 }

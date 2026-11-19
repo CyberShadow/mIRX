@@ -156,6 +156,7 @@ pub enum ContextMenuCommand {
     RejectInvite,
     PartRoom,
     ReplyMessage,
+    GoToOriginal,
     EditMessage,
     ReactMessage,
     RedactMessage,
@@ -1157,6 +1158,50 @@ pub struct UiState {
     pub room_list: Option<UiRoomList>,
     /// The Options dialog while it is open, read back from its controls.
     pub options_dialog: Option<UiOptionsDialog>,
+    /// The active window's timeline; the Rooms List has none.
+    pub active_timeline: Option<UiActiveTimeline>,
+}
+
+/// The active window's timeline: the lines it shows now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiActiveTimeline {
+    pub top_line: usize,
+    /// Each line on screen, top to bottom, with where to click it in the
+    /// timeline's client coordinates.
+    pub visible_lines: Vec<UiTimelineLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTimelineLine {
+    /// Empty for an image preview's lines.
+    pub text: String,
+    pub kind: UiTimelineLineKind,
+    /// The event the line belongs to; clicking it selects that event.
+    pub event_id: Option<String>,
+    pub click_point: UiPoint,
+}
+
+/// What a timeline line shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiTimelineLineKind {
+    Event,
+    Info,
+    Error,
+    Typing,
+    ReactionSummary,
+    ReplyQuote,
+    Message,
+    Image,
+    File,
+    Audio,
+    Video,
+    Unsupported,
+    UnableToDecrypt,
+    StateNotice,
+    Plain,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1306,6 +1351,7 @@ pub struct MessageMenuState {
     pub react_enabled: bool,
     pub redact_enabled: bool,
     pub save_attachment_enabled: bool,
+    pub go_to_original_enabled: bool,
     pub selected_event_id: Option<String>,
 }
 
@@ -1867,6 +1913,12 @@ impl MirxApp {
 
     pub fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
         self.inner.reply_to_selected_message_via_menu()
+    }
+
+    /// The message menu's Go to Original Message on the selected reply.
+    pub fn go_to_original_via_message_menu(&self) -> Result<(), TestkitError> {
+        self.inner
+            .open_selected_timeline_context_menu(ContextMenuCommand::GoToOriginal)
     }
 
     pub fn edit_selected_message_via_menu(&self) -> Result<(), TestkitError> {

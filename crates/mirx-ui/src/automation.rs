@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 39;
+pub(crate) const PROTOCOL_VERSION: u32 = 40;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -562,6 +562,7 @@ pub(crate) enum ContextMenuCommand {
     RejectInvite,
     PartRoom,
     ReplyMessage,
+    GoToOriginal,
     EditMessage,
     ReactMessage,
     RedactMessage,
@@ -863,6 +864,8 @@ pub(crate) struct DumpMessageMenuState {
     pub(crate) react_enabled: bool,
     pub(crate) redact_enabled: bool,
     pub(crate) save_attachment_enabled: bool,
+    /// The selected message is a reply with a quote line to go to.
+    pub(crate) go_to_original_enabled: bool,
     pub(crate) selected_event_id: Option<String>,
 }
 
@@ -923,6 +926,50 @@ pub(crate) struct UiState {
     pub(crate) room_list: Option<UiRoomList>,
     /// The Options dialog while it is open, read back from its controls.
     pub(crate) options_dialog: Option<UiOptionsDialog>,
+    /// The active window's timeline; the Rooms List has none.
+    pub(crate) active_timeline: Option<UiActiveTimeline>,
+}
+
+/// The active window's timeline: the lines it shows now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiActiveTimeline {
+    pub(crate) top_line: usize,
+    /// Each line on screen, top to bottom, with where to click it in the
+    /// timeline's client coordinates.
+    pub(crate) visible_lines: Vec<UiTimelineLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTimelineLine {
+    /// Empty for an image preview's lines.
+    pub(crate) text: String,
+    pub(crate) kind: UiTimelineLineKind,
+    /// The event the line belongs to; clicking it selects that event.
+    pub(crate) event_id: Option<String>,
+    pub(crate) click_point: UiPoint,
+}
+
+/// What a timeline line shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UiTimelineLineKind {
+    Event,
+    Info,
+    Error,
+    Typing,
+    ReactionSummary,
+    ReplyQuote,
+    Message,
+    Image,
+    File,
+    Audio,
+    Video,
+    Unsupported,
+    UnableToDecrypt,
+    StateNotice,
+    Plain,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2970,8 +3017,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_39() {
-        assert_eq!(PROTOCOL_VERSION, 39);
+    fn protocol_version_is_40() {
+        assert_eq!(PROTOCOL_VERSION, 40);
     }
 
     #[test]
@@ -4781,7 +4828,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":39,
+                    "protocol_version":40,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5392,6 +5439,15 @@ mod tests {
                         heading: "Connect > Options".to_owned(),
                         visible_controls: vec![6101],
                     }),
+                    active_timeline: Some(super::UiActiveTimeline {
+                        top_line: 2,
+                        visible_lines: vec![super::UiTimelineLine {
+                            text: "    > <Alice> are we deploying?".to_owned(),
+                            kind: super::UiTimelineLineKind::ReplyQuote,
+                            event_id: Some("$answer".to_owned()),
+                            click_point: super::UiPoint { x: 8, y: 9 },
+                        }],
+                    }),
                 },
             ))
             .unwrap(),
@@ -5544,6 +5600,15 @@ mod tests {
                         "selected":"Connect/Options",
                         "heading":"Connect > Options",
                         "visible_controls":[6101]
+                    },
+                    "active_timeline":{
+                        "top_line":2,
+                        "visible_lines":[{
+                            "text":"    > <Alice> are we deploying?",
+                            "kind":"reply_quote",
+                            "event_id":"$answer",
+                            "click_point":{"x":8,"y":9}
+                        }]
                     }
                 }
             })

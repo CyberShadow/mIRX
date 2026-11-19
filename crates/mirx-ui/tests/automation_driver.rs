@@ -42,10 +42,11 @@ use mirx_testkit::{
     SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
     SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiComposeTarget, UiComposeTargetKind, UiError,
+    SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
     UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimestamp, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimestamp,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -61,15 +62,15 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_DOWN, VK_ESCAPE, VK_MENU, VK_RETURN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
-    GetClientRect, GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow,
-    IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED,
-    PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
-    SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
-    SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
-    WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE, GW_OWNER,
+    GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgItem, GetLastActivePopup,
+    GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL,
+    IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT,
+    LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT,
+    SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
+    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, WM_CHAR, WM_COMMAND,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2858,7 +2859,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 39);
+    assert_eq!(version.protocol_version, 40);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -15076,6 +15077,179 @@ fn automation_driver_selected_timeline_context_menu_uses_keyboard_selection()
             if code == "selected_message_unavailable"
                 && message == "message context menu action is disabled"
     ));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The replies fixture in a frame low enough that its room scrolls.
+fn launch_replies_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        LaunchOptions {
+            frame_size: Some(FrameSize {
+                width: 800,
+                height: 300,
+            }),
+            ..launch_options(Some(local_app_data.clone()))
+        },
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&fs::read_to_string(fixture_state_path("replies.json"))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!replies:example")?;
+    // At the end, where the replies are.
+    unsafe {
+        SendMessageW(
+            active_room_timeline_hwnd(&app),
+            WM_VSCROLL,
+            SB_BOTTOM as WPARAM,
+            0,
+        )
+    };
+    Ok((app, local_app_data))
+}
+
+fn active_timeline(app: &MirxApp) -> Result<UiActiveTimeline, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .active_timeline
+        .expect("a room window has a timeline"))
+}
+
+/// Double-clicks the quote line above the reply `reply_event_id`.
+fn double_click_quote_of(
+    app: &MirxApp,
+    reply_event_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let timeline = active_timeline(app)?;
+    let quote = timeline
+        .visible_lines
+        .iter()
+        .find(|line| {
+            line.kind == UiTimelineLineKind::ReplyQuote
+                && line.event_id.as_deref() == Some(reply_event_id)
+        })
+        .unwrap_or_else(|| panic!("the quote of {reply_event_id} is on screen: {timeline:?}"));
+    // Sent, not posted: the click is handled before this returns, and the
+    // jump opens nothing modal.
+    let timeline = unsafe { active_room_timeline_hwnd(app) };
+    let lparam = mouse_lparam(&quote.click_point);
+    for (message, buttons) in [
+        (WM_LBUTTONDOWN, MK_LBUTTON),
+        (WM_LBUTTONUP, 0),
+        (WM_LBUTTONDBLCLK, MK_LBUTTON),
+        (WM_LBUTTONUP, 0),
+    ] {
+        let mut result = 0;
+        assert_ne!(
+            unsafe {
+                SendMessageTimeoutW(
+                    timeline,
+                    message,
+                    buttons as WPARAM,
+                    lparam,
+                    SMTO_NORMAL,
+                    5_000,
+                    &mut result,
+                )
+            },
+            0,
+            "the timeline must handle the click without blocking"
+        );
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn go_to_original_by_double_clicking_a_quote() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_replies_app()?;
+    // Windows sends WM_LBUTTONDBLCLK only to a class that asks for it.
+    let style = unsafe { GetClassLongPtrW(active_room_timeline_hwnd(&app), GCL_STYLE) } as u32;
+    assert_ne!(style & CS_DBLCLKS, 0);
+    let before = active_timeline(&app)?;
+    assert_ne!(before.top_line, 0, "the window starts scrolled to its end");
+    assert_ne!(
+        before.visible_lines[0].event_id.as_deref(),
+        Some("$replies-question")
+    );
+
+    double_click_quote_of(&app, "$replies-fallback")?;
+    assert_eq!(
+        app.dump_message_menu_state()?.selected_event_id.as_deref(),
+        Some("$replies-question")
+    );
+    let after = active_timeline(&app)?;
+    assert_eq!(
+        after.visible_lines[0].event_id.as_deref(),
+        Some("$replies-question"),
+        "{after:?}"
+    );
+    assert_eq!(app.dump_model()?.status, "original message found");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn go_to_original_via_the_message_menu() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_replies_app()?;
+    app.select_timeline_event("$replies-question")?;
+    assert!(!app.dump_message_menu_state()?.go_to_original_enabled);
+    assert!(app.go_to_original_via_message_menu().is_err());
+
+    // The emote replies to the answer, itself a reply: the answer's first
+    // line is its own quote line.
+    app.select_timeline_event("$replies-emote")?;
+    assert!(app.dump_message_menu_state()?.go_to_original_enabled);
+    app.go_to_original_via_message_menu()?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_message_menu_state()?.selected_event_id.as_deref(),
+        Some("$replies-answer")
+    );
+    let top = &active_timeline(&app)?.visible_lines[0];
+    assert_eq!(top.kind, UiTimelineLineKind::ReplyQuote);
+    assert_eq!(top.event_id.as_deref(), Some("$replies-answer"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn go_to_original_of_an_unloaded_message_asks_for_older_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_replies_app()?;
+    // A fetched quote (`$not-loaded`) is not a timeline line either; without
+    // a session the core refuses the history at once.
+    for reply in ["$replies-unknown-reply", "$replies-old-reply"] {
+        double_click_quote_of(&app, reply)?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            let status = app.dump_model()?.status;
+            if status != "finding the original message..." || Instant::now() >= deadline {
+                break status;
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        };
+        assert_eq!(
+            status,
+            "* could not load older messages: backfill room history requires an authenticated session",
+            "{reply}"
+        );
+        assert_eq!(
+            app.dump_message_menu_state()?.selected_event_id.as_deref(),
+            Some(reply)
+        );
+    }
+
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

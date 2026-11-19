@@ -28,6 +28,7 @@ pub(super) const MENU_ID_MESSAGE_SAVE_ATTACHMENT: usize = 40016;
 pub(super) const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
 pub(super) const MENU_ID_MESSAGE_EDIT: usize = 40018;
 pub(super) const MENU_ID_MESSAGE_REACT: usize = 40019;
+pub(super) const MENU_ID_MESSAGE_GO_TO_ORIGINAL: usize = 40020;
 pub(super) const MENU_ID_MEMBER_QUERY: usize = 40022;
 pub(super) const MENU_ID_MEMBER_MENTION: usize = 40023;
 pub(super) const MENU_ID_MEMBER_KICK: usize = 40024;

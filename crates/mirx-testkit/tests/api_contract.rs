@@ -36,11 +36,12 @@ use mirx_testkit::{
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
-    UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
-    UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
-    UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
+    UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog,
+    UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState,
+    UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimestamp, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -466,6 +467,7 @@ fn menu_state_models_round_trip_and_reject_unknown_fields() {
         react_enabled: true,
         redact_enabled: true,
         save_attachment_enabled: false,
+        go_to_original_enabled: true,
         selected_event_id: Some("$event:example".to_owned()),
     };
     assert_eq!(
@@ -881,6 +883,15 @@ fn data_models_round_trip_through_json() {
             heading: "Display".to_owned(),
             visible_controls: vec![6301],
         }),
+        active_timeline: Some(UiActiveTimeline {
+            top_line: 0,
+            visible_lines: vec![UiTimelineLine {
+                text: "[22:13] <Alice> hello".to_owned(),
+                kind: UiTimelineLineKind::Message,
+                event_id: Some("$hello".to_owned()),
+                click_point: UiPoint { x: 8, y: 9 },
+            }],
+        }),
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1134,6 +1145,15 @@ fn data_models_round_trip_through_json() {
                 "selected": "Display",
                 "heading": "Display",
                 "visible_controls": [6301],
+            },
+            "active_timeline": {
+                "top_line": 0,
+                "visible_lines": [{
+                    "text": "[22:13] <Alice> hello",
+                    "kind": "message",
+                    "event_id": "$hello",
+                    "click_point": {"x": 8, "y": 9},
+                }],
             },
             "rooms": [
                 {
@@ -6437,6 +6457,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         compose_target: None,
         room_list: None,
         options_dialog: None,
+        active_timeline: None,
     };
 
     let identity = ViewIdentity::Room {
