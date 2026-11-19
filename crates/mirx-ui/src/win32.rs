@@ -16099,8 +16099,8 @@ mod tests {
     fn core_events_move_the_connection_state() {
         with_local_app_data(|_| {
             let mut state = test_state();
-            let handle = start_test_core();
-            state.command_sender = Some(handle.command_sender().clone());
+            let (sender, _commands) = inert_command_sender();
+            state.command_sender = Some(sender);
             submit_restore_session(
                 &mut state,
                 "https://matrix.example/".to_owned(),
@@ -16135,11 +16135,6 @@ mod tests {
                 apply_core_event(&mut state, event.clone()).unwrap();
                 assert_eq!(state.model.connection, connection, "{event:?}");
             }
-            handle
-                .command_sender()
-                .send(Command::Shutdown)
-                .expect("shutdown command must enqueue");
-            handle.join().expect("test core must stop cleanly");
         });
     }
 
@@ -17241,6 +17236,13 @@ mod tests {
             room_id: room_id.to_owned(),
             thread_root_event_id: thread_root_event_id.to_owned(),
         }
+    }
+
+    /// A sender whose commands wait in the returned receiver, for tests of
+    /// what the UI submits: a real core would dial the test homeserver.
+    fn inert_command_sender() -> (CommandSender, UnboundedReceiver<Command>) {
+        let (sender, receiver) = unbounded_channel();
+        (CommandSender::new(sender), receiver)
     }
 
     fn start_test_core() -> CoreHandle {
@@ -29196,8 +29198,8 @@ mod tests {
     #[test]
     fn submit_login_and_restore_helpers_validate_inputs_and_update_lifecycle() {
         let mut state = test_state();
-        let handle = start_test_core();
-        state.command_sender = Some(handle.command_sender().clone());
+        let (sender, mut commands) = inert_command_sender();
+        state.command_sender = Some(sender);
 
         submit_login(
             &mut state,
@@ -29214,6 +29216,11 @@ mod tests {
             status_log_lines(&state).last().map(String::as_str),
             Some("[22:12] * Connecting to https://matrix.example as @alice:example")
         );
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Login(LoginRequest { server, username, start_sync: false, .. }))
+                if server == "https://matrix.example" && username == "@alice:example"
+        ));
         assert_eq!(
             submit_restore_session(
                 &mut state,
@@ -29240,6 +29247,14 @@ mod tests {
         assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
         assert_eq!(state.model.connection, ConnectionState::SigningIn);
         assert_eq!(state.model.own_user_id.as_deref(), Some("@alice:example"));
+        assert_eq!(
+            commands.try_recv(),
+            Ok(Command::RestoreSession(RestoreSessionRequest {
+                homeserver_url: "https://matrix.example".to_owned(),
+                session: stored_session(),
+                start_sync: true,
+            }))
+        );
 
         state.model.connection = ConnectionState::SignedIn;
         assert_eq!(
@@ -29270,12 +29285,7 @@ mod tests {
             submit_restore_session(&mut state, String::new(), stored_session(), true),
             Err("homeserver URL must not be empty".to_owned())
         );
-
-        handle
-            .command_sender()
-            .send(Command::Shutdown)
-            .expect("shutdown command must enqueue");
-        handle.join().expect("test core must stop cleanly");
+        assert!(commands.try_recv().is_err(), "refused submits send nothing");
     }
 
     #[test]
@@ -29296,8 +29306,8 @@ mod tests {
                 Err("core command sender is not available".to_owned())
             );
 
-            let handle = start_test_core();
-            state.command_sender = Some(handle.command_sender().clone());
+            let (sender, mut commands) = inert_command_sender();
+            state.command_sender = Some(sender);
             save_session("https://matrix.example", &stored_session()).unwrap();
 
             submit_restore_saved_session(&mut state, false).unwrap();
@@ -29306,12 +29316,16 @@ mod tests {
 
             submit_start_sync(&mut state).unwrap();
             submit_logout(&mut state).unwrap();
-
-            handle
-                .command_sender()
-                .send(Command::Shutdown)
-                .expect("shutdown command must enqueue");
-            handle.join().expect("test core must stop cleanly");
+            assert_eq!(
+                commands.try_recv(),
+                Ok(Command::RestoreSession(RestoreSessionRequest {
+                    homeserver_url: "https://matrix.example".to_owned(),
+                    session: stored_session(),
+                    start_sync: false,
+                }))
+            );
+            assert_eq!(commands.try_recv(), Ok(Command::StartSync));
+            assert_eq!(commands.try_recv(), Ok(Command::Logout));
         });
     }
 
@@ -29319,8 +29333,8 @@ mod tests {
     fn startup_restore_keeps_restoring_state_when_started_arrives_after_submit() {
         with_local_app_data(|_| {
             let mut state = test_state();
-            let handle = start_test_core();
-            state.command_sender = Some(handle.command_sender().clone());
+            let (sender, _commands) = inert_command_sender();
+            state.command_sender = Some(sender);
             save_session("https://matrix.example", &stored_session()).unwrap();
 
             submit_restore_saved_session(&mut state, false).unwrap();
@@ -29330,12 +29344,6 @@ mod tests {
             apply_core_event(&mut state, Event::Started).unwrap();
             assert_eq!(state.model.status, "restoring saved session");
             assert_eq!(state.model.lifecycle_state, LifecycleState::Restoring);
-
-            handle
-                .command_sender()
-                .send(Command::Shutdown)
-                .expect("shutdown command must enqueue");
-            handle.join().expect("test core must stop cleanly");
         });
     }
 
