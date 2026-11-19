@@ -164,8 +164,15 @@ pub enum ContextMenuCommand {
     ReactMessage,
     RedactMessage,
     SaveAttachment,
+    WhoisMember,
     QueryMember,
     MentionMember,
+    IgnoreMember,
+    UnignoreMember,
+    OpMember,
+    DeopMember,
+    VoiceMember,
+    DevoiceMember,
     KickMember,
     BanMember,
 }
@@ -173,8 +180,15 @@ pub enum ContextMenuCommand {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MemberMenuState {
+    pub whois_enabled: bool,
     pub query_enabled: bool,
     pub mention_enabled: bool,
+    pub ignore_enabled: bool,
+    pub unignore_enabled: bool,
+    pub op_enabled: bool,
+    pub deop_enabled: bool,
+    pub voice_enabled: bool,
+    pub devoice_enabled: bool,
     pub kick_enabled: bool,
     pub ban_enabled: bool,
     pub selected_user_id: Option<String>,

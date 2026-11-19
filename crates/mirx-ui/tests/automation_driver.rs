@@ -5601,8 +5601,13 @@ fn automation_driver_member_menu_state_tracks_selected_member()
     assert!(!app.dump_member_menu_state()?.query_enabled);
     app.select_member("@casey:example")?;
     let state = app.dump_member_menu_state()?;
-    assert!(state.query_enabled && state.mention_enabled);
+    assert!(state.whois_enabled && state.query_enabled && state.mention_enabled);
     assert!(state.kick_enabled && state.ban_enabled);
+    // A plain member can be given op or voice.
+    assert!(state.op_enabled && state.voice_enabled);
+    assert!(!state.deop_enabled && !state.devoice_enabled);
+    // The fixture has no ignore list.
+    assert!(!state.ignore_enabled && !state.unignore_enabled);
     assert_eq!(state.selected_user_id.as_deref(), Some("@casey:example"));
     assert_eq!(state.selected_label.as_deref(), Some("Casey"));
     app.select_member("@sam-two:example")?;
@@ -5613,6 +5618,102 @@ fn automation_driver_member_menu_state_tracks_selected_member()
         state.selected_label.as_deref(),
         Some("Sam (@sam-two:example)")
     );
+    Ok(())
+}
+
+#[test]
+fn member_menu_control_items() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let member = |user_id: &str, display_name: &str, rank, is_own_user| RoomMemberSummary {
+        user_id: user_id.to_owned(),
+        display_name: Some(display_name.to_owned()),
+        display_name_ambiguous: false,
+        is_own_user,
+        rank,
+        can_kick: false,
+        can_ban: false,
+    };
+    let mut events = base_events();
+    events.insert(
+        1,
+        Event::LoggedIn {
+            session: core_stored_session(),
+            homeserver_url: "https://matrix.example/".to_owned(),
+        },
+    );
+    events.extend([
+        Event::RoomMembers(RoomMembers {
+            room_id: "!beta:example".to_owned(),
+            members: vec![
+                member("@alice:example", "Alice", RoomMemberRank::Moderator, true),
+                member("@vic:example", "Vic", RoomMemberRank::Voiced, false),
+                member("@bob:example", "Bob", RoomMemberRank::Member, false),
+            ],
+        }),
+        Event::IgnoredUsers(Vec::new()),
+    ]);
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_view(room_identity("!beta:example"))?;
+
+    app.select_member("@bob:example")?;
+    let state = app.dump_member_menu_state()?;
+    assert!(state.whois_enabled && state.ignore_enabled && !state.unignore_enabled);
+    assert!(state.op_enabled && state.voice_enabled);
+    assert!(!state.deop_enabled && !state.devoice_enabled);
+    assert!(!state.kick_enabled && !state.ban_enabled);
+
+    app.select_member("@vic:example")?;
+    let state = app.dump_member_menu_state()?;
+    assert!(state.devoice_enabled && !state.voice_enabled);
+
+    // You cannot ignore or deop yourself.
+    app.select_member("@alice:example")?;
+    let state = app.dump_member_menu_state()?;
+    assert!(!state.ignore_enabled && !state.deop_enabled);
+    let error = app
+        .open_selected_member_context_menu(ContextMenuCommand::IgnoreMember)
+        .expect_err("ignoring yourself is greyed");
+    assert!(matches!(
+        error,
+        TestkitError::Protocol { message, .. }
+            if message == "member context menu action is disabled"
+    ));
+
+    // Each item runs the typed command on the member.
+    app.open_member_context_menu("@bob:example", ContextMenuCommand::OpMember)?;
+    app.open_member_context_menu("@bob:example", ContextMenuCommand::IgnoreMember)?;
+    app.open_member_context_menu("@bob:example", ContextMenuCommand::WhoisMember)?;
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_power_level_commands,
+        vec![SubmittedPowerLevelCommand {
+            room_id: "!beta:example".to_owned(),
+            user_id: "@bob:example".to_owned(),
+            role: MemberPowerRole::Moderator,
+        }]
+    );
+    assert_eq!(
+        model.submitted_user_commands,
+        vec![
+            SubmittedUserCommand {
+                action: UserCommandAction::Ignore,
+                user_id: "@bob:example".to_owned(),
+            },
+            SubmittedUserCommand {
+                action: UserCommandAction::FetchProfile,
+                user_id: "@bob:example".to_owned(),
+            },
+        ]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 

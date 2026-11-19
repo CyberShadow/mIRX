@@ -201,11 +201,13 @@ use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
 use menus::{
-    BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MENU_BAR, MENU_ID_COMMANDS_FIRST,
-    MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT,
-    MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS,
-    MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION,
-    MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL,
+    BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MEMBER_CONTROL_MENU, MEMBER_MENU, MENU_BAR,
+    MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT,
+    MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT,
+    MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_DEOP,
+    MENU_ID_MEMBER_DEVOICE, MENU_ID_MEMBER_IGNORE, MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION,
+    MENU_ID_MEMBER_OP, MENU_ID_MEMBER_QUERY, MENU_ID_MEMBER_UNIGNORE, MENU_ID_MEMBER_VOICE,
+    MENU_ID_MEMBER_WHOIS, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_GO_TO_ORIGINAL,
     MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY,
     MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
     MENU_ID_ROOM_NOTIFY_ALL, MENU_ID_ROOM_NOTIFY_MENTIONS, MENU_ID_ROOM_NOTIFY_MUTE,
@@ -215,9 +217,9 @@ use menus::{
     MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
     MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
     ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, commands_menu_item,
-    commands_menu_line, commands_menu_title, file_menu_state, notification_menu_id,
-    notification_menu_mode, notification_mode_label, verification_menu_action_enabled,
-    view_menu_bar, view_menu_checks,
+    commands_menu_line, commands_menu_title, file_menu_state, member_menu_command,
+    member_menu_item_enabled, member_menu_item_ids, notification_menu_id, notification_menu_mode,
+    notification_mode_label, verification_menu_action_enabled, view_menu_bar, view_menu_checks,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
@@ -5144,13 +5146,7 @@ unsafe fn show_member_context_menu(
     let menu = state_ref(frame).controls.member_menu;
     refresh_member_menu_state(frame, menu)?;
     let action_state = active_member_action_state(frame);
-    if requested_command.is_some_and(|command| match command {
-        MENU_ID_MEMBER_QUERY => !action_state.query_enabled,
-        MENU_ID_MEMBER_MENTION => !action_state.mention_enabled,
-        MENU_ID_MEMBER_KICK => !action_state.kick_enabled,
-        MENU_ID_MEMBER_BAN => !action_state.ban_enabled,
-        _ => true,
-    }) {
+    if requested_command.is_some_and(|command| !action_state.enabled(command)) {
         return Err("member context menu action is disabled".to_owned());
     }
     if let Some(command) = show_context_menu(frame, menu, x, y, requested_command)?
@@ -5162,7 +5158,7 @@ unsafe fn show_member_context_menu(
 }
 
 unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
-    let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
+    let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
     let status = submit_query_slash_command(state_mut(hwnd), member.user_id)?;
     state_mut(hwnd).model.status = status;
     refresh_status_bar(hwnd)
@@ -5171,7 +5167,7 @@ unsafe fn query_selected_member(hwnd: HWND) -> Result<(), String> {
 /// Inserts the selected member's name at the compose caret, replacing any
 /// selection, followed by a space to type on.
 unsafe fn mention_selected_member(hwnd: HWND) -> Result<(), String> {
-    let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
+    let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
     let mention = member_mention_text(&member.user_id, member.display_name.as_deref());
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
@@ -5243,39 +5239,13 @@ unsafe fn complete_compose_nick(hwnd: HWND, reverse: bool) -> Result<(), String>
     Ok(())
 }
 
-unsafe fn submit_selected_member_moderation(hwnd: HWND, kick: bool) -> Result<(), String> {
-    let member = selected_member_row(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
-    if if kick {
-        !member.can_kick
-    } else {
-        !member.can_ban
-    } {
-        return Err("member context menu action is disabled".to_owned());
-    }
-    let room_id = match &state_ref(hwnd).active_view {
-        ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id.clone(),
-        ViewId::Status | ViewId::RoomList => return Err("no room selected".to_owned()),
-    };
-    let command = if kick {
-        Command::KickRoomMember(KickRoomMemberRequest {
-            room_id: room_id.clone(),
-            user_id: member.user_id.clone(),
-            reason: None,
-        })
-    } else {
-        Command::BanRoomMember(BanRoomMemberRequest {
-            room_id: room_id.clone(),
-            user_id: member.user_id.clone(),
-            reason: None,
-        })
-    };
-    enqueue_command(state_mut(hwnd), command)?;
-    state_mut(hwnd).model.status = if kick {
-        format!("kick submitted: {}", member.user_id)
-    } else {
-        format!("ban submitted: {}", member.user_id)
-    };
-    refresh_status_bar(hwnd)
+/// Runs a member menu item's command on the selected member, as if typed:
+/// its refusals and errors print where typed ones do.
+unsafe fn run_selected_member_command(hwnd: HWND, id: usize) -> Result<(), String> {
+    let member = selected_member(hwnd).ok_or_else(|| "no member is selected".to_owned())?;
+    let command = member_menu_command(id, &member.user_id)
+        .unwrap_or_else(|| panic!("member menu item {id} runs no command"));
+    run_local_command(hwnd, command)
 }
 
 unsafe fn invoke_member_context_menu_for_automation(
@@ -5299,13 +5269,9 @@ unsafe fn invoke_selected_member_context_menu_for_automation(
 }
 
 fn member_context_menu_command_id(command: &ContextMenuCommand) -> Result<usize, String> {
-    Ok(match command {
-        ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
-        ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
-        ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
-        ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
-        _ => return Err("member context menu command is unavailable".to_owned()),
-    })
+    context_menu_command_id(command)
+        .filter(|id| member_menu_item_ids().any(|member_id| member_id == *id))
+        .ok_or_else(|| "member context menu command is unavailable".to_owned())
 }
 
 unsafe fn member_context_lparam_for_automation(
@@ -6518,24 +6484,13 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         append_menu_text(message_menu, MF_STRING, id, label)?;
     }
 
-    let member_menu = create_popup_menu()?;
-    append_menu_text(member_menu, MF_STRING, MENU_ID_MEMBER_QUERY, "Query User")?;
+    let member_menu = create_menu_from_entries(MEMBER_MENU)?;
     append_menu_text(
         member_menu,
-        MF_STRING,
-        MENU_ID_MEMBER_MENTION,
-        "Mention/Insert Name",
+        MF_POPUP,
+        create_menu_from_entries(MEMBER_CONTROL_MENU)? as usize,
+        "Control",
     )?;
-    if AppendMenuW(member_menu, MF_SEPARATOR, 0, null()) == 0 {
-        return Err(last_os_error("AppendMenuW"));
-    }
-    append_menu_text(
-        member_menu,
-        MF_STRING,
-        MENU_ID_MEMBER_KICK,
-        "Kick from Room",
-    )?;
-    append_menu_text(member_menu, MF_STRING, MENU_ID_MEMBER_BAN, "Ban from Room")?;
 
     let frame_menu = CreateMenu();
     if frame_menu.is_null() {
@@ -6915,12 +6870,20 @@ unsafe fn refresh_message_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<()
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MemberMenuActionState {
-    query_enabled: bool,
-    mention_enabled: bool,
-    kick_enabled: bool,
-    ban_enabled: bool,
+    /// Each member menu item, and whether it applies.
+    items: Vec<(usize, bool)>,
     selected_user_id: Option<String>,
     selected_label: Option<String>,
+}
+
+impl MemberMenuActionState {
+    fn enabled(&self, id: usize) -> bool {
+        self.items
+            .iter()
+            .find(|(item, _)| *item == id)
+            .unwrap_or_else(|| panic!("{id} is not a member menu item"))
+            .1
+    }
 }
 
 /// The members of the active view's room, in nick list order; a thread
@@ -6952,35 +6915,44 @@ unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
     }
 }
 
-unsafe fn selected_member_row(hwnd: HWND) -> Option<RoomMemberView> {
+/// The nick list's selected member: the list shows the active view's
+/// members in order.
+unsafe fn selected_member(hwnd: HWND) -> Option<RoomMemberSummary> {
     let list = active_member_list(hwnd)?;
     let selected = SendMessageW(list, LB_GETCURSEL, 0, 0);
     if selected == LB_ERR as isize {
         return None;
     }
-    active_member_rows(hwnd).get(selected as usize).cloned()
+    active_view_members(state_ref(hwnd))
+        .get(selected as usize)
+        .cloned()
 }
 
 unsafe fn active_member_action_state(hwnd: HWND) -> MemberMenuActionState {
-    let selected = selected_member_row(hwnd);
+    let selected = selected_member(hwnd);
+    let model = &state_ref(hwnd).model;
     MemberMenuActionState {
-        query_enabled: selected.is_some(),
-        mention_enabled: selected.is_some(),
-        kick_enabled: selected.as_ref().is_some_and(|member| member.can_kick),
-        ban_enabled: selected.as_ref().is_some_and(|member| member.can_ban),
+        items: member_menu_item_ids()
+            .map(|id| {
+                let enabled = selected.as_ref().is_some_and(|member| {
+                    member_menu_item_enabled(
+                        id,
+                        member,
+                        model.ignored_users.as_deref(),
+                        model.own_user_id.as_deref(),
+                    )
+                });
+                (id, enabled)
+            })
+            .collect(),
         selected_user_id: selected.as_ref().map(|member| member.user_id.clone()),
-        selected_label: selected.map(|member| member.label),
+        selected_label: selected.as_ref().map(room_member_nick),
     }
 }
 
 unsafe fn refresh_member_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
     let action_state = active_member_action_state(hwnd);
-    for (item, enabled) in [
-        (MENU_ID_MEMBER_QUERY, action_state.query_enabled),
-        (MENU_ID_MEMBER_MENTION, action_state.mention_enabled),
-        (MENU_ID_MEMBER_KICK, action_state.kick_enabled),
-        (MENU_ID_MEMBER_BAN, action_state.ban_enabled),
-    ] {
+    for (item, enabled) in action_state.items {
         let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
         if EnableMenuItem(popup_menu, item as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
@@ -6997,10 +6969,17 @@ unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, Stri
     refresh_member_menu_state(hwnd, menu)?;
     let state = active_member_action_state(hwnd);
     Ok(DumpMemberMenuState {
-        query_enabled: state.query_enabled,
-        mention_enabled: state.mention_enabled,
-        kick_enabled: state.kick_enabled,
-        ban_enabled: state.ban_enabled,
+        whois_enabled: state.enabled(MENU_ID_MEMBER_WHOIS),
+        query_enabled: state.enabled(MENU_ID_MEMBER_QUERY),
+        mention_enabled: state.enabled(MENU_ID_MEMBER_MENTION),
+        ignore_enabled: state.enabled(MENU_ID_MEMBER_IGNORE),
+        unignore_enabled: state.enabled(MENU_ID_MEMBER_UNIGNORE),
+        op_enabled: state.enabled(MENU_ID_MEMBER_OP),
+        deop_enabled: state.enabled(MENU_ID_MEMBER_DEOP),
+        voice_enabled: state.enabled(MENU_ID_MEMBER_VOICE),
+        devoice_enabled: state.enabled(MENU_ID_MEMBER_DEVOICE),
+        kick_enabled: state.enabled(MENU_ID_MEMBER_KICK),
+        ban_enabled: state.enabled(MENU_ID_MEMBER_BAN),
         selected_user_id: state.selected_user_id,
         selected_label: state.selected_label,
     })
@@ -7321,13 +7300,17 @@ unsafe fn menu_command_result(
         ),
         MENU_ID_MEMBER_QUERY => ("Member", query_selected_member(hwnd).map(|_| Some(()))),
         MENU_ID_MEMBER_MENTION => ("Member", mention_selected_member(hwnd).map(|_| Some(()))),
-        MENU_ID_MEMBER_KICK => (
+        MENU_ID_MEMBER_WHOIS
+        | MENU_ID_MEMBER_IGNORE
+        | MENU_ID_MEMBER_UNIGNORE
+        | MENU_ID_MEMBER_OP
+        | MENU_ID_MEMBER_DEOP
+        | MENU_ID_MEMBER_VOICE
+        | MENU_ID_MEMBER_DEVOICE
+        | MENU_ID_MEMBER_KICK
+        | MENU_ID_MEMBER_BAN => (
             "Member",
-            submit_selected_member_moderation(hwnd, true).map(|_| Some(())),
-        ),
-        MENU_ID_MEMBER_BAN => (
-            "Member",
-            submit_selected_member_moderation(hwnd, false).map(|_| Some(())),
+            run_selected_member_command(hwnd, command_id).map(|_| Some(())),
         ),
         MENU_ID_FILE_CONNECT => (
             "File",
@@ -7554,8 +7537,15 @@ fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
         ContextMenuCommand::ReactMessage => MENU_ID_MESSAGE_REACT,
         ContextMenuCommand::RedactMessage => MENU_ID_MESSAGE_REDACT,
         ContextMenuCommand::SaveAttachment => MENU_ID_MESSAGE_SAVE_ATTACHMENT,
+        ContextMenuCommand::WhoisMember => MENU_ID_MEMBER_WHOIS,
         ContextMenuCommand::QueryMember => MENU_ID_MEMBER_QUERY,
         ContextMenuCommand::MentionMember => MENU_ID_MEMBER_MENTION,
+        ContextMenuCommand::IgnoreMember => MENU_ID_MEMBER_IGNORE,
+        ContextMenuCommand::UnignoreMember => MENU_ID_MEMBER_UNIGNORE,
+        ContextMenuCommand::OpMember => MENU_ID_MEMBER_OP,
+        ContextMenuCommand::DeopMember => MENU_ID_MEMBER_DEOP,
+        ContextMenuCommand::VoiceMember => MENU_ID_MEMBER_VOICE,
+        ContextMenuCommand::DevoiceMember => MENU_ID_MEMBER_DEVOICE,
         ContextMenuCommand::KickMember => MENU_ID_MEMBER_KICK,
         ContextMenuCommand::BanMember => MENU_ID_MEMBER_BAN,
     })

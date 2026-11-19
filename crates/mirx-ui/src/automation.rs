@@ -571,8 +571,15 @@ pub(crate) enum ContextMenuCommand {
     ReactMessage,
     RedactMessage,
     SaveAttachment,
+    WhoisMember,
     QueryMember,
     MentionMember,
+    IgnoreMember,
+    UnignoreMember,
+    OpMember,
+    DeopMember,
+    VoiceMember,
+    DevoiceMember,
     KickMember,
     BanMember,
 }
@@ -879,8 +886,15 @@ pub(crate) struct DumpMessageMenuState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpMemberMenuState {
+    pub(crate) whois_enabled: bool,
     pub(crate) query_enabled: bool,
     pub(crate) mention_enabled: bool,
+    pub(crate) ignore_enabled: bool,
+    pub(crate) unignore_enabled: bool,
+    pub(crate) op_enabled: bool,
+    pub(crate) deop_enabled: bool,
+    pub(crate) voice_enabled: bool,
+    pub(crate) devoice_enabled: bool,
     pub(crate) kick_enabled: bool,
     pub(crate) ban_enabled: bool,
     pub(crate) selected_user_id: Option<String>,
