@@ -44,6 +44,9 @@ pub enum Command {
     /// Removes the user ID from the ignore list; the next sync's
     /// `IgnoredUsers` no longer lists it.
     UnignoreUser(String),
+    /// Asks the user's homeserver for their global profile; answered by
+    /// `UserProfile`.
+    FetchUserProfile(String),
     SendMessage(SendMessageRequest),
     SendFile(SendFileRequest),
     EditMessage(EditMessageRequest),
@@ -1250,6 +1253,44 @@ pub struct VerificationDecimals {
     pub third: u16,
 }
 
+/// A user's global profile, as their homeserver gives it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UserProfile {
+    pub user_id: String,
+    /// `None` when the profile has no display name, or an empty one.
+    pub display_name: Option<String>,
+}
+
+impl<'de> serde::Deserialize<'de> for UserProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireUserProfile {
+            user_id: String,
+            display_name: serde_json::Value,
+        }
+
+        let profile = WireUserProfile::deserialize(deserializer)?;
+        let display_name = match profile.display_name {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(name) => Some(name),
+            name => {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid display_name for {}: expected string or null, got {name}",
+                    profile.user_id
+                )));
+            }
+        };
+        Ok(Self {
+            user_id: profile.user_id,
+            display_name,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CoreErrorEvent {
     pub operation: Operation,
@@ -1318,6 +1359,7 @@ pub enum Operation {
     IgnoredUsers,
     IgnoreUser,
     UnignoreUser,
+    FetchUserProfile,
     SendMessage,
     SendFile,
     EditMessage,
@@ -1386,6 +1428,8 @@ pub enum Event {
     /// sorted: with the first room snapshot, and whenever it changes. The
     /// server stops sending ignored users' events.
     IgnoredUsers(Vec<String>),
+    /// The answer to `FetchUserProfile`.
+    UserProfile(UserProfile),
     E2eeStatus(E2eeStatus),
     E2eeRecoverySetupSucceeded(E2eeRecoverySetupSucceeded),
     E2eeRecoverySucceeded(E2eeRecoverySucceeded),

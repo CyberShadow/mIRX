@@ -2018,6 +2018,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::IgnoredUsers => "ignored_users",
         Operation::IgnoreUser => "ignore_user",
         Operation::UnignoreUser => "unignore_user",
+        Operation::FetchUserProfile => "fetch_user_profile",
         Operation::SendMessage => "send_text",
         Operation::SendFile => "send_file",
         Operation::EditMessage => "edit_message",

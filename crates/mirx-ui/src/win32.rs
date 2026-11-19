@@ -9146,6 +9146,8 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::HighlightWords(words) => state.model.highlight_words = Some(words),
         // Shown by /ignore, which the next change adds.
         Event::IgnoredUsers(_) => {}
+        // Shown by /whois, which a later change asks the server.
+        Event::UserProfile(_) => {}
         Event::E2eeStatus(status) => {
             for line in status_log::e2ee_status(&status) {
                 log_status(state, StatusLineKind::Info, line);
@@ -17490,6 +17492,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::IgnoredUsers => "ignore list",
         Operation::IgnoreUser => "ignore user",
         Operation::UnignoreUser => "unignore user",
+        Operation::FetchUserProfile => "fetch user profile",
         Operation::SendMessage => "send text",
         Operation::SendFile => "send file",
         Operation::EditMessage => "edit message",

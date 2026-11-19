@@ -229,6 +229,9 @@ async fn handle_command(
         }
         Command::IgnoreUser(user_id) => handle_ignore_user(event_tx, state, user_id).await,
         Command::UnignoreUser(user_id) => handle_unignore_user(event_tx, state, user_id).await,
+        Command::FetchUserProfile(user_id) => {
+            handle_fetch_user_profile(event_tx, state, user_id).await
+        }
         Command::SendMessage(request) => handle_send_message(event_tx, state, request).await,
         Command::SendFile(request) => handle_send_file(event_tx, state, request).await,
         Command::EditMessage(request) => handle_edit_message(event_tx, state, request).await,
@@ -1124,6 +1127,28 @@ async fn handle_unignore_user(
 
     if let Err(err) = matrix::unignore_user(client, &user_id).await {
         emit_matrix_error(event_tx, Operation::UnignoreUser, err);
+    }
+
+    false
+}
+
+async fn handle_fetch_user_profile(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    user_id: String,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::FetchUserProfile,
+            "fetch user profile requires an authenticated session",
+        );
+        return false;
+    };
+
+    match matrix::fetch_user_profile(client, &user_id).await {
+        Ok(profile) => emit_event(event_tx, Event::UserProfile(profile)),
+        Err(err) => emit_matrix_error(event_tx, Operation::FetchUserProfile, err),
     }
 
     false

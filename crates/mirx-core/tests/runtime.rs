@@ -22,8 +22,9 @@ use mirx_core::{
     SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
     SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start, validate_highlight_word,
+    UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals, VerificationEmoji,
+    VerificationFlowId, VerificationRequest, VerificationState, VerificationStateEvent, start,
+    validate_highlight_word,
 };
 use tempfile::TempDir;
 
@@ -151,6 +152,7 @@ fn error_room_id(command: &Command) -> Option<&str> {
         | Command::RemoveHighlightWord(_)
         | Command::IgnoreUser(_)
         | Command::UnignoreUser(_)
+        | Command::FetchUserProfile(_)
         | Command::ListPublicRooms(_)
         | Command::RefreshE2eeStatus
         | Command::SetupE2eeRecovery(_)
@@ -619,6 +621,50 @@ fn ignore_commands_before_login_emit_their_errors() {
         Command::UnignoreUser("@bob:example.org".to_owned()),
         Operation::UnignoreUser,
         "unignore user requires an authenticated session",
+    );
+}
+
+#[test]
+fn fetch_user_profile_before_login_emits_its_error() {
+    assert_invalid_authenticated_command(
+        Command::FetchUserProfile("@bob:example.org".to_owned()),
+        Operation::FetchUserProfile,
+        "fetch user profile requires an authenticated session",
+    );
+}
+
+#[test]
+fn user_profile_round_trips_and_requires_display_name() {
+    for profile in [
+        UserProfile {
+            user_id: "@bob:example.org".to_owned(),
+            display_name: Some("Bob Builder".to_owned()),
+        },
+        UserProfile {
+            user_id: "@bob:example.org".to_owned(),
+            display_name: None,
+        },
+    ] {
+        let json = serde_json::to_string(&Event::UserProfile(profile.clone())).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Event>(&json).unwrap(),
+            Event::UserProfile(profile)
+        );
+    }
+    let missing =
+        serde_json::from_str::<Event>(r#"{"UserProfile":{"user_id":"@bob:example.org"}}"#)
+            .expect_err("a profile without display_name must be rejected");
+    assert!(
+        missing.to_string().contains("missing field `display_name`"),
+        "{missing}"
+    );
+    let unknown = serde_json::from_str::<Event>(
+        r#"{"UserProfile":{"user_id":"@bob:example.org","display_name":null,"avatar_url":null}}"#,
+    )
+    .expect_err("a profile with an unknown field must be rejected");
+    assert!(
+        unknown.to_string().contains("unknown field `avatar_url`"),
+        "{unknown}"
     );
 }
 

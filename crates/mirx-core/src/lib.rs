@@ -30,7 +30,7 @@ pub use api::{
     SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason,
-    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
+    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals,
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, login_server, validate_highlight_word,
 };

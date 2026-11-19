@@ -38,6 +38,7 @@ use matrix_sdk::{
         EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId,
         OwnedRoomAliasId, OwnedRoomId, OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt,
         UserId,
+        api::client::profile::DisplayName as DisplayNameField,
         api::client::push::{delete_pushrule, set_pushrule, set_pushrule_enabled},
         api::client::{
             directory::get_public_rooms_filtered,
@@ -47,6 +48,7 @@ use matrix_sdk::{
                 create_room::v3::{Request as CreateRoomHttpRequest, RoomPreset},
             },
         },
+        api::error::ErrorKind,
         directory::Filter,
         events::{
             AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, InitialStateEvent,
@@ -120,7 +122,7 @@ use crate::api::{
     SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget, SendReactionRequest,
     SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest,
     SetRoomTopicRequest, SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession,
-    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
+    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, UserProfile, VerificationDecimals,
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent,
 };
@@ -891,6 +893,32 @@ pub(crate) async fn unignore_user(client: &Client, user_id: &str) -> Result<(), 
         .unignore_user(&user_id)
         .await
         .map_err(|err| MatrixCoreError::new(format!("failed to unignore {user_id}: {err}")))
+}
+
+/// The user's global profile from their homeserver. An empty display name
+/// is none.
+pub(crate) async fn fetch_user_profile(
+    client: &Client,
+    user_id: &str,
+) -> Result<UserProfile, MatrixCoreError> {
+    let user_id = parse_user_id(user_id)?;
+    let response = client
+        .account()
+        .fetch_user_profile_of(&user_id)
+        .await
+        .map_err(|err| match err.client_api_error_kind() {
+            Some(ErrorKind::NotFound) => MatrixCoreError::new(format!("no such user {user_id}")),
+            _ => MatrixCoreError::new(format!("failed to fetch the profile of {user_id}: {err}")),
+        })?;
+    let display_name = response.get_static::<DisplayNameField>().map_err(|err| {
+        MatrixCoreError::new(format!(
+            "invalid display name in the profile of {user_id}: {err}"
+        ))
+    })?;
+    Ok(UserProfile {
+        user_id: user_id.to_string(),
+        display_name: display_name.filter(|name| !name.is_empty()),
+    })
 }
 
 /// What a highlight word's rule does: notify with a sound and highlight,
@@ -4317,7 +4345,7 @@ mod tests {
         add_highlight_word, attach_reply_relation, attach_thread_relation,
         attach_thread_reply_relation, backfill_room_history, ban_room_member, cancelled_state,
         content_type_for_file_name, create_room, direct_user_ids_by_room_from_content,
-        emit_member_snapshots_after_sync, fetch_room_event, fetch_room_media,
+        emit_member_snapshots_after_sync, fetch_room_event, fetch_room_media, fetch_user_profile,
         highlight_word_actions, highlight_words_from_ruleset, ignore_user, ignored_users,
         insert_pending_outgoing_kind, invite_room_member, joined_room_members,
         joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
@@ -4347,7 +4375,7 @@ mod tests {
     use crate::api::{
         CreateRoomRequest, CreateRoomVisibility, HighlightWord, ListPublicRoomsRequest, PublicRoom,
         PublicRoomsPage, PublicRoomsResult, RoomNotificationMode, RoomSummary, SendFileRequest,
-        SetRoomNotificationModeRequest,
+        SetRoomNotificationModeRequest, UserProfile,
     };
 
     #[test]
@@ -10618,6 +10646,80 @@ mod tests {
             );
             read_state_task.abort();
             room_list_task.abort();
+        });
+    }
+
+    #[test]
+    fn fetch_user_profile_returns_display_name() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            for (user_id, body) in [
+                (
+                    "@alice:remote.org",
+                    serde_json::json!({ "displayname": "Alice Liddell" }),
+                ),
+                ("@bare:remote.org", serde_json::json!({})),
+                (
+                    "@empty:remote.org",
+                    serde_json::json!({ "displayname": "" }),
+                ),
+            ] {
+                wiremock::Mock::given(wiremock::matchers::method("GET"))
+                    .and(wiremock::matchers::path(format!(
+                        "/_matrix/client/v3/profile/{user_id}"
+                    )))
+                    .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+                    .mount(mock_server.server())
+                    .await;
+            }
+            wiremock::Mock::given(wiremock::matchers::method("GET"))
+                .and(wiremock::matchers::path(
+                    "/_matrix/client/v3/profile/@ghost:remote.org",
+                ))
+                .respond_with(wiremock::ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "Profile not found" }),
+                ))
+                .mount(mock_server.server())
+                .await;
+
+            assert_eq!(
+                fetch_user_profile(&client, "@alice:remote.org")
+                    .await
+                    .expect("alice"),
+                UserProfile {
+                    user_id: "@alice:remote.org".to_owned(),
+                    display_name: Some("Alice Liddell".to_owned()),
+                }
+            );
+            for user_id in ["@bare:remote.org", "@empty:remote.org"] {
+                assert_eq!(
+                    fetch_user_profile(&client, user_id).await.expect(user_id),
+                    UserProfile {
+                        user_id: user_id.to_owned(),
+                        display_name: None,
+                    }
+                );
+            }
+            assert_eq!(
+                fetch_user_profile(&client, "@ghost:remote.org")
+                    .await
+                    .expect_err("no such user")
+                    .to_string(),
+                "no such user @ghost:remote.org"
+            );
+            assert_eq!(
+                fetch_user_profile(&client, "ghost")
+                    .await
+                    .expect_err("an invalid user ID")
+                    .to_string(),
+                r#"invalid user ID "ghost": leading sigil is incorrect or missing"#
+            );
         });
     }
 
