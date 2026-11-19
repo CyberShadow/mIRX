@@ -82,21 +82,21 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnableMenuItem, FLASHW_TIMERNOFG, FLASHW_TRAY, FLASHWINFO, FlashWindowEx, GWL_STYLE,
     GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow, GetMessageW,
     GetParent, GetScrollInfo, GetSystemMenu, GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret,
-    IDC_ARROW, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
+    IDC_ARROW, IDYES, IsChild, IsIconic, IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR,
     LB_GETCURSEL, LB_GETITEMRECT, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL,
-    LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_OK, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
-    MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
-    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
-    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
-    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
-    SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
-    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
-    TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU,
-    WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE, WM_MDIDESTROY,
-    WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETTEXT, WM_SIZE, WM_TIMER,
-    WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    LBS_NOINTEGRALHEIGHT, LoadCursorW, MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO,
+    MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED,
+    MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
+    SB_THUMBTRACK, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE,
+    SIF_TRACKPOS, SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer,
+    SetWindowLongPtrW, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMDISysAccel, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
+    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
+    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
+    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETTEXT, WM_SIZE,
+    WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
     WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP,
     WS_VISIBLE, WS_VSCROLL,
 };
@@ -2086,6 +2086,13 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     {
         wants_attention =
             !state.synthetic_load_in_progress && activity_wants_attention(level, room_is_direct);
+        // A closed query pops up again when the other side talks, as in
+        // mIRC; the next view sync recreates its window.
+        if level >= ViewActivityLevel::Message
+            && let ViewId::Room(room_id) = &target_view_id
+        {
+            state.closed_queries.remove(room_id);
+        }
         if state.active_view != target_view_id {
             raise_view_activity(state, target_view_id.clone(), level);
             if !state.synthetic_load_in_progress
@@ -2692,6 +2699,10 @@ struct WindowState {
     find_states: BTreeMap<ViewId, ViewFindState>,
     switchbar_views: Vec<ViewId>,
     room_activity: BTreeMap<ViewId, ViewActivityLevel>,
+    /// Joined queries whose window the user closed. Like mIRC's closed query
+    /// windows, they stay closed until a new message from the other side or
+    /// an explicit activation. Holds only joined DM rooms in `model.rooms`.
+    closed_queries: BTreeSet<String>,
     room_activity_read_targets: BTreeMap<ViewId, String>,
     compose_history: ComposeHistory,
     /// The last Tab completion, for further Tabs to cycle.
@@ -2863,6 +2874,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         find_states: BTreeMap::new(),
         switchbar_views: Vec::new(),
         room_activity: BTreeMap::new(),
+        closed_queries: BTreeSet::new(),
         room_activity_read_targets: BTreeMap::new(),
         compose_history: ComposeHistory::default(),
         nick_completion: None,
@@ -3810,20 +3822,131 @@ unsafe extern "system" fn mdi_child_window_proc(
             }
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
-        WM_CLOSE
-            if state_ref(frame_window_for(hwnd))
-                .hwnd_views
-                .get(&(hwnd as isize))
-                == Some(&ViewId::Status) =>
-        {
-            // The Status window cannot be closed, as in mIRC.
-            0
+        WM_CLOSE => {
+            if close_view_requested(frame_window_for(hwnd), hwnd) {
+                DefMDIChildProcW(hwnd, message, wparam, lparam)
+            } else {
+                0
+            }
         }
         WM_NCDESTROY => {
             unregister_destroyed_view(hwnd);
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
         _ => DefMDIChildProcW(hwnd, message, wparam, lparam),
+    }
+}
+
+/// Which membership change closing a room window asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseLeave {
+    Part,
+    RejectInvite,
+}
+
+/// What closing a view's window does, after mIRC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CloseAction {
+    /// The Status window cannot be closed.
+    Refuse,
+    /// Thread windows just close; no sync reopens them.
+    Destroy,
+    /// A query window closes, and stays closed until the other side talks
+    /// or the user opens it again.
+    HideQuery(String),
+    /// Closing a channel parts it, and closing an invite rejects it. Unlike
+    /// mIRC this asks first, as leaving an invite-only Matrix room cannot be
+    /// undone with a rejoin. The window stays until the room leaves the room
+    /// list, as mIRC's closes when the PART lands.
+    Confirm { room_id: String, leave: CloseLeave },
+}
+
+fn close_action(model: &UiModel, view_id: &ViewId) -> CloseAction {
+    match view_id {
+        ViewId::Status => CloseAction::Refuse,
+        ViewId::Thread { .. } => CloseAction::Destroy,
+        ViewId::Room(room_id) => {
+            let room = navigable_room_by_id(&model.rooms, room_id)
+                .expect("a room window's room must be navigable");
+            match room_window_kind(room) {
+                RoomWindowKind::Channel => CloseAction::Confirm {
+                    room_id: room_id.clone(),
+                    leave: CloseLeave::Part,
+                },
+                RoomWindowKind::Query => CloseAction::HideQuery(room_id.clone()),
+                RoomWindowKind::Invite => CloseAction::Confirm {
+                    room_id: room_id.clone(),
+                    leave: CloseLeave::RejectInvite,
+                },
+            }
+        }
+    }
+}
+
+fn close_confirmation_text(leave: CloseLeave, room: &RoomSummary) -> String {
+    match leave {
+        CloseLeave::Part => format!(
+            "Leave {}?\n\nYou may need a new invite to rejoin.",
+            room.display_name
+        ),
+        CloseLeave::RejectInvite => format!("Reject the invite to {}?", room.display_name),
+    }
+}
+
+/// Handles `WM_CLOSE` on an MDI child (caption X, Ctrl+F4, the system
+/// menu); returns whether to destroy the window.
+unsafe fn close_view_requested(frame: HWND, child: HWND) -> bool {
+    let view_id = state_ref(frame)
+        .hwnd_views
+        .get(&(child as isize))
+        .cloned()
+        .expect("every MDI child is a tracked view");
+    let action = close_action(&state_ref(frame).model, &view_id);
+    match &action {
+        CloseAction::Refuse => false,
+        CloseAction::Destroy => true,
+        CloseAction::HideQuery(room_id) => {
+            state_mut(frame).closed_queries.insert(room_id.clone());
+            true
+        }
+        CloseAction::Confirm { room_id, leave } => {
+            let text = close_confirmation_text(
+                *leave,
+                room_by_id(&state_ref(frame).model.rooms, room_id)
+                    .expect("a room window's room must exist"),
+            );
+            let text = wide_null(&text);
+            let caption = wide_null(FRAME_TITLE);
+            let answer = MessageBoxW(
+                frame,
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_YESNO | MB_ICONQUESTION,
+            );
+            // Core events keep arriving during the box's modal loop: the
+            // room may have left, taking its window with it, or changed.
+            if answer != IDYES
+                || state_ref(frame).hwnd_views.get(&(child as isize)) != Some(&view_id)
+                || close_action(&state_ref(frame).model, &view_id) != action
+            {
+                return false;
+            }
+            let result = {
+                let state = state_mut(frame);
+                match leave {
+                    CloseLeave::Part => submit_part_slash_command(state, Some(room_id)),
+                    CloseLeave::RejectInvite => submit_reject_slash_command(state, Some(room_id)),
+                }
+            };
+            match result {
+                Ok(message) | Err(message) => {
+                    if let Err(error) = set_local_command_status(frame, message) {
+                        show_error_message(frame, "Window", &error);
+                    }
+                }
+            }
+            false
+        }
     }
 }
 
@@ -7972,6 +8095,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.room_activity.retain(|view_id, _| {
                 view_id_is_valid_for_rooms(&rooms, &state.model.room_views, view_id)
             });
+            state.closed_queries.retain(|room_id| {
+                navigable_room_by_id(&rooms, room_id)
+                    .is_some_and(|room| room_window_kind(room) == RoomWindowKind::Query)
+            });
             let tracked_room_activity = state.room_activity.clone();
             state
                 .room_activity_read_targets
@@ -8042,6 +8169,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.model.status = "logged out".to_owned();
             state.model.lifecycle_state = LifecycleState::LoggedOut;
             state.model.rooms.clear();
+            state.closed_queries.clear();
             state.model.selected_room = None;
             state.model.room_views.clear();
             state.model.last_activity = None;
@@ -9141,16 +9269,21 @@ unsafe fn execute_active_view_find(
     ))
 }
 
+/// The view to keep active: the active one if it still has a window, else
+/// its room, the selected room, the first room or Status. A closed query
+/// has no window, so it is never picked.
 fn resolve_active_view(
     active_view: &ViewId,
     selected_room: Option<&str>,
     model: &UiModel,
+    closed_queries: &BTreeSet<String>,
 ) -> ViewId {
+    let has_window = |room_id: &str| {
+        navigable_room_by_id(&model.rooms, room_id).is_some() && !closed_queries.contains(room_id)
+    };
     match active_view {
         ViewId::Status => ViewId::Status,
-        ViewId::Room(room_id) if navigable_room_by_id(&model.rooms, room_id).is_some() => {
-            ViewId::Room(room_id.clone())
-        }
+        ViewId::Room(room_id) if has_window(room_id) => ViewId::Room(room_id.clone()),
         ViewId::Thread {
             room_id,
             thread_root_event_id,
@@ -9160,15 +9293,11 @@ fn resolve_active_view(
                 thread_root_event_id: thread_root_event_id.clone(),
             }
         }
-        ViewId::Thread { room_id, .. } if navigable_room_by_id(&model.rooms, room_id).is_some() => {
-            ViewId::Room(room_id.clone())
-        }
+        ViewId::Thread { room_id, .. } if has_window(room_id) => ViewId::Room(room_id.clone()),
         ViewId::Room(_) | ViewId::Thread { .. } => {
-            if let Some(room_id) = selected_room
-                .filter(|room_id| navigable_room_by_id(&model.rooms, room_id).is_some())
-            {
+            if let Some(room_id) = selected_room.filter(|room_id| has_window(room_id)) {
                 ViewId::Room(room_id.to_owned())
-            } else if let Some(room) = model.rooms.iter().find(|room| is_navigable_room(room)) {
+            } else if let Some(room) = model.rooms.iter().find(|room| has_window(&room.room_id)) {
                 ViewId::Room(room.room_id.clone())
             } else {
                 ViewId::Status
@@ -9202,6 +9331,7 @@ fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState> {
         &state.active_view,
         state.model.selected_room.as_deref(),
         &state.model,
+        &state.closed_queries,
     );
     if state.active_view != resolved_active_view {
         state.selected_timeline_event = None;
@@ -9745,6 +9875,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
             &state.active_view,
             state.model.selected_room.as_deref(),
             &state.model,
+            &state.closed_queries,
         );
     }
     Some(view_id)
@@ -9837,6 +9968,7 @@ unsafe fn destroy_stale_room_views(hwnd: HWND) {
         (state.controls.mdi_client, take_stale_room_views(state))
     };
 
+    // WM_MDIDESTROY, not WM_CLOSE: closing a room window asks to leave it.
     for view in stale_views {
         SendMessageW(mdi_client, WM_MDIDESTROY, view.child as WPARAM, 0);
     }
@@ -10098,7 +10230,10 @@ unsafe fn apply_view_activation_state(
             ensure_status_view(hwnd)?
         }
         ViewId::Room(room_id) => {
-            select_room(state_mut(hwnd), room_id)?;
+            let state = state_mut(hwnd);
+            select_room(state, room_id)?;
+            // Activating a closed query reopens its window.
+            state.closed_queries.remove(room_id);
             ensure_room_view(hwnd, room_id)?
         }
         ViewId::Thread {
@@ -10179,13 +10314,16 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
 unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     ensure_status_view(hwnd)?;
 
-    let room_ids = state_ref(hwnd)
-        .model
-        .rooms
-        .iter()
-        .filter(|room| is_navigable_room(room))
-        .map(|room| room.room_id.clone())
-        .collect::<Vec<_>>();
+    let room_ids = {
+        let state = state_ref(hwnd);
+        state
+            .model
+            .rooms
+            .iter()
+            .filter(|room| is_navigable_room(room) && !state.closed_queries.contains(&room.room_id))
+            .map(|room| room.room_id.clone())
+            .collect::<Vec<_>>()
+    };
     destroy_stale_room_views(hwnd);
     for room_id in room_ids {
         ensure_room_view(hwnd, &room_id)?;
@@ -10202,6 +10340,7 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
             &state.active_view,
             state.model.selected_room.as_deref(),
             &state.model,
+            &state.closed_queries,
         );
         if state.active_view != active {
             state.selected_timeline_event = None;
@@ -12465,6 +12604,7 @@ unsafe fn apply_event_load(hwnd: HWND, events: Vec<Event>) -> Result<(usize, usi
         state.pending_login_homeserver_url = None;
         state.current_session_homeserver_url = None;
         state.room_activity.clear();
+        state.closed_queries.clear();
         state.room_activity_read_targets.clear();
         state.find_states.clear();
         state.selected_timeline_event = None;
@@ -16145,6 +16285,7 @@ mod tests {
             switchbar_views: Vec::new(),
             room_activity: BTreeMap::new(),
             room_activity_read_targets: BTreeMap::new(),
+            closed_queries: BTreeSet::new(),
             compose_history: ComposeHistory::default(),
             nick_completion: None,
             edit_window_proc: None,
@@ -21791,6 +21932,7 @@ mod tests {
                 &ViewId::Room("!keep:example".to_owned()),
                 Some("!other:example"),
                 &model,
+                &BTreeSet::new(),
             ),
             ViewId::Room("!keep:example".to_owned())
         );
@@ -21807,7 +21949,12 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &model),
+            resolve_active_view(
+                &ViewId::Room("!gone:example".to_owned()),
+                None,
+                &model,
+                &BTreeSet::new(),
+            ),
             ViewId::Room("!alpha:example".to_owned())
         );
     }
@@ -21824,7 +21971,12 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &model),
+            resolve_active_view(
+                &ViewId::Room("!gone:example".to_owned()),
+                None,
+                &model,
+                &BTreeSet::new(),
+            ),
             ViewId::Room("!alpha:example".to_owned())
         );
     }
@@ -21833,7 +21985,12 @@ mod tests {
     fn resolve_active_view_falls_back_to_status_when_no_rooms_remain() {
         let model = UiModel::default();
         assert_eq!(
-            resolve_active_view(&ViewId::Room("!gone:example".to_owned()), None, &model),
+            resolve_active_view(
+                &ViewId::Room("!gone:example".to_owned()),
+                None,
+                &model,
+                &BTreeSet::new(),
+            ),
             ViewId::Status
         );
     }
@@ -21861,6 +22018,7 @@ mod tests {
                 },
                 Some("!alpha:example"),
                 &model,
+                &BTreeSet::new(),
             ),
             ViewId::Thread {
                 room_id: "!alpha:example".to_owned(),
@@ -21884,6 +22042,7 @@ mod tests {
                 },
                 Some("!alpha:example"),
                 &model,
+                &BTreeSet::new(),
             ),
             ViewId::Room("!alpha:example".to_owned())
         );
@@ -23014,6 +23173,153 @@ mod tests {
         assert_eq!(
             view_caption(&state.model, &room_view_id("!group:example")),
             "Group"
+        );
+    }
+
+    #[test]
+    fn close_action_follows_mirc_per_window_kind() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            query("!dm:example", "Alice", "@alice:example"),
+            invited_room("!invite:example", "Invite"),
+        ];
+
+        assert_eq!(
+            close_action(&state.model, &ViewId::Status),
+            CloseAction::Refuse
+        );
+        assert_eq!(
+            close_action(&state.model, &thread_view_id("!ops:example", "$root")),
+            CloseAction::Destroy
+        );
+        assert_eq!(
+            close_action(&state.model, &room_view_id("!ops:example")),
+            CloseAction::Confirm {
+                room_id: "!ops:example".to_owned(),
+                leave: CloseLeave::Part,
+            }
+        );
+        assert_eq!(
+            close_action(&state.model, &room_view_id("!dm:example")),
+            CloseAction::HideQuery("!dm:example".to_owned())
+        );
+        assert_eq!(
+            close_action(&state.model, &room_view_id("!invite:example")),
+            CloseAction::Confirm {
+                room_id: "!invite:example".to_owned(),
+                leave: CloseLeave::RejectInvite,
+            }
+        );
+    }
+
+    #[test]
+    fn close_confirmation_text_names_the_room() {
+        assert_eq!(
+            close_confirmation_text(CloseLeave::Part, &room("!ops:example", "Ops", false)),
+            "Leave Ops?\n\nYou may need a new invite to rejoin."
+        );
+        assert_eq!(
+            close_confirmation_text(
+                CloseLeave::RejectInvite,
+                &invited_room("!invite:example", "Invite")
+            ),
+            "Reject the invite to Invite?"
+        );
+    }
+
+    #[test]
+    fn closed_query_reopens_on_message_activity_from_others() {
+        let mut state = test_state();
+        state.model.rooms = vec![query("!dm:example", "Alice", "@alice:example")];
+        state.model.own_user_id = Some("@me:example".to_owned());
+        state.closed_queries.insert("!dm:example".to_owned());
+        let message_from = |event_id: &str, user_id: &str| {
+            let mut activity = sent_message_activity("!dm:example", event_id, None, "hi", 1);
+            let RoomActivityKind::Message(message) = &mut activity.kind else {
+                unreachable!("a sent message activity is a message");
+            };
+            message.sender = user_profile(user_id);
+            activity
+        };
+
+        apply_room_activity_event(&mut state, message_from("$own", "@me:example"));
+        apply_core_event(&mut state, topic_state("!dm:example", "new topic")).unwrap();
+        assert!(state.closed_queries.contains("!dm:example"));
+
+        apply_room_activity_event(&mut state, message_from("$theirs", "@alice:example"));
+        assert!(state.closed_queries.is_empty());
+    }
+
+    #[test]
+    fn closed_queries_drop_rooms_that_stop_being_queries() {
+        let mut state = test_state();
+        state.closed_queries = BTreeSet::from([
+            "!dm:example".to_owned(),
+            "!gone:example".to_owned(),
+            "!now-channel:example".to_owned(),
+        ]);
+
+        apply_core_event(
+            &mut state,
+            Event::SyncedRooms(vec![
+                query("!dm:example", "Alice", "@alice:example"),
+                room("!now-channel:example", "Channel", false),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.closed_queries,
+            BTreeSet::from(["!dm:example".to_owned()])
+        );
+    }
+
+    #[test]
+    fn resolve_active_view_skips_closed_queries_when_falling_back() {
+        let model = UiModel {
+            rooms: vec![
+                query("!dm:example", "Alice", "@alice:example"),
+                room("!ops:example", "Ops", false),
+            ],
+            ..UiModel::default()
+        };
+        let closed = BTreeSet::from(["!dm:example".to_owned()]);
+
+        assert_eq!(
+            resolve_active_view(&room_view_id("!dm:example"), None, &model, &closed),
+            room_view_id("!ops:example")
+        );
+        assert_eq!(
+            resolve_active_view(
+                &room_view_id("!gone:example"),
+                Some("!dm:example"),
+                &model,
+                &closed
+            ),
+            room_view_id("!ops:example")
+        );
+        assert_eq!(
+            resolve_active_view(&room_view_id("!dm:example"), None, &model, &BTreeSet::new()),
+            room_view_id("!dm:example")
+        );
+    }
+
+    #[test]
+    fn navigation_layout_keeps_closed_queries() {
+        let mut state = test_state();
+        state.model.rooms = vec![query("!dm:example", "Alice", "@alice:example")];
+        let open_layout = navigation_layout(&state.model);
+        state.closed_queries.insert("!dm:example".to_owned());
+
+        assert_eq!(navigation_layout(&state.model), open_layout);
+        assert_eq!(
+            open_layout,
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![nav_room("Alice", "!dm:example")]
+            )
         );
     }
 

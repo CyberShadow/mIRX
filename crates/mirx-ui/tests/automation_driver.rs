@@ -55,12 +55,13 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumThreadWindows, FindWindowExW, FindWindowW, GWL_STYLE, GetClassNameW, GetClientRect,
-    GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN,
-    PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SCROLLINFO, SIF_ALL, SendMessageW, SetWindowTextW,
-    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE,
-    WM_PASTE, WM_VSCROLL, WS_VSCROLL,
+    EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
+    GetClientRect, GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, IDNO, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
+    LB_GETTEXT, LB_GETTEXTLEN, PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
+    SIF_ALL, SMTO_NORMAL, SendMessageTimeoutW, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND,
+    WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3875,27 +3876,308 @@ fn maximized_state_carries_across_activation() -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-#[test]
-fn closing_active_child_activates_next_view() -> Result<(), Box<dyn std::error::Error>> {
-    let app = launch_multi_room_fixture()?;
-    let ops = room_identity("!ops:example");
-    app.arrange_windows(MdiArrangement::TileVertical)?;
-    assert_eq!(app.dump_ui_state()?.mdi.active, ops);
+/// An `--automation` app with a channel (Beta), a query with @alice
+/// (Alpha) and an invite (Lobby), for the window close lifecycle.
+fn launch_close_lifecycle_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&close_lifecycle_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok((app, local_app_data))
+}
 
-    let title = find_view(&app.dump_ui_state()?, &ops).title.clone();
-    let child = unsafe { mdi_child_hwnd_by_title(&app, &title) };
+fn close_lifecycle_rooms() -> Vec<RoomSummary> {
+    let mut alpha = room_summary("!alpha:example", "Alpha", false);
+    alpha.is_direct = true;
+    alpha.direct_user_ids = vec!["@alice:example".to_owned()];
+    vec![
+        room_summary("!beta:example", "Beta", false),
+        alpha,
+        invited_room_summary("!invite:example", "Lobby", false),
+    ]
+}
+
+fn close_lifecycle_events() -> Vec<Event> {
+    vec![
+        Event::Started,
+        Event::SyncedRooms(close_lifecycle_rooms()),
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_000_000,
+            "beta first",
+        ),
+        text_event(
+            "!alpha:example",
+            "@alice:example",
+            1_700_000_060_000,
+            "alpha first",
+        ),
+    ]
+}
+
+fn view_child_hwnd(
+    app: &MirxApp,
+    identity: &ViewIdentity,
+) -> Result<HWND, Box<dyn std::error::Error>> {
+    let title = find_view(&app.dump_ui_state()?, identity).title.clone();
+    Ok(unsafe { mdi_child_hwnd_by_title(app, &title) })
+}
+
+/// Asks the view's MDI child to close the way its caption X does, for a
+/// close that asks first. Posted, not sent: the confirmation box runs a
+/// modal loop inside the handler.
+fn request_view_close(
+    app: &MirxApp,
+    identity: &ViewIdentity,
+) -> Result<HWND, Box<dyn std::error::Error>> {
+    let child = view_child_hwnd(app, identity)?;
+    assert_ne!(
+        unsafe { PostMessageW(child, WM_SYSCOMMAND, SC_CLOSE as WPARAM, 0) },
+        0,
+        "posting SC_CLOSE must succeed"
+    );
+    Ok(child)
+}
+
+/// Closes the view's MDI child the way its caption X does, for a close
+/// that must not ask: the send returns only once the close is handled,
+/// and times out if a modal box blocks it.
+fn close_view_without_prompt(
+    app: &MirxApp,
+    identity: &ViewIdentity,
+) -> Result<HWND, Box<dyn std::error::Error>> {
+    let child = view_child_hwnd(app, identity)?;
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                child,
+                WM_SYSCOMMAND,
+                SC_CLOSE as WPARAM,
+                0,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0,
+        "closing the view must not block on a prompt"
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(child)
+}
+
+/// The MessageBox the frame owns, or null.
+unsafe fn frame_message_box(frame: HWND) -> HWND {
+    let thread_id = unsafe { GetWindowThreadProcessId(frame, std::ptr::null_mut()) };
+    let mut search = (frame, 0 as HWND);
     unsafe {
-        SendMessageW(child, WM_CLOSE, 0, 0);
+        EnumThreadWindows(
+            thread_id,
+            Some(find_owned_message_box),
+            (&raw mut search) as isize,
+        );
+    }
+    search.1
+}
+
+unsafe extern "system" fn find_owned_message_box(hwnd: HWND, lparam: isize) -> i32 {
+    let search = unsafe { &mut *(lparam as *mut (HWND, HWND)) };
+    if unsafe { class_name(hwnd) } == "#32770" && unsafe { GetWindow(hwnd, GW_OWNER) } == search.0 {
+        search.1 = hwnd;
+        0
+    } else {
+        1
+    }
+}
+
+/// Waits for the frame's MessageBox and returns it with its text.
+fn wait_for_message_box(app: &MirxApp) -> (HWND, String) {
+    let frame = app.automation_frame_hwnd() as HWND;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let dialog = unsafe { frame_message_box(frame) };
+        if !dialog.is_null() {
+            // MessageBox's text is the static control with ID 0xFFFF.
+            let text = unsafe { read_window_text(GetDlgItem(dialog, 0xFFFF)) };
+            return (dialog, text);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "message box did not appear within five seconds"
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn answer_message_box(
+    app: &MirxApp,
+    dialog: HWND,
+    button: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, button as WPARAM, 0) },
+        0,
+        "posting the message box answer must succeed"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { IsWindow(dialog) } != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "message box did not close within five seconds"
+        );
+        std::thread::sleep(POLL_INTERVAL);
     }
     app.wait_idle(Duration::from_secs(5))?;
-    assert_eq!(unsafe { IsWindow(child) }, 0);
+    Ok(())
+}
 
-    // MDI activated the next window before destroying the closed one. (Every
-    // joined room has a window, so the next sync reopens Ops' window.)
+#[test]
+fn closing_a_room_window_confirms_then_parts() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    let child = request_view_close(&app, &beta)?;
+    let (dialog, text) = wait_for_message_box(&app);
+    assert_eq!(text, "Leave Beta?\n\nYou may need a new invite to rejoin.");
+    answer_message_box(&app, dialog, IDNO)?;
+    assert_eq!(unsafe { IsWindow(child) }, 1);
+    assert!(app.dump_model()?.submitted_membership_commands.is_empty());
+
+    request_view_close(&app, &beta)?;
+    let (dialog, _) = wait_for_message_box(&app);
+    answer_message_box(&app, dialog, IDYES)?;
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "part submitted: !beta:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Leave,
+            target: "!beta:example".to_owned(),
+        }]
+    );
+    // As in mIRC, the window stays until the part lands.
+    assert_eq!(unsafe { IsWindow(child) }, 1);
+    assert_eq!(app.dump_ui_state()?.mdi.active, beta);
+
+    let mut rooms = close_lifecycle_rooms();
+    rooms.retain(|room| room.room_id != "!beta:example");
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(rooms)])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(unsafe { IsWindow(child) }, 0);
     let ui_state = app.dump_ui_state()?;
-    assert_ne!(ui_state.mdi.active, ops);
+    assert_ne!(ui_state.mdi.active, beta);
+    assert!(ui_state.navigation.find_view(&beta).is_empty());
     assert_eq!(ui_state.switchbar.items.len(), ui_state.mdi.views.len());
     assert_compose_has_focus(&app);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn closing_an_invite_window_confirms_then_rejects() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let invite = room_identity("!invite:example");
+    app.select_view(invite.clone())?;
+
+    let child = request_view_close(&app, &invite)?;
+    let (dialog, text) = wait_for_message_box(&app);
+    assert_eq!(text, "Reject the invite to Lobby?");
+    answer_message_box(&app, dialog, IDYES)?;
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "reject submitted: !invite:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::RejectInvite,
+            target: "!invite:example".to_owned(),
+        }]
+    );
+    assert_eq!(unsafe { IsWindow(child) }, 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn closing_a_query_window_hides_it_until_its_next_message() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(alpha.clone())?;
+
+    let child = close_view_without_prompt(&app, &alpha)?;
+    assert_eq!(unsafe { IsWindow(child) }, 0);
+    let ui_state = app.dump_ui_state()?;
+    assert!(ui_state.mdi.views.iter().all(|view| view.identity != alpha));
+    assert!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .all(|item| item.identity != alpha)
+    );
+    assert_eq!(ui_state.navigation.find_view(&alpha).len(), 1);
+    assert_compose_has_focus(&app);
+
+    // A sync leaves it closed; the other side talking reopens it.
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(
+        close_lifecycle_rooms(),
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(
+        app.dump_ui_state()?
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != alpha)
+    );
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!alpha:example",
+        "@alice:example",
+        1_700_000_120_000,
+        "alpha second",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(ui_state.mdi.views.iter().any(|view| view.identity == alpha));
+    assert_ne!(ui_state.mdi.active, alpha);
+    assert_switchbar_activity(&ui_state, &alpha, Some(ViewActivityLevel::Message));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn closed_query_reopens_from_the_treebar() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(alpha.clone())?;
+    let child = close_view_without_prompt(&app, &alpha)?;
+    assert_eq!(unsafe { IsWindow(child) }, 0);
+
+    app.select_navigation_view(&alpha)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, alpha);
+    assert_active_switchbar_item(&ui_state, &alpha);
+    assert_eq!(app.selected_navigation_view()?, Some(alpha));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
@@ -3903,14 +4185,7 @@ fn closing_active_child_activates_next_view() -> Result<(), Box<dyn std::error::
 fn status_window_cannot_be_closed() -> Result<(), Box<dyn std::error::Error>> {
     let app = launch_multi_room_fixture()?;
     app.select_view(ViewIdentity::Status)?;
-    let title = find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
-        .title
-        .clone();
-    let child = unsafe { mdi_child_hwnd_by_title(&app, &title) };
-    unsafe {
-        SendMessageW(child, WM_CLOSE, 0, 0);
-    }
-    app.wait_idle(Duration::from_secs(5))?;
+    let child = close_view_without_prompt(&app, &ViewIdentity::Status)?;
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
     assert_eq!(unsafe { IsWindow(child) }, 1);
