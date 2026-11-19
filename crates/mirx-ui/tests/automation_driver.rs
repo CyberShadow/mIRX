@@ -4646,7 +4646,7 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
         "] * Alice is @alice:example",
         "] * Alice on Beta Alpha",
         "] * Alice End of /WHOIS list",
-        "] * /names [room] - list this room's members, or the named room's",
+        "] * /names [#room] - list this room's members, or the named room's",
         "] -> *alice* hi there",
     ] {
         assert!(
@@ -14264,6 +14264,73 @@ fn automation_driver_slash_topic_records_submission_and_waits_for_inbound_topic_
         beta_view,
         "[22:16] * @alice:example changes topic to 'incident review'"
     ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn slash_topic_shows_and_names_rooms_by_alias() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    let mut beta = room_summary("!beta:example", "Beta", true);
+    beta.topic = Some("incident review".to_owned());
+    beta.canonical_alias = Some("#beta:example".to_owned());
+    let mut lobby = room_summary("!lobby:example", "Lobby", false);
+    lobby.canonical_alias = Some("#lobby:example".to_owned());
+    lobby.alt_aliases = vec!["#hall:example".to_owned()];
+    app.load_events(&serde_json::to_string(&vec![
+        Event::Started,
+        Event::SyncedRooms(vec![beta, lobby]),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    type_commands(
+        &app,
+        &[
+            "/topic",
+            "/topic #hall",
+            "/topic #lobby:example deploy at noon",
+            "/topic #nope x",
+            "/msg #lobby see ops",
+        ],
+    )?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, beta);
+    let view = find_view(&ui_state, &beta);
+    // The window's own topic line, then /topic's.
+    assert_eq!(
+        view_lines_containing(view, "* Topic is 'incident review'").len(),
+        2,
+        "{:?}",
+        view.lines
+    );
+    for line in [
+        "] * No topic is set",
+        "] * /topic: unknown room: #nope",
+        "] -> *#lobby* see ops",
+    ] {
+        assert!(
+            only_view_line_containing(view, line).ends_with(line),
+            "{line:?} in {:?}",
+            view.lines
+        );
+    }
+    assert_eq!(
+        app.dump_model()?.submitted_room_topic_commands,
+        vec![SubmittedRoomTopicCommand {
+            room_id: "!lobby:example".to_owned(),
+            topic: "deploy at noon".to_owned(),
+        }]
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

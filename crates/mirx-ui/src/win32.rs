@@ -181,6 +181,7 @@ mod options_dialog;
 mod reactions;
 mod replies;
 mod room_list;
+mod room_targets;
 mod send_file;
 mod settings;
 mod status_log;
@@ -218,6 +219,7 @@ use menus::{
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
 use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
+use room_targets::{RoomTargetError, resolve_room};
 use status_log::{StatusLineKind, StatusLog};
 
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
@@ -2790,12 +2792,6 @@ impl ComposeHistory {
 enum ComposeHistoryDirection {
     Previous,
     Next,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WindowTargetError {
-    Unknown,
-    Ambiguous,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15184,15 +15180,16 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             Ok(None)
         }
         SlashCommand::Window { target } => {
-            let room_id = match resolve_room_command_target(&state_ref(hwnd).model.rooms, &target) {
-                Ok(room_id) => room_id,
-                Err(WindowTargetError::Unknown) => {
-                    return Err(format!("unknown window target: {target}"));
-                }
-                Err(WindowTargetError::Ambiguous) => {
-                    return Err(format!("ambiguous window target: {target}"));
-                }
-            };
+            let room_id =
+                match resolve_room(&state_ref(hwnd).model.rooms, is_navigable_room, &target) {
+                    Ok(room) => room.room_id.clone(),
+                    Err(RoomTargetError::Unknown) => {
+                        return Err(format!("unknown window target: {target}"));
+                    }
+                    Err(RoomTargetError::Ambiguous) => {
+                        return Err(format!("ambiguous window target: {target}"));
+                    }
+                };
             activate_view(hwnd, &ViewId::Room(room_id), None)?;
             Ok(Some(format!("window active: {target}")))
         }
@@ -15459,8 +15456,14 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
         SlashCommand::Unreact { reaction_event_id } => {
             submit_unreact_slash_command(state_mut(hwnd), reaction_event_id).map(Some)
         }
-        SlashCommand::Topic { topic } => {
-            submit_topic_slash_command(state_mut(hwnd), topic).map(Some)
+        SlashCommand::Topic {
+            room,
+            topic: Some(topic),
+        } => submit_topic_slash_command(state_mut(hwnd), room.as_deref(), topic).map(Some),
+        SlashCommand::Topic { room, topic: None } => {
+            let line = room_topic_line(state_ref(hwnd), room.as_deref())?;
+            echo_in_active_view(hwnd, [line])?;
+            Ok(None)
         }
         SlashCommand::Clear => match state_ref(hwnd).active_view.clone() {
             ViewId::Room(room_id) => {
@@ -15674,26 +15677,6 @@ unsafe fn set_local_command_status(hwnd: HWND, message: String) -> Result<(), St
     Ok(())
 }
 
-fn resolve_room_command_target(
-    rooms: &[RoomSummary],
-    target: &str,
-) -> Result<String, WindowTargetError> {
-    if let Some(room) = navigable_room_by_id(rooms, target) {
-        return Ok(room.room_id.clone());
-    }
-
-    let mut matches = rooms
-        .iter()
-        .filter(|room| is_navigable_room(room) && room.display_name == target);
-    let Some(room) = matches.next() else {
-        return Err(WindowTargetError::Unknown);
-    };
-    if matches.next().is_some() {
-        return Err(WindowTargetError::Ambiguous);
-    }
-    Ok(room.room_id.clone())
-}
-
 fn resolve_direct_room_query_target(model: &UiModel, user_id: &str) -> QueryTargetResolution {
     let mut matches = model
         .rooms
@@ -15749,13 +15732,14 @@ fn all_room_members(model: &UiModel) -> impl Iterator<Item = &RoomMemberSummary>
         .flat_map(|view| view.members.iter())
 }
 
-/// Where `/msg` sends: a room by ID or display name, else the query with a
-/// user named by ID or nick. Like mIRC's `/msg`, it does not open a query.
+/// Where `/msg` sends: a room by ID, alias or display name, else the query
+/// with a user named by ID or nick. Like mIRC's `/msg`, it does not open a
+/// query.
 fn msg_target_room_id(model: &UiModel, target: &str) -> Result<String, String> {
-    match resolve_room_command_target(&model.rooms, target) {
-        Ok(room_id) => return Ok(room_id),
-        Err(WindowTargetError::Ambiguous) => return Err(format!("ambiguous target: {target}")),
-        Err(WindowTargetError::Unknown) => {}
+    match resolve_room(&model.rooms, is_navigable_room, target) {
+        Ok(room) => return Ok(room.room_id.clone()),
+        Err(RoomTargetError::Ambiguous) => return Err(format!("ambiguous target: {target}")),
+        Err(RoomTargetError::Unknown) => {}
     }
     let user_id = commands::resolve_user(all_room_members(model), target)?.user_id;
     match resolve_direct_room_query_target(model, &user_id) {
@@ -15804,16 +15788,11 @@ fn resolve_joined_room_target(state: &WindowState, target: Option<&str>) -> Resu
         };
     };
 
-    match resolve_room_command_target(&state.model.rooms, target) {
-        Ok(room_id) => {
-            if sendable_room_by_id(&state.model.rooms, &room_id).is_some() {
-                Ok(room_id)
-            } else {
-                Err(format!("room is not joined: {target}"))
-            }
-        }
-        Err(WindowTargetError::Unknown) => Err(format!("unknown room: {target}")),
-        Err(WindowTargetError::Ambiguous) => Err(format!("ambiguous room: {target}")),
+    match resolve_room(&state.model.rooms, is_navigable_room, target) {
+        Ok(room) if is_sendable_room(room) => Ok(room.room_id.clone()),
+        Ok(_) => Err(format!("room is not joined: {target}")),
+        Err(RoomTargetError::Unknown) => Err(format!("unknown room: {target}")),
+        Err(RoomTargetError::Ambiguous) => Err(format!("ambiguous room: {target}")),
     }
 }
 
@@ -15834,41 +15813,23 @@ fn resolve_invite_command_room_id(
         };
     };
 
-    if let Some(room) = room_by_id(&state.model.rooms, target) {
-        return if is_invite_command_target(room) {
-            Ok(room.room_id.clone())
-        } else if is_navigable_room(room) {
-            Err(format!("{action} failed: room is not invited: {target}"))
-        } else {
-            Err(format!("{action} failed: invited room not found: {target}"))
-        };
-    }
-
-    let invited_matches = state
-        .model
-        .rooms
-        .iter()
-        .filter(|room| is_invite_command_target(room) && room.display_name == target)
-        .collect::<Vec<_>>();
-    if invited_matches.len() > 1 {
-        return Err(format!(
+    let rooms = &state.model.rooms;
+    match resolve_room(rooms, is_invite_command_target, target) {
+        Ok(room) => Ok(room.room_id.clone()),
+        Err(RoomTargetError::Ambiguous) => Err(format!(
             "{action} failed: ambiguous invited room target: {target}"
-        ));
+        )),
+        Err(RoomTargetError::Unknown) => {
+            match resolve_room(rooms, is_joined_message_room, target) {
+                Ok(_) | Err(RoomTargetError::Ambiguous) => {
+                    Err(format!("{action} failed: room is not invited: {target}"))
+                }
+                Err(RoomTargetError::Unknown) => {
+                    Err(format!("{action} failed: invited room not found: {target}"))
+                }
+            }
+        }
     }
-    if let Some(room) = invited_matches.first() {
-        return Ok(room.room_id.clone());
-    }
-
-    if state
-        .model
-        .rooms
-        .iter()
-        .any(|room| is_joined_message_room(room) && room.display_name == target)
-    {
-        return Err(format!("{action} failed: room is not invited: {target}"));
-    }
-
-    Err(format!("{action} failed: invited room not found: {target}"))
 }
 
 /// The user's homeserver name, for commands that need a session.
@@ -16146,8 +16107,20 @@ fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Resul
     Ok(format!("query submitted: {user_id}"))
 }
 
-fn submit_topic_slash_command(state: &mut WindowState, topic: String) -> Result<String, String> {
-    let room_id = resolve_joined_room_target(state, None)?;
+/// `/topic [#room]`: the room's topic, as mIRC prints it.
+fn room_topic_line(state: &WindowState, room: Option<&str>) -> Result<String, String> {
+    let room_id = resolve_joined_room_target(state, room)?;
+    Ok(commands::topic_line(
+        state.model.room_views[&room_id].topic.as_deref(),
+    ))
+}
+
+fn submit_topic_slash_command(
+    state: &mut WindowState,
+    room: Option<&str>,
+    topic: String,
+) -> Result<String, String> {
+    let room_id = resolve_joined_room_target(state, room)?;
     let command = Command::SetRoomTopic(SetRoomTopicRequest {
         room_id: room_id.clone(),
         topic,
@@ -29270,51 +29243,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_room_command_target_accepts_room_id_and_unique_display_name() {
-        let rooms = vec![
-            room("!alpha:example", "Alpha", false),
-            room("!beta:example", "Beta", false),
-            room("!alpha-target:example", "!alpha:example", false),
-        ];
-
-        assert_eq!(
-            resolve_room_command_target(&rooms, "!alpha:example"),
-            Ok("!alpha:example".to_owned())
-        );
-        assert_eq!(
-            resolve_room_command_target(&rooms, "Beta"),
-            Ok("!beta:example".to_owned())
-        );
-    }
-
-    #[test]
-    fn resolve_room_command_target_rejects_unknown_spaces_and_ambiguous_display_names() {
-        let rooms = vec![
-            space("!work:example", "Work"),
-            room("!shared-one:example", "Shared", false),
-            room("!shared-two:example", "Shared", false),
-            room("!alpha:example", "Alpha", false),
-        ];
-
-        assert_eq!(
-            resolve_room_command_target(&rooms, "!work:example"),
-            Err(WindowTargetError::Unknown)
-        );
-        assert_eq!(
-            resolve_room_command_target(&rooms, "Work"),
-            Err(WindowTargetError::Unknown)
-        );
-        assert_eq!(
-            resolve_room_command_target(&rooms, "Missing"),
-            Err(WindowTargetError::Unknown)
-        );
-        assert_eq!(
-            resolve_room_command_target(&rooms, "Shared"),
-            Err(WindowTargetError::Ambiguous)
-        );
-    }
-
-    #[test]
     fn resolve_direct_room_query_target_distinguishes_none_single_and_ambiguous() {
         let mut single_room = room("!single:example", "Single", false);
         single_room.is_direct = true;
@@ -30795,7 +30723,8 @@ mod tests {
         state.model.rooms = vec![room("!room:example", "Room", false)];
         state.active_view = room_view_id("!room:example");
 
-        let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
+        let status =
+            submit_topic_slash_command(&mut state, None, "incident review".to_owned()).unwrap();
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
@@ -30821,7 +30750,8 @@ mod tests {
         let (mut state, handle) = test_state_with_command_sender();
         state.active_view = thread_view_id("!room:example", "$thread-root");
 
-        let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
+        let status =
+            submit_topic_slash_command(&mut state, None, "incident review".to_owned()).unwrap();
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(
@@ -30840,10 +30770,91 @@ mod tests {
         let mut state = test_state();
 
         assert_eq!(
-            submit_topic_slash_command(&mut state, "incident review".to_owned()),
+            submit_topic_slash_command(&mut state, None, "incident review".to_owned()),
             Err("no room selected".to_owned())
         );
         assert!(state.recorded_commands.is_empty());
+    }
+
+    fn aliased_rooms() -> Vec<RoomSummary> {
+        let mut ops = room("!ops:example", "Ops", false);
+        ops.canonical_alias = Some("#ops:example".to_owned());
+        ops.topic = Some("incident review".to_owned());
+        let mut lobby = room("!lobby:example", "Lobby", false);
+        lobby.canonical_alias = Some("#lobby:example".to_owned());
+        lobby.alt_aliases = vec!["#hall:example".to_owned()];
+        let mut invite = invited_room("!invite:example", "Invite");
+        invite.canonical_alias = Some("#party:example".to_owned());
+        vec![ops, lobby, invite]
+    }
+
+    #[test]
+    fn submit_topic_slash_command_names_the_room_by_alias() {
+        let (mut state, handle) = test_state_with_command_sender();
+        apply_core_event(&mut state, Event::SyncedRooms(aliased_rooms())).unwrap();
+        state.active_view = room_view_id("!ops:example");
+
+        let status =
+            submit_topic_slash_command(&mut state, Some("#hall"), "new".to_owned()).unwrap();
+
+        assert_eq!(status, "topic change submitted for !lobby:example");
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::SetRoomTopic(SetRoomTopicRequest {
+                room_id: "!lobby:example".to_owned(),
+                topic: "new".to_owned(),
+            })]
+        );
+        assert_eq!(
+            submit_topic_slash_command(&mut state, Some("#nope"), "x".to_owned()),
+            Err("unknown room: #nope".to_owned())
+        );
+        assert_eq!(
+            submit_topic_slash_command(&mut state, Some("#party"), "x".to_owned()),
+            Err("room is not joined: #party".to_owned())
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn room_topic_line_shows_the_active_or_named_rooms_topic() {
+        let mut state = test_state();
+        apply_core_event(&mut state, Event::SyncedRooms(aliased_rooms())).unwrap();
+
+        assert_eq!(
+            room_topic_line(&state, None),
+            Err("no room selected".to_owned())
+        );
+        state.active_view = room_view_id("!ops:example");
+        assert_eq!(
+            room_topic_line(&state, None),
+            Ok("* Topic is 'incident review'".to_owned())
+        );
+        assert_eq!(
+            room_topic_line(&state, Some("#lobby:example")),
+            Ok("* No topic is set".to_owned())
+        );
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn invite_and_msg_targets_accept_aliases() {
+        let mut state = test_state();
+        apply_core_event(&mut state, Event::SyncedRooms(aliased_rooms())).unwrap();
+
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", Some("#party")),
+            Ok("!invite:example".to_owned())
+        );
+        assert_eq!(
+            resolve_invite_command_room_id(&state, "accept", Some("#ops:example")),
+            Err("accept failed: room is not invited: #ops:example".to_owned())
+        );
+        assert_eq!(
+            msg_target_room_id(&state.model, "#lobby"),
+            Ok("!lobby:example".to_owned())
+        );
     }
 
     #[test]
@@ -30872,7 +30883,8 @@ mod tests {
             .activities
             .clone();
 
-        let status = submit_topic_slash_command(&mut state, "incident review".to_owned()).unwrap();
+        let status =
+            submit_topic_slash_command(&mut state, None, "incident review".to_owned()).unwrap();
 
         assert_eq!(status, "topic change submitted for !room:example");
         assert_eq!(

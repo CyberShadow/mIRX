@@ -12,7 +12,7 @@ use mirx_core::{MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessageP
 
 use super::nick_completion::member_mention_text;
 use super::settings::{Bar, FontSetting, parse_points};
-use super::timeline_text::rank_prefix;
+use super::timeline_text::{context_line, rank_prefix, topic_is_text};
 use super::timestamp::TimestampFormat;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,8 +127,10 @@ pub(super) enum SlashCommand {
     Unreact {
         reaction_event_id: String,
     },
+    /// `/topic [#room] [text]`: without text, shows the topic.
     Topic {
-        topic: String,
+        room: Option<String>,
+        topic: Option<String>,
     },
     Clear,
     E2ee(E2eeSlashCommand),
@@ -361,7 +363,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "invite",
-        usage: "<nick> [room]",
+        usage: "<nick> [#room]",
         summary: "invite a user to this room, or the named one",
     },
     CommandSpec {
@@ -386,12 +388,12 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "msg",
-        usage: "<nick|room> <message>",
+        usage: "<nick|#room> <message>",
         summary: "send a message without opening a window",
     },
     CommandSpec {
         name: "names",
-        usage: "[room]",
+        usage: "[#room]",
         summary: "list this room's members, or the named room's",
     },
     CommandSpec {
@@ -401,7 +403,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "notice",
-        usage: "<nick|room> <message>",
+        usage: "<nick|#room> <message>",
         summary: "send a notice",
     },
     CommandSpec {
@@ -411,7 +413,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "part",
-        usage: "[room]",
+        usage: "[#room]",
         summary: "leave this room, or the named one",
     },
     CommandSpec {
@@ -471,8 +473,8 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "topic",
-        usage: "<text>",
-        summary: "set this room's topic",
+        usage: "[#room] [text]",
+        summary: "show or set a room's topic (#alias or !id names the room)",
     },
     CommandSpec {
         name: "treebar",
@@ -705,9 +707,20 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "unreact" => Ok(SlashCommand::Unreact {
             reaction_event_id: single_word(&name, argument)?,
         }),
-        "topic" => Ok(SlashCommand::Topic {
-            topic: required(argument)?,
-        }),
+        "topic" => {
+            // As in mIRC, a first word that names a room is the room: a
+            // topic starting with one needs the room named first.
+            let (first, rest) = split_word(argument);
+            let (room, topic) = if first.starts_with(['#', '!']) {
+                (Some(first.to_owned()), rest)
+            } else {
+                (None, argument)
+            };
+            Ok(SlashCommand::Topic {
+                room,
+                topic: optional(topic),
+            })
+        }
         "clear" => no_parameters(SlashCommand::Clear),
         "e2ee" => parse_e2ee(argument).map(SlashCommand::E2ee),
         "verify" => parse_verify(argument),
@@ -1123,6 +1136,14 @@ pub(super) fn rank_change_role(
     }
 }
 
+/// `/topic` without text: `* Topic is '...'`, or `* No topic is set`.
+pub(super) fn topic_line(topic: Option<&str>) -> String {
+    match topic {
+        Some(topic) => context_line(&topic_is_text(topic)),
+        None => context_line("No topic is set"),
+    }
+}
+
 /// The echo of `/msg` (`-> *nick* text`) and `/notice` (`-> -nick- text`).
 pub(super) fn msg_echo(
     presentation: RoomMessagePresentationKind,
@@ -1509,13 +1530,35 @@ mod tests {
                 event_id: "$redaction-target".to_owned(),
             })
         );
-        for input in ["/topic incident review", "/topic   incident review   "] {
-            assert_eq!(
-                parse(input),
-                Ok(SlashCommand::Topic {
-                    topic: "incident review".to_owned(),
-                })
-            );
+        let topic = |room: Option<&str>, topic: Option<&str>| {
+            Ok(SlashCommand::Topic {
+                room: room.map(str::to_owned),
+                topic: topic.map(str::to_owned),
+            })
+        };
+        for (input, expected) in [
+            (
+                "/topic incident review",
+                topic(None, Some("incident review")),
+            ),
+            (
+                "/topic   incident review   ",
+                topic(None, Some("incident review")),
+            ),
+            ("/topic", topic(None, None)),
+            ("/topic   ", topic(None, None)),
+            ("/topic #a", topic(Some("#a"), None)),
+            (
+                "/topic !r:x text here",
+                topic(Some("!r:x"), Some("text here")),
+            ),
+            ("/topic hello #world", topic(None, Some("hello #world"))),
+            (
+                "/topic #ops #1 priority",
+                topic(Some("#ops"), Some("#1 priority")),
+            ),
+        ] {
+            assert_eq!(parse(input), expected, "{input}");
         }
         assert_eq!(
             parse("/sendfile C:\\some file.txt"),
@@ -1561,8 +1604,6 @@ mod tests {
             ("/query", "query"),
             ("/query   ", "query"),
             ("/find   ", "find"),
-            ("/topic", "topic"),
-            ("/topic   ", "topic"),
             ("/react", "react"),
             ("/react $react-normal", "react"),
             ("/react $react-normal   ", "react"),
@@ -1789,6 +1830,18 @@ mod tests {
                     .to_owned()
             ])
         );
+        assert_eq!(
+            help_lines(Some("topic")),
+            Ok(vec![
+                "* /topic [#room] [text] - show or set a room's topic (#alias or !id names the room)"
+                    .to_owned()
+            ])
+        );
+        assert_eq!(
+            topic_line(Some("incident review")),
+            "* Topic is 'incident review'"
+        );
+        assert_eq!(topic_line(None), "* No topic is set");
         assert_eq!(
             help_lines(Some("/CLEAR")),
             Ok(vec!["* /clear - clear this window".to_owned()])
