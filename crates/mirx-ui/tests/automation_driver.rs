@@ -42,9 +42,9 @@ use mirx_testkit::{
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedVerificationAction, SwitchbarItem, TestkitError, UiError, UiFindHistorySearchState,
-    UiFindState, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimestamp,
-    UnsupportedRoomMessageActivity, Verification, VerificationActionKind, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
+    UiState, UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -54,16 +54,19 @@ use windows_sys::Win32::System::DataExchange::{
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
+    VK_MENU,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
     GetClientRect, GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow,
     IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED,
     PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
-    SendMessageTimeoutW, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND, WM_VSCROLL,
-    WS_VSCROLL,
+    SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowTextW, WM_CHAR, WM_COMMAND,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND,
+    WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2327,6 +2330,12 @@ fn assert_raw_switchbar_state(
     );
 }
 
+unsafe fn active_mdi_child(app: &MirxApp) -> HWND {
+    let active_child = unsafe { SendMessageW(mdi_client_hwnd(app), WM_MDIGETACTIVE, 0, 0) } as HWND;
+    assert!(!active_child.is_null(), "an MDI child must be active");
+    active_child
+}
+
 /// The active MDI child's editbox.
 unsafe fn compose_edit_hwnd(app: &MirxApp) -> HWND {
     let active_child = unsafe { SendMessageW(mdi_client_hwnd(app), WM_MDIGETACTIVE, 0, 0) } as HWND;
@@ -2995,6 +3004,7 @@ const LOGIN_DIALOG_SERVER_ID: i32 = 5001;
 const LOGIN_DIALOG_USER_ID: i32 = 5002;
 const LOGIN_DIALOG_PASSWORD_ID: i32 = 5003;
 const LOGIN_DIALOG_OK_ID: usize = 5005;
+const LOGIN_DIALOG_CANCEL_ID: usize = 5006;
 const CONNECT_HINT: &str = "* Not connected. Use File > Select Server... (Alt+E) or /server to connect to a Matrix homeserver";
 
 fn launch_automation_app(local_app_data: &Path) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
@@ -10957,8 +10967,315 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
     Ok(())
 }
 
+const MENU_ID_COMMANDS_FIRST: usize = 40100;
+const COMMANDS_MENU_JOIN: usize = 0;
+const COMMANDS_MENU_PART: usize = 1;
+const COMMANDS_MENU_QUERY: usize = 2;
+const MENU_ID_HELP_TOPICS: usize = 40034;
+const FIND_DIALOG_QUERY_ID: i32 = 5010;
+const FIND_DIALOG_OK_ID: usize = 5011;
+const FIND_DIALOG_CANCEL_ID: usize = 5012;
+const SYSMENU_ID_FIND: WPARAM = 0x0120;
+
+/// Picks the Commands menu item at `index` as a click does, filling its
+/// prompt with `input` when it has one.
+fn run_commands_menu_item(
+    app: &MirxApp,
+    index: usize,
+    input: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let frame_value = app.automation_frame_hwnd();
+    let menu_thread = std::thread::spawn(move || unsafe {
+        SendMessageW(
+            frame_value as HWND,
+            WM_COMMAND,
+            (MENU_ID_COMMANDS_FIRST + index) as WPARAM,
+            0,
+        );
+    });
+    if let Some(input) = input {
+        let class_name = wide_null("mirxWin32FindDialog");
+        let dialog = wait_for_window(&class_name, "Commands prompt")?;
+        let edit = unsafe { GetDlgItem(dialog, FIND_DIALOG_QUERY_ID) };
+        assert!(!edit.is_null(), "Commands prompt edit must exist");
+        let input = wide_null(input);
+        assert_ne!(unsafe { SetWindowTextW(edit, input.as_ptr()) }, 0);
+        assert_ne!(
+            unsafe { PostMessageW(dialog, WM_COMMAND, FIND_DIALOG_OK_ID as WPARAM, 0) },
+            0
+        );
+        wait_for_window_gone(dialog, "Commands prompt")?;
+    }
+    menu_thread
+        .join()
+        .expect("Commands menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
 #[test]
-fn automation_driver_room_menu_join_records_submitted_membership_without_creating_room()
+fn commands_menu_part_parts_the_active_room_and_empty_join_echoes_the_error()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    run_commands_menu_item(&app, COMMANDS_MENU_PART, None)?;
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "part submitted: !beta:example");
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Leave,
+            target: "!beta:example".to_owned(),
+        }]
+    );
+
+    run_commands_menu_item(&app, COMMANDS_MENU_JOIN, Some("  "))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, beta);
+    assert!(view_contains(
+        find_view(&ui_state, &beta),
+        "* /join: insufficient parameters"
+    ));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+fn menu(label: &str, items: &[(&str, bool)]) -> UiMenu {
+    UiMenu {
+        label: label.to_owned(),
+        items: items
+            .iter()
+            .map(|(label, enabled)| UiMenuItem {
+                label: (*label).to_owned(),
+                enabled: *enabled,
+            })
+            .collect(),
+    }
+}
+
+fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
+    let [connect, disconnect, select_server, log_out] = file;
+    vec![
+        menu(
+            "&File",
+            &[
+                ("&Connect", connect),
+                ("&Disconnect", disconnect),
+                ("Select &Server...\tAlt+E", select_server),
+                ("&Log Out", log_out),
+                ("E&xit", true),
+            ],
+        ),
+        menu(
+            "&Tools",
+            &[
+                ("Set Up E2EE &Recovery...", true),
+                ("Recover &E2EE...", true),
+                ("&Accept Verification", false),
+                ("Confirm &SAS", false),
+                ("Re&ject SAS", false),
+                ("&Cancel Verification", false),
+            ],
+        ),
+        menu(
+            "&Commands",
+            &[
+                ("&Join room...", true),
+                ("&Part room", true),
+                ("&Query user...", true),
+                ("&Whois user...", true),
+                ("&Invite user...", true),
+                ("&Kick user...", true),
+                ("&Ban user...", true),
+                ("Change &nick...", true),
+            ],
+        ),
+        menu(
+            "&Window",
+            &[
+                ("Cascade", true),
+                ("Tile Horizontal", true),
+                ("Tile Vertical", true),
+                ("Arrange Icons", true),
+            ],
+        ),
+        menu("&Help", &[("&Help Topics", true)]),
+    ]
+}
+
+#[test]
+fn menu_bar_is_mirc_shaped() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    assert_eq!(
+        app.dump_ui_state()?.menu_bar,
+        expected_menu_bar([true, false, true, false])
+    );
+
+    // A maximized child adds MDI's bitmap items to the bar; they are no
+    // menus.
+    app.set_view_window_state(ViewIdentity::Status, MdiWindowState::Maximized)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(
+        app.dump_ui_state()?
+            .mdi
+            .views
+            .iter()
+            .any(|view| view.placement.state == MdiWindowState::Maximized)
+    );
+    // MDI marks the frame title and augments the bar together (Wine's
+    // mdi.c, MDI_AugmentFrameMenu); menus are not readable cross-process.
+    assert!(
+        unsafe { read_window_text(app.automation_frame_hwnd() as HWND) }.ends_with("[Status]"),
+        "the Status window must be MDI's maximized child"
+    );
+    assert_eq!(
+        app.dump_ui_state()?.menu_bar,
+        expected_menu_bar([true, false, true, false])
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn help_topics_echoes_command_list() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    invoke_account_menu_command(&app, MENU_ID_HELP_TOPICS)?;
+    assert!(status_view_contains(&app, "* Commands: /accept /ban")?);
+    assert!(status_view_contains(&app, " /join ")?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Cancels the open Find dialog.
+fn cancel_find_dialog() -> Result<(), Box<dyn std::error::Error>> {
+    let class_name = wide_null("mirxWin32FindDialog");
+    let dialog = wait_for_window(&class_name, "Find dialog")?;
+    assert_eq!(unsafe { read_window_text(dialog) }, "Find");
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, FIND_DIALOG_CANCEL_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Find dialog")
+}
+
+#[test]
+fn find_text_in_window_menu_and_ctrl_f() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    let ui_state = app.dump_ui_state()?;
+    for label in ["Find &Text...\tCtrl+F", "&Font..."] {
+        assert!(
+            ui_state
+                .active_system_menu_items
+                .contains(&label.to_owned()),
+            "{label:?} in {:?}",
+            ui_state.active_system_menu_items
+        );
+    }
+
+    let child = unsafe { active_mdi_child(&app) };
+    assert_ne!(
+        unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_FIND, 0) },
+        0
+    );
+    cancel_find_dialog()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    // Ctrl+F goes through the frame's accelerator table, which reads the
+    // real keyboard state: type it.
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    assert_compose_has_focus(&app);
+    send_key_chord(VK_CONTROL, u16::from(b'F'));
+    cancel_find_dialog()?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn alt_e_opens_select_server_only_while_signed_out() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    let class_name = wide_null("mirxWin32LoginDialog");
+
+    send_key_chord(VK_MENU, u16::from(b'E'));
+    let dialog = wait_for_window(&class_name, "Select Server dialog")?;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_CANCEL_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Select Server dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    // Signed in, Select Server is greyed, and an accelerator for a greyed
+    // item sends nothing.
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    unsafe { SetForegroundWindow(frame) };
+    send_key_chord(VK_MENU, u16::from(b'E'));
+    app.wait_idle(Duration::from_secs(5))?;
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) }.is_null());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Presses and releases `modifier`+`key` through `SendInput`.
+fn send_key_chord(modifier: u16, key: u16) {
+    let input = |virtual_key: u16, flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: virtual_key,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    let inputs = [
+        input(modifier, 0),
+        input(key, 0),
+        input(key, KEYEVENTF_KEYUP),
+        input(modifier, KEYEVENTF_KEYUP),
+    ];
+    assert_eq!(
+        unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            )
+        },
+        inputs.len() as u32,
+        "SendInput must queue every key event"
+    );
+}
+
+#[test]
+fn commands_menu_join_records_submitted_membership_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -10973,8 +11290,7 @@ fn automation_driver_room_menu_join_records_submitted_membership_without_creatin
     app.wait_idle(Duration::from_secs(5))?;
 
     let before = app.dump_ui_state()?;
-    app.join_room_via_room_menu("#ops:example.org")?;
-    app.wait_idle(Duration::from_secs(5))?;
+    run_commands_menu_item(&app, COMMANDS_MENU_JOIN, Some("#ops:example.org"))?;
 
     let model = app.dump_model()?;
     assert_eq!(model.status, "join submitted: #ops:example.org");
@@ -11016,7 +11332,7 @@ fn automation_driver_room_menu_join_records_submitted_membership_without_creatin
 }
 
 #[test]
-fn automation_driver_room_menu_query_records_submitted_direct_room_without_creating_room()
+fn commands_menu_query_records_submitted_direct_room_without_creating_room()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =
         mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
@@ -11032,8 +11348,7 @@ fn automation_driver_room_menu_query_records_submitted_direct_room_without_creat
 
     let before_rooms = app.list_rooms()?;
     let before_state = app.dump_ui_state()?;
-    app.query_user_via_room_menu("@alice:example.org")?;
-    app.wait_idle(Duration::from_secs(5))?;
+    run_commands_menu_item(&app, COMMANDS_MENU_QUERY, Some("@alice:example.org"))?;
 
     let model = app.dump_model()?;
     assert_eq!(model.status, "query submitted: @alice:example.org");

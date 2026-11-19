@@ -36,10 +36,10 @@ use mirx_testkit::{
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
-    TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    TestkitError, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp,
+    UnsupportedRoomMessageActivity, Verification, VerificationActionArgs, VerificationDecimals,
+    VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -813,6 +813,13 @@ fn data_models_round_trip_through_json() {
             format: "[HH:nn]".to_owned(),
         },
         active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
+        menu_bar: vec![UiMenu {
+            label: "&File".to_owned(),
+            items: vec![UiMenuItem {
+                label: "&Disconnect".to_owned(),
+                enabled: false,
+            }],
+        }],
     };
     let navigation_path = vec![
         NavigationPathSegment::first("mirx"),
@@ -1085,6 +1092,7 @@ fn data_models_round_trip_through_json() {
             },
             "timestamp": {"show": true, "format": "[HH:nn]"},
             "active_system_menu_items": ["&Restore", "&Font..."],
+            "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false}]}],
         })
     );
     assert_eq!(
@@ -6274,6 +6282,7 @@ fn switchbar_helpers_find_items_and_active_item() {
             format: "[HH:nn]".to_owned(),
         },
         active_system_menu_items: vec![],
+        menu_bar: vec![],
     };
 
     let identity = ViewIdentity::Room {

@@ -1074,7 +1074,7 @@ configure_case_expectations() {
       status_view_expect_args=(
         --expect-status-view 'flow-verify-123'
         --expect-status-view 'message send failed'
-        --expect-status-view '* Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
+        --expect-status-view '* Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'error during send text'
@@ -1113,7 +1113,7 @@ configure_case_expectations() {
       )
       status_view_expect_args=(
         --expect-status-view '[22:12] * Verification requested by @alice:example (flow flow-verify-request)'
-        --expect-status-view '* Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel'
+        --expect-status-view '* Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'verification requested by @alice:example'
@@ -1149,7 +1149,7 @@ configure_case_expectations() {
         --expect-status-view '[22:12] * Verification with @alice:example: compare the emoji or the numbers'
         --expect-status-view '* Emoji: 🐶 dog | 🐱 cat | 🦁 lion | 🐎 horse | 🦄 unicorn | 🐷 pig | 🐘 elephant'
         --expect-status-view '* Decimals: 1234-5678-9012'
-        --expect-status-view '* Actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel'
+        --expect-status-view '* Actions: Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel'
       )
       status_bar_expect_args=(
         --expect-status-bar 'verification sas ready with @alice:example'

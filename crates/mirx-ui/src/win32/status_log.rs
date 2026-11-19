@@ -8,9 +8,10 @@
 
 use mirx_core::{E2eeStatus, SyncStopReason, VerificationState, VerificationStateEvent};
 
+use super::menus::verification_actions_text;
 use super::{
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
-    e2ee_server_backup_label, format_verification_emojis, verification_actions_text,
+    e2ee_server_backup_label, format_verification_emojis,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,7 +247,7 @@ mod tests {
             verification(&verification_event(VerificationState::Requested)),
             vec![
                 "Verification requested by @alice:example (flow flow-1)".to_owned(),
-                "Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
+                "Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel"
                     .to_owned(),
             ]
         );

@@ -58,8 +58,6 @@ pub(crate) const COMMAND_ID_SEND_FILE: u32 = 39;
 pub(crate) const COMMAND_ID_SETUP_E2EE_RECOVERY: u32 = 40;
 pub(crate) const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
 pub(crate) const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
-pub(crate) const COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU: u32 = 43;
-pub(crate) const COMMAND_ID_QUERY_USER_VIA_ROOM_MENU: u32 = 44;
 pub(crate) const COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU: u32 = 45;
 pub(crate) const COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU: u32 = 46;
 pub(crate) const COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU: u32 = 47;
@@ -112,8 +110,6 @@ pub(crate) enum CommandKind {
     AcceptInviteViaRoomMenu,
     RejectInviteViaRoomMenu,
     PartRoomViaRoomMenu,
-    JoinRoomViaRoomMenu,
-    QueryUserViaRoomMenu,
     ReplyToSelectedMessageViaMenu,
     EditSelectedMessageViaMenu,
     ReactToSelectedMessageViaMenu,
@@ -174,8 +170,6 @@ impl CommandKind {
             COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU => Some(Self::AcceptInviteViaRoomMenu),
             COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU => Some(Self::RejectInviteViaRoomMenu),
             COMMAND_ID_PART_ROOM_VIA_ROOM_MENU => Some(Self::PartRoomViaRoomMenu),
-            COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU => Some(Self::JoinRoomViaRoomMenu),
-            COMMAND_ID_QUERY_USER_VIA_ROOM_MENU => Some(Self::QueryUserViaRoomMenu),
             COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU => {
                 Some(Self::ReplyToSelectedMessageViaMenu)
             }
@@ -346,14 +340,6 @@ pub(crate) enum ParsedCommand {
     PartRoomViaRoomMenu {
         id: String,
     },
-    JoinRoomViaRoomMenu {
-        id: String,
-        args: JoinRoomViaRoomMenuArgs,
-    },
-    QueryUserViaRoomMenu {
-        id: String,
-        args: QueryUserViaRoomMenuArgs,
-    },
     ReplyToSelectedMessageViaMenu {
         id: String,
     },
@@ -461,8 +447,6 @@ impl ParsedCommand {
             Self::AcceptInviteViaRoomMenu { .. } => CommandKind::AcceptInviteViaRoomMenu,
             Self::RejectInviteViaRoomMenu { .. } => CommandKind::RejectInviteViaRoomMenu,
             Self::PartRoomViaRoomMenu { .. } => CommandKind::PartRoomViaRoomMenu,
-            Self::JoinRoomViaRoomMenu { .. } => CommandKind::JoinRoomViaRoomMenu,
-            Self::QueryUserViaRoomMenu { .. } => CommandKind::QueryUserViaRoomMenu,
             Self::ReplyToSelectedMessageViaMenu { .. } => {
                 CommandKind::ReplyToSelectedMessageViaMenu
             }
@@ -534,18 +518,6 @@ pub(crate) struct SelectTimelineEventArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectMemberArgs {
-    pub(crate) user_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct JoinRoomViaRoomMenuArgs {
-    pub(crate) target: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct QueryUserViaRoomMenuArgs {
     pub(crate) user_id: String,
 }
 
@@ -941,6 +913,25 @@ pub(crate) struct UiState {
     pub(crate) timestamp: UiTimestamp,
     /// The labels of the active window's window menu, separators omitted.
     pub(crate) active_system_menu_items: Vec<String>,
+    /// The frame's menubar as opening each menu would show it: MDI's
+    /// maximized-child buttons and separators omitted.
+    pub(crate) menu_bar: Vec<UiMenu>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiMenu {
+    /// With its `&` mnemonic, as `GetMenuItemInfoW` returns it.
+    pub(crate) label: String,
+    pub(crate) items: Vec<UiMenuItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiMenuItem {
+    /// With its `&` mnemonic and any `\t` accelerator text.
+    pub(crate) label: String,
+    pub(crate) enabled: bool,
 }
 
 /// The text font as the active window draws it.
@@ -2313,14 +2304,6 @@ pub(crate) fn parse_command_request(
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::PartRoomViaRoomMenu { id: envelope.id })
         }
-        CommandKind::JoinRoomViaRoomMenu => Ok(ParsedCommand::JoinRoomViaRoomMenu {
-            id: envelope.id.clone(),
-            args: parse_args_required::<JoinRoomViaRoomMenuArgs>(&envelope.id, envelope.args)?,
-        }),
-        CommandKind::QueryUserViaRoomMenu => Ok(ParsedCommand::QueryUserViaRoomMenu {
-            id: envelope.id.clone(),
-            args: parse_args_required::<QueryUserViaRoomMenuArgs>(&envelope.id, envelope.args)?,
-        }),
         CommandKind::ReplyToSelectedMessageViaMenu => {
             parse_args_with_default::<NoArgs>(&envelope.id, envelope.args)?;
             Ok(ParsedCommand::ReplyToSelectedMessageViaMenu { id: envelope.id })
@@ -2670,35 +2653,34 @@ mod tests {
         COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
         COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
         COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU,
-        COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN,
-        COMMAND_ID_LOGOUT, COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU,
-        COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU,
-        COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
+        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
+        COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU, COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
+        COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING,
-        COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU, COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
-        COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RECOVER_E2EE,
-        COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU,
-        COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
-        COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_MEMBER,
-        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_NAVIGATION_VIEW,
-        COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
-        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT,
-        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_SET_VIEW_WINDOW_STATE,
-        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
-        ComposeKey, ComposeTextResponse, ConnectionState, ContextMenuCommand,
-        DumpE2eeRecoverySetupResult, DumpMemberModerationAction, DumpMemberPowerRole, DumpModel,
-        DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
-        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
-        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
-        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
-        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
-        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpRoomVideoActivity,
-        DumpRoomVideoInfo, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
+        COMMAND_ID_QUERY_SELECTED_MEMBER_VIA_MENU, COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_RECOVER_E2EE, COMMAND_ID_REDACT_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_REJECT_INVITE_VIA_ROOM_MENU, COMMAND_ID_REJECT_VERIFICATION_SAS,
+        COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RESTORE_SAVED_SESSION,
+        COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
+        COMMAND_ID_SELECT_MEMBER, COMMAND_ID_SELECT_NAVIGATION_PATH,
+        COMMAND_ID_SELECT_NAVIGATION_VIEW, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
+        COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
+        COMMAND_ID_SET_VIEW_WINDOW_STATE, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
+        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, ConnectionState,
+        ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberModerationAction,
+        DumpMemberPowerRole, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
+        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
         DumpSubmittedMemberModerationCommand, DumpSubmittedPowerLevelCommand,
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
@@ -3065,14 +3047,6 @@ mod tests {
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_SETUP_E2EE_RECOVERY),
             Some(CommandKind::SetupE2eeRecovery)
-        );
-        assert_eq!(
-            CommandKind::from_id(COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU),
-            Some(CommandKind::JoinRoomViaRoomMenu)
-        );
-        assert_eq!(
-            CommandKind::from_id(COMMAND_ID_QUERY_USER_VIA_ROOM_MENU),
-            Some(CommandKind::QueryUserViaRoomMenu)
         );
         assert_eq!(
             CommandKind::from_id(COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU),
@@ -3847,7 +3821,8 @@ mod tests {
             "rooms":[],
             "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
-            "active_system_menu_items":[]
+            "active_system_menu_items":[],
+            "menu_bar":[]
         }))
         .unwrap();
         assert_eq!(without_find.active_find, None);
@@ -3869,7 +3844,8 @@ mod tests {
             "rooms":[],
             "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
-            "active_system_menu_items":[]
+            "active_system_menu_items":[],
+            "menu_bar":[]
         }))
         .unwrap();
         assert_eq!(
@@ -5221,6 +5197,13 @@ mod tests {
                         format: "[HH:nn]".to_owned(),
                     },
                     active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
+                    menu_bar: vec![super::UiMenu {
+                        label: "&Help".to_owned(),
+                        items: vec![super::UiMenuItem {
+                            label: "&Help Topics".to_owned(),
+                            enabled: true,
+                        }],
+                    }],
                 },
             ))
             .unwrap(),
@@ -5348,7 +5331,8 @@ mod tests {
                         "fallback_faces":["Tahoma","Noto Emoji"]
                     },
                     "timestamp":{"show":true,"format":"[HH:nn]"},
-                    "active_system_menu_items":["&Restore","&Font..."]
+                    "active_system_menu_items":["&Restore","&Font..."],
+                    "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true}]}]
                 }
             })
         );

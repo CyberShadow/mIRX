@@ -101,10 +101,6 @@ const COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU: u32 = 41;
 #[cfg(windows)]
 const COMMAND_ID_REACT_TO_SELECTED_MESSAGE_VIA_MENU: u32 = 42;
 #[cfg(windows)]
-const COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU: u32 = 43;
-#[cfg(windows)]
-const COMMAND_ID_QUERY_USER_VIA_ROOM_MENU: u32 = 44;
-#[cfg(windows)]
 const COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU: u32 = 45;
 #[cfg(windows)]
 const COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU: u32 = 46;
@@ -1129,6 +1125,25 @@ pub struct UiState {
     pub timestamp: UiTimestamp,
     /// The labels of the active window's window menu, separators omitted.
     pub active_system_menu_items: Vec<String>,
+    /// The frame's menubar as opening each menu would show it: MDI's
+    /// maximized-child buttons and separators omitted.
+    pub menu_bar: Vec<UiMenu>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiMenu {
+    /// With its `&` mnemonic, as `GetMenuItemInfoW` returns it.
+    pub label: String,
+    pub items: Vec<UiMenuItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiMenuItem {
+    /// With its `&` mnemonic and any `\t` accelerator text.
+    pub label: String,
+    pub enabled: bool,
 }
 
 /// The text font as the active window draws it.
@@ -1724,14 +1739,6 @@ impl MirxApp {
         self.inner.part_room_via_room_menu()
     }
 
-    pub fn join_room_via_room_menu(&self, target: &str) -> Result<(), TestkitError> {
-        self.inner.join_room_via_room_menu(target)
-    }
-
-    pub fn query_user_via_room_menu(&self, user_id: &str) -> Result<(), TestkitError> {
-        self.inner.query_user_via_room_menu(user_id)
-    }
-
     pub fn reply_to_selected_message_via_menu(&self) -> Result<(), TestkitError> {
         self.inner.reply_to_selected_message_via_menu()
     }
@@ -2166,18 +2173,6 @@ struct OpenSelectedMemberContextMenuArgs {
 }
 
 #[cfg(windows)]
-#[derive(Serialize)]
-struct JoinRoomViaRoomMenuArgs<'a> {
-    target: &'a str,
-}
-
-#[cfg(windows)]
-#[derive(Serialize)]
-struct QueryUserViaRoomMenuArgs<'a> {
-    user_id: &'a str,
-}
-
-#[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct RequestEnvelope<'a, T> {
     id: &'a str,
@@ -2501,18 +2496,6 @@ mod imp {
         }
 
         pub(crate) fn part_room_via_room_menu(&self) -> Result<(), TestkitError> {
-            Err(TestkitError::UnsupportedPlatform(
-                "mirx-testkit requires the Windows target",
-            ))
-        }
-
-        pub(crate) fn join_room_via_room_menu(&self, _target: &str) -> Result<(), TestkitError> {
-            Err(TestkitError::UnsupportedPlatform(
-                "mirx-testkit requires the Windows target",
-            ))
-        }
-
-        pub(crate) fn query_user_via_room_menu(&self, _user_id: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
             ))
@@ -3136,22 +3119,6 @@ mod imp {
                 COMMAND_ID_PART_ROOM_VIA_ROOM_MENU,
                 EmptyArgs {},
                 "PART_ROOM_VIA_ROOM_MENU",
-            )
-        }
-
-        pub(crate) fn join_room_via_room_menu(&self, target: &str) -> Result<(), TestkitError> {
-            self.send_accepted_command(
-                COMMAND_ID_JOIN_ROOM_VIA_ROOM_MENU,
-                JoinRoomViaRoomMenuArgs { target },
-                "JOIN_ROOM_VIA_ROOM_MENU",
-            )
-        }
-
-        pub(crate) fn query_user_via_room_menu(&self, user_id: &str) -> Result<(), TestkitError> {
-            self.send_accepted_command(
-                COMMAND_ID_QUERY_USER_VIA_ROOM_MENU,
-                QueryUserViaRoomMenuArgs { user_id },
-                "QUERY_USER_VIA_ROOM_MENU",
             )
         }
 

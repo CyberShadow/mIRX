@@ -80,7 +80,12 @@ use windows_sys::Win32::UI::Controls::{
     TVM_GETITEMW, TVM_GETNEXTITEM, TVM_HITTEST, TVM_INSERTITEMW, TVM_SELECTITEM, TVN_SELCHANGEDW,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_SHIFT,
+    EnableWindow, GetKeyState, SetFocus, VK_SHIFT,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    ACCEL, CreateAcceleratorTableW, DestroyAcceleratorTable, FALT, FCONTROL, FVIRTKEY, GetMenu,
+    GetMenuItemInfoW, HACCEL, MENUITEMINFOW, MFS_DISABLED, MFT_BITMAP, MFT_SEPARATOR, MIIM_FTYPE,
+    MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, TranslateAcceleratorW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
@@ -134,12 +139,12 @@ use crate::{
         NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
         RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
         SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState,
-        UiFindState, UiRoomHistoryBackfillState, UiRoomState, UiState, UiTextFont, UiTimestamp,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState, UiRoomState, UiState,
+        UiTextFont, UiTimestamp, VerificationActionArgs, ViewActivityLevel, ViewIdentity,
+        WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -150,6 +155,7 @@ mod echo;
 mod glyph_fonts;
 mod glyph_runs;
 mod mdi;
+mod menus;
 mod nick_completion;
 mod settings;
 mod status_log;
@@ -162,6 +168,19 @@ use commands::{
 };
 use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
+use menus::{
+    BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MENU_BAR, MENU_ID_COMMANDS_FIRST,
+    MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER,
+    MENU_ID_FIND, MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_KICK,
+    MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_REACT,
+    MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT,
+    MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_PART,
+    MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_VERIFY_ACCEPT,
+    MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS,
+    MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL,
+    MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU, WINDOW_MENU, commands_menu_item,
+    commands_menu_line, commands_menu_title, file_menu_state, verification_menu_action_enabled,
+};
 use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
 
@@ -205,37 +224,11 @@ const VIEW_EDIT_ID: u16 = 2002;
 /// with the low four bits clear: Windows uses those bits itself.
 const SYSMENU_ID_FONT: usize = 0x0110;
 const SYSMENU_FONT_LABEL: &str = "&Font...";
+/// The window menu's Find Text item, mIRC's window-menu Find.
+const SYSMENU_ID_FIND: usize = 0x0120;
+const SYSMENU_FIND_LABEL: &str = "Find &Text...\tCtrl+F";
 const COMPOSE_EDIT_STYLE: WINDOW_STYLE = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL as u32;
 const COMPOSE_EDIT_EX_STYLE: WINDOW_EX_STYLE = WS_EX_CLIENTEDGE;
-const MENU_ID_LOGOUT: usize = 40004;
-const MENU_ID_RECOVER_E2EE: usize = 40005;
-const MENU_ID_SETUP_E2EE_RECOVERY: usize = 40017;
-const MENU_ID_FIND: usize = 40006;
-const MENU_ID_VERIFY_ACCEPT: usize = 40007;
-const MENU_ID_VERIFY_CANCEL: usize = 40008;
-const MENU_ID_VERIFY_CONFIRM_SAS: usize = 40009;
-const MENU_ID_VERIFY_REJECT_SAS: usize = 40010;
-const MENU_ID_ROOM_ACCEPT_INVITE: usize = 40011;
-const MENU_ID_ROOM_REJECT_INVITE: usize = 40012;
-const MENU_ID_ROOM_PART: usize = 40013;
-const MENU_ID_MESSAGE_REPLY: usize = 40014;
-const MENU_ID_MESSAGE_REDACT: usize = 40015;
-const MENU_ID_MESSAGE_SAVE_ATTACHMENT: usize = 40016;
-const MENU_ID_MESSAGE_EDIT: usize = 40018;
-const MENU_ID_MESSAGE_REACT: usize = 40019;
-const MENU_ID_ROOM_JOIN: usize = 40020;
-const MENU_ID_ROOM_QUERY: usize = 40021;
-const MENU_ID_MEMBER_QUERY: usize = 40022;
-const MENU_ID_MEMBER_MENTION: usize = 40023;
-const MENU_ID_MEMBER_KICK: usize = 40024;
-const MENU_ID_MEMBER_BAN: usize = 40025;
-const MENU_ID_WINDOW_CASCADE: usize = 40026;
-const MENU_ID_WINDOW_TILE_HORIZONTAL: usize = 40027;
-const MENU_ID_WINDOW_TILE_VERTICAL: usize = 40028;
-const MENU_ID_WINDOW_ARRANGE_ICONS: usize = 40029;
-const MENU_ID_FILE_CONNECT: usize = 40030;
-const MENU_ID_FILE_DISCONNECT: usize = 40031;
-const MENU_ID_FILE_SELECT_SERVER: usize = 40032;
 const SWITCHBAR_COMMAND_FIRST: usize = 41001;
 const SWITCHBAR_COMMAND_LAST: usize = 41999;
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -292,7 +285,6 @@ const VK_DOWN_KEY: WPARAM = 40;
 const VK_DELETE_KEY: WPARAM = 46;
 const VK_TAB_KEY: WPARAM = 9;
 const VK_ESCAPE_KEY: WPARAM = 27;
-const VK_F_KEY: WPARAM = b'F' as WPARAM;
 
 #[derive(Default)]
 struct Controls {
@@ -300,10 +292,16 @@ struct Controls {
     mdi_client: HWND,
     status_bar: HWND,
     switchbar: HWND,
+    /// The menubar's File and Tools menus, which `refresh_menu_popup`
+    /// updates before they open.
+    file_menu: HMENU,
+    tools_menu: HMENU,
+    /// Right-click menus. They hang in no menubar, so `WM_DESTROY`
+    /// destroys them.
     room_menu: HMENU,
     message_menu: HMENU,
     member_menu: HMENU,
-    account_menu: HMENU,
+    accelerators: HACCEL,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -3741,18 +3739,8 @@ unsafe extern "system" fn window_proc(
             }
         }
         WM_INITMENUPOPUP => {
-            let popup_menu = wparam as HMENU;
-            let result = if popup_menu == state_ref(hwnd).controls.room_menu {
-                refresh_room_menu_state(hwnd, popup_menu)
-            } else if popup_menu == state_ref(hwnd).controls.message_menu {
-                refresh_message_menu_state(hwnd, popup_menu)
-            } else if popup_menu == state_ref(hwnd).controls.account_menu {
-                refresh_account_verification_menu_state(hwnd, popup_menu)
-            } else {
-                Ok(())
-            };
-            if let Err(message) = result {
-                show_error_message(hwnd, "Account", &message);
+            if let Err(message) = refresh_menu_popup(hwnd, wparam as HMENU) {
+                show_error_message(hwnd, "Menu", &message);
             }
             0
         }
@@ -3819,11 +3807,18 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DESTROY => {
-            let member_menu = state_ref(hwnd).controls.member_menu;
-            if !member_menu.is_null() {
-                DestroyMenu(member_menu);
-                state_mut(hwnd).controls.member_menu = null_mut();
+            let controls = &mut state_mut(hwnd).controls;
+            // The menubar goes with the window; these hang in no menubar.
+            for menu in [
+                &mut controls.room_menu,
+                &mut controls.message_menu,
+                &mut controls.member_menu,
+            ] {
+                DestroyMenu(*menu);
+                *menu = null_mut();
             }
+            DestroyAcceleratorTable(controls.accelerators);
+            controls.accelerators = null_mut();
             if let Some(sender) = state_mut(hwnd).command_sender.as_ref() {
                 let _ = sender.send(Command::Shutdown);
             }
@@ -3877,6 +3872,13 @@ unsafe extern "system" fn mdi_child_window_proc(
                 eprintln!("{message}");
             }
             DefMDIChildProcW(hwnd, message, wparam, lparam)
+        }
+        WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_FIND => {
+            let frame = frame_window_for(hwnd);
+            if let Err(message) = begin_find_dialog(frame) {
+                show_error_message(frame, "Find", &message);
+            }
+            0
         }
         WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_FONT => {
             let frame = frame_window_for(hwnd);
@@ -6175,19 +6177,31 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     Ok(())
 }
 
-unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
-    let edit_menu = CreatePopupMenu();
-    if edit_menu.is_null() {
+unsafe fn create_popup_menu() -> Result<HMENU, String> {
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
         return Err(last_os_error("CreatePopupMenu"));
     }
-    append_menu_text(edit_menu, MF_STRING, MENU_ID_FIND, "Find...\tCtrl+F")?;
+    Ok(menu)
+}
 
-    let room_menu = CreatePopupMenu();
-    if room_menu.is_null() {
-        return Err(last_os_error("CreatePopupMenu"));
+unsafe fn create_menu_from_entries(entries: &[MenuEntry]) -> Result<HMENU, String> {
+    let menu = create_popup_menu()?;
+    for entry in entries {
+        match *entry {
+            MenuEntry::Item { id, label } => append_menu_text(menu, MF_STRING, id, label)?,
+            MenuEntry::Separator => {
+                if AppendMenuW(menu, MF_SEPARATOR, 0, null()) == 0 {
+                    return Err(last_os_error("AppendMenuW"));
+                }
+            }
+        }
     }
-    append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_JOIN, "Join Room...")?;
-    append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_QUERY, "Query User...")?;
+    Ok(menu)
+}
+
+unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
+    let room_menu = create_popup_menu()?;
     append_menu_text(
         room_menu,
         MF_STRING,
@@ -6202,21 +6216,18 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
     )?;
     append_menu_text(room_menu, MF_STRING, MENU_ID_ROOM_PART, "Part Room")?;
 
-    let message_menu = CreatePopupMenu();
-    if message_menu.is_null() {
-        return Err(last_os_error("CreatePopupMenu"));
+    let message_menu = create_popup_menu()?;
+    for (id, label) in [
+        (MENU_ID_MESSAGE_REPLY, "Reply to Message"),
+        (MENU_ID_MESSAGE_EDIT, "Edit Message"),
+        (MENU_ID_MESSAGE_REACT, "React to Message"),
+        (MENU_ID_MESSAGE_REDACT, "Redact Message"),
+        (MENU_ID_MESSAGE_SAVE_ATTACHMENT, "Save Attachment..."),
+    ] {
+        append_menu_text(message_menu, MF_STRING, id, label)?;
     }
-    append_menu_text(
-        message_menu,
-        MF_STRING,
-        MENU_ID_MESSAGE_REPLY,
-        "Reply to Message",
-    )?;
 
-    let member_menu = CreatePopupMenu();
-    if member_menu.is_null() {
-        return Err(last_os_error("CreatePopupMenu"));
-    }
+    let member_menu = create_popup_menu()?;
     append_menu_text(member_menu, MF_STRING, MENU_ID_MEMBER_QUERY, "Query User")?;
     append_menu_text(
         member_menu,
@@ -6234,130 +6245,76 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
         "Kick from Room",
     )?;
     append_menu_text(member_menu, MF_STRING, MENU_ID_MEMBER_BAN, "Ban from Room")?;
-    append_menu_text(
-        message_menu,
-        MF_STRING,
-        MENU_ID_MESSAGE_EDIT,
-        "Edit Message",
-    )?;
-    append_menu_text(
-        message_menu,
-        MF_STRING,
-        MENU_ID_MESSAGE_REACT,
-        "React to Message",
-    )?;
-    append_menu_text(
-        message_menu,
-        MF_STRING,
-        MENU_ID_MESSAGE_REDACT,
-        "Redact Message",
-    )?;
-    append_menu_text(
-        message_menu,
-        MF_STRING,
-        MENU_ID_MESSAGE_SAVE_ATTACHMENT,
-        "Save Attachment...",
-    )?;
-
-    let account_menu = CreatePopupMenu();
-    if account_menu.is_null() {
-        return Err(last_os_error("CreatePopupMenu"));
-    }
-    append_menu_text(account_menu, MF_STRING, MENU_ID_FILE_CONNECT, "Connect")?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_FILE_DISCONNECT,
-        "Disconnect",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_FILE_SELECT_SERVER,
-        "Select Server...",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_SETUP_E2EE_RECOVERY,
-        "Set Up E2EE Recovery...",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_RECOVER_E2EE,
-        "Recover E2EE...",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_VERIFY_ACCEPT,
-        "Accept Verification",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_VERIFY_CANCEL,
-        "Cancel Verification",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_VERIFY_CONFIRM_SAS,
-        "Confirm SAS",
-    )?;
-    append_menu_text(
-        account_menu,
-        MF_STRING,
-        MENU_ID_VERIFY_REJECT_SAS,
-        "Reject SAS",
-    )?;
-    append_menu_text(account_menu, MF_STRING, MENU_ID_LOGOUT, "Logout")?;
-
-    let window_menu = CreatePopupMenu();
-    if window_menu.is_null() {
-        return Err(last_os_error("CreatePopupMenu"));
-    }
-    for arrangement in [
-        MdiArrangement::Cascade,
-        MdiArrangement::TileHorizontal,
-        MdiArrangement::TileVertical,
-        MdiArrangement::ArrangeIcons,
-    ] {
-        let (command_id, label) = window_menu_item(arrangement);
-        append_menu_text(window_menu, MF_STRING, command_id, label)?;
-    }
 
     let frame_menu = CreateMenu();
     if frame_menu.is_null() {
         return Err(last_os_error("CreateMenu"));
     }
-    append_menu_text(frame_menu, MF_POPUP, edit_menu as usize, "Edit")?;
-    append_menu_text(frame_menu, MF_POPUP, room_menu as usize, "Room")?;
-    append_menu_text(frame_menu, MF_POPUP, message_menu as usize, "Message")?;
-    append_menu_text(frame_menu, MF_POPUP, account_menu as usize, "Account")?;
-    append_menu_text(frame_menu, MF_POPUP, window_menu as usize, "Window")?;
+    let (mut file_menu, mut tools_menu) = (null_mut(), null_mut());
+    for (bar_menu, label) in MENU_BAR {
+        let popup = match bar_menu {
+            BarMenu::File => {
+                file_menu = create_menu_from_entries(FILE_MENU)?;
+                file_menu
+            }
+            BarMenu::Tools => {
+                tools_menu = create_menu_from_entries(TOOLS_MENU)?;
+                tools_menu
+            }
+            BarMenu::Commands => {
+                let menu = create_popup_menu()?;
+                for (index, item) in COMMANDS_MENU.iter().enumerate() {
+                    append_menu_text(menu, MF_STRING, MENU_ID_COMMANDS_FIRST + index, item.label)?;
+                }
+                menu
+            }
+            BarMenu::Window => create_menu_from_entries(WINDOW_MENU)?,
+            BarMenu::Help => create_menu_from_entries(HELP_MENU)?,
+        };
+        append_menu_text(frame_menu, MF_POPUP, popup as usize, label)?;
+    }
 
     if SetMenu(hwnd, frame_menu) == 0 {
         return Err(last_os_error("SetMenu"));
     }
+    let accelerators = [
+        ACCEL {
+            fVirt: FCONTROL | FVIRTKEY,
+            key: u16::from(b'F'),
+            cmd: MENU_ID_FIND as u16,
+        },
+        // Under Wine too, Alt+E arrives as WM_SYSKEYDOWN, which FVIRTKEY
+        // with FALT matches.
+        ACCEL {
+            fVirt: FALT | FVIRTKEY,
+            key: u16::from(b'E'),
+            cmd: MENU_ID_FILE_SELECT_SERVER as u16,
+        },
+    ];
+    let accelerator_table =
+        CreateAcceleratorTableW(accelerators.as_ptr(), accelerators.len() as i32);
+    if accelerator_table.is_null() {
+        return Err(last_os_error("CreateAcceleratorTableW"));
+    }
     let controls = &mut state_mut(hwnd).controls;
+    controls.file_menu = file_menu;
+    controls.tools_menu = tools_menu;
     controls.room_menu = room_menu;
     controls.message_menu = message_menu;
     controls.member_menu = member_menu;
-    controls.account_menu = account_menu;
+    controls.accelerators = accelerator_table;
     if DrawMenuBar(hwnd) == 0 {
         return Err(last_os_error("DrawMenuBar"));
     }
     Ok(())
 }
 
-fn window_menu_item(arrangement: MdiArrangement) -> (usize, &'static str) {
+fn window_menu_command_id(arrangement: MdiArrangement) -> usize {
     match arrangement {
-        MdiArrangement::Cascade => (MENU_ID_WINDOW_CASCADE, "Cascade"),
-        MdiArrangement::TileHorizontal => (MENU_ID_WINDOW_TILE_HORIZONTAL, "Tile Horizontal"),
-        MdiArrangement::TileVertical => (MENU_ID_WINDOW_TILE_VERTICAL, "Tile Vertical"),
-        MdiArrangement::ArrangeIcons => (MENU_ID_WINDOW_ARRANGE_ICONS, "Arrange Icons"),
+        MdiArrangement::Cascade => MENU_ID_WINDOW_CASCADE,
+        MdiArrangement::TileHorizontal => MENU_ID_WINDOW_TILE_HORIZONTAL,
+        MdiArrangement::TileVertical => MENU_ID_WINDOW_TILE_VERTICAL,
+        MdiArrangement::ArrangeIcons => MENU_ID_WINDOW_ARRANGE_ICONS,
     }
 }
 
@@ -6678,10 +6635,41 @@ unsafe fn append_menu_text(
     Ok(())
 }
 
-unsafe fn refresh_account_verification_menu_state(
-    hwnd: HWND,
-    popup_menu: HMENU,
-) -> Result<(), String> {
+/// Updates a menu's items before it opens, as `WM_INITMENUPOPUP` and the
+/// automation dumps do. Other menus (Commands, Window, Help, the window
+/// menu) have nothing that greys.
+unsafe fn refresh_menu_popup(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    let controls = &state_ref(hwnd).controls;
+    if popup_menu == controls.file_menu {
+        refresh_file_menu_state(hwnd, popup_menu)
+    } else if popup_menu == controls.tools_menu {
+        refresh_tools_menu_state(hwnd, popup_menu)
+    } else if popup_menu == controls.room_menu {
+        refresh_room_menu_state(hwnd, popup_menu)
+    } else if popup_menu == controls.message_menu {
+        refresh_message_menu_state(hwnd, popup_menu)
+    } else {
+        Ok(())
+    }
+}
+
+unsafe fn refresh_file_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    let state = file_menu_state(state_ref(hwnd).model.connection);
+    for (item, enabled) in [
+        (MENU_ID_FILE_CONNECT, state.connect),
+        (MENU_ID_FILE_DISCONNECT, state.disconnect),
+        (MENU_ID_FILE_SELECT_SERVER, state.select_server),
+        (MENU_ID_LOGOUT, state.log_out),
+    ] {
+        let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
+        if EnableMenuItem(popup_menu, item as u32, flags) == -1 {
+            return Err(last_os_error("EnableMenuItem"));
+        }
+    }
+    Ok(())
+}
+
+unsafe fn refresh_tools_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
     let last_verification = state_ref(hwnd).model.last_verification.as_ref();
 
     let accept_flags = MF_BYCOMMAND
@@ -6727,14 +6715,8 @@ unsafe fn refresh_account_verification_menu_state(
     Ok(())
 }
 
-unsafe fn dump_account_verification_menu_state(
-    hwnd: HWND,
-) -> Result<DumpVerificationMenuState, String> {
-    let account_menu = state_ref(hwnd).controls.account_menu;
-    if account_menu.is_null() {
-        return Err("Account menu is not available".to_owned());
-    }
-    refresh_account_verification_menu_state(hwnd, account_menu)?;
+unsafe fn dump_verification_menu_state(hwnd: HWND) -> Result<DumpVerificationMenuState, String> {
+    refresh_tools_menu_state(hwnd, state_ref(hwnd).controls.tools_menu)?;
 
     let last_verification = state_ref(hwnd).model.last_verification.as_ref();
     Ok(DumpVerificationMenuState {
@@ -6834,14 +6816,6 @@ unsafe fn menu_command_result(
         MENU_ID_WINDOW_TILE_HORIZONTAL => window_menu_command(hwnd, MdiArrangement::TileHorizontal),
         MENU_ID_WINDOW_TILE_VERTICAL => window_menu_command(hwnd, MdiArrangement::TileVertical),
         MENU_ID_WINDOW_ARRANGE_ICONS => window_menu_command(hwnd, MdiArrangement::ArrangeIcons),
-        MENU_ID_ROOM_JOIN => (
-            "Room",
-            show_join_room_menu_dialog(hwnd).map(|handled| handled.then_some(())),
-        ),
-        MENU_ID_ROOM_QUERY => (
-            "Room",
-            show_query_user_menu_dialog(hwnd).map(|handled| handled.then_some(())),
-        ),
         MENU_ID_ROOM_ACCEPT_INVITE => (
             "Room",
             submit_room_menu_action(hwnd, submit_accept_slash_command).map(|_| Some(())),
@@ -6885,40 +6859,54 @@ unsafe fn menu_command_result(
             submit_selected_member_moderation(hwnd, false).map(|_| Some(())),
         ),
         MENU_ID_FILE_CONNECT => (
-            "Account",
+            "File",
             connect(hwnd, None).map(|performed| performed.then_some(())),
         ),
-        MENU_ID_FILE_DISCONNECT => ("Account", disconnect(hwnd).map(|_| Some(()))),
+        MENU_ID_FILE_DISCONNECT => ("File", disconnect(hwnd).map(|_| Some(()))),
         MENU_ID_FILE_SELECT_SERVER => (
-            "Account",
+            "File",
             show_select_server_dialog(hwnd, "").map(|performed| performed.then_some(())),
         ),
+        MENU_ID_FILE_EXIT => (
+            "File",
+            run_local_command(hwnd, SlashCommand::Exit).map(|_| Some(())),
+        ),
+        MENU_ID_HELP_TOPICS => (
+            "Help",
+            run_local_command(hwnd, SlashCommand::Help { topic: None }).map(|_| Some(())),
+        ),
         MENU_ID_RECOVER_E2EE => (
-            "Account",
+            "Tools",
             show_recover_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
         ),
         MENU_ID_SETUP_E2EE_RECOVERY => (
-            "Account",
+            "Tools",
             show_setup_e2ee_menu_dialog(hwnd).map(|handled| handled.then_some(())),
         ),
         MENU_ID_VERIFY_ACCEPT => (
-            "Account",
+            "Tools",
             submit_menu_verification_action(hwnd, VerificationAction::Accept).map(|_| Some(())),
         ),
         MENU_ID_VERIFY_CANCEL => (
-            "Account",
+            "Tools",
             submit_menu_verification_action(hwnd, VerificationAction::Cancel).map(|_| Some(())),
         ),
         MENU_ID_VERIFY_CONFIRM_SAS => (
-            "Account",
+            "Tools",
             submit_menu_verification_action(hwnd, VerificationAction::Confirm).map(|_| Some(())),
         ),
         MENU_ID_VERIFY_REJECT_SAS => (
-            "Account",
+            "Tools",
             submit_menu_verification_action(hwnd, VerificationAction::Reject).map(|_| Some(())),
         ),
-        MENU_ID_LOGOUT => ("Account", submit_logout(state_mut(hwnd)).map(|_| Some(()))),
-        _ => return None,
+        MENU_ID_LOGOUT => ("File", submit_logout(state_mut(hwnd)).map(|_| Some(()))),
+        _ => {
+            let item = commands_menu_item(command_id)?;
+            (
+                "Commands",
+                run_commands_menu_item(hwnd, item).map(|performed| performed.then_some(())),
+            )
+        }
     };
 
     Some((title, result))
@@ -7281,19 +7269,26 @@ unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
     enqueue_command(state_mut(hwnd), Command::StopSync)
 }
 
-unsafe fn show_join_room_menu_dialog(hwnd: HWND) -> Result<bool, String> {
-    let Some(target) = show_single_field_dialog(hwnd, "Join Room", "Room or alias", "")? else {
-        return Ok(false);
+/// A Commands item runs the slash command it stands for, prompting first
+/// for its parameters; failures echo in the active window, as typed
+/// commands' do. Returns whether it ran rather than the user cancelling.
+unsafe fn run_commands_menu_item(
+    hwnd: HWND,
+    item: &menus::CommandsMenuItem,
+) -> Result<bool, String> {
+    let input = match item.prompt {
+        Some(label) => {
+            match show_single_field_dialog(hwnd, &commands_menu_title(item), label, "")? {
+                Some(input) => input,
+                None => return Ok(false),
+            }
+        }
+        None => String::new(),
     };
-    submit_join_room_menu_target(hwnd, target)?;
-    Ok(true)
-}
-
-unsafe fn show_query_user_menu_dialog(hwnd: HWND) -> Result<bool, String> {
-    let Some(user_id) = show_single_field_dialog(hwnd, "Query User", "User ID", "")? else {
-        return Ok(false);
-    };
-    submit_query_user_menu_target(hwnd, user_id)?;
+    match commands::parse(&commands_menu_line(item, &input)) {
+        Ok(command) => run_local_command(hwnd, command)?,
+        Err(error) => report_command_error(hwnd, error)?,
+    }
     Ok(true)
 }
 
@@ -10211,12 +10206,16 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
             return Err(last_os_error("EnableMenuItem Status SC_CLOSE"));
         }
     }
-    // mIRC's window menu has the font too.
+    // mIRC's window menu has Find Text and the font too.
+    let find_label = wide_null(SYSMENU_FIND_LABEL);
     let font_label = wide_null(SYSMENU_FONT_LABEL);
     if AppendMenuW(system_menu, MF_SEPARATOR, 0, null()) == 0
+        || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FIND, find_label.as_ptr()) == 0
         || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FONT, font_label.as_ptr()) == 0
     {
-        return Err(last_os_error("AppendMenuW window menu Font..."));
+        return Err(last_os_error(
+            "AppendMenuW window menu Find Text... and Font...",
+        ));
     }
 
     layout_mdi_child(child);
@@ -11275,7 +11274,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, dump)
         }
         ParsedCommand::DumpVerificationMenuState { id } => {
-            let state = dump_account_verification_menu_state(hwnd).map_err(|message| {
+            let state = dump_verification_menu_state(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "verification_menu_unavailable", message)
             })?;
             serialize_success_json(&id, state)
@@ -11355,18 +11354,6 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         }
         ParsedCommand::PartRoomViaRoomMenu { id } => {
             invoke_menu_command_for_automation(hwnd, MENU_ID_ROOM_PART).map_err(|message| {
-                failure_response(Some(id.clone()), "room_menu_action_failed", message)
-            })?;
-            serialize_success_json(&id, AcceptedResponse { accepted: true })
-        }
-        ParsedCommand::JoinRoomViaRoomMenu { id, args } => {
-            submit_join_room_menu_target(hwnd, args.target).map_err(|message| {
-                failure_response(Some(id.clone()), "room_menu_action_failed", message)
-            })?;
-            serialize_success_json(&id, AcceptedResponse { accepted: true })
-        }
-        ParsedCommand::QueryUserViaRoomMenu { id, args } => {
-            submit_query_user_menu_target(hwnd, args.user_id).map_err(|message| {
                 failure_response(Some(id.clone()), "room_menu_action_failed", message)
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
@@ -11503,7 +11490,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             )
         }
         ParsedCommand::ArrangeWindowsViaWindowMenu { id, args } => {
-            let (command_id, _) = window_menu_item(args.arrangement);
+            let command_id = window_menu_command_id(args.arrangement);
             invoke_menu_command_for_automation(hwnd, command_id).map_err(|message| {
                 failure_response(Some(id.clone()), "window_menu_failed", message)
             })?;
@@ -11797,8 +11784,6 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::AcceptInviteViaRoomMenu { id }
         | ParsedCommand::RejectInviteViaRoomMenu { id }
         | ParsedCommand::PartRoomViaRoomMenu { id }
-        | ParsedCommand::JoinRoomViaRoomMenu { id, .. }
-        | ParsedCommand::QueryUserViaRoomMenu { id, .. }
         | ParsedCommand::ReplyToSelectedMessageViaMenu { id }
         | ParsedCommand::EditSelectedMessageViaMenu { id }
         | ParsedCommand::ReactToSelectedMessageViaMenu { id }
@@ -12573,6 +12558,55 @@ unsafe fn system_menu_labels(child: HWND) -> Vec<String> {
         .collect()
 }
 
+/// A menu item's type, state, label and submenu.
+unsafe fn menu_item_info(menu: HMENU, position: u32) -> Result<(MENUITEMINFOW, String), String> {
+    let mut label = [0u16; 128];
+    let mut info = MENUITEMINFOW {
+        cbSize: size_of::<MENUITEMINFOW>() as u32,
+        fMask: MIIM_FTYPE | MIIM_STRING | MIIM_SUBMENU | MIIM_STATE,
+        dwTypeData: label.as_mut_ptr(),
+        cch: label.len() as u32,
+        ..MENUITEMINFOW::default()
+    };
+    if GetMenuItemInfoW(menu, position, 1, &mut info) == 0 {
+        return Err(last_os_error("GetMenuItemInfoW"));
+    }
+    let text = String::from_utf16_lossy(&label[..info.cch as usize]);
+    Ok((info, text))
+}
+
+/// The menubar as opening each menu would show it. A maximized MDI child
+/// puts its window menu icon and its minimize, restore and close buttons
+/// into the bar as bitmap items, which are not menus.
+unsafe fn dump_menu_bar(hwnd: HWND) -> Result<Vec<UiMenu>, String> {
+    let bar = GetMenu(hwnd);
+    let mut menus = Vec::new();
+    for position in 0..menu_item_count(bar)? {
+        let (info, label) = menu_item_info(bar, position)?;
+        if info.fType & MFT_BITMAP != 0 {
+            continue;
+        }
+        refresh_menu_popup(hwnd, info.hSubMenu)?;
+        let mut items = Vec::new();
+        for item_position in 0..menu_item_count(info.hSubMenu)? {
+            let (item, item_label) = menu_item_info(info.hSubMenu, item_position)?;
+            if item.fType & MFT_SEPARATOR != 0 {
+                continue;
+            }
+            items.push(UiMenuItem {
+                label: item_label,
+                enabled: item.fState & MFS_DISABLED == 0,
+            });
+        }
+        menus.push(UiMenu { label, items });
+    }
+    Ok(menus)
+}
+
+unsafe fn menu_item_count(menu: HMENU) -> Result<u32, String> {
+    u32::try_from(GetMenuItemCount(menu)).map_err(|_| last_os_error("GetMenuItemCount"))
+}
+
 unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
     let navigation = dump_navigation_tree(hwnd)?;
     let mdi = dump_mdi_state(hwnd)?;
@@ -12592,6 +12626,7 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             format: timestamp.format.to_string(),
         },
         active_system_menu_items: system_menu_labels(active_view.child),
+        menu_bar: dump_menu_bar(hwnd)?,
         navigation,
         mdi,
         status_bar,
@@ -14136,47 +14171,6 @@ fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<
     Ok(format!("join submitted: {target}"))
 }
 
-unsafe fn submit_join_room_menu_target(hwnd: HWND, target: String) -> Result<(), String> {
-    let target = target.trim().to_owned();
-    if target.is_empty() {
-        let message = "join room target cannot be empty";
-        state_mut(hwnd).model.status = message.to_owned();
-        refresh_status_bar(hwnd)?;
-        return Err(message.to_owned());
-    }
-    let status = submit_join_slash_command(state_mut(hwnd), target)?;
-    state_mut(hwnd).model.status = status;
-    refresh_status_bar(hwnd)
-}
-
-fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Result<String, String> {
-    let sender = state
-        .command_sender
-        .as_ref()
-        .ok_or_else(|| "core command sender is not available".to_owned())?;
-    let command = Command::CreateDirectRoom(CreateDirectRoomRequest {
-        user_id: user_id.clone(),
-    });
-    sender
-        .send(command.clone())
-        .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
-    state.recorded_commands.push(command);
-    Ok(format!("query submitted: {user_id}"))
-}
-
-unsafe fn submit_query_user_menu_target(hwnd: HWND, user_id: String) -> Result<(), String> {
-    let user_id = user_id.trim().to_owned();
-    if user_id.is_empty() {
-        let message = "query user ID cannot be empty";
-        state_mut(hwnd).model.status = message.to_owned();
-        refresh_status_bar(hwnd)?;
-        return Err(message.to_owned());
-    }
-    let status = submit_query_slash_command(state_mut(hwnd), user_id)?;
-    state_mut(hwnd).model.status = status;
-    refresh_status_bar(hwnd)
-}
-
 fn submit_accept_slash_command(
     state: &mut WindowState,
     target: Option<&str>,
@@ -14332,6 +14326,21 @@ fn submit_unreact_slash_command(
 ) -> Result<String, String> {
     submit_redact_event_command(state, reaction_event_id.clone())?;
     Ok(format!("Reaction redaction queued for {reaction_event_id}"))
+}
+
+fn submit_query_slash_command(state: &mut WindowState, user_id: String) -> Result<String, String> {
+    let sender = state
+        .command_sender
+        .as_ref()
+        .ok_or_else(|| "core command sender is not available".to_owned())?;
+    let command = Command::CreateDirectRoom(CreateDirectRoomRequest {
+        user_id: user_id.clone(),
+    });
+    sender
+        .send(command.clone())
+        .map_err(|err| format!("failed to enqueue create direct room command: {err}"))?;
+    state.recorded_commands.push(command);
+    Ok(format!("query submitted: {user_id}"))
 }
 
 fn submit_topic_slash_command(state: &mut WindowState, topic: String) -> Result<String, String> {
@@ -14618,7 +14627,9 @@ fn message_loop() {
         unsafe {
             let frame = frame_window_for(message.hwnd);
             if !frame.is_null() {
-                if handle_find_shortcut_message(frame, &message) {
+                if TranslateAcceleratorW(frame, state_ref(frame).controls.accelerators, &message)
+                    != 0
+                {
                     continue;
                 }
                 let mdi_client = state_ref(frame).controls.mdi_client;
@@ -14630,20 +14641,6 @@ fn message_loop() {
             DispatchMessageW(&message);
         }
     }
-}
-
-unsafe fn handle_find_shortcut_message(frame: HWND, message: &MSG) -> bool {
-    if message.message != WM_KEYDOWN || message.wParam != VK_F_KEY {
-        return false;
-    }
-    if (GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) == 0 {
-        return false;
-    }
-
-    if let Err(error) = begin_find_dialog(frame) {
-        show_error_message(frame, "Find", &error);
-    }
-    true
 }
 
 unsafe fn frame_window_for(mut hwnd: HWND) -> HWND {
@@ -15167,52 +15164,6 @@ fn format_verification_emojis(emojis: &[VerificationEmoji]) -> String {
         .map(|emoji| format!("{} {}", emoji.symbol, emoji.description))
         .collect::<Vec<_>>()
         .join(" | ")
-}
-
-fn verification_menu_action_enabled(
-    last_verification: Option<&VerificationStateEvent>,
-    action: VerificationAction,
-) -> bool {
-    let Some(event) = last_verification else {
-        return false;
-    };
-
-    matches!(
-        (&event.state, action),
-        (
-            VerificationState::Requested,
-            VerificationAction::Accept | VerificationAction::Cancel
-        ) | (
-            VerificationState::Accepted | VerificationState::Ready | VerificationState::Confirmed,
-            VerificationAction::Cancel
-        ) | (
-            VerificationState::SasReady { .. },
-            VerificationAction::Cancel | VerificationAction::Confirm | VerificationAction::Reject
-        )
-    )
-}
-
-fn verification_actions_text(
-    last_verification: Option<&VerificationStateEvent>,
-) -> Option<&'static str> {
-    let actions = (
-        verification_menu_action_enabled(last_verification, VerificationAction::Accept),
-        verification_menu_action_enabled(last_verification, VerificationAction::Cancel),
-        verification_menu_action_enabled(last_verification, VerificationAction::Confirm),
-        verification_menu_action_enabled(last_verification, VerificationAction::Reject),
-    );
-
-    match actions {
-        (true, true, false, false) => Some(
-            "Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel",
-        ),
-        (false, true, false, false) => Some("Account > Cancel Verification, /verify cancel"),
-        (false, true, true, true) => Some(
-            "Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel",
-        ),
-        (false, false, false, false) => None,
-        _ => unreachable!("verification action text must match the menu action predicate"),
-    }
 }
 
 fn verification_action_label(action: VerificationAction) -> &'static str {
@@ -15785,6 +15736,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use mirx_core::{RoomMemberChange, RoomMemberRank, RoomStateNoticeActivity, SyncStopReason};
+
+    use super::menus::verification_actions_text;
 
     use super::*;
 
@@ -21435,7 +21388,7 @@ mod tests {
             vec![
                 "[22:12] * Verification requested by @alice:example (flow flow-verify-123)"
                     .to_owned(),
-                "[22:12] * Actions: Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
+                "[22:12] * Actions: Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel"
                     .to_owned(),
             ]
         );
@@ -21485,7 +21438,7 @@ mod tests {
                     .to_owned(),
                 "[22:12] * Emoji: 🐶 dog | 🔥 fire".to_owned(),
                 "[22:12] * Decimals: 1234-5678-9012".to_owned(),
-                "[22:12] * Actions: Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
+                "[22:12] * Actions: Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
                     .to_owned(),
                 "[22:12] * Error during send text: message send failed".to_owned(),
             ]
@@ -22746,13 +22699,13 @@ mod tests {
         assert_eq!(
             verification_actions_text(Some(&requested)),
             Some(
-                "Account > Accept Verification, Account > Cancel Verification, /verify accept, /verify cancel"
+                "Tools > Accept Verification, Tools > Cancel Verification, /verify accept, /verify cancel"
             )
         );
         assert_eq!(
             verification_actions_text(Some(&sas_ready)),
             Some(
-                "Account > Confirm SAS, Account > Reject SAS, Account > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
+                "Tools > Confirm SAS, Tools > Reject SAS, Tools > Cancel Verification, /verify confirm, /verify reject, /verify cancel"
             )
         );
         assert_eq!(verification_actions_text(Some(&done)), None);
