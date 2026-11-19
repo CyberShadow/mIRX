@@ -1,0 +1,75 @@
+[
+  {
+    "PublicRooms": {
+      "request": {
+        "server": null,
+        "filter": null,
+        "since": null,
+        "limit": 100
+      },
+      "result": {
+        "type": "loaded",
+        "rooms": [
+          {
+            "room_id": "!rust:example",
+            "canonical_alias": "#rust:example",
+            "name": "Rust",
+            "topic": "The Rust programming language",
+            "joined_members": 1520
+          },
+          {
+            "room_id": "!matrix:example",
+            "canonical_alias": "#matrix:example",
+            "name": "Matrix HQ",
+            "topic": "Talk about Matrix, the open protocol",
+            "joined_members": 8812
+          },
+          {
+            "room_id": "!lobby:example",
+            "canonical_alias": "#lobby:example",
+            "name": "Lobby",
+            "topic": "welcome to the lobby",
+            "joined_members": 3
+          },
+          {
+            "room_id": "!nixos:example",
+            "canonical_alias": "#nixos:example",
+            "name": "NixOS",
+            "topic": "Purely functional Linux",
+            "joined_members": 2304
+          },
+          {
+            "room_id": "!quiet:example",
+            "canonical_alias": null,
+            "name": "Quiet corner",
+            "topic": null,
+            "joined_members": 2
+          },
+          {
+            "room_id": "!wine:example",
+            "canonical_alias": "#wine:example",
+            "name": "Wine",
+            "topic": "Run Windows applications on Linux",
+            "joined_members": 415
+          },
+          {
+            "room_id": "!unnamed:example",
+            "canonical_alias": "#unnamed:example",
+            "name": null,
+            "topic": null,
+            "joined_members": 1
+          },
+          {
+            "room_id": "!mirc:example",
+            "canonical_alias": "#mirc:example",
+            "name": "mIRC users",
+            "topic": "Scripts, themes and nostalgia",
+            "joined_members": 97
+          }
+        ],
+        "next_batch": null,
+        "total_estimate": 8
+      }
+    }
+  }
+]

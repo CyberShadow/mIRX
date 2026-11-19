@@ -1711,6 +1711,36 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!ops:example'
       ;;
+    room-list|room-list-listing)
+      expect_active_view='room_list'
+      # `/list` opens the Rooms List over the room; the directory's one
+      # page fills it, or has not arrived yet.
+      case "$case_name" in
+        room-list)
+          ordered_actions=(
+            'input:/list'
+            "append:$root_dir/tests/ui-state-updates/room-list-results.json"
+          )
+          mdi_title_expect_args=(
+            --expect-mdi-title 'room_list::Rooms List [example] - 8 rooms'
+          )
+          ;;
+        room-list-listing)
+          ordered_actions=('input:/list')
+          mdi_title_expect_args=(
+            --expect-mdi-title 'room_list::Rooms List [example] - listing...'
+          )
+          ;;
+      esac
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'room:!lobby:example::Lobby'
+        --expect-switchbar-item 'room_list::Rooms List'
+      )
+      expect_switchbar_active='room_list'
+      navigation_expect_args=(
+        --expect-navigation-text 'Rooms List'
+      )
+      ;;
     timestamp-format)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'

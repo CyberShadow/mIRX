@@ -44,6 +44,8 @@ pub(super) const MENU_ID_HELP_ABOUT: usize = 40035;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
+/// List rooms, which Alt+L sends, as mIRC's List Channels.
+pub(super) const MENU_ID_COMMANDS_LIST: usize = MENU_ID_COMMANDS_FIRST + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MenuEntry {
@@ -175,6 +177,11 @@ pub(super) const COMMANDS_MENU: &[CommandsMenuItem] = &[
         prompt: Some("Room ID or alias"),
     },
     CommandsMenuItem {
+        label: "&List rooms...\tAlt+L",
+        command: "list",
+        prompt: Some("Match text (blank lists all)"),
+    },
+    CommandsMenuItem {
         label: "&Part room",
         command: "part",
         prompt: None,
@@ -215,12 +222,11 @@ pub(super) fn commands_menu_item(id: usize) -> Option<&'static CommandsMenuItem>
     COMMANDS_MENU.get(id.checked_sub(MENU_ID_COMMANDS_FIRST)?)
 }
 
-/// The prompt dialog's title: the label without its mnemonic and `...`.
+/// The prompt dialog's title: the label without its mnemonic, its
+/// accelerator and `...`.
 pub(super) fn commands_menu_title(item: &CommandsMenuItem) -> String {
-    item.label
-        .replace('&', "")
-        .trim_end_matches("...")
-        .to_owned()
+    let label = item.label.split('\t').next().unwrap_or_default();
+    label.replace('&', "").trim_end_matches("...").to_owned()
 }
 
 /// The line the item runs, as if typed: `/join #ops`, or `/part`. Empty
@@ -375,7 +381,8 @@ mod tests {
     #[test]
     fn commands_menu_lines_read_as_typed() {
         let join = &COMMANDS_MENU[0];
-        let part = &COMMANDS_MENU[1];
+        let list = &COMMANDS_MENU[1];
+        let part = &COMMANDS_MENU[2];
         assert_eq!(
             commands_menu_line(join, "  #ops:example.org "),
             "/join #ops:example.org"
@@ -389,7 +396,12 @@ mod tests {
         );
         assert_eq!(commands_menu_line(part, "ignored"), "/part");
         assert_eq!(commands_menu_title(join), "Join room");
-        assert_eq!(commands_menu_title(&COMMANDS_MENU[7]), "Change nick");
+        assert_eq!(commands_menu_title(list), "List rooms");
+        assert_eq!(commands_menu_title(&COMMANDS_MENU[8]), "Change nick");
+        // A blank match lists every room.
+        assert_eq!(commands_menu_line(list, "  "), "/list");
+        assert_eq!(commands_menu_line(list, " rust "), "/list rust");
+        assert_eq!(commands_menu_item(MENU_ID_COMMANDS_LIST), Some(list));
     }
 
     #[test]

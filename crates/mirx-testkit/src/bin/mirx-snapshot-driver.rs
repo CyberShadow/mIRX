@@ -682,10 +682,13 @@ mod cli {
         if value == "status" {
             return Ok(ViewIdentity::Status);
         }
+        if value == "room_list" {
+            return Ok(ViewIdentity::RoomList);
+        }
         if let Some(room_id) = value.strip_prefix("room:") {
             if room_id.is_empty() {
                 return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    "invalid {flag_name} value {value:?}; expected status, room_list, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
                     usage()
                 ));
             }
@@ -696,13 +699,13 @@ mod cli {
         if let Some(thread_identity) = value.strip_prefix("thread:") {
             let Some((room_id, thread_root_event_id)) = thread_identity.split_once('|') else {
                 return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    "invalid {flag_name} value {value:?}; expected status, room_list, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
                     usage()
                 ));
             };
             if room_id.is_empty() || thread_root_event_id.is_empty() {
                 return Err(format!(
-                    "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+                    "invalid {flag_name} value {value:?}; expected status, room_list, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
                     usage()
                 ));
             }
@@ -712,7 +715,7 @@ mod cli {
             });
         }
         Err(format!(
-            "invalid {flag_name} value {value:?}; expected status, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
+            "invalid {flag_name} value {value:?}; expected status, room_list, room:<room_id>, or thread:<room_id>|<thread_root_event_id>\n{}",
             usage()
         ))
     }
@@ -838,6 +841,7 @@ mod cli {
     pub(crate) fn format_view_identity(identity: &ViewIdentity) -> String {
         match identity {
             ViewIdentity::Status => "status".to_owned(),
+            ViewIdentity::RoomList => "room_list".to_owned(),
             ViewIdentity::Room { room_id } => format!("room:{room_id}"),
             ViewIdentity::Thread {
                 room_id,

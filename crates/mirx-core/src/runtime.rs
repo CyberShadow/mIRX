@@ -229,6 +229,9 @@ async fn handle_command(
         }
         Command::FetchRoomMedia(request) => handle_fetch_room_media(event_tx, state, request).await,
         Command::FetchRoomEvent(request) => handle_fetch_room_event(event_tx, state, request).await,
+        Command::ListPublicRooms(request) => {
+            handle_list_public_rooms(event_tx, state, request).await
+        }
         Command::RefreshE2eeStatus => handle_refresh_e2ee_status(event_tx, state).await,
         Command::SetupE2eeRecovery(request) => {
             handle_setup_e2ee_recovery(event_tx, state, &request).await
@@ -1017,6 +1020,26 @@ async fn handle_fetch_room_event(
 
     let fetch = matrix::fetch_room_event(client, request).await;
     emit_event(event_tx, Event::RoomEvent(fetch));
+
+    false
+}
+
+async fn handle_list_public_rooms(
+    event_tx: &EventSender,
+    state: &mut WorkerState,
+    request: crate::api::ListPublicRoomsRequest,
+) -> bool {
+    let WorkerState::Ready { client, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::ListPublicRooms,
+            "list public rooms requires an authenticated session",
+        );
+        return false;
+    };
+
+    let page = matrix::list_public_rooms(client, request).await;
+    emit_event(event_tx, Event::PublicRooms(page));
 
     false
 }

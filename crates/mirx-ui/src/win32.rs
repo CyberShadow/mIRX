@@ -20,7 +20,7 @@ use mirx_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
     EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation, PublicRoomsPage,
     ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
@@ -70,12 +70,19 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 };
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
-    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, I_IMAGENONE,
-    ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
-    MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NMHDR, NMTBCUSTOMDRAW, NMTVCUSTOMDRAW, ODS_FOCUS,
-    ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW,
-    TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE,
-    TB_SETEXTENDEDSTYLE, TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
+    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, HDM_GETITEMCOUNT,
+    HDM_GETITEMRECT, I_IMAGENONE, ICC_BAR_CLASSES, ICC_LISTVIEW_CLASSES, ICC_TREEVIEW_CLASSES,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, LVCF_FMT, LVCF_TEXT, LVCF_WIDTH, LVCFMT_LEFT,
+    LVCFMT_RIGHT, LVCOLUMNW, LVIF_TEXT, LVIR_LABEL, LVIS_FOCUSED, LVIS_SELECTED, LVITEMW,
+    LVM_GETCOLUMNW, LVM_GETCOUNTPERPAGE, LVM_GETHEADER, LVM_GETITEMCOUNT, LVM_GETITEMRECT,
+    LVM_GETITEMTEXTW, LVM_GETNEXTITEM, LVM_GETTOPINDEX, LVM_INSERTCOLUMNW,
+    LVM_SETEXTENDEDLISTVIEWSTYLE, LVM_SETITEMCOUNT, LVM_SETITEMSTATE, LVN_COLUMNCLICK,
+    LVN_GETDISPINFOW, LVNI_SELECTED, LVS_EX_FULLROWSELECT, LVS_OWNERDATA, LVS_REPORT,
+    LVS_SHOWSELALWAYS, LVS_SINGLESEL, LVSICF_NOSCROLL, MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NM_DBLCLK,
+    NM_RETURN, NMHDR, NMITEMACTIVATE, NMLISTVIEW, NMLVDISPINFOW, NMTBCUSTOMDRAW, NMTVCUSTOMDRAW,
+    ODS_FOCUS, ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo,
+    TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON,
+    TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
     TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD,
     TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT,
     TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
@@ -133,21 +140,21 @@ use crate::{
         DumpSubmittedMemberModerationCommand, DumpSubmittedMembershipCommand,
         DumpSubmittedPowerLevelCommand, DumpSubmittedProfileCommand, DumpSubmittedReactionCommand,
         DumpSubmittedRecoveryCommand, DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand,
-        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
-        DumpSubmittedSetupRecoveryCommand, DumpSubmittedVerificationAction,
-        DumpVerificationActionKind, DumpVerificationMenuState, FailureEnvelope,
-        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
-        LoadEventsResponse, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-        NavigationNode, NavigationPathSegment, ParsedCommand, PongResponse, ResponseEnvelope,
-        RoomMemberView, SelectRoomResponse, SelectViewResponse, SelectedNavigationPathResponse,
-        SendTextResponse, StatusBarState, SwitchbarItem, SwitchbarState, UiComposeTarget,
-        UiComposeTargetKind, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
-        UiRoomHistoryBackfillState, UiRoomState, UiState, UiTextFont, UiTimestamp,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleResponse,
-        dump_error_from_core, dump_room_activity_from_activity, dump_room_from_summary,
-        dump_room_message_send_state_from_core, dump_ui_room_read_state_from_core,
-        dump_verification_from_state_event, failure_response, parse_command_request,
-        success_response,
+        DumpSubmittedReplyThreadTarget, DumpSubmittedRoomListRequest,
+        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
+        DumpSubmittedVerificationAction, DumpVerificationActionKind, DumpVerificationMenuState,
+        FailureEnvelope, FindActiveViewResponse, GetVersionResponse, LifecycleState,
+        ListRoomsResponse, LoadEventsResponse, MdiArrangement, MdiState, MdiView,
+        MdiWindowPlacement, MdiWindowState, NavigationNode, NavigationPathSegment, ParsedCommand,
+        PongResponse, ResponseEnvelope, RoomMemberView, SelectRoomResponse, SelectViewResponse,
+        SelectedNavigationPathResponse, SendTextResponse, StatusBarState, SwitchbarItem,
+        SwitchbarState, UiComposeTarget, UiComposeTargetKind, UiFindHistorySearchState,
+        UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomList,
+        UiRoomState, UiState, UiTextFont, UiTimestamp, VerificationActionArgs, ViewActivityLevel,
+        ViewIdentity, WaitIdleResponse, dump_error_from_core, dump_room_activity_from_activity,
+        dump_room_from_summary, dump_room_message_send_state_from_core,
+        dump_ui_room_read_state_from_core, dump_verification_from_state_event, failure_response,
+        parse_command_request, success_response,
     },
 };
 
@@ -161,6 +168,7 @@ mod mdi;
 mod menus;
 mod nick_completion;
 mod replies;
+mod room_list;
 mod settings;
 mod status_log;
 mod timeline_text;
@@ -174,20 +182,21 @@ use connection::ConnectAction;
 use echo::{EchoLine, EchoLog};
 use menus::{
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MENU_BAR, MENU_ID_COMMANDS_FIRST,
-    MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER,
-    MENU_ID_FIND, MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS, MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN,
-    MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION, MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT,
-    MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT, MENU_ID_MESSAGE_REPLY,
-    MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE, MENU_ID_ROOM_ACCEPT_INVITE,
-    MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE, MENU_ID_SETUP_E2EE_RECOVERY,
-    MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL, MENU_ID_VERIFY_CONFIRM_SAS,
-    MENU_ID_VERIFY_REJECT_SAS, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
-    MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry, TOOLS_MENU,
-    WINDOW_MENU, commands_menu_item, commands_menu_line, commands_menu_title, file_menu_state,
-    verification_menu_action_enabled,
+    MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT, MENU_ID_FILE_EXIT,
+    MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT, MENU_ID_HELP_TOPICS,
+    MENU_ID_LOGOUT, MENU_ID_MEMBER_BAN, MENU_ID_MEMBER_KICK, MENU_ID_MEMBER_MENTION,
+    MENU_ID_MEMBER_QUERY, MENU_ID_MESSAGE_EDIT, MENU_ID_MESSAGE_REACT, MENU_ID_MESSAGE_REDACT,
+    MENU_ID_MESSAGE_REPLY, MENU_ID_MESSAGE_SAVE_ATTACHMENT, MENU_ID_RECOVER_E2EE,
+    MENU_ID_ROOM_ACCEPT_INVITE, MENU_ID_ROOM_PART, MENU_ID_ROOM_REJECT_INVITE,
+    MENU_ID_SETUP_E2EE_RECOVERY, MENU_ID_VERIFY_ACCEPT, MENU_ID_VERIFY_CANCEL,
+    MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_WINDOW_ARRANGE_ICONS,
+    MENU_ID_WINDOW_CASCADE, MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL,
+    MenuEntry, TOOLS_MENU, WINDOW_MENU, commands_menu_item, commands_menu_line,
+    commands_menu_title, file_menu_state, verification_menu_action_enabled,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use replies::ComposeTarget;
+use room_list::{PageApplied, RoomListColumn, RoomListQuery, RoomListState};
 use status_log::{StatusLineKind, StatusLog};
 
 use settings::{FontSetting, SETTINGS_FILE_NAME, SettingsStore};
@@ -203,6 +212,8 @@ use timestamp::{LocalTime, LocalTimeFn, TimestampStyle};
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
 const ROOM_CONTENT_CLASS_NAME: &str = "mirxWin32RoomContent";
+/// `WC_LISTVIEWW`, the common controls' list view.
+const ROOM_LIST_CLASS_NAME: &str = "SysListView32";
 const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
 const LOGIN_DIALOG_CLASS_NAME: &str = "mirxWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
@@ -328,12 +339,14 @@ enum ViewId {
         room_id: String,
         thread_root_event_id: String,
     },
+    /// The Rooms List window, mIRC's Channels List; there is one at most.
+    RoomList,
 }
 
 impl ViewId {
     fn room_id(&self) -> Option<&str> {
         match self {
-            Self::Status => None,
+            Self::Status | Self::RoomList => None,
             Self::Room(room_id) => Some(room_id.as_str()),
             Self::Thread { room_id, .. } => Some(room_id.as_str()),
         }
@@ -353,12 +366,35 @@ impl ViewId {
 struct MdiViewState {
     child: HWND,
     content: HWND,
+    /// `None` only for the Rooms List, which has no editbox, as mIRC's
+    /// Channels List has none.
+    compose: Option<ViewCompose>,
+}
+
+/// A window's editbox and what it remembers.
+struct ViewCompose {
     edit: HWND,
     /// What Up and Down recall in this window's editbox, as in mIRC, where
     /// each window remembers what was typed in it.
     history: ComposeHistory,
     /// The message the editbox replies to or edits, until sent or Esc.
-    compose_target: Option<ComposeTarget>,
+    target: Option<ComposeTarget>,
+}
+
+impl MdiViewState {
+    /// The editbox of a window that has one: every window the user can
+    /// type in, which the Rooms List is not.
+    fn compose(&self) -> &ViewCompose {
+        self.compose
+            .as_ref()
+            .expect("only the Rooms List has no editbox")
+    }
+
+    fn compose_mut(&mut self) -> &mut ViewCompose {
+        self.compose
+            .as_mut()
+            .expect("only the Rooms List has no editbox")
+    }
 }
 
 struct MdiChildCreateState {
@@ -704,6 +740,9 @@ struct UiModel {
     last_e2ee_recovery_setup_result: bool,
     last_verification: Option<VerificationStateEvent>,
     last_error: Option<CoreErrorEvent>,
+    /// The `/list` listing; the Rooms List window exists exactly while this
+    /// is `Some`.
+    room_list: Option<RoomListState>,
 }
 
 #[derive(Default, Clone)]
@@ -3480,7 +3519,7 @@ fn hex_string(bytes: &[u8]) -> String {
 fn init_common_controls() -> Result<(), String> {
     let controls = INITCOMMONCONTROLSEX {
         dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-        dwICC: ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES,
+        dwICC: ICC_TREEVIEW_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES,
     };
     let success = unsafe { InitCommonControlsEx(&controls) };
     if success == 0 {
@@ -3972,7 +4011,7 @@ unsafe extern "system" fn mdi_child_window_proc(
         WM_SETFOCUS => {
             // Activating a window puts the caret in its editbox, as in mIRC.
             let result = DefMDIChildProcW(hwnd, message, wparam, lparam);
-            SetFocus(mdi_child_edit(hwnd));
+            SetFocus(mdi_child_focus(hwnd));
             result
         }
         WM_MDIACTIVATE => {
@@ -3999,8 +4038,14 @@ unsafe extern "system" fn mdi_child_window_proc(
             0
         }
         WM_CLOSE => {
-            if close_view_requested(frame_window_for(hwnd), hwnd) {
-                DefMDIChildProcW(hwnd, message, wparam, lparam)
+            let frame = frame_window_for(hwnd);
+            if close_view_requested(frame, hwnd) {
+                let result = DefMDIChildProcW(hwnd, message, wparam, lparam);
+                // The treebar and switchbar follow the views left.
+                if let Err(message) = sync_views_and_tree(frame) {
+                    show_error_message(frame, "Window", &message);
+                }
+                result
             } else {
                 0
             }
@@ -4009,6 +4054,11 @@ unsafe extern "system" fn mdi_child_window_proc(
             unregister_destroyed_view(hwnd);
             DefMDIChildProcW(hwnd, message, wparam, lparam)
         }
+        // Only the Rooms List's list notifies its MDI child.
+        WM_NOTIFY => match handle_room_list_notify(frame_window_for(hwnd), lparam) {
+            Some(result) => result,
+            None => DefMDIChildProcW(hwnd, message, wparam, lparam),
+        },
         _ => DefMDIChildProcW(hwnd, message, wparam, lparam),
     }
 }
@@ -4035,11 +4085,15 @@ enum CloseAction {
     /// undone with a rejoin. The window stays until the room leaves the room
     /// list, as mIRC's closes when the PART lands.
     Confirm { room_id: String, leave: CloseLeave },
+    /// Closing the Rooms List drops its listing; pages still on the way
+    /// are ignored.
+    DropRoomList,
 }
 
 fn close_action(model: &UiModel, view_id: &ViewId) -> CloseAction {
     match view_id {
         ViewId::Status => CloseAction::Refuse,
+        ViewId::RoomList => CloseAction::DropRoomList,
         ViewId::Thread { .. } => CloseAction::Destroy,
         ViewId::Room(room_id) => {
             let room = navigable_room_by_id(&model.rooms, room_id)
@@ -4083,6 +4137,11 @@ unsafe fn close_view_requested(frame: HWND, child: HWND) -> bool {
         CloseAction::Destroy => true,
         CloseAction::HideQuery(room_id) => {
             state_mut(frame).closed_queries.insert(room_id.clone());
+            true
+        }
+        // Before the window goes, so no view sync recreates it.
+        CloseAction::DropRoomList => {
+            state_mut(frame).model.room_list = None;
             true
         }
         CloseAction::Confirm { room_id, leave } => {
@@ -4730,6 +4789,11 @@ unsafe fn set_timeline_font(hwnd: HWND, font: HFONT) {
 /// it: the text area, the nick list and the editbox, as in mIRC.
 unsafe fn set_view_text_font(view_id: &ViewId, child: HWND, font: HFONT) {
     let content = mdi_child_content(child);
+    if *view_id == ViewId::RoomList {
+        // The list is the whole window; there is no editbox.
+        SendMessageW(content, WM_SETFONT, font as WPARAM, 1);
+        return;
+    }
     SendMessageW(
         view_timeline(view_id, content),
         WM_SETFONT,
@@ -4738,6 +4802,7 @@ unsafe fn set_view_text_font(view_id: &ViewId, child: HWND, font: HFONT) {
     );
     match view_id {
         ViewId::Status => {}
+        ViewId::RoomList => unreachable!("the Rooms List returned above"),
         ViewId::Room(_) | ViewId::Thread { .. } => {
             let members = room_content_member_list(content);
             SendMessageW(members, WM_SETFONT, font as WPARAM, 1);
@@ -5131,7 +5196,7 @@ unsafe fn submit_selected_member_moderation(hwnd: HWND, kick: bool) -> Result<()
     }
     let room_id = match &state_ref(hwnd).active_view {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id.clone(),
-        ViewId::Status => return Err("no room selected".to_owned()),
+        ViewId::Status | ViewId::RoomList => return Err("no room selected".to_owned()),
     };
     let command = if kick {
         Command::KickRoomMember(KickRoomMemberRequest {
@@ -5293,6 +5358,22 @@ unsafe fn timeline_get_text(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESU
     copy_nonoverlapping(encoded.as_ptr(), buffer, copied);
     *buffer.add(copied) = 0;
     copied as LRESULT
+}
+
+/// Copies `text` into a control's text buffer of `capacity` UTF-16 units,
+/// NUL-terminated and cut short when it does not fit, never inside a
+/// surrogate pair.
+unsafe fn copy_text_to_buffer(text: &str, buffer: *mut u16, capacity: i32) {
+    let capacity = usize::try_from(capacity).expect("a text buffer has a capacity");
+    assert!(capacity > 0, "a text buffer holds at least the NUL");
+    let encoded = text.encode_utf16().collect::<Vec<_>>();
+    let mut copied = encoded.len().min(capacity - 1);
+    if copied < encoded.len() && (0xD800..0xDC00).contains(&encoded[copied]) {
+        // `copied` is the low half of a pair cut off: drop the high half.
+        copied -= 1;
+    }
+    copy_nonoverlapping(encoded.as_ptr(), buffer, copied);
+    *buffer.add(copied) = 0;
 }
 
 unsafe fn timeline_visible_rows(hwnd: HWND) -> usize {
@@ -6425,6 +6506,12 @@ unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
             key: u16::from(b'E'),
             cmd: MENU_ID_FILE_SELECT_SERVER as u16,
         },
+        // mIRC's List Channels.
+        ACCEL {
+            fVirt: FALT | FVIRTKEY,
+            key: u16::from(b'L'),
+            cmd: MENU_ID_COMMANDS_LIST as u16,
+        },
     ];
     let accelerator_table =
         CreateAcceleratorTableW(accelerators.as_ptr(), accelerators.len() as i32);
@@ -6526,7 +6613,7 @@ fn selected_timeline_media_attachment(state: &WindowState) -> Option<SelectedMed
     let room_id = match &state.active_view {
         ViewId::Room(room_id) => room_id,
         ViewId::Thread { room_id, .. } => room_id,
-        ViewId::Status => return None,
+        ViewId::Status | ViewId::RoomList => return None,
     };
     let activity = state
         .model
@@ -6598,7 +6685,7 @@ fn active_message_action_state(state: &WindowState) -> MessageActionState {
         ViewId::Room(_) | ViewId::Thread { .. } => {
             selected_timeline_event_id(state).map(str::to_owned)
         }
-        ViewId::Status => None,
+        ViewId::Status | ViewId::RoomList => None,
     };
     let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
     MessageActionState {
@@ -6611,7 +6698,7 @@ fn active_message_action_state(state: &WindowState) -> MessageActionState {
 unsafe fn active_message_action_state_for_automation(hwnd: HWND) -> MessageActionState {
     let selected_event_id = match state_ref(hwnd).active_view {
         ViewId::Room(_) | ViewId::Thread { .. } => selected_timeline_event_id_for_automation(hwnd),
-        ViewId::Status => None,
+        ViewId::Status | ViewId::RoomList => None,
     };
     let state = state_ref(hwnd);
     let save_attachment_enabled = selected_timeline_media_attachment(state).is_some();
@@ -6675,7 +6762,7 @@ struct MemberMenuActionState {
 fn active_view_members(state: &WindowState) -> &[RoomMemberSummary] {
     let room_id = match &state.active_view {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id,
-        ViewId::Status => return &[],
+        ViewId::Status | ViewId::RoomList => return &[],
     };
     state
         .model
@@ -6691,7 +6778,7 @@ unsafe fn active_member_rows(hwnd: HWND) -> Vec<RoomMemberView> {
 
 unsafe fn active_member_list(hwnd: HWND) -> Option<HWND> {
     match &state_ref(hwnd).active_view {
-        ViewId::Status => None,
+        ViewId::Status | ViewId::RoomList => None,
         ViewId::Room(_) | ViewId::Thread { .. } => state_ref(hwnd)
             .views
             .get(&state_ref(hwnd).active_view)
@@ -7351,7 +7438,8 @@ unsafe fn arm_compose_target(hwnd: HWND, target: ComposeTarget) -> Result<(), St
         .views
         .get_mut(&view_id)
         .expect("the active view has a window")
-        .compose_target = Some(target);
+        .compose_mut()
+        .target = Some(target);
     let edit = compose_edit(hwnd);
     match edit_text {
         Some(text) => set_compose_text(hwnd, &text)?,
@@ -7373,7 +7461,8 @@ unsafe fn cancel_compose_target(hwnd: HWND) -> Result<(), String> {
         .views
         .get_mut(&view_id)
         .expect("the active view has a window")
-        .compose_target
+        .compose_mut()
+        .target
         .take();
     match target {
         None => return Ok(()),
@@ -7517,8 +7606,19 @@ unsafe fn show_setup_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Find searches a window's text; the Rooms List has none of its own.
+const FIND_NOT_AVAILABLE: &str = "Find: not available in this window";
+
 unsafe fn begin_find_dialog(hwnd: HWND) -> Result<(), String> {
     let active_view = state_ref(hwnd).active_view.clone();
+    if active_view == ViewId::RoomList {
+        log_status(
+            state_mut(hwnd),
+            StatusLineKind::Error,
+            FIND_NOT_AVAILABLE.to_owned(),
+        );
+        return refresh_view_content(hwnd, &ViewId::Status).map(|_| ());
+    }
     let initial_query = state_ref(hwnd)
         .find_states
         .get(&active_view)
@@ -8786,6 +8886,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
         Event::RoomMedia(media) => apply_room_media_event(state, media),
         Event::RoomEvent(fetch) => apply_room_event_fetch(state, fetch),
+        Event::PublicRooms(page) => apply_public_rooms_page(state, page)?,
         Event::RoomJoined(joined) => apply_room_joined_event(state, &joined.room_id)?,
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
@@ -8834,6 +8935,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.model.last_verification = None;
             state.model.last_error = None;
             state.model.room_read_states.clear();
+            state.model.room_list = None;
             state.room_activity.clear();
             state.room_activity_read_targets.clear();
             state.find_states.clear();
@@ -8880,6 +8982,24 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         }
     }
     Ok(false)
+}
+
+/// A directory page fills the Rooms List and asks for the next one. A page
+/// for a listing the user closed or replaced is dropped.
+fn apply_public_rooms_page(state: &mut WindowState, page: PublicRoomsPage) -> Result<(), String> {
+    let Some(room_list) = &mut state.model.room_list else {
+        return Ok(());
+    };
+    match room_list.apply_page(page) {
+        Err(room_list::Ignored) | Ok(PageApplied::Finished) => {}
+        Ok(PageApplied::Next(request)) => {
+            enqueue_command(state, Command::ListPublicRooms(request))?;
+        }
+        Ok(PageApplied::Failed(message)) => {
+            log_status(state, StatusLineKind::Error, format!("/list: {message}"));
+        }
+    }
+    Ok(())
 }
 
 /// A join the user asked for opens the room's window and makes it active,
@@ -9972,6 +10092,7 @@ fn build_timeline_find_state_and_maybe_submit_history_backfill(
     let room_id = match view_id {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id,
         ViewId::Status => unreachable!("status find does not use room history"),
+        ViewId::RoomList => unreachable!("the Rooms List has no find"),
     };
     let history_search = if !matches.is_empty() {
         RoomFindHistorySearch::LocalOnly
@@ -10024,6 +10145,9 @@ unsafe fn execute_active_view_find(
     }
 
     let active_view = state_ref(hwnd).active_view.clone();
+    if active_view == ViewId::RoomList {
+        return Err(FIND_NOT_AVAILABLE.to_owned());
+    }
     let previous_state = state_ref(hwnd).find_states.get(&active_view).cloned();
     let folded_query = fold_find_query(query);
 
@@ -10056,6 +10180,7 @@ unsafe fn execute_active_view_find(
         ViewId::Status => {
             build_view_find_state(query, &folded_query, matches, selected_match_index)
         }
+        ViewId::RoomList => unreachable!("the Rooms List has no find"),
         ViewId::Room(_) | ViewId::Thread { .. } => {
             build_timeline_find_state_and_maybe_submit_history_backfill(
                 state_mut(hwnd),
@@ -10111,6 +10236,7 @@ fn resolve_active_view(
     };
     match active_view {
         ViewId::Status => ViewId::Status,
+        ViewId::RoomList if model.room_list.is_some() => ViewId::RoomList,
         ViewId::Room(room_id) if has_window(room_id) => ViewId::Room(room_id.clone()),
         ViewId::Thread {
             room_id,
@@ -10122,7 +10248,7 @@ fn resolve_active_view(
             }
         }
         ViewId::Thread { room_id, .. } if has_window(room_id) => ViewId::Room(room_id.clone()),
-        ViewId::Room(_) | ViewId::Thread { .. } => {
+        ViewId::Room(_) | ViewId::Thread { .. } | ViewId::RoomList => {
             if let Some(room_id) = selected_room.filter(|room_id| has_window(room_id)) {
                 ViewId::Room(room_id.to_owned())
             } else if let Some(room) = model.rooms.iter().find(|room| has_window(&room.room_id)) {
@@ -10240,6 +10366,7 @@ fn view_id_is_valid_for_rooms(
 ) -> bool {
     match view_id {
         ViewId::Status => true,
+        ViewId::RoomList => unreachable!("the Rooms List has no activity"),
         ViewId::Room(room_id) => navigable_room_by_id(rooms, room_id).is_some(),
         ViewId::Thread {
             room_id,
@@ -10269,6 +10396,7 @@ fn projected_thread_by_id<'a>(
 fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
     match view_id {
         ViewId::Status => true,
+        ViewId::RoomList => model.room_list.is_some(),
         ViewId::Room(room_id) => navigable_room_by_id(&model.rooms, room_id).is_some(),
         ViewId::Thread {
             room_id,
@@ -10297,6 +10425,9 @@ fn space_tree_label(space: &RoomSummary) -> String {
     space.display_name.clone()
 }
 
+/// The Rooms List's switchbar and treebar label.
+const ROOM_LIST_TITLE: &str = "Rooms List";
+
 /// The MDI window caption: the short title, with the topic for channels and
 /// the other user's ID for queries. A query ignores its room's topic, as
 /// mIRC queries have none.
@@ -10320,6 +10451,11 @@ fn view_caption(model: &UiModel, view_id: &ViewId) -> String {
         }
         ViewId::Status => mdi::status_caption(model.own_user_id.as_deref()),
         ViewId::Thread { .. } => title,
+        ViewId::RoomList => model
+            .room_list
+            .as_ref()
+            .expect("the Rooms List window has its listing")
+            .caption(),
     }
 }
 
@@ -10347,6 +10483,7 @@ fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
             room_tree_label(room)
         }
         ViewId::Thread { .. } => unreachable!("thread views are handled above"),
+        ViewId::RoomList => ROOM_LIST_TITLE.to_owned(),
     }
 }
 
@@ -10357,7 +10494,9 @@ fn switchbar_button_text(state: &WindowState, view_id: &ViewId) -> String {
                 .expect("room switchbar button must target an existing room");
             room_navigation_label(&state.model, room)
         }
-        ViewId::Status | ViewId::Thread { .. } => view_short_title(&state.model, view_id),
+        ViewId::Status | ViewId::Thread { .. } | ViewId::RoomList => {
+            view_short_title(&state.model, view_id)
+        }
     }
 }
 
@@ -10424,6 +10563,7 @@ fn tree_custom_draw(state: &WindowState, draw: &mut NMTVCUSTOMDRAW) -> LRESULT {
 fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
     match view_id {
         ViewId::Status => ViewIdentity::Status,
+        ViewId::RoomList => ViewIdentity::RoomList,
         ViewId::Room(room_id) => ViewIdentity::Room {
             room_id: room_id.clone(),
         },
@@ -10440,6 +10580,7 @@ fn view_identity_from_view_id(view_id: &ViewId) -> ViewIdentity {
 fn view_id_from_identity(identity: &ViewIdentity) -> ViewId {
     match identity {
         ViewIdentity::Status => ViewId::Status,
+        ViewIdentity::RoomList => ViewId::RoomList,
         ViewIdentity::Room { room_id } => ViewId::Room(room_id.clone()),
         ViewIdentity::Thread {
             room_id,
@@ -10579,6 +10720,19 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
         ViewId::Room(_) | ViewId::Thread { .. } => {
             (ROOM_CONTENT_CLASS_NAME, WS_CHILD | WS_VISIBLE, 0)
         }
+        // An owner-data list: the rows live in `UiModel.room_list`, and the
+        // list asks for each cell's text as it paints.
+        ViewId::RoomList => (
+            ROOM_LIST_CLASS_NAME,
+            WS_CHILD
+                | WS_VISIBLE
+                | WS_TABSTOP
+                | LVS_REPORT
+                | LVS_SINGLESEL
+                | LVS_SHOWSELALWAYS
+                | LVS_OWNERDATA,
+            WS_EX_CLIENTEDGE,
+        ),
     };
     let content = CreateWindowExW(
         ex_style,
@@ -10598,18 +10752,22 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
         return Err(last_os_error("CreateWindowExW MDI child content"));
     }
 
-    let edit = create_child_window(
-        child,
-        EDIT_CLASS_NAME,
-        "",
-        WS_VISIBLE | COMPOSE_EDIT_STYLE,
-        COMPOSE_EDIT_EX_STYLE,
-        VIEW_EDIT_ID,
-        instance,
-        null_mut(),
-    )?;
     let frame = frame_window_for(child);
-    subclass_compose_edit(frame, edit)?;
+    if view_has_editbox(view_id) {
+        let edit = create_child_window(
+            child,
+            EDIT_CLASS_NAME,
+            "",
+            WS_VISIBLE | COMPOSE_EDIT_STYLE,
+            COMPOSE_EDIT_EX_STYLE,
+            VIEW_EDIT_ID,
+            instance,
+            null_mut(),
+        )?;
+        subclass_compose_edit(frame, edit)?;
+    } else {
+        add_room_list_columns(content)?;
+    }
     // Before any rows: the timeline wraps them in its font.
     set_view_text_font(view_id, child, state_ref(frame).text_font.hfont());
 
@@ -10621,11 +10779,13 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
             return Err(last_os_error("EnableMenuItem Status SC_CLOSE"));
         }
     }
-    // mIRC's window menu has Find Text and the font too.
+    // mIRC's window menu has Find Text and the font too. The Rooms List
+    // has no text of its own to find.
     let find_label = wide_null(SYSMENU_FIND_LABEL);
     let font_label = wide_null(SYSMENU_FONT_LABEL);
     if AppendMenuW(system_menu, MF_SEPARATOR, 0, null()) == 0
-        || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FIND, find_label.as_ptr()) == 0
+        || (view_has_editbox(view_id)
+            && AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FIND, find_label.as_ptr()) == 0)
         || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FONT, font_label.as_ptr()) == 0
     {
         return Err(last_os_error(
@@ -10663,14 +10823,37 @@ unsafe fn subclass_compose_edit(frame: HWND, edit: HWND) -> Result<(), String> {
 unsafe fn layout_mdi_child(child: HWND) {
     let mut rect = RECT::default();
     GetClientRect(child, &mut rect);
-    let edit_height = state_ref(frame_window_for(child)).text_font.edit_height;
+    // The Rooms List has no editbox: its list fills the window.
+    let edit = mdi_child_optional_edit(child);
+    let edit_height = edit.map_or(0, |_| {
+        state_ref(frame_window_for(child)).text_font.edit_height
+    });
     let layout = mdi::child_layout(rect.right - rect.left, rect.bottom - rect.top, edit_height);
-    for (control, place) in [
-        (mdi_child_content(child), layout.content),
-        (mdi_child_edit(child), layout.edit),
-    ] {
-        MoveWindow(control, place.x, place.y, place.width, place.height, 1);
+    let place = layout.content;
+    MoveWindow(
+        mdi_child_content(child),
+        place.x,
+        place.y,
+        place.width,
+        place.height,
+        1,
+    );
+    if let Some(edit) = edit {
+        let place = layout.edit;
+        MoveWindow(edit, place.x, place.y, place.width, place.height, 1);
     }
+}
+
+/// The child's editbox; only the Rooms List has none.
+unsafe fn mdi_child_optional_edit(child: HWND) -> Option<HWND> {
+    let edit = GetDlgItem(child, VIEW_EDIT_ID as i32);
+    (!edit.is_null()).then_some(edit)
+}
+
+/// Where the keyboard goes in an active window: the editbox, as in mIRC,
+/// or the Rooms List's list.
+unsafe fn mdi_child_focus(child: HWND) -> HWND {
+    mdi_child_optional_edit(child).unwrap_or_else(|| mdi_child_content(child))
 }
 
 unsafe fn mdi_child_content(child: HWND) -> HWND {
@@ -10695,6 +10878,7 @@ unsafe fn view_timeline(view_id: &ViewId, content: HWND) -> HWND {
     match view_id {
         ViewId::Status => content,
         ViewId::Room(_) | ViewId::Thread { .. } => room_content_timeline(content),
+        ViewId::RoomList => unreachable!("the Rooms List has no timeline"),
     }
 }
 
@@ -10738,7 +10922,19 @@ unsafe fn unregister_destroyed_view(child: HWND) {
 unsafe fn cached_view_is_alive(view: &MdiViewState) -> bool {
     IsWindow(view.child) != 0
         && GetDlgItem(view.child, VIEW_CONTENT_ID as i32) == view.content
-        && GetDlgItem(view.child, VIEW_EDIT_ID as i32) == view.edit
+        && GetDlgItem(view.child, VIEW_EDIT_ID as i32)
+            == view
+                .compose
+                .as_ref()
+                .map_or(null_mut(), |compose| compose.edit)
+}
+
+/// Every window has an editbox but the Rooms List, as in mIRC.
+fn view_has_editbox(view_id: &ViewId) -> bool {
+    match view_id {
+        ViewId::Status | ViewId::Room(_) | ViewId::Thread { .. } => true,
+        ViewId::RoomList => false,
+    }
 }
 
 unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
@@ -10762,9 +10958,11 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
     let view = MdiViewState {
         child,
         content: mdi_child_content(child),
-        edit: mdi_child_edit(child),
-        history: ComposeHistory::default(),
-        compose_target: None,
+        compose: view_has_editbox(&view_id).then(|| ViewCompose {
+            edit: mdi_child_edit(child),
+            history: ComposeHistory::default(),
+            target: None,
+        }),
     };
 
     let state = state_mut(hwnd);
@@ -10775,6 +10973,187 @@ unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, String> {
 
 unsafe fn ensure_status_view(hwnd: HWND) -> Result<HWND, String> {
     ensure_view(hwnd, ViewId::Status)
+}
+
+/// `/list`: opens the Rooms List, or reuses it, for a new listing and asks
+/// for its first page. The window follows the model: the view sync creates
+/// it.
+unsafe fn start_room_list(hwnd: HWND, query: RoomListQuery) -> Result<String, String> {
+    let state = state_mut(hwnd);
+    if matches!(
+        state.model.connection,
+        ConnectionState::SignedOut | ConnectionState::SigningIn
+    ) {
+        return Err("not connected to server".to_owned());
+    }
+    let own_user_id = state
+        .model
+        .own_user_id
+        .as_deref()
+        .expect("a signed-in session knows its user");
+    let (_, own_server) = own_user_id
+        .split_once(':')
+        .expect("a Matrix user ID names its server");
+    let room_list = RoomListState::new(query, own_server);
+    enqueue_command(state, Command::ListPublicRooms(room_list.first_request()))?;
+    state.model.room_list = Some(room_list);
+    sync_views_and_tree(hwnd)?;
+    let list = mdi_child_content(ensure_room_list_view(hwnd)?);
+    // A new listing starts with nothing selected.
+    let unselect = LVITEMW {
+        stateMask: LVIS_SELECTED | LVIS_FOCUSED,
+        ..LVITEMW::default()
+    };
+    SendMessageW(
+        list,
+        LVM_SETITEMSTATE,
+        usize::MAX,
+        &unselect as *const _ as LPARAM,
+    );
+    activate_view(hwnd, &ViewId::RoomList, None)?;
+    Ok("listing rooms".to_owned())
+}
+
+/// Column widths in pixels, for the frame's Fixedsys text.
+const ROOM_LIST_COLUMN_WIDTHS: [i32; 4] = [240, 64, 200, 640];
+
+unsafe fn add_room_list_columns(list: HWND) -> Result<(), String> {
+    SendMessageW(
+        list,
+        LVM_SETEXTENDEDLISTVIEWSTYLE,
+        LVS_EX_FULLROWSELECT as WPARAM,
+        LVS_EX_FULLROWSELECT as LPARAM,
+    );
+    for (index, column) in RoomListColumn::ALL.into_iter().enumerate() {
+        let mut title = wide_null(column.title());
+        let format = match column {
+            RoomListColumn::Users => LVCFMT_RIGHT,
+            RoomListColumn::Room | RoomListColumn::Name | RoomListColumn::Topic => LVCFMT_LEFT,
+        };
+        let lv_column = LVCOLUMNW {
+            mask: LVCF_FMT | LVCF_TEXT | LVCF_WIDTH,
+            fmt: format,
+            cx: ROOM_LIST_COLUMN_WIDTHS[index],
+            pszText: title.as_mut_ptr(),
+            ..LVCOLUMNW::default()
+        };
+        if SendMessageW(
+            list,
+            LVM_INSERTCOLUMNW,
+            index,
+            &lv_column as *const _ as LPARAM,
+        ) != index as LRESULT
+        {
+            return Err(format!("LVM_INSERTCOLUMNW {} failed", column.title()));
+        }
+    }
+    Ok(())
+}
+
+/// Tells the owner-data list how many rows the listing has; it asks for
+/// their text as it paints them.
+unsafe fn refresh_room_list_rows(state: &WindowState, list: HWND) {
+    let rows = state
+        .model
+        .room_list
+        .as_ref()
+        .expect("the Rooms List window has its listing")
+        .len();
+    SendMessageW(list, LVM_SETITEMCOUNT, rows, LVSICF_NOSCROLL as LPARAM);
+    InvalidateRect(list, null(), 1);
+}
+
+/// The Rooms List's notifications; `None` for any other, which the MDI
+/// child's default handling gets.
+unsafe fn handle_room_list_notify(frame: HWND, lparam: LPARAM) -> Option<LRESULT> {
+    let header = &*(lparam as *const NMHDR);
+    match header.code {
+        LVN_GETDISPINFOW => {
+            let item = &mut (*(lparam as *mut NMLVDISPINFOW)).item;
+            // Text is all the list asks the listing for.
+            if item.mask & LVIF_TEXT != 0 {
+                let text = state_ref(frame)
+                    .model
+                    .room_list
+                    .as_ref()
+                    .expect("the Rooms List window has its listing")
+                    .cell_text(
+                        item.iItem as usize,
+                        RoomListColumn::from_index(item.iSubItem as usize),
+                    );
+                copy_text_to_buffer(&text, item.pszText, item.cchTextMax);
+            }
+            Some(0)
+        }
+        LVN_COLUMNCLICK => {
+            let column = (*(lparam as *const NMLISTVIEW)).iSubItem as usize;
+            state_mut(frame)
+                .model
+                .room_list
+                .as_mut()
+                .expect("the Rooms List window has its listing")
+                .sort_by(RoomListColumn::from_index(column));
+            if let Err(message) = refresh_view_content(frame, &ViewId::RoomList) {
+                show_error_message(frame, ROOM_LIST_TITLE, &message);
+            }
+            Some(0)
+        }
+        // A double-click below the rows hits no item.
+        NM_DBLCLK => {
+            let item = (*(lparam as *const NMITEMACTIVATE)).iItem;
+            Some(join_room_list_row_reporting(frame, item))
+        }
+        NM_RETURN => {
+            let item = SendMessageW(
+                header.hwndFrom,
+                LVM_GETNEXTITEM,
+                usize::MAX,
+                LVNI_SELECTED as LPARAM,
+            );
+            Some(join_room_list_row_reporting(frame, item as i32))
+        }
+        _ => None,
+    }
+}
+
+/// Joins the row at `item`, unless it is -1 (no row); errors go where a
+/// typed command's would.
+unsafe fn join_room_list_row_reporting(frame: HWND, item: i32) -> LRESULT {
+    if item >= 0
+        && let Err(message) = join_room_list_row(frame, item as usize)
+    {
+        let error = CommandError::new("list", message);
+        if let Err(message) = report_command_error(frame, error) {
+            show_error_message(frame, ROOM_LIST_TITLE, &message);
+        }
+    }
+    0
+}
+
+/// Double-click or Enter on a row: a room already joined comes to the
+/// front; any other is joined, and opens when the join lands.
+unsafe fn join_room_list_row(frame: HWND, display_index: usize) -> Result<(), String> {
+    let (room_id, target, via) = {
+        let room_list = state_ref(frame)
+            .model
+            .room_list
+            .as_ref()
+            .expect("the Rooms List window has its listing");
+        let (target, via) = room_list.join_target(display_index);
+        (room_list.row(display_index).room_id.clone(), target, via)
+    };
+    if navigable_room_by_id(&state_ref(frame).model.rooms, &room_id).is_some() {
+        return activate_view(frame, &ViewId::Room(room_id), None);
+    }
+    let status = submit_join_room(state_mut(frame), target, via)?;
+    set_local_command_status(frame, status)
+}
+
+unsafe fn ensure_room_list_view(hwnd: HWND) -> Result<HWND, String> {
+    if state_ref(hwnd).model.room_list.is_none() {
+        return Err("no rooms are listed: use /list".to_owned());
+    }
+    ensure_view(hwnd, ViewId::RoomList)
 }
 
 unsafe fn ensure_room_view(hwnd: HWND, room_id: &str) -> Result<HWND, String> {
@@ -11010,23 +11389,25 @@ fn dispatch_reply_target_fetches(
 /// A window's editbox stays armed only with a message the window shows: a
 /// redaction, or `/clear`, disarms it.
 fn disarm_vanished_compose_target(state: &mut WindowState, view_id: &ViewId) {
-    let view = state
+    let compose = state
         .views
         .get_mut(view_id)
-        .expect("a refreshed view has a window");
-    if view
-        .compose_target
+        .expect("a refreshed view has a window")
+        .compose_mut();
+    if compose
+        .target
         .as_ref()
         .is_some_and(|target| window_message(&state.model, view_id, target.event_id()).is_none())
     {
-        view.compose_target = None;
+        compose.target = None;
     }
 }
 
 /// The indicator row of an armed editbox, if `view_id`'s is.
 fn armed_compose_target_row(state: &WindowState, view_id: &ViewId) -> Option<TimelineRow> {
     state.views[view_id]
-        .compose_target
+        .compose()
+        .target
         .as_ref()
         .map(|target| compose_target_row(&state.model, view_id, target))
 }
@@ -11044,8 +11425,14 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
 
     let title = wide_null(&title);
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
+    if *view_id == ViewId::RoomList {
+        // No text and no editbox: only the list's rows change.
+        refresh_room_list_rows(state_ref(hwnd), content);
+        return Ok(());
+    }
     disarm_vanished_compose_target(state_mut(hwnd), view_id);
     match view_id {
+        ViewId::RoomList => unreachable!("the Rooms List returned above"),
         ViewId::Status => {
             let (rows, indent_sample) = {
                 let state = state_ref(hwnd);
@@ -11194,6 +11581,10 @@ unsafe fn apply_view_activation_state(
             state_mut(hwnd).model.selected_room = None;
             ensure_status_view(hwnd)?
         }
+        ViewId::RoomList => {
+            state_mut(hwnd).model.selected_room = None;
+            ensure_room_list_view(hwnd)?
+        }
         ViewId::Room(room_id) => {
             let state = state_mut(hwnd);
             select_room(state, room_id)?;
@@ -11240,7 +11631,7 @@ unsafe fn finish_view_activation_chrome(
         refresh_switchbar_state(hwnd)?;
     }
     refresh_status_bar(hwnd)?;
-    SetFocus(compose_edit(hwnd));
+    SetFocus(mdi_child_focus(applied.child));
     Ok(())
 }
 
@@ -11292,6 +11683,9 @@ unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     destroy_stale_room_views(hwnd);
     for room_id in room_ids {
         ensure_room_view(hwnd, &room_id)?;
+    }
+    if state_ref(hwnd).model.room_list.is_some() {
+        ensure_room_list_view(hwnd)?;
     }
 
     refresh_every_view_content(hwnd)?;
@@ -11477,6 +11871,13 @@ fn navigation_layout(model: &UiModel) -> NavItem {
             .filter(|room| !spaced_ids.contains(room.room_id.as_str()))
             .map(|room| room_nav_item(model, room)),
     );
+    if model.room_list.is_some() {
+        children.push(NavItem {
+            label: ROOM_LIST_TITLE.to_owned(),
+            view: Some(ViewId::RoomList),
+            children: Vec::new(),
+        });
+    }
     NavItem {
         label: view_short_title(model, &ViewId::Status),
         view: Some(ViewId::Status),
@@ -12063,7 +12464,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                             "file attachments cannot target threads yet".to_owned(),
                         ));
                     }
-                    ViewId::Status => {
+                    ViewId::Status | ViewId::RoomList => {
                         return Err(failure_response(
                             Some(id.clone()),
                             "send_failed",
@@ -12449,7 +12850,7 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
         .views
         .keys()
         .filter_map(|view_id| match view_id {
-            ViewId::Status => None,
+            ViewId::Status | ViewId::RoomList => None,
             ViewId::Room(room_id)
                 if navigable_room_by_id(&state.model.rooms, room_id).is_none() =>
             {
@@ -12461,6 +12862,9 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
         .collect::<Vec<_>>();
     remaining.sort();
     ordered.extend(remaining.into_iter().map(ViewId::Room));
+    if state.views.contains_key(&ViewId::RoomList) {
+        ordered.push(ViewId::RoomList);
+    }
     ordered
 }
 
@@ -12940,12 +13344,18 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                 title: read_window_text(view.child),
                 active: identity == active,
                 placement: mdi_window_placement(state_ref(hwnd).controls.mdi_client, view.child),
-                lines: split_rendered_lines(&read_window_text(view_timeline(
-                    &view_id,
-                    view.content,
-                ))),
+                // The Rooms List's rows are in `UiState.room_list`.
+                lines: match &view_id {
+                    ViewId::RoomList => Vec::new(),
+                    ViewId::Status | ViewId::Room(_) | ViewId::Thread { .. } => {
+                        split_rendered_lines(&read_window_text(view_timeline(
+                            &view_id,
+                            view.content,
+                        )))
+                    }
+                },
                 members: match &view_id {
-                    ViewId::Status => Vec::new(),
+                    ViewId::Status | ViewId::RoomList => Vec::new(),
                     ViewId::Room(room_id) => room_by_id(&state_ref(hwnd).model.rooms, room_id)
                         .filter(|room| is_sendable_room(room))
                         .map(|_| {
@@ -13005,10 +13415,118 @@ fn dump_active_find_state(state: &WindowState) -> Option<UiFindState> {
         .map(|find_state| dump_find_state(&state.active_view, find_state))
 }
 
+/// The Rooms List as its list control shows it: the header's titles and
+/// every row's text as the list asks the listing for it, through
+/// `LVN_GETDISPINFOW`.
+unsafe fn dump_room_list(list: HWND) -> UiRoomList {
+    let header = SendMessageW(list, LVM_GETHEADER, 0, 0) as HWND;
+    assert!(!header.is_null(), "a report list has a header");
+    let column_count = SendMessageW(header, HDM_GETITEMCOUNT, 0, 0);
+    let column_count = usize::try_from(column_count).expect("HDM_GETITEMCOUNT succeeds");
+    let mut buffer = [0u16; 512];
+    let mut columns = Vec::new();
+    let mut column_click_points = Vec::new();
+    for column in 0..column_count {
+        let mut lv_column = LVCOLUMNW {
+            mask: LVCF_TEXT,
+            pszText: buffer.as_mut_ptr(),
+            cchTextMax: buffer.len() as i32,
+            ..LVCOLUMNW::default()
+        };
+        assert_ne!(
+            SendMessageW(
+                list,
+                LVM_GETCOLUMNW,
+                column,
+                &mut lv_column as *mut _ as LPARAM
+            ),
+            0,
+            "LVM_GETCOLUMNW must read column {column}"
+        );
+        columns.push(wide_buffer_text(&buffer));
+        let mut rect = RECT::default();
+        assert_ne!(
+            SendMessageW(
+                header,
+                HDM_GETITEMRECT,
+                column,
+                &mut rect as *mut _ as LPARAM
+            ),
+            0,
+            "HDM_GETITEMRECT must place column {column}"
+        );
+        column_click_points.push(rect_center(&rect));
+    }
+
+    let row_count = usize::try_from(SendMessageW(list, LVM_GETITEMCOUNT, 0, 0))
+        .expect("LVM_GETITEMCOUNT succeeds");
+    let rows = (0..row_count)
+        .map(|row| {
+            (0..column_count)
+                .map(|column| {
+                    let mut item = LVITEMW {
+                        iSubItem: column as i32,
+                        pszText: buffer.as_mut_ptr(),
+                        cchTextMax: buffer.len() as i32,
+                        ..LVITEMW::default()
+                    };
+                    SendMessageW(list, LVM_GETITEMTEXTW, row, &mut item as *mut _ as LPARAM);
+                    wide_buffer_text(&buffer)
+                })
+                .collect()
+        })
+        .collect();
+
+    let top_row = usize::try_from(SendMessageW(list, LVM_GETTOPINDEX, 0, 0))
+        .expect("LVM_GETTOPINDEX succeeds");
+    let per_page = usize::try_from(SendMessageW(list, LVM_GETCOUNTPERPAGE, 0, 0))
+        .expect("LVM_GETCOUNTPERPAGE succeeds");
+    let visible_row_click_points = (top_row..row_count.min(top_row + per_page))
+        .map(|row| {
+            let mut rect = RECT {
+                left: LVIR_LABEL as i32,
+                ..RECT::default()
+            };
+            assert_ne!(
+                SendMessageW(list, LVM_GETITEMRECT, row, &mut rect as *mut _ as LPARAM),
+                0,
+                "LVM_GETITEMRECT must place row {row}"
+            );
+            rect_center(&rect)
+        })
+        .collect();
+    let selected = SendMessageW(list, LVM_GETNEXTITEM, usize::MAX, LVNI_SELECTED as LPARAM);
+
+    UiRoomList {
+        columns,
+        rows,
+        selected: usize::try_from(selected).ok(),
+        column_click_points,
+        visible_row_click_points,
+        top_row,
+    }
+}
+
+/// The text before the NUL a control wrote into `buffer`.
+fn wide_buffer_text(buffer: &[u16]) -> String {
+    let len = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .expect("the control NUL-terminates its text");
+    String::from_utf16_lossy(&buffer[..len])
+}
+
+fn rect_center(rect: &RECT) -> UiPoint {
+    UiPoint {
+        x: (rect.left + rect.right) / 2,
+        y: (rect.top + rect.bottom) / 2,
+    }
+}
+
 /// The text font as the active window really draws it: the face GDI
 /// selected for the timeline's font, and the heights laid out from it.
-unsafe fn dump_text_font(state: &WindowState, view: &MdiViewState) -> UiTextFont {
-    let timeline = view_timeline(&state.active_view, view.content);
+unsafe fn dump_text_font(state: &WindowState, view_id: &ViewId, view: &MdiViewState) -> UiTextFont {
+    let timeline = view_timeline(view_id, view.content);
     let timeline_state = timeline_state_ref(timeline);
     let hdc = GetDC(timeline);
     assert!(!hdc.is_null(), "GetDC must succeed for the timeline");
@@ -13122,8 +13640,15 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         .expect("the active view has a window");
     let timestamp = &state.settings.settings().timestamp;
 
+    // The text font is the frame's, the same in every window; the Rooms
+    // List has no timeline or editbox to measure it by, Status always does.
+    let text_font_view = match &state.active_view {
+        ViewId::RoomList => (&ViewId::Status, &state.views[&ViewId::Status]),
+        view_id => (view_id, active_view),
+    };
+
     Ok(UiState {
-        text_font: dump_text_font(state, active_view),
+        text_font: dump_text_font(state, text_font_view.0, text_font_view.1),
         timestamp: UiTimestamp {
             show: timestamp.show,
             format: timestamp.format.to_string(),
@@ -13131,8 +13656,9 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         active_system_menu_items: system_menu_labels(active_view.child),
         menu_bar: dump_menu_bar(hwnd)?,
         compose_target: active_view
-            .compose_target
+            .compose
             .as_ref()
+            .and_then(|compose| compose.target.as_ref())
             .map(|target| UiComposeTarget {
                 kind: match target {
                     ComposeTarget::Reply { .. } => UiComposeTargetKind::Reply,
@@ -13140,6 +13666,10 @@ unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
                 },
                 event_id: target.event_id().to_owned(),
             }),
+        room_list: state
+            .views
+            .get(&ViewId::RoomList)
+            .map(|view| dump_room_list(view.content)),
         navigation,
         mdi,
         status_bar,
@@ -13519,6 +14049,7 @@ fn continue_timeline_find_history_search_after_refresh_state(
     let room_id = match view_id {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id,
         ViewId::Status => unreachable!("status find does not use room history"),
+        ViewId::RoomList => unreachable!("the Rooms List has no find"),
     };
     let Some(find_state) = state.find_states.get(view_id) else {
         return Ok(false);
@@ -13622,7 +14153,7 @@ unsafe fn apply_events_and_refresh(hwnd: HWND, events: Vec<Event>) -> Result<(),
                         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => {
                             room_id == &backfill.room_id
                         }
-                        ViewId::Status => false,
+                        ViewId::Status | ViewId::RoomList => false,
                     }),
             );
         } else if matches!(
@@ -13771,13 +14302,14 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
             .views
             .get_mut(&view)
             .expect("the submitting editbox's window must exist")
+            .compose_mut()
             .history
             .record_submission(entry);
     };
     let empty = wide_null("");
     match parse_compose_submission(&input) {
         ComposeSubmission::Message { presentation, body } => {
-            let target = state_ref(hwnd).views[&view].compose_target.clone();
+            let target = state_ref(hwnd).views[&view].compose().target.clone();
             match &target {
                 None => {
                     submit_compose(state_mut(hwnd), presentation, body.into_owned(), None)?;
@@ -13796,7 +14328,8 @@ unsafe fn submit_compose_from_edit(hwnd: HWND) -> Result<(), String> {
                     .views
                     .get_mut(&view)
                     .expect("the submitting editbox's window must exist")
-                    .compose_target = None;
+                    .compose_mut()
+                    .target = None;
                 refresh_view_content(hwnd, &view)?;
             }
         }
@@ -13821,6 +14354,7 @@ fn active_compose_history(state: &mut WindowState) -> &mut ComposeHistory {
         .views
         .get_mut(&state.active_view)
         .expect("the active view must have a window")
+        .compose_mut()
         .history
 }
 
@@ -13831,6 +14365,7 @@ unsafe fn compose_edit(hwnd: HWND) -> HWND {
         .views
         .get(&state.active_view)
         .expect("the active view must have a window")
+        .compose()
         .edit
 }
 
@@ -13961,7 +14496,7 @@ fn submit_send_file_slash_command(state: &mut WindowState, path: String) -> Resu
         ViewId::Thread { .. } => {
             return Err("file attachments cannot target threads yet".to_owned());
         }
-        ViewId::Status => return Err("no room selected".to_owned()),
+        ViewId::Status | ViewId::RoomList => return Err("no room selected".to_owned()),
     };
     let command = Command::SendFile(SendFileRequest {
         room_id: room_id.clone(),
@@ -14028,7 +14563,7 @@ fn resolve_compose_destination(
                 }),
             })
         }
-        ViewId::Status => Err("no room selected".to_owned()),
+        ViewId::Status | ViewId::RoomList => Err("no room selected".to_owned()),
     }
 }
 
@@ -14099,7 +14634,10 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             Ok(Some(format!("window active: {target}")))
         }
         SlashCommand::Join { target } => {
-            submit_join_slash_command(state_mut(hwnd), target).map(Some)
+            submit_join_room(state_mut(hwnd), target, Vec::new()).map(Some)
+        }
+        SlashCommand::List { server, filter } => {
+            start_room_list(hwnd, RoomListQuery { server, filter }).map(Some)
         }
         SlashCommand::Query { target, message } => {
             let user_id =
@@ -14372,6 +14910,7 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
                 refresh_view_content(hwnd, &ViewId::Status)?;
                 Ok(Some("cleared window: status".to_owned()))
             }
+            ViewId::RoomList => unreachable!("/clear is typed in an editbox"),
         },
         SlashCommand::E2ee(command) => match command {
             E2eeSlashCommand::ShowStatus => {
@@ -14494,13 +15033,19 @@ unsafe fn echo_in_active_view(
     hwnd: HWND,
     lines: impl IntoIterator<Item = String>,
 ) -> Result<(), String> {
-    let view = state_ref(hwnd).active_view.clone();
+    let view = match &state_ref(hwnd).active_view {
+        // The Rooms List has no text of its own: what a Commands menu item
+        // run there prints goes to Status.
+        ViewId::RoomList => ViewId::Status,
+        view => view.clone(),
+    };
     {
         let state = state_mut(hwnd);
         let now = state.clock.now_ms();
         for text in lines {
             match &view {
                 ViewId::Status => state.model.status_log.push(now, StatusLineKind::Info, text),
+                ViewId::RoomList => unreachable!("Rooms List output goes to Status"),
                 ViewId::Room(room_id) => state
                     .model
                     .room_views
@@ -14664,7 +15209,7 @@ fn resolve_joined_room_target(state: &WindowState, target: Option<&str>) -> Resu
                 }
             }
             ViewId::Thread { room_id, .. } => Ok(room_id.clone()),
-            ViewId::Status => Err("no room selected".to_owned()),
+            ViewId::Status | ViewId::RoomList => Err("no room selected".to_owned()),
         };
     };
 
@@ -14735,10 +15280,14 @@ fn resolve_invite_command_room_id(
     Err(format!("{action} failed: invited room not found: {target}"))
 }
 
-fn submit_join_slash_command(state: &mut WindowState, target: String) -> Result<String, String> {
+fn submit_join_room(
+    state: &mut WindowState,
+    target: String,
+    via: Vec<String>,
+) -> Result<String, String> {
     let command = Command::JoinRoom(JoinRoomRequest {
         room_or_alias: target.clone(),
-        via: Vec::new(),
+        via,
     });
     let sender = state
         .command_sender
@@ -15478,6 +16027,24 @@ fn submitted_membership_commands_from_state(
         .collect()
 }
 
+fn submitted_room_list_requests_from_state(
+    state: &WindowState,
+) -> Vec<DumpSubmittedRoomListRequest> {
+    state
+        .recorded_commands
+        .iter()
+        .filter_map(|command| match command {
+            Command::ListPublicRooms(request) => Some(DumpSubmittedRoomListRequest {
+                server: request.server.clone(),
+                filter: request.filter.clone(),
+                since: request.since.clone(),
+                limit: request.limit,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 fn submitted_direct_room_commands_from_state(
     state: &WindowState,
 ) -> Vec<DumpSubmittedDirectRoomCommand> {
@@ -15638,6 +16205,7 @@ fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_verification_actions: submitted_verification_actions_from_state(state),
         submitted_recovery_commands: submitted_recovery_commands_from_state(state),
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
+        submitted_room_list_requests: submitted_room_list_requests_from_state(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }
@@ -15987,7 +16555,7 @@ unsafe fn submit_backfill_room_history(hwnd: HWND) -> Result<(), String> {
     let state = timeline_window_state_mut(hwnd);
     let room_id = match &state.active_view {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id.clone(),
-        ViewId::Status => return Ok(()),
+        ViewId::Status | ViewId::RoomList => return Ok(()),
     };
     let Some(active_view) = state.views.get(&state.active_view) else {
         return Ok(());
@@ -16212,6 +16780,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::BackfillRoomHistory => "backfill room history",
         Operation::FetchRoomMedia => "fetch room image media",
         Operation::FetchRoomEvent => "fetch message",
+        Operation::ListPublicRooms => "list rooms",
         Operation::RoomList => "room list",
         Operation::RoomReadState => "room read state",
         Operation::E2eeStatus => "e2ee status",
@@ -16342,7 +16911,10 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use mirx_core::{RoomMemberChange, RoomMemberRank, RoomStateNoticeActivity, SyncStopReason};
+    use mirx_core::{
+        ListPublicRoomsRequest, PublicRoomsResult, RoomMemberChange, RoomMemberRank,
+        RoomStateNoticeActivity, SyncStopReason,
+    };
 
     use super::menus::verification_actions_text;
 
@@ -17554,9 +18126,11 @@ mod tests {
             MdiViewState {
                 child,
                 content: null_mut(),
-                edit: compose,
-                history: ComposeHistory::default(),
-                compose_target: None,
+                compose: Some(ViewCompose {
+                    edit: compose,
+                    history: ComposeHistory::default(),
+                    target: None,
+                }),
             },
         );
 
@@ -17577,6 +18151,7 @@ mod tests {
         let class_name = match active_view {
             ViewId::Status => TIMELINE_CLASS_NAME,
             ViewId::Room(_) | ViewId::Thread { .. } => ROOM_CONTENT_CLASS_NAME,
+            ViewId::RoomList => unreachable!("test windows have a timeline"),
         };
         let content = CreateWindowExW(
             0,
@@ -17673,9 +18248,11 @@ mod tests {
         MdiViewState {
             child: hwnd_value as HWND,
             content: (hwnd_value + 1) as HWND,
-            edit: (hwnd_value + 2) as HWND,
-            history: ComposeHistory::default(),
-            compose_target: None,
+            compose: Some(ViewCompose {
+                edit: (hwnd_value + 2) as HWND,
+                history: ComposeHistory::default(),
+                target: None,
+            }),
         }
     }
 
@@ -22363,7 +22940,7 @@ mod tests {
             !state
                 .views
                 .values()
-                .flat_map(|view| &view.history.entries)
+                .flat_map(|view| &view.compose().history.entries)
                 .any(|entry| entry.contains(recovery_key))
         );
     }
@@ -24979,6 +25556,192 @@ mod tests {
         );
     }
 
+    fn listing_rooms(filter: Option<&str>) -> RoomListState {
+        RoomListState::new(
+            RoomListQuery {
+                server: None,
+                filter: filter.map(str::to_owned),
+            },
+            "example",
+        )
+    }
+
+    fn public_rooms_page(
+        request: ListPublicRoomsRequest,
+        room_ids: &[&str],
+        next_batch: Option<&str>,
+    ) -> Event {
+        Event::PublicRooms(PublicRoomsPage {
+            request,
+            result: PublicRoomsResult::Loaded {
+                rooms: room_ids
+                    .iter()
+                    .map(|room_id| mirx_core::PublicRoom {
+                        room_id: (*room_id).to_owned(),
+                        canonical_alias: None,
+                        name: None,
+                        topic: None,
+                        joined_members: 1,
+                    })
+                    .collect(),
+                next_batch: next_batch.map(str::to_owned),
+                total_estimate: None,
+            },
+        })
+    }
+
+    #[test]
+    fn public_rooms_page_fills_the_listing_and_asks_for_the_next_page() {
+        let (mut state, handle) = test_state_with_command_sender();
+        let room_list = listing_rooms(Some("rust"));
+        let first = room_list.first_request();
+        state.model.room_list = Some(room_list);
+
+        apply_core_event(
+            &mut state,
+            public_rooms_page(first, &["!a:example", "!b:example"], Some("page2")),
+        )
+        .unwrap();
+
+        assert_eq!(state.model.room_list.as_ref().unwrap().len(), 2);
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::ListPublicRooms(ListPublicRoomsRequest {
+                server: None,
+                filter: Some("rust".to_owned()),
+                since: Some("page2".to_owned()),
+                limit: room_list::ROOM_LIST_PAGE_SIZE,
+            })]
+        );
+        assert_eq!(
+            dump_model_from_state(&state).submitted_room_list_requests,
+            vec![DumpSubmittedRoomListRequest {
+                server: None,
+                filter: Some("rust".to_owned()),
+                since: Some("page2".to_owned()),
+                limit: room_list::ROOM_LIST_PAGE_SIZE,
+            }]
+        );
+
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn public_rooms_page_after_the_listing_closed_is_dropped() {
+        let mut state = test_state();
+        let first = listing_rooms(None).first_request();
+
+        apply_core_event(
+            &mut state,
+            public_rooms_page(first, &["!a:example"], Some("page2")),
+        )
+        .unwrap();
+
+        assert!(state.model.room_list.is_none());
+        assert!(state.recorded_commands.is_empty());
+    }
+
+    #[test]
+    fn failed_public_rooms_page_logs_the_error_to_status() {
+        let mut state = test_state();
+        let room_list = listing_rooms(None);
+        let request = room_list.first_request();
+        state.model.room_list = Some(room_list);
+
+        apply_core_event(
+            &mut state,
+            Event::PublicRooms(PublicRoomsPage {
+                request,
+                result: PublicRoomsResult::Failed {
+                    message: "failed to list public rooms: forbidden".to_owned(),
+                },
+            }),
+        )
+        .unwrap();
+
+        assert!(state.recorded_commands.is_empty());
+        assert_eq!(
+            state
+                .model
+                .status_log
+                .lines()
+                .last()
+                .map(|line| line.text.as_str()),
+            Some("* /list: failed to list public rooms: forbidden")
+        );
+        assert_eq!(
+            view_caption(&state.model, &ViewId::RoomList),
+            "Rooms List [example] - failed"
+        );
+    }
+
+    #[test]
+    fn the_rooms_list_view_exists_while_its_listing_does() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        let resolve = |state: &WindowState| {
+            resolve_active_view(&ViewId::RoomList, None, &state.model, &state.closed_queries)
+        };
+        assert!(!view_id_is_valid(&state.model, &ViewId::RoomList));
+        assert_eq!(resolve(&state), room_view_id("!ops:example"));
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![nav_room("Ops", "!ops:example")]
+            )
+        );
+
+        state.model.room_list = Some(listing_rooms(None));
+
+        assert!(view_id_is_valid(&state.model, &ViewId::RoomList));
+        assert_eq!(resolve(&state), ViewId::RoomList);
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![
+                    nav_room("Ops", "!ops:example"),
+                    nav_view("Rooms List", ViewId::RoomList, Vec::new()),
+                ]
+            )
+        );
+        state.views.insert(ViewId::RoomList, tracked_view(30));
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state
+            .views
+            .insert(room_view_id("!ops:example"), tracked_view(20));
+        assert_eq!(
+            ordered_view_ids(&state),
+            vec![
+                ViewId::Status,
+                room_view_id("!ops:example"),
+                ViewId::RoomList
+            ]
+        );
+    }
+
+    #[test]
+    fn logging_out_drops_the_rooms_list() {
+        let mut state = test_state();
+        state.model.room_list = Some(listing_rooms(None));
+        state.views.insert(ViewId::Status, tracked_view(10));
+        state.views.insert(ViewId::RoomList, tracked_view(20));
+        state.hwnd_views.insert(10, ViewId::Status);
+        state.hwnd_views.insert(20, ViewId::RoomList);
+
+        with_local_app_data(|_| {
+            apply_core_event(&mut state, Event::LoggedOut).unwrap();
+        });
+        let removed = take_stale_room_views(&mut state);
+
+        assert!(state.model.room_list.is_none());
+        assert_eq!(removed.len(), 1);
+        assert!(!state.views.contains_key(&ViewId::RoomList));
+    }
+
     #[test]
     fn closed_queries_drop_rooms_that_stop_being_queries() {
         let mut state = test_state();
@@ -27555,9 +28318,11 @@ mod tests {
                     MdiViewState {
                         child,
                         content: null_mut(),
-                        edit,
-                        history: ComposeHistory::default(),
-                        compose_target: None,
+                        compose: Some(ViewCompose {
+                            edit,
+                            history: ComposeHistory::default(),
+                            target: None,
+                        }),
                     },
                 );
                 state_mut(hwnd).active_view = room_view.clone();
@@ -27763,7 +28528,8 @@ mod tests {
     fn submit_join_slash_command_records_typed_join_and_returns_status() {
         let (mut state, handle) = test_state_with_command_sender();
 
-        let status = submit_join_slash_command(&mut state, "#ops:example.org".to_owned()).unwrap();
+        let status =
+            submit_join_room(&mut state, "#ops:example.org".to_owned(), Vec::new()).unwrap();
 
         assert_eq!(status, "join submitted: #ops:example.org");
         assert_eq!(
@@ -28243,7 +29009,7 @@ mod tests {
 
     unsafe fn active_compose_target(hwnd: HWND) -> Option<ComposeTarget> {
         let state = state_ref(hwnd);
-        state.views[&state.active_view].compose_target.clone()
+        state.views[&state.active_view].compose().target.clone()
     }
 
     /// The active window's lines as its timeline holds them.

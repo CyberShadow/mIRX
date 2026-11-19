@@ -31,7 +31,10 @@ use matrix_sdk::{
     ruma::{
         EventId, Int, MilliSecondsSinceUnixEpoch, MxcUri, OwnedDeviceId, OwnedEventId, OwnedRoomId,
         OwnedUserId, RoomId, RoomOrAliasId, ServerName, UInt, UserId,
-        api::client::media::get_content_thumbnail::v3::Method,
+        api::client::{
+            directory::get_public_rooms_filtered, media::get_content_thumbnail::v3::Method,
+        },
+        directory::Filter,
         events::{
             AnyMessageLikeEventContent, AnySyncStateEvent, AnySyncTimelineEvent, Mentions,
             SyncStateEvent, TimelineEventType, ToDeviceEvent,
@@ -80,7 +83,8 @@ use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
     Event, FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    KickRoomMemberRequest, ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest,
+    MemberPowerRole, Operation, PublicRoom, PublicRoomsPage, PublicRoomsResult,
     ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
     RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
     RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
@@ -3799,6 +3803,62 @@ pub(crate) async fn fetch_room_event(
     }
 }
 
+pub(crate) async fn list_public_rooms(
+    client: &Client,
+    request: ListPublicRoomsRequest,
+) -> PublicRoomsPage {
+    let result = match fetch_public_rooms(client, &request).await {
+        Ok(result) => result,
+        Err(err) => PublicRoomsResult::Failed {
+            message: err.to_string(),
+        },
+    };
+    PublicRoomsPage { request, result }
+}
+
+async fn fetch_public_rooms(
+    client: &Client,
+    request: &ListPublicRoomsRequest,
+) -> Result<PublicRoomsResult, MatrixCoreError> {
+    let server = request
+        .server
+        .as_deref()
+        .map(|server| {
+            ServerName::parse(server).map_err(|err| {
+                MatrixCoreError::new(format!("invalid Matrix server name {server}: {err}"))
+            })
+        })
+        .transpose()?;
+    let mut filter = Filter::new();
+    filter.generic_search_term = request.filter.clone();
+    let mut sdk_request = get_public_rooms_filtered::v3::Request::new();
+    sdk_request.server = server;
+    sdk_request.limit = Some(UInt::from(request.limit));
+    sdk_request.since = request.since.clone();
+    sdk_request.filter = filter;
+
+    let response = client
+        .public_rooms_filtered(sdk_request)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to list public rooms: {err}")))?;
+
+    Ok(PublicRoomsResult::Loaded {
+        rooms: response
+            .chunk
+            .into_iter()
+            .map(|room| PublicRoom {
+                room_id: room.room_id.to_string(),
+                canonical_alias: room.canonical_alias.map(|alias| alias.to_string()),
+                name: room.name,
+                topic: room.topic,
+                joined_members: room.num_joined_members.into(),
+            })
+            .collect(),
+        next_batch: response.next_batch,
+        total_estimate: response.total_room_count_estimate.map(u64::from),
+    })
+}
+
 /// The event as the timeline line backfill would make of it, from the event
 /// cache or else the server. An event that is no line of its own (an edit,
 /// a reaction, a redaction) is unsupported.
@@ -3860,9 +3920,9 @@ mod tests {
         direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
         fetch_room_media, insert_pending_outgoing_kind, invite_room_member, joined_room_members,
         joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
-        map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
-        map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
-        map_send_queue_update, member_target_display_name,
+        list_public_rooms, map_cross_signing_status, map_decimals, map_e2ee_backup_state,
+        map_e2ee_recovery_state, map_emoji_array, map_emoji_short_auth_string, map_local_echo,
+        map_local_message_activity, map_send_queue_update, member_target_display_name,
         message_presentation_and_body_from_serialized_event, outgoing_events_from_local_echo_event,
         own_room_user_profile, owned_event_id_from_str, power_levels_change,
         reaction_event_content, read_file_bytes, register_event_handlers, reply_mention_user_ids,
@@ -3881,6 +3941,7 @@ mod tests {
         sync_message_replacement, unban_room_member, verification_flow_id_from_to_device,
         verification_request_from_to_device, verification_requested_state_event,
     };
+    use crate::api::{ListPublicRoomsRequest, PublicRoom, PublicRoomsPage, PublicRoomsResult};
 
     #[test]
     fn joined_member_snapshots_use_sdk_members_and_default_power_levels() {
@@ -8392,6 +8453,195 @@ mod tests {
                         reason: Some("flooding".to_owned()),
                     },
                 })
+            );
+        });
+    }
+
+    fn list_request(
+        server: Option<&str>,
+        filter: Option<&str>,
+        since: Option<&str>,
+    ) -> ListPublicRoomsRequest {
+        ListPublicRoomsRequest {
+            server: server.map(str::to_owned),
+            filter: filter.map(str::to_owned),
+            since: since.map(str::to_owned),
+            limit: 100,
+        }
+    }
+
+    #[test]
+    fn list_public_rooms_converts_the_page_in_server_order() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            wiremock::Mock::given(wiremock::matchers::method("POST"))
+                .and(wiremock::matchers::path("/_matrix/client/v3/publicRooms"))
+                .and(wiremock::matchers::query_param("server", "other.example"))
+                .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                    "limit": 100,
+                    "since": "batch-1",
+                    "filter": { "generic_search_term": "rust" }
+                })))
+                .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                    serde_json::json!({
+                        "chunk": [
+                            {
+                                "room_id": "!big:other.example",
+                                "canonical_alias": "#rust:other.example",
+                                "name": "Rust",
+                                "topic": "The Rust language\nBe nice",
+                                "num_joined_members": 4200,
+                                "world_readable": true,
+                                "guest_can_join": false
+                            },
+                            {
+                                "room_id": "!small:other.example",
+                                "num_joined_members": 3,
+                                "world_readable": false,
+                                "guest_can_join": false
+                            }
+                        ],
+                        "next_batch": "batch-2",
+                        "total_room_count_estimate": 250
+                    }),
+                ))
+                .expect(1)
+                .mount(mock_server.server())
+                .await;
+
+            let request = list_request(Some("other.example"), Some("rust"), Some("batch-1"));
+            assert_eq!(
+                list_public_rooms(&client, request.clone()).await,
+                PublicRoomsPage {
+                    request,
+                    result: PublicRoomsResult::Loaded {
+                        rooms: vec![
+                            PublicRoom {
+                                room_id: "!big:other.example".to_owned(),
+                                canonical_alias: Some("#rust:other.example".to_owned()),
+                                name: Some("Rust".to_owned()),
+                                topic: Some("The Rust language\nBe nice".to_owned()),
+                                joined_members: 4200,
+                            },
+                            PublicRoom {
+                                room_id: "!small:other.example".to_owned(),
+                                canonical_alias: None,
+                                name: None,
+                                topic: None,
+                                joined_members: 3,
+                            },
+                        ],
+                        next_batch: Some("batch-2".to_owned()),
+                        total_estimate: Some(250),
+                    },
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn list_public_rooms_of_the_home_server_sends_no_server_filter_or_since() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_public_rooms()
+                .ok(Vec::new(), None, None, None)
+                .expect(1)
+                .mount()
+                .await;
+
+            let page = list_public_rooms(&client, list_request(None, None, None)).await;
+            assert_eq!(
+                page.result,
+                PublicRoomsResult::Loaded {
+                    rooms: Vec::new(),
+                    next_batch: None,
+                    total_estimate: None,
+                }
+            );
+            let requests = mock_server
+                .received_requests()
+                .await
+                .expect("request recording enabled");
+            let request = requests
+                .iter()
+                .find(|request| request.url.path() == "/_matrix/client/v3/publicRooms")
+                .expect("the publicRooms request");
+            assert_eq!(request.url.query(), None);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&request.body).expect("JSON body"),
+                serde_json::json!({ "limit": 100 })
+            );
+        });
+    }
+
+    #[test]
+    fn list_public_rooms_reports_a_server_error_as_failed() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_public_rooms()
+                .respond_with(wiremock::ResponseTemplate::new(500).set_body_json(
+                    serde_json::json!({ "errcode": "M_UNKNOWN", "error": "directory down" }),
+                ))
+                .mount()
+                .await;
+
+            let page = list_public_rooms(&client, list_request(None, None, None)).await;
+            let PublicRoomsResult::Failed { message } = &page.result else {
+                panic!("expected a failure, got {page:?}");
+            };
+            assert!(
+                message.starts_with("failed to list public rooms:")
+                    && message.contains("directory down"),
+                "{message}"
+            );
+        });
+    }
+
+    #[test]
+    fn list_public_rooms_rejects_an_invalid_server_name_without_a_request() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_public_rooms()
+                .ok(Vec::new(), None, None, None)
+                .expect(0)
+                .mount()
+                .await;
+
+            let page =
+                list_public_rooms(&client, list_request(Some("bad server"), None, None)).await;
+            let PublicRoomsResult::Failed { message } = &page.result else {
+                panic!("expected a failure, got {page:?}");
+            };
+            assert!(
+                message.starts_with("invalid Matrix server name bad server:"),
+                "{message}"
             );
         });
     }

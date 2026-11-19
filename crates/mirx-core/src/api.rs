@@ -37,6 +37,7 @@ pub enum Command {
     BackfillRoomHistory(BackfillRoomHistoryRequest),
     FetchRoomMedia(FetchRoomMediaRequest),
     FetchRoomEvent(FetchRoomEventRequest),
+    ListPublicRooms(ListPublicRoomsRequest),
     RefreshE2eeStatus,
     SetupE2eeRecovery(SetupE2eeRecoveryRequest),
     RecoverE2ee(RecoverE2eeRequest),
@@ -154,6 +155,20 @@ pub struct JoinRoomRequest {
     /// Servers to join a room ID through, when the user's homeserver is
     /// not in the room; an alias resolves its own servers.
     pub via: Vec<String>,
+}
+
+/// One page of a server's public room directory.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListPublicRoomsRequest {
+    /// The server whose directory to list; `None` is the user's homeserver.
+    pub server: Option<String>,
+    /// Text the server matches against room names, topics and aliases;
+    /// `None` lists every room.
+    pub filter: Option<String>,
+    /// The previous page's `next_batch`; `None` asks for the first page.
+    pub since: Option<String>,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -790,6 +805,40 @@ pub enum RoomEventFetchResult {
     },
 }
 
+/// The answer to `Command::ListPublicRooms`; a request always ends in one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicRoomsPage {
+    pub request: ListPublicRoomsRequest,
+    pub result: PublicRoomsResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PublicRoomsResult {
+    /// The rooms in the server's order.
+    Loaded {
+        rooms: Vec<PublicRoom>,
+        /// Where the next page starts; `None` on the last page.
+        next_batch: Option<String>,
+        /// The server's estimate of the rooms matching in all.
+        total_estimate: Option<u64>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicRoom {
+    pub room_id: String,
+    pub canonical_alias: Option<String>,
+    pub name: Option<String>,
+    pub topic: Option<String>,
+    pub joined_members: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomJoined {
@@ -1111,6 +1160,7 @@ pub enum Operation {
     BackfillRoomHistory,
     FetchRoomMedia,
     FetchRoomEvent,
+    ListPublicRooms,
     RoomList,
     RoomReadState,
     E2eeStatus,
@@ -1151,6 +1201,7 @@ pub enum Event {
     RoomHistoryBackfill(RoomHistoryBackfill),
     RoomMedia(RoomMedia),
     RoomEvent(RoomEventFetch),
+    PublicRooms(PublicRoomsPage),
     /// A join the user asked for (`JoinRoom`, `AcceptRoomInvite`,
     /// `CreateDirectRoom`) succeeded; it follows the `SyncedRooms` that
     /// lists the room.

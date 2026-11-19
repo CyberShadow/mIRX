@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 35;
+pub(crate) const PROTOCOL_VERSION: u32 = 36;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -918,6 +918,33 @@ pub(crate) struct UiState {
     pub(crate) menu_bar: Vec<UiMenu>,
     /// What the active window's editbox replies to or edits.
     pub(crate) compose_target: Option<UiComposeTarget>,
+    /// The Rooms List window, read back from its list control.
+    pub(crate) room_list: Option<UiRoomList>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiRoomList {
+    /// The header's column titles.
+    pub(crate) columns: Vec<String>,
+    /// Every row's cells in display order, as the list shows them.
+    pub(crate) rows: Vec<Vec<String>>,
+    pub(crate) selected: Option<usize>,
+    /// Where to click each column header, in the header's client
+    /// coordinates.
+    pub(crate) column_click_points: Vec<UiPoint>,
+    /// Where to click each row the list shows now, from its top row, in the
+    /// list's client coordinates.
+    pub(crate) visible_row_click_points: Vec<UiPoint>,
+    /// The display index of the list's top row.
+    pub(crate) top_row: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiPoint {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1085,6 +1112,8 @@ pub(crate) struct SwitchbarState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum ViewIdentity {
     Status,
+    /// The Rooms List window (`/list`).
+    RoomList,
     Room {
         room_id: String,
     },
@@ -1103,13 +1132,14 @@ impl<'de> Deserialize<'de> for ViewIdentity {
         #[serde(rename_all = "snake_case")]
         enum Kind {
             Status,
+            RoomList,
             Room,
             Thread,
         }
 
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct StatusIdentity {
+        struct KindOnlyIdentity {
             #[serde(rename = "kind")]
             _kind: Kind,
         }
@@ -1139,9 +1169,14 @@ impl<'de> Deserialize<'de> for ViewIdentity {
 
         match serde_json::from_value::<Kind>(kind).map_err(serde::de::Error::custom)? {
             Kind::Status => {
-                serde_json::from_value::<StatusIdentity>(value)
+                serde_json::from_value::<KindOnlyIdentity>(value)
                     .map_err(serde::de::Error::custom)?;
                 Ok(Self::Status)
+            }
+            Kind::RoomList => {
+                serde_json::from_value::<KindOnlyIdentity>(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Self::RoomList)
             }
             Kind::Room => serde_json::from_value::<RoomIdentity>(value)
                 .map(|view| {
@@ -1349,6 +1384,8 @@ pub(crate) struct DumpModel {
     pub(crate) submitted_recovery_commands: Vec<DumpSubmittedRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) submitted_setup_recovery_commands: Vec<DumpSubmittedSetupRecoveryCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) submitted_room_list_requests: Vec<DumpSubmittedRoomListRequest>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
 }
@@ -1399,6 +1436,16 @@ pub(crate) enum DumpMemberPowerRole {
 #[serde(deny_unknown_fields)]
 pub(crate) struct DumpSubmittedProfileCommand {
     pub(crate) display_name: String,
+}
+
+/// A room directory page asked for (`/list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpSubmittedRoomListRequest {
+    pub(crate) server: Option<String>,
+    pub(crate) filter: Option<String>,
+    pub(crate) since: Option<String>,
+    pub(crate) limit: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1843,6 +1890,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::BackfillRoomHistory => "backfill_room_history",
         Operation::FetchRoomMedia => "fetch_room_media",
         Operation::FetchRoomEvent => "fetch_room_event",
+        Operation::ListPublicRooms => "list_public_rooms",
         Operation::RoomList => "room_list",
         Operation::RoomReadState => "room_read_state",
         Operation::E2eeStatus => "e2ee_status",
@@ -2871,8 +2919,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_35() {
-        assert_eq!(PROTOCOL_VERSION, 35);
+    fn protocol_version_is_36() {
+        assert_eq!(PROTOCOL_VERSION, 36);
     }
 
     #[test]
@@ -4673,7 +4721,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":35,
+                    "protocol_version":36,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4740,6 +4788,7 @@ mod tests {
                     submitted_verification_actions: Vec::new(),
                     submitted_recovery_commands: Vec::new(),
                     submitted_setup_recovery_commands: Vec::new(),
+                    submitted_room_list_requests: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -5233,6 +5282,14 @@ mod tests {
                         kind: super::UiComposeTargetKind::Reply,
                         event_id: "$question".to_owned(),
                     }),
+                    room_list: Some(super::UiRoomList {
+                        columns: vec!["Room".to_owned(), "Users".to_owned()],
+                        rows: vec![vec!["#rust:example".to_owned(), "42".to_owned()]],
+                        selected: Some(0),
+                        column_click_points: vec![super::UiPoint { x: 10, y: 8 }],
+                        visible_row_click_points: vec![super::UiPoint { x: 12, y: 24 }],
+                        top_row: 0,
+                    }),
                 },
             ))
             .unwrap(),
@@ -5362,7 +5419,15 @@ mod tests {
                     "timestamp":{"show":true,"format":"[HH:nn]"},
                     "active_system_menu_items":["&Restore","&Font..."],
                     "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true}]}],
-                    "compose_target":{"kind":"reply","event_id":"$question"}
+                    "compose_target":{"kind":"reply","event_id":"$question"},
+                    "room_list":{
+                        "columns":["Room","Users"],
+                        "rows":[["#rust:example","42"]],
+                        "selected":0,
+                        "column_click_points":[{"x":10,"y":8}],
+                        "visible_row_click_points":[{"x":12,"y":24}],
+                        "top_row":0
+                    }
                 }
             })
         );
@@ -5410,6 +5475,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -5498,6 +5564,7 @@ mod tests {
                 passphrase_redacted: true,
                 wait_for_backups_to_upload: true,
             }],
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -5550,6 +5617,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -5612,6 +5680,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -5699,6 +5768,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -5793,6 +5863,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -5892,6 +5963,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6021,6 +6093,7 @@ mod tests {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: Some("!room:example".to_owned()),
         };
@@ -6094,6 +6167,7 @@ mod tests {
                 submitted_verification_actions: Vec::new(),
                 submitted_recovery_commands: Vec::new(),
                 submitted_setup_recovery_commands: Vec::new(),
+                submitted_room_list_requests: Vec::new(),
                 last_error: None,
                 selected_room: None,
             }

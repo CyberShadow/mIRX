@@ -40,11 +40,12 @@ use mirx_testkit::{
     SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
     SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
     SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
-    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiComposeTarget, UiComposeTargetKind,
-    UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimestamp, UnsupportedRoomMessageActivity,
-    Verification, VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
+    SubmittedReplyThreadTarget, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
+    SubmittedSetupRecoveryCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
+    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu,
+    UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UiTimestamp, UnsupportedRoomMessageActivity, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -52,11 +53,12 @@ use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
-    VK_MENU,
+    VK_MENU, VK_RETURN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
@@ -65,8 +67,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED,
     PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
     SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowTextW, WM_CHAR, WM_COMMAND,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND,
-    WM_VSCROLL, WS_VSCROLL,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -614,23 +616,53 @@ fn spawn_mock_homeserver(
                 continue;
             }
 
-            // `/join #new:example` (the SDK percent-encodes `#`). The room
-            // has no state yet; the snapshot after the join reads its
-            // encryption state.
-            if path == "/_matrix/client/v3/join/%23new:example" {
+            // `/join #name:example` (the SDK percent-encodes `#`) joins
+            // `!name:example`. The room has no state yet; the snapshot after
+            // the join reads its encryption state.
+            if let Some(name) = path
+                .strip_prefix("/_matrix/client/v3/join/%23")
+                .and_then(|alias| alias.strip_suffix(":example"))
+            {
                 respond_json(
                     &mut stream,
                     200,
-                    &serde_json::json!({ "room_id": "!new:example" }),
+                    &serde_json::json!({ "room_id": format!("!{name}:example") }),
                 );
                 continue;
             }
-            if path == "/_matrix/client/v3/rooms/!new:example/state/m.room.encryption/" {
+            if path.starts_with("/_matrix/client/v3/rooms/!")
+                && path.ends_with(":example/state/m.room.encryption/")
+            {
                 respond_json(
                     &mut stream,
                     404,
                     &serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "not found" }),
                 );
+                continue;
+            }
+
+            // The room directory, in two pages.
+            if path == "/_matrix/client/v3/publicRooms" {
+                let page = if request.contains("\"since\":\"page2\"") {
+                    serde_json::json!({
+                        "chunk": [
+                            public_room_chunk("!zed:example", Some("#zed:example"), "Zed", 40),
+                            public_room_chunk("!alpha:example", Some("#alpha:example"), "Alpha", 1),
+                        ],
+                        "total_room_count_estimate": 5
+                    })
+                } else {
+                    serde_json::json!({
+                        "chunk": [
+                            public_room_chunk("!rust:example", Some("#rust:example"), "Rust", 120),
+                            public_room_chunk("!beta:example", Some("#beta:example"), "Beta", 2),
+                            public_room_chunk("!opaque:example", None, "Opaque", 7),
+                        ],
+                        "next_batch": "page2",
+                        "total_room_count_estimate": 5
+                    })
+                };
+                respond_json(&mut stream, 200, &page);
                 continue;
             }
 
@@ -683,6 +715,27 @@ fn spawn_mock_homeserver(
     Ok(MockBackfillHomeserver {
         base_url: format!("http://{address}"),
     })
+}
+
+/// A room directory entry whose topic is "About {name}".
+fn public_room_chunk(
+    room_id: &str,
+    alias: Option<&str>,
+    name: &str,
+    joined_members: u64,
+) -> serde_json::Value {
+    let mut chunk = serde_json::json!({
+        "room_id": room_id,
+        "name": name,
+        "topic": format!("About {name}"),
+        "num_joined_members": joined_members,
+        "world_readable": false,
+        "guest_can_join": false
+    });
+    if let Some(alias) = alias {
+        chunk["canonical_alias"] = serde_json::json!(alias);
+    }
+    chunk
 }
 
 fn respond_json(stream: &mut std::net::TcpStream, status: u16, body: &serde_json::Value) {
@@ -2794,7 +2847,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 35);
+    assert_eq!(version.protocol_version, 36);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -11115,8 +11168,9 @@ fn automation_driver_slash_query_records_submitted_direct_room_without_creating_
 
 const MENU_ID_COMMANDS_FIRST: usize = 40100;
 const COMMANDS_MENU_JOIN: usize = 0;
-const COMMANDS_MENU_PART: usize = 1;
-const COMMANDS_MENU_QUERY: usize = 2;
+const COMMANDS_MENU_LIST: usize = 1;
+const COMMANDS_MENU_PART: usize = 2;
+const COMMANDS_MENU_QUERY: usize = 3;
 const MENU_ID_HELP_TOPICS: usize = 40034;
 const MENU_ID_HELP_ABOUT: usize = 40035;
 const ABOUT_DIALOG_VERSION_ID: i32 = 5019;
@@ -11143,22 +11197,291 @@ fn run_commands_menu_item(
         );
     });
     if let Some(input) = input {
-        let class_name = wide_null("mirxWin32FindDialog");
-        let dialog = wait_for_window(&class_name, "Commands prompt")?;
-        let edit = unsafe { GetDlgItem(dialog, FIND_DIALOG_QUERY_ID) };
-        assert!(!edit.is_null(), "Commands prompt edit must exist");
-        let input = wide_null(input);
-        assert_ne!(unsafe { SetWindowTextW(edit, input.as_ptr()) }, 0);
-        assert_ne!(
-            unsafe { PostMessageW(dialog, WM_COMMAND, FIND_DIALOG_OK_ID as WPARAM, 0) },
-            0
-        );
-        wait_for_window_gone(dialog, "Commands prompt")?;
+        answer_commands_prompt(input)?;
     }
     menu_thread
         .join()
         .expect("Commands menu thread must not panic");
     app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+/// Types `input` into the open Commands prompt and presses OK.
+fn answer_commands_prompt(input: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let class_name = wide_null("mirxWin32FindDialog");
+    let dialog = wait_for_window(&class_name, "Commands prompt")?;
+    let edit = unsafe { GetDlgItem(dialog, FIND_DIALOG_QUERY_ID) };
+    assert!(!edit.is_null(), "Commands prompt edit must exist");
+    let input = wide_null(input);
+    assert_ne!(unsafe { SetWindowTextW(edit, input.as_ptr()) }, 0);
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, FIND_DIALOG_OK_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Commands prompt")
+}
+
+/// The Rooms List's list control, read from the real window.
+fn room_list_control(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
+    let child = view_child_hwnd(app, &ViewIdentity::RoomList)?;
+    let list = unsafe { GetDlgItem(child, VIEW_CONTENT_ID) };
+    assert!(!list.is_null(), "the Rooms List window must hold its list");
+    assert_eq!(unsafe { class_name(list) }, "SysListView32");
+    Ok(list)
+}
+
+fn mouse_lparam(point: &UiPoint) -> isize {
+    ((point.y as u16 as isize) << 16) | point.x as u16 as isize
+}
+
+/// Clicks, or double-clicks, `hwnd` at `point` in its client area with the
+/// left button, through the mouse messages the control itself handles.
+fn post_left_click(hwnd: HWND, point: &UiPoint, double: bool) {
+    let lparam = mouse_lparam(point);
+    let mut messages = vec![(WM_LBUTTONDOWN, MK_LBUTTON), (WM_LBUTTONUP, 0)];
+    if double {
+        messages.extend([(WM_LBUTTONDBLCLK, MK_LBUTTON), (WM_LBUTTONUP, 0)]);
+    }
+    for (message, buttons) in messages {
+        assert_ne!(
+            unsafe { PostMessageW(hwnd, message, buttons as WPARAM, lparam) },
+            0,
+            "posting a mouse message must succeed"
+        );
+    }
+}
+
+fn room_list_rows(ui_state: &UiState) -> Vec<Vec<String>> {
+    ui_state
+        .room_list
+        .as_ref()
+        .map(|room_list| room_list.rows.clone())
+        .unwrap_or_default()
+}
+
+fn directory_row(room: &str, users: &str, name: &str) -> Vec<String> {
+    vec![
+        room.to_owned(),
+        users.to_owned(),
+        name.to_owned(),
+        format!("About {name}"),
+    ]
+}
+
+/// Signs in to the mock homeserver and lists its whole directory from the
+/// Commands menu.
+fn list_the_mock_directory(
+    local_app_data: &Path,
+    server: &MockBackfillHomeserver,
+) -> Result<(GuiTestApp, UiState), Box<dyn std::error::Error>> {
+    let app = launch_automation_app(local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    run_commands_menu_item(&app, COMMANDS_MENU_LIST, Some(""))?;
+    let ui_state = app.wait_for_ui_state(
+        "both directory pages listed",
+        Duration::from_secs(10),
+        |ui_state| {
+            find_view(ui_state, &ViewIdentity::RoomList)
+                .title
+                .ends_with("5 rooms")
+        },
+    )?;
+    Ok((app, ui_state))
+}
+
+#[test]
+fn room_list_fills_sorts_and_joins_from_the_directory() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let (app, listed) = list_the_mock_directory(&local_app_data, &server)?;
+
+    assert_eq!(listed.mdi.active, ViewIdentity::RoomList);
+    assert_eq!(
+        find_view(&listed, &ViewIdentity::RoomList).title,
+        "Rooms List [example] - 5 rooms"
+    );
+    let room_list = listed.room_list.as_ref().expect("the Rooms List is open");
+    assert_eq!(room_list.columns, ["Room", "Users", "Name", "Topic"]);
+    assert_eq!(
+        room_list.rows,
+        vec![
+            directory_row("#rust:example", "120", "Rust"),
+            directory_row("#beta:example", "2", "Beta"),
+            directory_row("!opaque:example", "7", "Opaque"),
+            directory_row("#zed:example", "40", "Zed"),
+            directory_row("#alpha:example", "1", "Alpha"),
+        ]
+    );
+    assert_eq!(room_list.selected, None);
+    assert_eq!(
+        app.dump_model()?.submitted_room_list_requests,
+        vec![
+            SubmittedRoomListRequest {
+                server: None,
+                filter: None,
+                since: None,
+                limit: 100,
+            },
+            SubmittedRoomListRequest {
+                server: None,
+                filter: None,
+                since: Some("page2".to_owned()),
+                limit: 100,
+            },
+        ]
+    );
+
+    // Clicking the Users header sorts the busiest rooms first.
+    let list = room_list_control(&app)?;
+    let header = unsafe { child_window_with_class(list, "SysHeader32") };
+    post_left_click(header, &room_list.column_click_points[1], false);
+    let sorted = app.wait_for_ui_state(
+        "the rooms sorted by users",
+        Duration::from_secs(5),
+        |ui_state| {
+            room_list_rows(ui_state).first().map(|row| row[0].as_str()) == Some("#rust:example")
+                && room_list_rows(ui_state).get(1).map(|row| row[0].as_str())
+                    == Some("#zed:example")
+        },
+    )?;
+    assert_eq!(
+        room_list_rows(&sorted)
+            .iter()
+            .map(|row| row[1].as_str())
+            .collect::<Vec<_>>(),
+        ["120", "40", "7", "2", "1"]
+    );
+
+    // Double-clicking a room joins it and opens its window.
+    let sorted_list = sorted.room_list.as_ref().expect("the Rooms List is open");
+    post_left_click(list, &sorted_list.visible_row_click_points[0], true);
+    let joined = app.wait_for_ui_state(
+        "the joined room active",
+        Duration::from_secs(10),
+        |ui_state| ui_state.mdi.active == room_identity("!rust:example"),
+    )?;
+    find_view(&joined, &ViewIdentity::RoomList);
+    let model = app.dump_model()?;
+    assert_eq!(
+        model.submitted_membership_commands,
+        vec![SubmittedMembershipCommand {
+            action: MembershipCommandAction::Join,
+            target: "#rust:example".to_owned(),
+        }]
+    );
+    assert_eq!(model.last_error, None);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn room_list_return_on_a_joined_room_activates_its_window() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let (app, listed) = list_the_mock_directory(&local_app_data, &server)?;
+    let room_list = listed.room_list.as_ref().expect("the Rooms List is open");
+    assert_eq!(room_list.rows[1][0], "#beta:example");
+
+    let list = room_list_control(&app)?;
+    post_left_click(list, &room_list.visible_row_click_points[1], false);
+    app.wait_for_ui_state(
+        "the Beta row selected",
+        Duration::from_secs(5),
+        |ui_state| {
+            ui_state
+                .room_list
+                .as_ref()
+                .and_then(|room_list| room_list.selected)
+                == Some(1)
+        },
+    )?;
+    assert_ne!(
+        unsafe { PostMessageW(list, WM_KEYDOWN, VK_RETURN as WPARAM, 0) },
+        0
+    );
+    app.wait_for_ui_state(
+        "the Beta window active",
+        Duration::from_secs(5),
+        |ui_state| ui_state.mdi.active == room_identity("!beta:example"),
+    )?;
+    assert!(app.dump_model()?.submitted_membership_commands.is_empty());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn alt_l_lists_matching_rooms_and_closing_the_window_drops_the_listing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+    let frame = app.automation_frame_hwnd() as HWND;
+
+    // Signed out there is no directory to list.
+    unsafe { SetForegroundWindow(frame) };
+    send_key_chord(VK_MENU, u16::from(b'L'));
+    answer_commands_prompt("rust")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(status_view_contains(
+        &app,
+        "* /list: not connected to server"
+    )?);
+    assert!(app.dump_ui_state()?.room_list.is_none());
+    assert!(app.dump_model()?.submitted_room_list_requests.is_empty());
+
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    unsafe { SetForegroundWindow(frame) };
+    send_key_chord(VK_MENU, u16::from(b'L'));
+    answer_commands_prompt("rust")?;
+    let listed = app.wait_for_ui_state(
+        "the matching rooms listed",
+        Duration::from_secs(10),
+        |ui_state| {
+            ui_state
+                .room_list
+                .as_ref()
+                .is_some_and(|room_list| room_list.rows.len() == 5)
+        },
+    )?;
+    assert_eq!(listed.mdi.active, ViewIdentity::RoomList);
+    assert_eq!(
+        find_view(&listed, &ViewIdentity::RoomList).title,
+        "Rooms List [example] \"rust\" - 5 rooms"
+    );
+    assert_eq!(
+        app.dump_model()?.submitted_room_list_requests[0],
+        SubmittedRoomListRequest {
+            server: None,
+            filter: Some("rust".to_owned()),
+            since: None,
+            limit: 100,
+        }
+    );
+
+    close_view_without_prompt(&app, &ViewIdentity::RoomList)?;
+    let closed = app.dump_ui_state()?;
+    assert!(closed.room_list.is_none());
+    assert!(
+        closed
+            .mdi
+            .views
+            .iter()
+            .all(|view| view.identity != ViewIdentity::RoomList)
+    );
+    assert!(!serde_json::to_string(&closed.navigation)?.contains("Rooms List"));
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }
 
@@ -11237,6 +11560,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
             "&Commands",
             &[
                 ("&Join room...", true),
+                ("&List rooms...\tAlt+L", true),
                 ("&Part room", true),
                 ("&Query user...", true),
                 ("&Whois user...", true),

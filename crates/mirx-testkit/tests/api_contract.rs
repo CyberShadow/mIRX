@@ -37,10 +37,10 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SwitchbarItem, SwitchbarState,
     TestkitError, UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState,
-    UiFindState, UiMenu, UiMenuItem, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState,
-    UiState, UiTextFont, UiTimestamp, UnsupportedRoomMessageActivity, Verification,
-    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
-    ViewActivityLevel, ViewIdentity,
+    UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomList,
+    UiRoomReadState, UiRoomState, UiState, UiTextFont, UiTimestamp, UnsupportedRoomMessageActivity,
+    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -634,6 +634,7 @@ fn data_models_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: Some(UiError {
             operation: "send text".to_owned(),
             message: "failed".to_owned(),
@@ -824,6 +825,14 @@ fn data_models_round_trip_through_json() {
         compose_target: Some(UiComposeTarget {
             kind: UiComposeTargetKind::Edit,
             event_id: "$mine:example".to_owned(),
+        }),
+        room_list: Some(UiRoomList {
+            columns: vec!["Room".to_owned()],
+            rows: vec![vec!["#rust:example".to_owned()]],
+            selected: None,
+            column_click_points: vec![UiPoint { x: 4, y: 5 }],
+            visible_row_click_points: vec![UiPoint { x: 6, y: 7 }],
+            top_row: 0,
         }),
     };
     let navigation_path = vec![
@@ -1055,6 +1064,14 @@ fn data_models_round_trip_through_json() {
                 "current_match_index": 0,
                 "selected_text": "hello",
                 "history_search": {"state": "local_only"},
+            },
+            "room_list": {
+                "columns": ["Room"],
+                "rows": [["#rust:example"]],
+                "selected": null,
+                "column_click_points": [{"x": 4, "y": 5}],
+                "visible_row_click_points": [{"x": 6, "y": 7}],
+                "top_row": 0,
             },
             "rooms": [
                 {
@@ -4100,6 +4117,7 @@ fn model_last_activity_round_trips_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: Some("!room:example".to_owned()),
     };
@@ -4171,6 +4189,7 @@ fn model_submitted_membership_commands_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4361,6 +4380,7 @@ fn model_submitted_direct_room_commands_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4451,6 +4471,7 @@ fn model_submitted_room_topic_commands_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4549,6 +4570,7 @@ fn model_submitted_reaction_commands_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4629,6 +4651,7 @@ fn model_submitted_reply_commands_round_trip_through_json_without_thread() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4714,6 +4737,7 @@ fn model_submitted_reply_commands_round_trip_through_json_with_thread() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4801,6 +4825,7 @@ fn model_submitted_redaction_commands_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -4935,6 +4960,7 @@ fn model_full_payload_round_trips_submitted_reply_reaction_and_redaction_command
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: None,
         }
@@ -5016,6 +5042,7 @@ fn model_submitted_history_commands_round_trip_through_json() {
         submitted_verification_actions: Vec::new(),
         submitted_recovery_commands: Vec::new(),
         submitted_setup_recovery_commands: Vec::new(),
+        submitted_room_list_requests: Vec::new(),
         last_error: None,
         selected_room: None,
     };
@@ -5115,6 +5142,7 @@ fn model_submitted_history_commands_default_to_empty_when_omitted() {
             submitted_verification_actions: Vec::new(),
             submitted_recovery_commands: Vec::new(),
             submitted_setup_recovery_commands: Vec::new(),
+            submitted_room_list_requests: Vec::new(),
             last_error: None,
             selected_room: None,
         }
@@ -6301,6 +6329,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         active_system_menu_items: vec![],
         menu_bar: vec![],
         compose_target: None,
+        room_list: None,
     };
 
     let identity = ViewIdentity::Room {

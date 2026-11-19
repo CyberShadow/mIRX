@@ -7,11 +7,12 @@ use mirx_core::{
     E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
     E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
     InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
-    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
-    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
-    RedactEventRequest, RejectRoomInviteRequest, RoomActivity, RoomActivityKind,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    ListPublicRoomsRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    PublicRoom, PublicRoomsPage, PublicRoomsResult, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
+    RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
+    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
@@ -857,6 +858,52 @@ fn stored_session_rejects_unknown_fields() {
         .is_err(),
         "stored session must reject unknown fields"
     );
+}
+
+#[test]
+fn list_public_rooms_before_login_emits_list_public_rooms_error() {
+    assert_invalid_authenticated_command(
+        Command::ListPublicRooms(ListPublicRoomsRequest {
+            server: None,
+            filter: None,
+            since: None,
+            limit: 100,
+        }),
+        Operation::ListPublicRooms,
+        "list public rooms requires an authenticated session",
+    );
+}
+
+#[test]
+fn public_rooms_page_round_trips_through_serde() {
+    let page = PublicRoomsPage {
+        request: ListPublicRoomsRequest {
+            server: Some("matrix.org".to_owned()),
+            filter: Some("rust".to_owned()),
+            since: Some("batch-1".to_owned()),
+            limit: 100,
+        },
+        result: PublicRoomsResult::Loaded {
+            rooms: vec![PublicRoom {
+                room_id: "!rust:matrix.org".to_owned(),
+                canonical_alias: Some("#rust:matrix.org".to_owned()),
+                name: Some("Rust".to_owned()),
+                topic: None,
+                joined_members: 42,
+            }],
+            next_batch: None,
+            total_estimate: Some(1),
+        },
+    };
+
+    let json = serde_json::to_string(&page).expect("serialize public rooms page");
+    assert_eq!(
+        json,
+        r##"{"request":{"server":"matrix.org","filter":"rust","since":"batch-1","limit":100},"result":{"type":"loaded","rooms":[{"room_id":"!rust:matrix.org","canonical_alias":"#rust:matrix.org","name":"Rust","topic":null,"joined_members":42}],"next_batch":null,"total_estimate":1}}"##
+    );
+    let restored: PublicRoomsPage =
+        serde_json::from_str(&json).expect("deserialize public rooms page");
+    assert_eq!(restored, page);
 }
 
 #[test]

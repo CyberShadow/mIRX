@@ -36,6 +36,11 @@ pub(super) enum SlashCommand {
     Join {
         target: String,
     },
+    /// `/list [-s <server>] [match text]`: the Rooms List.
+    List {
+        server: Option<String>,
+        filter: Option<String>,
+    },
     /// `/query <nick> [message]`.
     Query {
         target: String,
@@ -186,6 +191,7 @@ impl SlashCommand {
             Self::Find { .. } => "find",
             Self::Window { .. } => "window",
             Self::Join { .. } => "join",
+            Self::List { .. } => "list",
             Self::Query { .. } => "query",
             Self::Msg {
                 presentation: RoomMessagePresentationKind::Notice,
@@ -343,6 +349,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "kick",
         usage: "<nick> [reason]",
         summary: "kick a member from this room",
+    },
+    CommandSpec {
+        name: "list",
+        usage: "[-s server] [match text]",
+        summary: "list the rooms in a server's room directory",
     },
     CommandSpec {
         name: "me",
@@ -552,6 +563,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "join" => Ok(SlashCommand::Join {
             target: required(argument)?,
         }),
+        "list" => parse_list(argument),
         "query" => {
             required(argument)?;
             let (target, message) = split_word(argument);
@@ -671,6 +683,32 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
         "font" => parse_font(argument).map(SlashCommand::Font),
         _ => Err(CommandError::unknown(name)),
     }
+}
+
+/// `[-s <server>] [match text]`. The match text is the rest of the line, as
+/// the server matches it; empty lists every room.
+fn parse_list(argument: &str) -> Result<SlashCommand, CommandError> {
+    let (switch, rest) = split_word(argument);
+    let (server, filter) = match switch {
+        "-s" => {
+            let (server, filter) = split_word(rest);
+            if server.is_empty() {
+                return Err(CommandError::insufficient_parameters("list"));
+            }
+            (Some(server.to_owned()), filter)
+        }
+        switch if switch.starts_with('-') => {
+            return Err(CommandError::new(
+                "list",
+                format!("unknown switch {switch}"),
+            ));
+        }
+        _ => (None, argument),
+    };
+    Ok(SlashCommand::List {
+        server,
+        filter: (!filter.is_empty()).then(|| filter.to_owned()),
+    })
 }
 
 /// `<event-id> <text>`: both parts are required.
@@ -1203,6 +1241,27 @@ mod tests {
             assert_eq!(rejected, error("e2ee", "invalid parameters"), "{input}");
             assert!(!rejected.unwrap_err().to_string().contains("secret"));
         }
+    }
+
+    #[test]
+    fn parse_list_takes_a_server_switch_and_match_text() {
+        let list = |server: Option<&str>, filter: Option<&str>| {
+            Ok(SlashCommand::List {
+                server: server.map(str::to_owned),
+                filter: filter.map(str::to_owned),
+            })
+        };
+        assert_eq!(parse("/list"), list(None, None));
+        assert_eq!(parse("/list   "), list(None, None));
+        assert_eq!(parse("/list rust lang"), list(None, Some("rust lang")));
+        assert_eq!(parse("/list -s matrix.org"), list(Some("matrix.org"), None));
+        assert_eq!(
+            parse("/list -s matrix.org  rust lang "),
+            list(Some("matrix.org"), Some("rust lang"))
+        );
+        assert_eq!(parse("/list -s"), insufficient("list"));
+        assert_eq!(parse("/list -s   "), insufficient("list"));
+        assert_eq!(parse("/list -x rust"), error("list", "unknown switch -x"));
     }
 
     #[test]

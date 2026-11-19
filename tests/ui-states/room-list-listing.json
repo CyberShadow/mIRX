@@ -1,0 +1,78 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null
+      },
+      "homeserver_url": "https://matrix.example/"
+    }
+  },
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!lobby:example",
+        "display_name": "Lobby",
+        "topic": "welcome to the lobby",
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": []
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "morning all",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-2",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "coffee is ready",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  }
+]

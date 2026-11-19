@@ -381,6 +381,8 @@ pub struct Model {
     pub submitted_recovery_commands: Vec<SubmittedRecoveryCommand>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submitted_setup_recovery_commands: Vec<SubmittedSetupRecoveryCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub submitted_room_list_requests: Vec<SubmittedRoomListRequest>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
 }
@@ -431,6 +433,16 @@ pub enum MemberPowerRole {
 #[serde(deny_unknown_fields)]
 pub struct SubmittedProfileCommand {
     pub display_name: String,
+}
+
+/// A room directory page asked for (`/list`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmittedRoomListRequest {
+    pub server: Option<String>,
+    pub filter: Option<String>,
+    pub since: Option<String>,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1131,6 +1143,33 @@ pub struct UiState {
     pub menu_bar: Vec<UiMenu>,
     /// What the active window's editbox replies to or edits.
     pub compose_target: Option<UiComposeTarget>,
+    /// The Rooms List window, read back from its list control.
+    pub room_list: Option<UiRoomList>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiRoomList {
+    /// The header's column titles.
+    pub columns: Vec<String>,
+    /// Every row's cells in display order, as the list shows them.
+    pub rows: Vec<Vec<String>>,
+    pub selected: Option<usize>,
+    /// Where to click each column header, in the header's client
+    /// coordinates.
+    pub column_click_points: Vec<UiPoint>,
+    /// Where to click each row the list shows now, from its top row, in the
+    /// list's client coordinates.
+    pub visible_row_click_points: Vec<UiPoint>,
+    /// The display index of the list's top row.
+    pub top_row: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiPoint {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1392,6 +1431,8 @@ pub struct SwitchbarState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ViewIdentity {
     Status,
+    /// The Rooms List window (`/list`).
+    RoomList,
     Room {
         room_id: String,
     },
@@ -1410,13 +1451,14 @@ impl<'de> Deserialize<'de> for ViewIdentity {
         #[serde(rename_all = "snake_case")]
         enum Kind {
             Status,
+            RoomList,
             Room,
             Thread,
         }
 
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct StatusIdentity {
+        struct KindOnlyIdentity {
             #[serde(rename = "kind")]
             _kind: Kind,
         }
@@ -1446,9 +1488,14 @@ impl<'de> Deserialize<'de> for ViewIdentity {
 
         match serde_json::from_value::<Kind>(kind).map_err(serde::de::Error::custom)? {
             Kind::Status => {
-                serde_json::from_value::<StatusIdentity>(value)
+                serde_json::from_value::<KindOnlyIdentity>(value)
                     .map_err(serde::de::Error::custom)?;
                 Ok(Self::Status)
+            }
+            Kind::RoomList => {
+                serde_json::from_value::<KindOnlyIdentity>(value)
+                    .map_err(serde::de::Error::custom)?;
+                Ok(Self::RoomList)
             }
             Kind::Room => serde_json::from_value::<RoomIdentity>(value)
                 .map(|view| {
