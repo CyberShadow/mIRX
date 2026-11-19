@@ -41,11 +41,12 @@ use windows_sys::Win32::Foundation::{
     LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_WINDOW, ClientToScreen, CreateFontIndirectW, CreateSolidBrush,
-    DEFAULT_CHARSET, DeleteObject, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC,
-    GetDeviceCaps, GetTextFaceW, GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW,
-    LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode,
-    SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
+    BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
+    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DeleteObject,
+    DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect, GetDC, GetDeviceCaps,
+    GetSysColor, GetSysColorBrush, GetTextFaceW, GetTextMetricsW, HBRUSH, HFONT, InvalidateRect,
+    LOGFONTW, LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject,
+    SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -67,11 +68,12 @@ use windows_sys::Win32::UI::Controls::Dialogs::{
 };
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
-    CDRF_NOTIFYITEMDRAW, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES,
-    ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CUSTOMDRAW, NMHDR,
-    NMTBCUSTOMDRAW, NMTVCUSTOMDRAW, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo,
-    TB_ADDBUTTONSW, TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON,
-    TB_SETBUTTONSIZE, TB_SETEXTENDEDSTYLE, TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
+    CDRF_NOTIFYITEMDRAW, DRAWITEMSTRUCT, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, I_IMAGENONE,
+    ICC_BAR_CLASSES, ICC_TREEVIEW_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx,
+    MEASUREITEMSTRUCT, NM_CUSTOMDRAW, NMHDR, NMTBCUSTOMDRAW, NMTVCUSTOMDRAW, ODS_FOCUS,
+    ODS_SELECTED, SB_SETTEXTW, SBARS_SIZEGRIP, STATUSCLASSNAMEW, SetScrollInfo, TB_ADDBUTTONSW,
+    TB_AUTOSIZE, TB_BUTTONCOUNT, TB_BUTTONSTRUCTSIZE, TB_DELETEBUTTON, TB_SETBUTTONSIZE,
+    TB_SETEXTENDEDSTYLE, TB_SETSTATE, TBBUTTON, TBSTATE_CHECKED, TBSTATE_ENABLED,
     TBSTYLE_EX_MIXEDBUTTONS, TBSTYLE_FLAT, TOOLBARCLASSNAMEW, TVE_EXPAND, TVGN_CARET, TVGN_CHILD,
     TVGN_NEXT, TVGN_PARENT, TVGN_ROOT, TVHITTESTINFO, TVI_LAST, TVI_ROOT, TVIF_TEXT,
     TVINSERTSTRUCTW, TVINSERTSTRUCTW_0, TVITEMEXW, TVM_DELETEITEM, TVM_EXPAND, TVM_GETITEMRECT,
@@ -89,23 +91,24 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GWL_STYLE, GWLP_USERDATA, GWLP_WNDPROC, GetClientRect, GetDlgItem, GetForegroundWindow,
     GetMenuItemCount, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo, GetSystemMenu,
     GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsChild, IsIconic,
-    IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
-    LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LBS_NOINTEGRALHEIGHT, LoadCursorW,
-    MB_ICONERROR, MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL,
-    MDITILE_VERTICAL, MF_BYCOMMAND, MF_BYPOSITION, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
-    MF_STRING, MSG, MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SB_BOTTOM, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK,
-    SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
+    IsWindow, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT,
+    LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
+    LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
+    MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL,
+    MF_BYCOMMAND, MF_BYPOSITION, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG,
+    MessageBoxW, MoveWindow, PostMessageW, PostQuitMessage, RegisterClassExW, SB_BOTTOM,
+    SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP,
+    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SIF_TRACKPOS,
     SW_MINIMIZE, SW_SHOW, SendMessageW, SetForegroundWindow, SetMenu, SetTimer, SetWindowLongPtrW,
     ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMDISysAccel,
     TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_GETFONT, WM_GETTEXT, WM_GETTEXTLENGTH,
-    WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE, WM_MDICREATE,
-    WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE, WM_MDITILE,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE, WM_SETFOCUS, WM_SETFONT, WM_SETTEXT,
-    WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW, WNDPROC, WS_BORDER, WS_CAPTION,
-    WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    WM_CONTEXTMENU, WM_COPYDATA, WM_CREATE, WM_DESTROY, WM_DRAWITEM, WM_GETFONT, WM_GETTEXT,
+    WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MDIACTIVATE, WM_MDICASCADE,
+    WM_MDICREATE, WM_MDIDESTROY, WM_MDIGETACTIVE, WM_MDIICONARRANGE, WM_MDIMAXIMIZE, WM_MDIRESTORE,
+    WM_MDITILE, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_PASTE,
+    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WM_VSCROLL, WNDCLASSEXW,
+    WNDPROC, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_MAXIMIZE,
+    WS_OVERLAPPED, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use self::glyph_fonts::GlyphFonts;
@@ -4058,6 +4061,18 @@ unsafe extern "system" fn room_content_window_proc(
             layout_room_content(hwnd);
             0
         }
+        // From the owner-drawn nick list. The first arrives while the list
+        // is created, before this window's state exists: the height comes
+        // from the frame.
+        WM_MEASUREITEM => {
+            let measure = &mut *(lparam as *mut MEASUREITEMSTRUCT);
+            measure.itemHeight = text_font_item_height(hwnd);
+            1
+        }
+        WM_DRAWITEM => {
+            draw_nick_list_item(hwnd, &*(lparam as *const DRAWITEMSTRUCT));
+            1
+        }
         WM_NCDESTROY => {
             let state_ptr = room_content_state_ptr(hwnd);
             if !state_ptr.is_null() {
@@ -4118,7 +4133,10 @@ unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>,
         WS_EX_CLIENTEDGE,
         wide_null("LISTBOX").as_ptr(),
         wide_null("").as_ptr(),
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOINTEGRALHEIGHT as u32,
+        WS_CHILD
+            | WS_VISIBLE
+            | WS_VSCROLL
+            | (LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32,
         0,
         0,
         0,
@@ -4133,6 +4151,63 @@ unsafe fn create_room_content_state(hwnd: HWND) -> Result<Box<RoomContentState>,
     }
 
     Ok(Box::new(RoomContentState { timeline, members }))
+}
+
+/// A nick list item's height: a line of the frame's text font, as the
+/// stock listbox sizes its items for its font.
+unsafe fn text_font_item_height(hwnd: HWND) -> u32 {
+    let height = state_ref(frame_window_for(hwnd))
+        .text_font
+        .glyphs
+        .metrics()
+        .tmHeight;
+    u32::try_from(height).expect("a font height is positive")
+}
+
+/// Draws a nick list item like the stock listbox does, with the text in the
+/// frame's text font and its fallbacks.
+unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
+    let hdc = item.hDC;
+    // An empty list with the focus: only the focus rectangle.
+    if item.itemID == u32::MAX {
+        if item.itemState & ODS_FOCUS != 0 {
+            DrawFocusRect(hdc, &item.rcItem);
+        }
+        return;
+    }
+    let (background, text_color) = if item.itemState & ODS_SELECTED != 0 {
+        (COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT)
+    } else {
+        (COLOR_WINDOW, COLOR_WINDOWTEXT)
+    };
+    FillRect(hdc, &item.rcItem, GetSysColorBrush(background));
+    let previous_color = SetTextColor(hdc, GetSysColor(text_color));
+    let previous_mode = SetBkMode(hdc, TRANSPARENT as i32);
+
+    let length = SendMessageW(item.hwndItem, LB_GETTEXTLEN, item.itemID as WPARAM, 0);
+    let length = usize::try_from(length).expect("a nick list item has text");
+    let mut text = vec![0u16; length + 1];
+    SendMessageW(
+        item.hwndItem,
+        LB_GETTEXT,
+        item.itemID as WPARAM,
+        text.as_mut_ptr() as LPARAM,
+    );
+    let text = String::from_utf16(&text[..length]).expect("nick list items are UTF-16 text");
+    let glyphs = &state_ref(frame_window_for(hwnd)).text_font.glyphs;
+    glyphs.draw(
+        hdc,
+        item.rcItem.left + 1,
+        item.rcItem.top + glyphs.metrics().tmAscent,
+        &item.rcItem,
+        &text,
+    );
+
+    SetBkMode(hdc, previous_mode);
+    SetTextColor(hdc, previous_color);
+    if item.itemState & ODS_FOCUS != 0 {
+        DrawFocusRect(hdc, &item.rcItem);
+    }
 }
 
 unsafe fn layout_room_content(hwnd: HWND) {
@@ -4517,11 +4592,15 @@ unsafe fn set_view_text_font(view_id: &ViewId, child: HWND, font: HFONT) {
     match view_id {
         ViewId::Status => {}
         ViewId::Room(_) | ViewId::Thread { .. } => {
+            let members = room_content_member_list(content);
+            SendMessageW(members, WM_SETFONT, font as WPARAM, 1);
+            // Owner-drawn fixed items take their height from WM_MEASUREITEM
+            // once, at creation.
             SendMessageW(
-                room_content_member_list(content),
-                WM_SETFONT,
-                font as WPARAM,
-                1,
+                members,
+                LB_SETITEMHEIGHT,
+                0,
+                text_font_item_height(content) as LPARAM,
             );
         }
     }

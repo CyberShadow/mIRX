@@ -59,10 +59,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumThreadWindows, FindWindowExW, FindWindowW, GW_OWNER, GWL_STYLE, GetClassNameW,
     GetClientRect, GetDlgItem, GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow,
-    IsWindowVisible, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN, PostMessageW, SB_PAGEUP, SB_TOP,
-    SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SendMessageTimeoutW, SendMessageW,
-    SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIACTIVATE,
-    WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED,
+    PostMessageW, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL,
+    SendMessageTimeoutW, SendMessageW, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT,
+    WM_GETTEXTLENGTH, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SYSCOMMAND, WM_VSCROLL,
+    WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -4345,6 +4346,30 @@ fn font_command_changes_and_persists_the_text_font() -> Result<(), Box<dyn std::
     let font = app.dump_ui_state()?.text_font;
     assert_eq!(font.face, "Courier");
     assert_eq!((font.points, font.bold), (12, true));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn nick_list_is_owner_drawn_in_the_text_font() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.select_view(room_identity("!beta:example"))?;
+    let item_height = || unsafe {
+        SendMessageW(active_room_member_list_hwnd(&app), LB_GETITEMHEIGHT, 0, 0) as i32
+    };
+    let members = unsafe { active_room_member_list_hwnd(&app) };
+    assert_ne!(
+        unsafe { window_style(members) } & LBS_OWNERDRAWFIXED as u32,
+        0
+    );
+    // Items are a text font line tall, as the stock listbox makes them.
+    assert_eq!(item_height(), app.dump_ui_state()?.text_font.line_height);
+
+    type_commands(&app, &["/font 12 Courier"])?;
+    let font = app.dump_ui_state()?.text_font;
+    assert_eq!(font.face, "Courier");
+    assert_eq!(item_height(), font.line_height);
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
