@@ -20,6 +20,8 @@ fi
 export WINEPREFIX="${WINEPREFIX:-$tmpdir/wineprefix}"
 export WINEARCH="${WINEARCH:-win64}"
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
+# Timestamps show local time: pin it so the output is the same everywhere.
+export TZ=UTC
 
 command -v flock >/dev/null 2>&1 || {
   echo "windows-ui-tests: required command not found: flock" >&2

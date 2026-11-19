@@ -119,6 +119,8 @@ ensure_wineprefix() {
   export WINEARCH="${WINEARCH:-win64}"
   export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-mscoree,mshtml=}"
   export WINEDEBUG="${WINEDEBUG:--all}"
+  # Timestamps show local time: pin it so the output is the same everywhere.
+  export TZ=UTC
 
   if [[ ! -f "$WINEPREFIX/system.reg" ]]; then
     local prefix_lock_name=${WINEPREFIX//\//_}

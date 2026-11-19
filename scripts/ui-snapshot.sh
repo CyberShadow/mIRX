@@ -115,6 +115,8 @@ ensure_wineprefix() {
   export WINEARCH="${WINEARCH:-win64}"
   export WINEDLLOVERRIDES=mscoree,mshtml=
   export WINEDEBUG="${WINEDEBUG:--all}"
+  # Timestamps show local time: pin it so the output is the same everywhere.
+  export TZ=UTC
 
   mkdir -p "$WINEPREFIX"
   if [[ ! -f "$WINEPREFIX/system.reg" ]]; then

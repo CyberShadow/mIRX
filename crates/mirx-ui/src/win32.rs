@@ -37,8 +37,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT,
-    POINT, RECT, SIZE, WPARAM,
+    CloseHandle, FILETIME, GetLastError, GlobalFree, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+    LRESULT, POINT, RECT, SIZE, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_WINDOW, ClientToScreen, CreateSolidBrush, DT_NOPREFIX, DT_SINGLELINE,
@@ -59,6 +59,7 @@ use windows_sys::Win32::System::Memory::{
     MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, PAGE_READWRITE, UnmapViewOfFile,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
 use windows_sys::Win32::UI::Controls::{
     BTNS_CHECK, BTNS_SHOWTEXT, CCS_NOPARENTALIGN, CCS_NORESIZE, CDDS_ITEMPREPAINT, CDDS_PREPAINT,
     CDRF_NOTIFYITEMDRAW, EM_GETSEL, EM_REPLACESEL, EM_SETSEL, I_IMAGENONE, ICC_BAR_CLASSES,
@@ -138,6 +139,7 @@ mod mdi;
 mod nick_completion;
 mod status_log;
 mod timeline_text;
+mod timestamp;
 
 use commands::{
     CommandError, ComposeSubmission, E2eeSlashCommand, SlashCommand, VerificationAction,
@@ -148,10 +150,11 @@ use nick_completion::{NickCompletion, member_mention_text};
 use status_log::{StatusLineKind, StatusLog};
 
 use timeline_text::{
-    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, TIMELINE_CONTINUATION_INDENT_SAMPLE, action_line,
-    context_line, event_line, invited_text, member_change_text, message_line, nick_label,
-    now_talking_text, power_levels_change_text, rank_prefix, topic_change_text, topic_is_text,
+    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
+    member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
+    rank_prefix, topic_change_text, topic_is_text,
 };
+use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 
 const FRAME_CLASS_NAME: &str = "mirxWin32Frame";
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
@@ -532,6 +535,9 @@ struct TimelineState {
     top_line: usize,
     line_height: i32,
     vertical_padding: i32,
+    /// The timestamp prefix sample that log rows' continuation lines are
+    /// indented past; set with the rows, as the rows were stamped with it.
+    indent_sample: String,
 }
 
 impl Default for TimelineState {
@@ -545,6 +551,7 @@ impl Default for TimelineState {
             top_line: 0,
             line_height: TIMELINE_ROW_HEIGHT,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
+            indent_sample: String::new(),
         }
     }
 }
@@ -2616,6 +2623,10 @@ struct WindowState {
     automation: Option<AutomationState>,
     render_state_mode: bool,
     clock: UiClock,
+    /// How line timestamps are shown.
+    timestamp: TimestampSetting,
+    /// The time zone timestamps are shown in.
+    local_time: LocalTimeFn,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
@@ -2659,6 +2670,43 @@ enum UiClock {
 
 /// 2023-11-14 22:12 UTC, a minute before the fixtures' first event.
 const RENDER_STATE_CLOCK_MS: u64 = 1_699_999_920_000;
+
+impl WindowState {
+    fn timestamps(&self) -> TimestampStyle<'_> {
+        TimestampStyle::new(&self.timestamp, self.local_time)
+    }
+}
+
+/// `timestamp_ms` in the user's time zone, with the DST rules of that date.
+fn system_local_time(timestamp_ms: u64) -> LocalTime {
+    /// 100 ns intervals from 1601-01-01 to 1970-01-01.
+    const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
+    let ticks = UNIX_EPOCH_FILETIME + timestamp_ms * 10_000;
+    let file_time = FILETIME {
+        dwLowDateTime: ticks as u32,
+        dwHighDateTime: (ticks >> 32) as u32,
+    };
+    let mut utc = SYSTEMTIME::default();
+    let mut local = SYSTEMTIME::default();
+    unsafe {
+        assert!(
+            FileTimeToSystemTime(&file_time, &mut utc) != 0,
+            "FileTimeToSystemTime must convert a post-1970 time"
+        );
+        assert!(
+            SystemTimeToTzSpecificLocalTime(null(), &utc, &mut local) != 0,
+            "SystemTimeToTzSpecificLocalTime must convert to the current time zone"
+        );
+    }
+    LocalTime {
+        year: local.wYear,
+        month: local.wMonth as u8,
+        day: local.wDay as u8,
+        hour: local.wHour as u8,
+        minute: local.wMinute as u8,
+        second: local.wSecond as u8,
+    }
+}
 
 impl UiClock {
     fn now_ms(self) -> u64 {
@@ -2790,6 +2838,8 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         } else {
             UiClock::System
         },
+        timestamp: TimestampSetting::default(),
+        local_time: system_local_time,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         last_idle_probe_generation: None,
@@ -4166,16 +4216,18 @@ where
 
 /// Paint lines for a log row: the first line starts at the left padding and
 /// every continuation, whether wrapped or from a newline in the text, is
-/// indented past the timestamp like mIRC's hanging indent.
+/// indented past the timestamp like mIRC's hanging indent: by the width of
+/// `indent_sample`, a timestamp prefix.
 fn timeline_log_paint_texts<Measure>(
     text: &str,
     width: i32,
+    indent_sample: &str,
     measure: &Measure,
 ) -> Vec<(String, i32)>
 where
     Measure: Fn(&str) -> i32,
 {
-    let indent = measure(TIMELINE_CONTINUATION_INDENT_SAMPLE).min(width - 1);
+    let indent = measure(indent_sample).min(width - 1);
     let continuation_width = width - indent;
     let mut lines = Vec::new();
     for line in split_rendered_lines(text) {
@@ -4211,6 +4263,7 @@ fn timeline_full_width_paint_lines(kind: &TimelineRowKind, text: &str) -> Vec<Ti
 fn timeline_row_paint_lines_with_measure<Measure>(
     rows: &[TimelineRow],
     client_width: i32,
+    indent_sample: &str,
     measure: &Measure,
 ) -> Vec<TimelinePaintLine>
 where
@@ -4229,7 +4282,9 @@ where
                 paint_lines.extend(row_paint_lines);
             }
             TimelineRowLayout::Log => {
-                for (text, indent) in timeline_log_paint_texts(&row.logical_text, width, measure) {
+                for (text, indent) in
+                    timeline_log_paint_texts(&row.logical_text, width, indent_sample, measure)
+                {
                     paint_lines.push(TimelinePaintLine {
                         kind: row.kind.clone(),
                         visual: TimelinePaintLineVisual::Text { text, indent },
@@ -4300,9 +4355,11 @@ unsafe fn timeline_row_paint_lines(
     client_width: i32,
 ) -> Vec<TimelinePaintLine> {
     let (hdc, font, previous) = timeline_measurement_hdc(hwnd);
-    let paint_lines = timeline_row_paint_lines_with_measure(rows, client_width, &|text| unsafe {
-        timeline_measure_text_width(hdc, text)
-    });
+    let indent_sample = &timeline_state_ref(hwnd).indent_sample;
+    let paint_lines =
+        timeline_row_paint_lines_with_measure(rows, client_width, indent_sample, &|text| unsafe {
+            timeline_measure_text_width(hdc, text)
+        });
     if !font.is_null() && !previous.is_null() {
         SelectObject(hdc, previous);
     }
@@ -4373,7 +4430,9 @@ unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
     1
 }
 
-unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
+/// Shows `rows`, whose timestamps are as wide as `indent_sample`.
+unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow], indent_sample: String) {
+    timeline_state_mut(hwnd).indent_sample = indent_sample;
     let (rendered_text, lines) =
         normalize_timeline_text(&render_view_text(&project_timeline_rows(rows)));
     let paint_lines = timeline_row_paint_lines(hwnd, rows, timeline_client_width(hwnd));
@@ -8312,8 +8371,9 @@ fn push_room_activity_row(
     rows: &mut Vec<TimelineRow>,
     room_view: Option<&RoomViewModel>,
     activity: &RoomActivity,
+    timestamps: TimestampStyle,
 ) {
-    let timestamp = format!("[{}]", format_timestamp_hhmm_utc(activity.timestamp_ms));
+    let timestamp = timestamps.prefix(activity.timestamp_ms);
     let (kind, line, image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
             let suffix = match &message.send_state {
@@ -8492,13 +8552,22 @@ fn push_room_activity_row(
     );
 }
 
-fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> {
+fn build_room_timeline_rows(
+    model: &UiModel,
+    room_id: &str,
+    timestamps: TimestampStyle,
+) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("room view must target an existing room");
     let room_view = model.room_views.get(room_id);
     if is_invited_room(room) {
         let mut rows = build_invite_timeline_rows(room);
         if let Some(room_view) = room_view {
-            rows.extend(room_view.echo.lines_for(None).map(echo_row));
+            rows.extend(
+                room_view
+                    .echo
+                    .lines_for(None)
+                    .map(|line| echo_row(line, timestamps)),
+            );
         }
         return rows;
     }
@@ -8507,7 +8576,13 @@ fn build_room_timeline_rows(model: &UiModel, room_id: &str) -> Vec<TimelineRow> 
 
     if let Some(room_view) = room_view {
         push_room_history_backfill_row(&mut rows, &room_view.history);
-        push_activity_rows_with_echo(&mut rows, room_view, room_view.activities.iter(), None);
+        push_activity_rows_with_echo(
+            &mut rows,
+            room_view,
+            room_view.activities.iter(),
+            None,
+            timestamps,
+        );
         push_room_typing_row(&mut rows, room_view);
     }
 
@@ -8522,20 +8597,21 @@ fn push_activity_rows_with_echo<'a>(
     room_view: &RoomViewModel,
     activities: impl Iterator<Item = &'a RoomActivity>,
     thread_root: Option<&str>,
+    timestamps: TimestampStyle,
 ) {
     let mut echo = room_view.echo.lines_for(thread_root).peekable();
     for activity in activities {
         while let Some(line) = echo.next_if(|line| line.timestamp_ms < activity.timestamp_ms) {
-            rows.push(echo_row(line));
+            rows.push(echo_row(line, timestamps));
         }
-        push_room_activity_row(rows, Some(room_view), activity);
+        push_room_activity_row(rows, Some(room_view), activity, timestamps);
     }
-    rows.extend(echo.map(echo_row));
+    rows.extend(echo.map(|line| echo_row(line, timestamps)));
 }
 
-fn echo_row(line: &EchoLine) -> TimelineRow {
-    let timestamp = format!("[{}]", format_timestamp_hhmm_utc(line.timestamp_ms));
-    TimelineRow::log(TimelineRowKind::Info, format!("{timestamp} {}", line.text)).with_identity(
+fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
+    let prefix = timestamps.prefix(line.timestamp_ms);
+    TimelineRow::log(TimelineRowKind::Info, format!("{prefix}{}", line.text)).with_identity(
         TimelineRowIdentity::EchoLine {
             sequence: line.sequence,
         },
@@ -8546,6 +8622,7 @@ fn build_thread_timeline_rows(
     model: &UiModel,
     room_id: &str,
     thread_root_event_id: &str,
+    timestamps: TimestampStyle,
 ) -> Vec<TimelineRow> {
     let room = room_by_id(&model.rooms, room_id).expect("thread view must target an existing room");
     let room_view = model
@@ -8562,6 +8639,7 @@ fn build_thread_timeline_rows(
             .iter()
             .filter(|activity| room_activity_belongs_to_thread(activity, thread_root_event_id)),
         Some(thread_root_event_id),
+        timestamps,
     );
     push_room_typing_row(&mut rows, room_view);
     rows
@@ -8572,8 +8650,12 @@ fn project_timeline_rows(rows: &[TimelineRow]) -> Vec<String> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-fn render_room_lines(model: &UiModel, room_id: &str) -> Vec<String> {
-    project_timeline_rows(&build_room_timeline_rows(model, room_id))
+fn render_room_lines(state: &WindowState, room_id: &str) -> Vec<String> {
+    project_timeline_rows(&build_room_timeline_rows(
+        &state.model,
+        room_id,
+        state.timestamps(),
+    ))
 }
 
 fn format_room_image_metadata_suffix(info: Option<&RoomImageInfo>) -> String {
@@ -8668,17 +8750,10 @@ fn format_room_video_metadata_suffix(info: Option<&RoomVideoInfo>) -> String {
     }
 }
 
-fn format_timestamp_hhmm_utc(timestamp_ms: u64) -> String {
-    const MINUTES_PER_DAY: u64 = 24 * 60;
-
-    let total_minutes = timestamp_ms / 1000 / 60;
-    let minutes_of_day = total_minutes % MINUTES_PER_DAY;
-    let hours = minutes_of_day / 60;
-    let minutes = minutes_of_day % 60;
-    format!("{hours:02}:{minutes:02}")
-}
-
-fn build_status_timeline_rows(status_log: &StatusLog) -> Vec<TimelineRow> {
+fn build_status_timeline_rows(
+    status_log: &StatusLog,
+    timestamps: TimestampStyle,
+) -> Vec<TimelineRow> {
     status_log
         .lines()
         .iter()
@@ -8687,8 +8762,8 @@ fn build_status_timeline_rows(status_log: &StatusLog) -> Vec<TimelineRow> {
                 StatusLineKind::Info => TimelineRowKind::Info,
                 StatusLineKind::Error => TimelineRowKind::Error,
             };
-            let timestamp = format!("[{}]", format_timestamp_hhmm_utc(line.timestamp_ms));
-            TimelineRow::log(kind, format!("{timestamp} {}", line.text))
+            let prefix = timestamps.prefix(line.timestamp_ms);
+            TimelineRow::log(kind, format!("{prefix}{}", line.text))
                 .with_identity(TimelineRowIdentity::status_line(line.sequence))
         })
         .collect()
@@ -10081,19 +10156,27 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
     SendMessageW(child, WM_SETTEXT, 0, title.as_ptr() as LPARAM);
     match view_id {
         ViewId::Status => {
-            let rows = build_status_timeline_rows(&state_ref(hwnd).model.status_log);
-            set_timeline_rows(content, &rows);
+            let (rows, indent_sample) = {
+                let state = state_ref(hwnd);
+                let timestamps = state.timestamps();
+                (
+                    build_status_timeline_rows(&state.model.status_log, timestamps),
+                    timestamps.indent_sample(),
+                )
+            };
+            set_timeline_rows(content, &rows, indent_sample);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             apply_find_to_active_view(hwnd, view_id)?;
             InvalidateRect(content, null(), 1);
         }
         ViewId::Room(room_id) => {
-            let (rows, member_rows, image_requests) = {
+            let (rows, indent_sample, member_rows, image_requests) = {
                 let state = state_ref(hwnd);
                 let room = room_by_id(&state.model.rooms, room_id)
                     .expect("room view must target an existing room");
                 let room_view = state.model.room_views.get(room_id);
-                let rows = build_room_timeline_rows(&state.model, room_id);
+                let timestamps = state.timestamps();
+                let rows = build_room_timeline_rows(&state.model, room_id, timestamps);
                 let image_requests = if is_sendable_room(room) {
                     room_view
                         .map(|room_view| {
@@ -10115,12 +10198,17 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                 } else {
                     Vec::new()
                 };
-                (rows, member_rows, image_requests)
+                (
+                    rows,
+                    timestamps.indent_sample(),
+                    member_rows,
+                    image_requests,
+                )
             };
             dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
-            set_timeline_rows(timeline, &rows);
+            set_timeline_rows(timeline, &rows, indent_sample);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;
@@ -10136,14 +10224,20 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             room_id,
             thread_root_event_id,
         } => {
-            let (rows, member_rows, image_requests) = {
+            let (rows, indent_sample, member_rows, image_requests) = {
                 let state = state_ref(hwnd);
                 let room_view = state
                     .model
                     .room_views
                     .get(room_id)
                     .expect("thread view must target an existing room view");
-                let rows = build_thread_timeline_rows(&state.model, room_id, thread_root_event_id);
+                let timestamps = state.timestamps();
+                let rows = build_thread_timeline_rows(
+                    &state.model,
+                    room_id,
+                    thread_root_event_id,
+                    timestamps,
+                );
                 let image_requests = collect_lazy_room_preview_media_requests(
                     room_view,
                     room_view.activities.iter().filter(|activity| {
@@ -10151,12 +10245,17 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                     }),
                 );
                 let member_rows = room_member_view_rows(room_view.members.as_slice());
-                (rows, member_rows, image_requests)
+                (
+                    rows,
+                    timestamps.indent_sample(),
+                    member_rows,
+                    image_requests,
+                )
             };
             dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
-            set_timeline_rows(timeline, &rows);
+            set_timeline_rows(timeline, &rows, indent_sample);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;
@@ -15148,6 +15247,7 @@ fn last_os_error(operation: &str) -> String {
 mod tests {
     use std::env;
     use std::fs;
+    use std::sync::LazyLock;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -15762,8 +15862,11 @@ mod tests {
         summary.topic = Some("incident review".to_owned());
 
         apply_core_event(&mut state, Event::SyncedRooms(vec![summary.clone()])).unwrap();
-        let initial =
-            project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
+        let initial = project_timeline_rows(&build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+        ));
         assert!(initial.contains(&"* Now talking in Ops (!ops:example)".to_owned()));
         assert!(initial.contains(&"* Topic is 'incident review'".to_owned()));
         assert!(
@@ -15773,8 +15876,11 @@ mod tests {
         );
 
         apply_core_event(&mut state, topic_state("!ops:example", "deployment window")).unwrap();
-        let updated =
-            project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
+        let updated = project_timeline_rows(&build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+        ));
         assert!(updated.contains(&"* Topic is 'deployment window'".to_owned()));
         assert!(
             updated
@@ -15785,8 +15891,11 @@ mod tests {
 
         summary.topic = None;
         apply_core_event(&mut state, Event::SyncedRooms(vec![summary])).unwrap();
-        let cleared =
-            project_timeline_rows(&build_room_timeline_rows(&state.model, "!ops:example"));
+        let cleared = project_timeline_rows(&build_room_timeline_rows(
+            &state.model,
+            "!ops:example",
+            state.timestamps(),
+        ));
         assert!(!cleared.iter().any(|line| line.starts_with("* Topic is ''")));
     }
 
@@ -16193,6 +16302,8 @@ mod tests {
             automation: None,
             render_state_mode: false,
             clock: UiClock::Fixed(RENDER_STATE_CLOCK_MS),
+            timestamp: TimestampSetting::default(),
+            local_time: timestamp::utc_local_time,
             exit_code: Arc::new(AtomicI32::new(0)),
             event_generation: 0,
             last_idle_probe_generation: None,
@@ -16369,7 +16480,14 @@ mod tests {
                 "[00:00] @alice: message".to_owned(),
             )
             .with_event_id(Some(event_id))],
+            String::new(),
         );
+    }
+
+    /// The default timestamps, in UTC.
+    fn utc_timestamps() -> TimestampStyle<'static> {
+        static SETTING: LazyLock<TimestampSetting> = LazyLock::new(TimestampSetting::default);
+        TimestampStyle::new(&SETTING, timestamp::utc_local_time)
     }
 
     fn measure_ascii_width(text: &str) -> i32 {
@@ -16675,7 +16793,7 @@ mod tests {
             })
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves (sending)".to_owned(),
@@ -16727,7 +16845,7 @@ mod tests {
             })
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
@@ -16781,7 +16899,7 @@ mod tests {
             )])
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example edited body".to_owned(),
@@ -16916,7 +17034,7 @@ mod tests {
         ));
         assert_eq!(state.model.last_activity, None);
 
-        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("secret body"));
     }
@@ -16971,7 +17089,7 @@ mod tests {
         )
         .unwrap();
 
-        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("original body"));
         assert!(!rendered.contains("edited body"));
@@ -17007,7 +17125,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -17085,7 +17203,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         assert_eq!(
             rows.iter()
                 .filter(|row| row.kind == TimelineRowKind::ReactionSummary)
@@ -17251,7 +17369,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
@@ -17272,7 +17390,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] <@alice:example> hello".to_owned(),
@@ -17319,7 +17437,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -17472,7 +17590,12 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root");
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root",
+            state.timestamps(),
+        );
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -17667,7 +17790,7 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves".to_owned(),
@@ -17745,7 +17868,7 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves".to_owned(),
@@ -17805,7 +17928,7 @@ mod tests {
             })
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves (failed)".to_owned(),
@@ -17845,7 +17968,7 @@ mod tests {
             )])
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[22:13] * @alice:example waves (failed)".to_owned(),
@@ -18170,11 +18293,6 @@ mod tests {
     }
 
     #[test]
-    fn format_timestamp_hhmm_utc_uses_deterministic_utc_minutes() {
-        assert_eq!(format_timestamp_hhmm_utc(1_700_000_000_000), "22:13");
-    }
-
-    #[test]
     fn build_room_timeline_rows_capture_kind_order_and_projection() {
         let mut state = test_state();
         state.model.rooms = vec![room("!ops:example", "Ops", true)];
@@ -18315,7 +18433,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
@@ -18358,7 +18476,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             project_timeline_rows(&rows)
         );
         assert_eq!(
@@ -18434,7 +18552,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            render_room_lines(&state.model, "!ops:example")
+            render_room_lines(&state, "!ops:example")
                 .contains(&"* Alice, Sam (@sam1:example), @stranger:example are typing".to_owned())
         );
     }
@@ -18496,7 +18614,7 @@ mod tests {
         apply_core_event(&mut state, Event::RoomActivity(Box::new(activity))).unwrap();
 
         assert!(
-            render_room_lines(&state.model, "!ops:example")
+            render_room_lines(&state, "!ops:example")
                 .iter()
                 .any(|line| line.ends_with("<Sam (@sam1:example)> hello"))
         );
@@ -18579,7 +18697,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "* Topic is 'incident review'".to_owned(),
@@ -18615,7 +18733,7 @@ mod tests {
             .history
             .status = RoomHistoryBackfillStatus::Loading { from: None };
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -18657,7 +18775,7 @@ mod tests {
             message: "homeserver unavailable".to_owned(),
         };
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
 
         assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(
@@ -18685,7 +18803,7 @@ mod tests {
             .history
             .status = RoomHistoryBackfillStatus::Exhausted;
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
 
         assert_eq!(rows[2].kind, TimelineRowKind::Plain);
         assert_eq!(rows[2].logical_text, "* No older history available.");
@@ -18703,7 +18821,7 @@ mod tests {
         .unwrap();
         apply_core_event(&mut state, timeline("!ops:example", "latest row")).unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -18788,7 +18906,7 @@ mod tests {
         )
         .unwrap();
 
-        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("Joins: carol"));
     }
@@ -18910,7 +19028,7 @@ mod tests {
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         state.model.rooms = vec![direct_room];
 
-        let rows = build_room_timeline_rows(&state.model, "!direct:example");
+        let rows = build_room_timeline_rows(&state.model, "!direct:example", state.timestamps());
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![TimelineRowKind::Event, TimelineRowKind::Info]
@@ -18942,13 +19060,111 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[16:00] * @alice:example.org sent unsupported com.example.custom: clip.mp4"
                     .to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn system_local_time_matches_utc_under_the_harness_tz() {
+        // The Wine harness pins TZ=UTC, so snapshots and tests that go
+        // through the app's own conversion see UTC times.
+        for timestamp_ms in [0, 951_782_400_000, 1_700_000_000_000, 1_720_000_000_999] {
+            assert_eq!(
+                system_local_time(timestamp_ms),
+                timestamp::utc_local_time(timestamp_ms)
+            );
+        }
+    }
+
+    #[test]
+    fn room_and_status_rows_follow_the_timestamp_setting() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        apply_core_event(
+            &mut state,
+            Event::RoomActivity(Box::new(sent_message_activity(
+                "!ops:example",
+                "$hi:example",
+                None,
+                "hi",
+                1_700_000_000_000,
+            ))),
+        )
+        .unwrap();
+        state.model.status_log.push(
+            1_700_000_000_000,
+            StatusLineKind::Info,
+            "* ready".to_owned(),
+        );
+
+        state.timestamp.show = false;
+        assert_eq!(
+            render_room_lines(&state, "!ops:example"),
+            vec![
+                "* Now talking in Ops (!ops:example)".to_owned(),
+                "<@alice:example> hi".to_owned(),
+            ]
+        );
+        assert_eq!(
+            project_timeline_rows(&build_status_timeline_rows(
+                &state.model.status_log,
+                state.timestamps()
+            )),
+            vec!["* ready".to_owned()]
+        );
+        assert_eq!(state.timestamps().indent_sample(), "");
+
+        state.timestamp = TimestampSetting {
+            show: true,
+            format: timestamp::TimestampFormat::parse("[HH:nn:ss]").unwrap(),
+        };
+        assert_eq!(
+            render_room_lines(&state, "!ops:example")[1],
+            "[22:13:20] <@alice:example> hi"
+        );
+        assert_eq!(
+            project_timeline_rows(&build_status_timeline_rows(
+                &state.model.status_log,
+                state.timestamps()
+            )),
+            vec!["[22:13:20] * ready".to_owned()]
+        );
+    }
+
+    #[test]
+    fn the_hanging_indent_is_as_wide_as_the_timestamp_format() {
+        let mut setting = TimestampSetting {
+            show: true,
+            format: timestamp::TimestampFormat::parse("[HH:nn:ss]").unwrap(),
+        };
+        let indent_of = |setting: &TimestampSetting| {
+            let sample = TimestampStyle::new(setting, timestamp::utc_local_time).indent_sample();
+            let rows = [TimelineRow::log(
+                TimelineRowKind::Info,
+                format!("{sample}alpha beta gamma"),
+            )];
+            timeline_row_paint_lines_with_measure(
+                &rows,
+                client_width_for_text(sample.len() as i32 + 10),
+                &sample,
+                &measure_ascii_width,
+            )
+            .into_iter()
+            .map(|line| match line.visual {
+                TimelinePaintLineVisual::Text { indent, .. } => indent,
+                TimelinePaintLineVisual::ImageSlot => unreachable!("info rows have no image"),
+            })
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(indent_of(&setting), vec![0, 11]);
+        setting.show = false;
+        assert_eq!(indent_of(&setting), vec![0, 0]);
     }
 
     #[test]
@@ -18967,7 +19183,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "* Messages in this room are end-to-end encrypted".to_owned(),
@@ -19003,7 +19219,7 @@ mod tests {
         )
         .unwrap();
 
-        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("com.example.custom"));
         assert!(!rendered.contains("clip.mp4"));
@@ -19034,7 +19250,7 @@ mod tests {
         )
         .unwrap();
 
-        let lines = render_room_lines(&state.model, "!ops:example");
+        let lines = render_room_lines(&state, "!ops:example");
         assert_eq!(
             lines,
             vec![
@@ -19065,7 +19281,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "[16:00] * @alice:example.org sent image: diagram.png".to_owned(),
@@ -19091,7 +19307,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -19099,7 +19315,7 @@ mod tests {
 
         assert_eq!(image_row.image_state, Some(TimelineImageState::Pending));
         assert!(
-            !render_room_lines(&state.model, "!ops:example")
+            !render_room_lines(&state, "!ops:example")
                 .join("\n")
                 .contains("loading image...")
         );
@@ -19150,7 +19366,7 @@ mod tests {
             })
         );
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -19162,7 +19378,7 @@ mod tests {
             })
         );
         assert!(
-            !render_room_lines(&state.model, "!ops:example")
+            !render_room_lines(&state, "!ops:example")
                 .join("\n")
                 .contains("image unavailable")
         );
@@ -19338,7 +19554,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            build_room_timeline_rows(&state.model, "!ops:example")
+            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps())
                 .iter()
                 .any(|row| matches!(
                     row.image_state,
@@ -19392,7 +19608,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            build_room_timeline_rows(&state.model, "!ops:example")
+            build_room_timeline_rows(&state.model, "!ops:example", state.timestamps())
                 .iter()
                 .any(|row| matches!(
                     row.image_state,
@@ -19523,7 +19739,7 @@ mod tests {
             "redacted image rows must not trigger lazy image fetches"
         );
 
-        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("diagram.png"));
         assert!(!rendered.contains("body fallback"));
@@ -19549,7 +19765,7 @@ mod tests {
             .get("!ops:example")
             .expect("room view must exist");
         assert!(room_view.preview_media.is_empty());
-        let rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(rendered.contains("message redacted"));
         assert!(!rendered.contains("late"));
     }
@@ -19585,7 +19801,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -19650,7 +19866,7 @@ mod tests {
         );
         assert!(state.decoded_images.contains_key(&image_key));
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -19694,8 +19910,12 @@ mod tests {
         )
         .unwrap();
 
-        let rows =
-            build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root:example.org",
+            state.timestamps(),
+        );
         let image_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Image { .. }))
@@ -19725,8 +19945,12 @@ mod tests {
         )
         .unwrap();
 
-        let rows =
-            build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root:example.org",
+            state.timestamps(),
+        );
         let lines = project_timeline_rows(&rows);
         assert_eq!(
             lines[..3],
@@ -19766,8 +19990,12 @@ mod tests {
         )
         .unwrap();
 
-        let rows =
-            build_thread_timeline_rows(&state.model, "!ops:example", "$thread-root:example.org");
+        let rows = build_thread_timeline_rows(
+            &state.model,
+            "!ops:example",
+            "$thread-root:example.org",
+            state.timestamps(),
+        );
         let video_row = rows
             .iter()
             .find(|row| matches!(row.kind, TimelineRowKind::Video { .. }))
@@ -20284,7 +20512,8 @@ mod tests {
         ];
 
         let logical_lines = project_timeline_rows(&rows);
-        let paint_lines = timeline_row_paint_lines_with_measure(&rows, 360, &measure_ascii_width);
+        let paint_lines =
+            timeline_row_paint_lines_with_measure(&rows, 360, "[00:00] ", &measure_ascii_width);
 
         assert_eq!(
             logical_lines,
@@ -20324,7 +20553,7 @@ mod tests {
             },
             text.to_owned(),
         )];
-        timeline_row_paint_lines_with_measure(&rows, client_width, &measure_ascii_width)
+        timeline_row_paint_lines_with_measure(&rows, client_width, "[00:00] ", &measure_ascii_width)
             .into_iter()
             .map(|line| match line.visual {
                 TimelinePaintLineVisual::Text { text, indent } => (text, indent),
@@ -20341,7 +20570,7 @@ mod tests {
     #[test]
     fn timeline_row_paint_lines_wrap_log_rows_with_a_hanging_indent() {
         let text = "[22:13] <@alice:example> alpha beta gamma";
-        let indent = TIMELINE_CONTINUATION_INDENT_SAMPLE.len() as i32;
+        let indent = "[00:00] ".len() as i32;
 
         assert_eq!(
             log_paint_texts(text, client_width_for_text(30)),
@@ -20358,7 +20587,7 @@ mod tests {
 
     #[test]
     fn timeline_row_paint_lines_indent_lines_after_newlines_like_wrapped_lines() {
-        let indent = TIMELINE_CONTINUATION_INDENT_SAMPLE.len() as i32;
+        let indent = "[00:00] ".len() as i32;
 
         assert_eq!(
             log_paint_texts(
@@ -20396,6 +20625,7 @@ mod tests {
         let paint_lines = timeline_row_paint_lines_with_measure(
             &[row],
             client_width_for_text(30),
+            "[00:00] ",
             &measure_ascii_width,
         );
         let caption_lines = paint_lines
@@ -20436,6 +20666,7 @@ mod tests {
         let paint_lines = timeline_row_paint_lines_with_measure(
             &rows,
             client_width_for_text(30),
+            "[00:00] ",
             &measure_ascii_width,
         );
 
@@ -20501,7 +20732,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            render_room_lines(&state.model, "!ops:example"),
+            render_room_lines(&state, "!ops:example"),
             vec![
                 "* Now talking in Ops (!ops:example)".to_owned(),
                 "* @alice:example.org is typing".to_owned(),
@@ -20527,7 +20758,10 @@ mod tests {
     }
 
     fn status_log_lines(state: &WindowState) -> Vec<String> {
-        project_timeline_rows(&build_status_timeline_rows(&state.model.status_log))
+        project_timeline_rows(&build_status_timeline_rows(
+            &state.model.status_log,
+            state.timestamps(),
+        ))
     }
 
     #[test]
@@ -20598,7 +20832,7 @@ mod tests {
         )
         .unwrap();
 
-        let rows = build_status_timeline_rows(&state.model.status_log);
+        let rows = build_status_timeline_rows(&state.model.status_log, state.timestamps());
         assert_eq!(
             project_timeline_rows(&rows),
             vec![
@@ -20805,7 +21039,7 @@ mod tests {
             StatusLineKind::Info,
             "* E2EE status not yet known".to_owned(),
         );
-        let rows = build_status_timeline_rows(&log);
+        let rows = build_status_timeline_rows(&log, utc_timestamps());
 
         let matches = compute_timeline_find_matches(&rows, &fold_find_query("e2ee"));
         assert_eq!(
@@ -20831,7 +21065,7 @@ mod tests {
             log.push(0, StatusLineKind::Info, text.to_owned());
         }
         let matches = compute_timeline_find_matches(
-            &build_status_timeline_rows(&log),
+            &build_status_timeline_rows(&log, utc_timestamps()),
             &fold_find_query("needle"),
         );
 
@@ -22659,6 +22893,7 @@ mod tests {
             &state.model,
             "!ops:example",
             "$thread-root",
+            state.timestamps(),
         ));
         let rendered = lines.join("\n");
         assert!(rendered.contains("message redacted"));
@@ -22705,6 +22940,7 @@ mod tests {
             &state.model,
             "!ops:example",
             "$thread-root",
+            state.timestamps(),
         ));
 
         assert!(
@@ -22756,7 +22992,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            render_room_lines(&state.model, "!ops:example")
+            render_room_lines(&state, "!ops:example")
                 .iter()
                 .any(|line| line.contains("edited reply"))
         );
@@ -22764,6 +23000,7 @@ mod tests {
             &state.model,
             "!ops:example",
             "$thread-root",
+            state.timestamps(),
         ));
         assert!(lines.iter().any(|line| line.contains("edited reply")));
         assert!(!lines.iter().any(|line| line.contains("old reply")));
@@ -22795,7 +23032,7 @@ mod tests {
         )
         .unwrap();
 
-        let room_rendered = render_room_lines(&state.model, "!ops:example").join("\n");
+        let room_rendered = render_room_lines(&state, "!ops:example").join("\n");
         assert!(room_rendered.contains("message redacted"));
         assert!(!room_rendered.contains("old reply"));
 
@@ -22803,6 +23040,7 @@ mod tests {
             &state.model,
             "!ops:example",
             "$thread-root",
+            state.timestamps(),
         ));
         let thread_rendered = thread_lines.join("\n");
         assert!(thread_rendered.contains("message redacted"));
@@ -23449,14 +23687,14 @@ mod tests {
             "ping",
             1,
         ));
-        push_room_activity_row(&mut rows, None, &mention);
+        push_room_activity_row(&mut rows, None, &mention, utc_timestamps());
         let redacted = RoomActivity {
             kind: RoomActivityKind::Redacted(RoomRedactedActivity {
                 event_id: "$m".to_owned(),
             }),
             ..mention.clone()
         };
-        push_room_activity_row(&mut rows, None, &redacted);
+        push_room_activity_row(&mut rows, None, &redacted, utc_timestamps());
 
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
@@ -25311,7 +25549,7 @@ mod tests {
                         ),
                     ]
                 );
-                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
                     &lines[lines.len() - 4..],
                     [
@@ -25337,7 +25575,7 @@ mod tests {
                 type_compose_line(hwnd, "/whois alice");
                 type_compose_line(hwnd, "/whois @stranger:example");
                 type_compose_line(hwnd, "/names Nowhere");
-                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
                     &lines[lines.len() - 7..],
                     [
@@ -25373,7 +25611,7 @@ mod tests {
                     state_ref(hwnd).model.status,
                     "query submitted: @bob:example"
                 );
-                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
                     lines.last().map(String::as_str),
                     Some("[22:12] * /query: creating a query with @bob:example; message not sent")
@@ -25452,7 +25690,7 @@ mod tests {
                     state_ref(hwnd).model.status,
                     "nick change submitted: New Name"
                 );
-                let lines = render_room_lines(&state_ref(hwnd).model, "!ops:example");
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
                     &lines[lines.len() - 7..],
                     [
@@ -25479,7 +25717,8 @@ mod tests {
                 type_compose_line(hwnd, "/close");
                 assert_eq!(
                     project_timeline_rows(&build_status_timeline_rows(
-                        &state_ref(hwnd).model.status_log
+                        &state_ref(hwnd).model.status_log,
+                        state_ref(hwnd).timestamps()
                     )),
                     vec!["[22:12] * /close: the Status window cannot be closed".to_owned()]
                 );
@@ -25501,7 +25740,7 @@ mod tests {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/react");
-                let lines = render_room_lines(&state_ref(hwnd).model, "!room:example");
+                let lines = render_room_lines(state_ref(hwnd), "!room:example");
                 assert_eq!(
                     lines.last().map(String::as_str),
                     Some("[22:12] * /react: insufficient parameters")
@@ -25525,7 +25764,10 @@ mod tests {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/wat now");
-                let rows = build_status_timeline_rows(&state_ref(hwnd).model.status_log);
+                let rows = build_status_timeline_rows(
+                    &state_ref(hwnd).model.status_log,
+                    state_ref(hwnd).timestamps(),
+                );
                 assert_eq!(
                     project_timeline_rows(&rows),
                     vec!["[22:12] * /wat: unknown command".to_owned()]
@@ -25552,7 +25794,7 @@ mod tests {
                 type_compose_line(hwnd, "/help");
                 type_compose_line(hwnd, "/help clear");
                 type_compose_line(hwnd, "/help nope");
-                let lines = render_room_lines(&state_ref(hwnd).model, "!room:example");
+                let lines = render_room_lines(state_ref(hwnd), "!room:example");
                 let echo = &lines[lines.len() - 4..];
                 assert!(echo[0].starts_with("[22:12] * Commands: /accept /ban /clear /close "));
                 assert_eq!(echo[1], "[22:12] * /help <command> for usage");
@@ -25583,7 +25825,7 @@ mod tests {
         echo.push(1_700_000_180_000, None, "* tie".to_owned());
         echo.push(1_700_000_240_000, None, "* tie".to_owned());
 
-        let rows = build_room_timeline_rows(&state.model, "!ops:example");
+        let rows = build_room_timeline_rows(&state.model, "!ops:example", state.timestamps());
         let texts = project_timeline_rows(&rows);
         let tail = &texts[texts.len() - 6..];
         assert_eq!(
@@ -25644,12 +25886,13 @@ mod tests {
             &state.model,
             "!ops:example",
             "$thread-root",
+            state.timestamps(),
         ));
         assert!(
             thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
         );
         assert!(!thread_lines.contains(&"[22:16] * room line".to_owned()));
-        let room_lines = render_room_lines(&state.model, "!ops:example");
+        let room_lines = render_room_lines(&state, "!ops:example");
         assert!(room_lines.contains(&"[22:16] * room line".to_owned()));
         assert!(
             !room_lines
@@ -25664,13 +25907,13 @@ mod tests {
             .unwrap()
             .clear_visible_entries();
         assert!(
-            !render_room_lines(&state.model, "!ops:example")
-                .contains(&"[22:16] * room line".to_owned())
+            !render_room_lines(&state, "!ops:example").contains(&"[22:16] * room line".to_owned())
         );
         let thread_lines = project_timeline_rows(&build_thread_timeline_rows(
             &state.model,
             "!ops:example",
             "$thread-root",
+            state.timestamps(),
         ));
         assert!(
             thread_lines.contains(&"[22:16] * /clear: nothing to clear in thread view".to_owned())
@@ -26977,7 +27220,7 @@ mod tests {
             Some(before_activities)
         );
         assert_eq!(
-            render_room_lines(&state.model, "!room:example"),
+            render_room_lines(&state, "!room:example"),
             vec![
                 "* Now talking in Room (!room:example)".to_owned(),
                 "* Topic is 'existing topic'".to_owned(),
@@ -27896,7 +28139,7 @@ mod tests {
             state.room_activity.get(&ViewId::Status),
             Some(&ViewActivityLevel::Message)
         );
-        let rows = build_status_timeline_rows(&state.model.status_log);
+        let rows = build_status_timeline_rows(&state.model.status_log, state.timestamps());
         assert_eq!(rows.last().unwrap().kind, TimelineRowKind::Error);
     }
 

@@ -54,33 +54,30 @@ fn nick_with_user_id(profile: &RoomUserProfile) -> String {
     nick_label(&profile.user_id, profile.display_name.as_deref(), true)
 }
 
-/// Log lines start with a `[hh:mm] ` timestamp; wrapped continuation lines
-/// are indented by this sample's width so they align past it.
-pub(super) const TIMELINE_CONTINUATION_INDENT_SAMPLE: &str = "[00:00] ";
-
-/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`.
+/// `[ts] <Nick> body`, `[ts] * Nick body`, or `[ts] -Nick- body`. The
+/// timestamp `prefix` is `"[ts] "`, or empty when timestamps are off.
 pub(super) fn message_line(
-    timestamp: &str,
+    prefix: &str,
     presentation: RoomMessagePresentationKind,
     sender: &RoomUserProfile,
     body: &str,
 ) -> String {
     let nick = profile_nick(sender);
     match presentation {
-        RoomMessagePresentationKind::Text => format!("{timestamp} <{nick}> {body}"),
-        RoomMessagePresentationKind::Emote => format!("{timestamp} * {nick} {body}"),
-        RoomMessagePresentationKind::Notice => format!("{timestamp} -{nick}- {body}"),
+        RoomMessagePresentationKind::Text => format!("{prefix}<{nick}> {body}"),
+        RoomMessagePresentationKind::Emote => format!("{prefix}* {nick} {body}"),
+        RoomMessagePresentationKind::Notice => format!("{prefix}-{nick}- {body}"),
     }
 }
 
 /// An action-style line, as for media: `[ts] * Nick sent image: ...`.
-pub(super) fn action_line(timestamp: &str, sender: &RoomUserProfile, body: &str) -> String {
-    format!("{timestamp} * {} {body}", profile_nick(sender))
+pub(super) fn action_line(prefix: &str, sender: &RoomUserProfile, body: &str) -> String {
+    format!("{prefix}* {} {body}", profile_nick(sender))
 }
 
 /// A line reporting an event rather than something a user said.
-pub(super) fn event_line(timestamp: &str, body: &str) -> String {
-    format!("{timestamp} * {body}")
+pub(super) fn event_line(prefix: &str, body: &str) -> String {
+    format!("{prefix}* {body}")
 }
 
 /// A line about the window itself rather than a timed event, such as the
@@ -219,7 +216,7 @@ mod tests {
     #[test]
     fn message_lines_use_mirc_sender_prefixes() {
         let alice = profile("@alice:example", Some("Alice"), false);
-        let line = |presentation| message_line("[12:34]", presentation, &alice, "hi");
+        let line = |presentation| message_line("[12:34] ", presentation, &alice, "hi");
 
         assert_eq!(
             line(RoomMessagePresentationKind::Text),
@@ -234,13 +231,18 @@ mod tests {
             "[12:34] -Alice- hi"
         );
         assert_eq!(
-            action_line("[12:34]", &alice, "sent image: a.png"),
+            action_line("[12:34] ", &alice, "sent image: a.png"),
             "[12:34] * Alice sent image: a.png"
         );
         assert_eq!(
-            event_line("[12:34]", &topic_change_text(&alice, "release day")),
+            event_line("[12:34] ", &topic_change_text(&alice, "release day")),
             "[12:34] * Alice changes topic to 'release day'"
         );
+        assert_eq!(
+            message_line("", RoomMessagePresentationKind::Text, &alice, "hi"),
+            "<Alice> hi"
+        );
+        assert_eq!(event_line("", "message redacted"), "* message redacted");
     }
 
     #[test]
