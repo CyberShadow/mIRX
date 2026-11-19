@@ -1,0 +1,109 @@
+[
+  {
+    "RoomActivity": {
+      "room_id": "!busy:example",
+      "activity_id": "event:$busy-1",
+      "timestamp_ms": 1700000060000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$busy-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "standup in five",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!quiet:example",
+      "activity_id": "event:$quiet-1",
+      "timestamp_ms": 1700000120000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$quiet-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@dave:example",
+          "display_name": "Dave",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "new release notes are up",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!noisy:example",
+      "activity_id": "event:$noisy-1",
+      "timestamp_ms": 1700000180000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$noisy-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bot:example",
+          "display_name": "Bot",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "build #4211 passed",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!noisy:example",
+      "activity_id": "event:$noisy-2",
+      "timestamp_ms": 1700000240000,
+      "highlight": true,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$noisy-2",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@bob:example",
+          "display_name": "Bob",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "Alice: the deploy is yours",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  },
+  {
+    "RoomReadState": {
+      "room_id": "!noisy:example",
+      "latest_active_event_id": "$noisy-2",
+      "fully_read_event_id": "$noisy-0",
+      "marked_unread": false,
+      "num_unread": 3,
+      "num_notifications": 0,
+      "num_mentions": 0
+    }
+  }
+]

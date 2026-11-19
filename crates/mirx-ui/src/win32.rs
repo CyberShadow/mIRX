@@ -174,6 +174,7 @@ mod glyph_runs;
 mod mdi;
 mod menus;
 mod nick_completion;
+mod notifications;
 mod options;
 mod options_dialog;
 mod reactions;
@@ -2269,15 +2270,6 @@ fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
         .insert_preview_media(activity_id, next_state);
 }
 
-/// mIRC flashes the frame for highlights and for query messages.
-fn activity_wants_attention(level: ViewActivityLevel, room_is_direct: bool) -> bool {
-    match level {
-        ViewActivityLevel::Highlight => true,
-        ViewActivityLevel::Message => room_is_direct,
-        ViewActivityLevel::Event => false,
-    }
-}
-
 /// Returns whether the activity should flash the frame. The active view gets
 /// no activity colour, but it can still want attention while mIRC is in the
 /// background.
@@ -2286,19 +2278,22 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     let target_view_id = room_activity_target_view_id(&activity);
     let mut wants_attention = false;
     if let Some(level) = activity_level_for(&activity, state.model.own_user_id.as_deref())
-        && let Some(room_is_direct) =
-            sendable_room_by_id(&state.model.rooms, &activity.room_id).map(|room| room.is_direct)
+        && let Some((room_is_direct, mode)) =
+            sendable_room_by_id(&state.model.rooms, &activity.room_id)
+                .map(|room| (room.is_direct, joined_room_notification_mode(room)))
     {
-        wants_attention =
-            !state.synthetic_load_in_progress && activity_wants_attention(level, room_is_direct);
+        wants_attention = !state.synthetic_load_in_progress
+            && notifications::activity_wants_attention(level, room_is_direct, mode);
         // A closed query pops up again when the other side talks, as in
-        // mIRC; the next view sync recreates its window.
+        // mIRC, muted or not; the next view sync recreates its window.
         if level >= ViewActivityLevel::Message
             && let ViewId::Room(room_id) = &target_view_id
         {
             state.closed_queries.remove(room_id);
         }
         if state.active_view != target_view_id {
+            // The room's mode caps its threads' activity too.
+            let level = notifications::room_activity_level(level, mode);
             raise_view_activity(state, target_view_id.clone(), level);
             if !state.synthetic_load_in_progress
                 && let Some(event_id) = read_target_for_room_activity(&activity)
@@ -2541,9 +2536,11 @@ fn apply_backfill_room_history_error(state: &mut WindowState, message: String) {
 
 fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadState) {
     let room_id = read_state.room_id.clone();
-    if sendable_room_by_id(&state.model.rooms, &room_id).is_none() {
+    let Some(mode) =
+        sendable_room_by_id(&state.model.rooms, &room_id).map(joined_room_notification_mode)
+    else {
         return;
-    }
+    };
     state
         .model
         .room_read_states
@@ -2582,7 +2579,11 @@ fn apply_room_read_state_event(state: &mut WindowState, read_state: RoomReadStat
         } else {
             ViewActivityLevel::Message
         };
-        raise_view_activity(state, room_view_id, level);
+        raise_view_activity(
+            state,
+            room_view_id,
+            notifications::room_activity_level(level, mode),
+        );
     } else {
         state.room_activity.remove(&room_view_id);
     }
@@ -10457,6 +10458,13 @@ fn navigable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&
 
 fn sendable_room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
     room_by_id(rooms, room_id).filter(|room| is_sendable_room(room))
+}
+
+/// A joined room's notification mode, which the core reports for every
+/// joined room.
+fn joined_room_notification_mode(room: &RoomSummary) -> RoomNotificationMode {
+    room.notification_mode
+        .expect("a joined room has a notification mode")
 }
 
 fn view_id_is_valid_for_rooms(
@@ -26749,24 +26757,6 @@ mod tests {
     }
 
     #[test]
-    fn highlights_and_query_messages_want_attention() {
-        for (level, room_is_direct, expected) in [
-            (ViewActivityLevel::Event, false, false),
-            (ViewActivityLevel::Event, true, false),
-            (ViewActivityLevel::Message, false, false),
-            (ViewActivityLevel::Message, true, true),
-            (ViewActivityLevel::Highlight, false, true),
-            (ViewActivityLevel::Highlight, true, true),
-        ] {
-            assert_eq!(
-                activity_wants_attention(level, room_is_direct),
-                expected,
-                "{level:?} direct={room_is_direct}"
-            );
-        }
-    }
-
-    #[test]
     fn room_activity_wants_attention_even_in_the_active_view_but_not_during_loads() {
         let mut state = test_state();
         let mut query = room("!query:example", "Casey", false);
@@ -26797,6 +26787,110 @@ mod tests {
         state.synthetic_load_in_progress = true;
         assert!(!apply_core_event(&mut state, ping()).unwrap());
         assert!(!apply_core_event(&mut state, timeline("!query:example", "loaded")).unwrap());
+    }
+
+    fn with_mode(mut room: RoomSummary, mode: RoomNotificationMode) -> RoomSummary {
+        room.notification_mode = Some(mode);
+        room
+    }
+
+    #[test]
+    fn a_muted_rooms_activity_stays_event_coloured_and_never_flashes() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            with_mode(
+                room("!muted:example", "Muted", false),
+                RoomNotificationMode::Mute,
+            ),
+            with_mode(
+                query("!quiet-dm:example", "Casey", "@casey:example"),
+                RoomNotificationMode::Mute,
+            ),
+        ];
+        state.active_view = room_view_id("!active:example");
+
+        assert!(!apply_core_event(&mut state, timeline("!muted:example", "hello")).unwrap());
+        let ping = highlighted(sent_message_activity(
+            "!muted:example",
+            "$ping",
+            None,
+            "Alice: ping",
+            1,
+        ));
+        assert!(!apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap());
+        assert!(!apply_core_event(&mut state, timeline("!quiet-dm:example", "hi")).unwrap());
+        assert_eq!(
+            state.room_activity.get(&room_view_id("!muted:example")),
+            Some(&ViewActivityLevel::Event)
+        );
+        assert_eq!(
+            state.room_activity.get(&room_view_id("!quiet-dm:example")),
+            Some(&ViewActivityLevel::Event)
+        );
+    }
+
+    #[test]
+    fn a_mentions_only_query_message_is_red_but_does_not_flash() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            with_mode(
+                query("!dm:example", "Casey", "@casey:example"),
+                RoomNotificationMode::MentionsAndKeywordsOnly,
+            ),
+        ];
+        state.active_view = room_view_id("!active:example");
+
+        assert!(!apply_core_event(&mut state, timeline("!dm:example", "hi")).unwrap());
+        assert_eq!(
+            state.room_activity.get(&room_view_id("!dm:example")),
+            Some(&ViewActivityLevel::Message)
+        );
+        let ping = highlighted(sent_message_activity(
+            "!dm:example",
+            "$ping",
+            None,
+            "Casey: ping",
+            1,
+        ));
+        assert!(apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap());
+    }
+
+    #[test]
+    fn a_muted_closed_query_still_reopens_when_the_other_side_talks() {
+        let mut state = test_state();
+        state.model.rooms = vec![with_mode(
+            query("!dm:example", "Alice", "@alice:example"),
+            RoomNotificationMode::Mute,
+        )];
+        state.closed_queries.insert("!dm:example".to_owned());
+
+        apply_core_event(&mut state, timeline("!dm:example", "hi")).unwrap();
+        assert!(state.closed_queries.is_empty());
+    }
+
+    #[test]
+    fn a_muted_rooms_unread_counts_are_event_coloured() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!active:example", "Active", false),
+            with_mode(
+                room("!muted:example", "Muted", false),
+                RoomNotificationMode::Mute,
+            ),
+        ];
+        state.active_view = room_view_id("!active:example");
+
+        apply_core_event(
+            &mut state,
+            room_read_state("!muted:example", None, None, false, 3, 0, 1),
+        )
+        .unwrap();
+        assert_eq!(
+            state.room_activity.get(&room_view_id("!muted:example")),
+            Some(&ViewActivityLevel::Event)
+        );
     }
 
     #[test]

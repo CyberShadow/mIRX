@@ -1,0 +1,83 @@
+[
+  "Started",
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!lobby:example",
+        "display_name": "Lobby",
+        "topic": null,
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages"
+      },
+      {
+        "room_id": "!busy:example",
+        "display_name": "Busy",
+        "topic": null,
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "all_messages"
+      },
+      {
+        "room_id": "!quiet:example",
+        "display_name": "Quiet",
+        "topic": null,
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "mentions_and_keywords_only"
+      },
+      {
+        "room_id": "!noisy:example",
+        "display_name": "Noisy",
+        "topic": null,
+        "membership": "join",
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "notification_mode": "mute"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!lobby:example",
+      "activity_id": "event:$lobby-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "relation": null,
+      "kind": {
+        "type": "message",
+        "event_id": "$lobby-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@carol:example",
+          "display_name": "Carol",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "morning all",
+        "send_state": {
+          "state": "sent"
+        }
+      }
+    }
+  }
+]

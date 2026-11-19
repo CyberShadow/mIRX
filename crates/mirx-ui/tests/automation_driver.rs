@@ -9630,6 +9630,41 @@ fn automation_driver_reports_activity_levels_and_highlight_lines()
 }
 
 #[test]
+fn notification_mode_caps_muted_room_activity() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("notification-modes.json");
+    let update_path = fixture_update_path("notification-modes.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.append_synthetic_events(&fs::read_to_string(&update_path)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, room_identity("!lobby:example"));
+    // Noisy is muted: a message, a highlight and three unread stay maroon.
+    for (room_id, level) in [
+        ("!lobby:example", None),
+        ("!busy:example", Some(ViewActivityLevel::Message)),
+        ("!quiet:example", Some(ViewActivityLevel::Message)),
+        ("!noisy:example", Some(ViewActivityLevel::Event)),
+    ] {
+        assert_switchbar_activity(&ui_state, &room_identity(room_id), level);
+        assert_navigation_activity(&ui_state, &room_identity(room_id), level);
+        assert_eq!(
+            find_ui_room(&ui_state, room_id).activity,
+            level,
+            "{room_id}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn automation_driver_own_messages_do_not_colour_the_switchbar()
 -> Result<(), Box<dyn std::error::Error>> {
     let exe_path =

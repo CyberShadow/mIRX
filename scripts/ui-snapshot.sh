@@ -1947,6 +1947,33 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!lobby:example'
       ;;
+    notification-modes)
+      expect_selected='!lobby:example'
+      expect_active_view='room:!lobby:example'
+      append_events_path="$root_dir/tests/ui-state-updates/notification-modes.json"
+      room_activity_expect_args=(
+        --expect-room-activity '!noisy:example::"highlight":true'
+      )
+      switchbar_activity_expect_args=(
+        --expect-switchbar-activity 'room:!busy:example::message'
+        --expect-switchbar-activity 'room:!quiet:example::message'
+        --expect-switchbar-activity 'room:!noisy:example::event'
+      )
+      switchbar_no_activity_expect_args=(
+        --expect-no-switchbar-activity 'status'
+        --expect-no-switchbar-activity 'room:!lobby:example'
+      )
+      navigation_activity_expect_args=(
+        --expect-navigation-activity 'room:!busy:example::message'
+        --expect-navigation-activity 'room:!quiet:example::message'
+        --expect-navigation-activity 'room:!noisy:example::event'
+      )
+      navigation_no_activity_expect_args=(
+        --expect-no-navigation-activity 'status'
+        --expect-no-navigation-activity 'room:!lobby:example'
+      )
+      expect_switchbar_active='room:!lobby:example'
+      ;;
     shell-constrained-layout)
       expect_selected='!focus:example'
       expect_active_view='room:!focus:example'
