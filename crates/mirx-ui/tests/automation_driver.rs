@@ -22,7 +22,7 @@ use mirx_core::{
     RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
     RoomMessageSendState as CoreRoomMessageSendState, RoomNotificationMode, RoomSummary,
-    RoomTyping, SpaceChildSummary, StoredSession as CoreStoredSession,
+    RoomTyping, SpaceChildSummary, StoredSession as CoreStoredSession, UserProfile,
     VerificationDecimals as CoreVerificationDecimals, VerificationEmoji as CoreVerificationEmoji,
     VerificationState as CoreVerificationState,
     VerificationStateEvent as CoreVerificationStateEvent,
@@ -4639,14 +4639,23 @@ fn automation_driver_irc_info_commands_echo_in_active_window()
         app.wait_idle(Duration::from_secs(5))?;
         assert_eq!(app.compose_text()?, "", "{input}");
     }
+    // The server's answer to /whois.
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::UserProfile(
+        UserProfile {
+            user_id: "@alice:example".to_owned(),
+            display_name: Some("Alice Liddell".to_owned()),
+        },
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
     let ui_state = app.dump_ui_state()?;
     assert_eq!(ui_state.mdi.active, beta);
     let view = find_view(&ui_state, &beta);
     for line in [
         "] * Names Beta: Alice Bob",
         "] * End of /NAMES list",
-        "] * Alice is @alice:example",
+        "] * Alice is @alice:example * Alice Liddell",
         "] * Alice on Beta Alpha",
+        "] * Alice using example",
         "] * Alice End of /WHOIS list",
         "] * /names [#room] - list this room's members, or the named room's",
         "] -> *alice* hi there",
@@ -14420,6 +14429,68 @@ fn slash_ignore_round_trip() -> Result<(), Box<dyn std::error::Error>> {
             view.lines
         );
     }
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn slash_whois_prints_server_profile() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events(&serde_json::to_string(&base_events())?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+
+    // Not a member of any known room: only the server knows them.
+    type_commands(&app, &["/whois @stranger:remote"])?;
+    // The automation core, which is not signed in, refuses it with an
+    // error of its own; the UserProfile below stands in for the answer.
+    assert_eq!(
+        app.dump_model()?.submitted_user_commands,
+        vec![SubmittedUserCommand {
+            action: UserCommandAction::FetchProfile,
+            user_id: "@stranger:remote".to_owned(),
+        }]
+    );
+
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        Event::UserProfile(UserProfile {
+            user_id: "@stranger:remote".to_owned(),
+            display_name: Some("Stranger".to_owned()),
+        }),
+        Event::Error(mirx_core::CoreErrorEvent {
+            operation: mirx_core::Operation::FetchUserProfile,
+            room_id: None,
+            message: "no such user @nobody:remote".to_owned(),
+        }),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    let view = find_view(&ui_state, &beta);
+    for line in [
+        "] * Stranger is @stranger:remote * Stranger",
+        "] * Stranger using remote",
+        "] * Stranger End of /WHOIS list",
+        "] * /whois: no such user @nobody:remote",
+    ] {
+        assert!(
+            only_view_line_containing(view, line).ends_with(line),
+            "{line:?} in {:?}",
+            view.lines
+        );
+    }
+    assert!(!view_contains(
+        find_view(&ui_state, &ViewIdentity::Status),
+        "Stranger"
+    ));
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

@@ -8,7 +8,9 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use mirx_core::{MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind};
+use mirx_core::{
+    MemberPowerRole, RoomMemberRank, RoomMemberSummary, RoomMessagePresentationKind, UserProfile,
+};
 
 use super::nick_completion::member_mention_text;
 use super::settings::{Bar, FontSetting, parse_points};
@@ -523,7 +525,7 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "whois",
         usage: "<nick>",
-        summary: "show who a user is and the rooms you share",
+        summary: "show who a user is, from their server",
     },
     CommandSpec {
         name: "window",
@@ -1115,14 +1117,22 @@ pub(super) fn names_lines(room_name: &str, members: &[RoomMemberSummary]) -> Vec
     ]
 }
 
-/// `/whois`: who the member is and the rooms shared with them, each with
-/// the member's rank prefix there.
+/// `/whois`: the user's server profile, the rooms shared with them (each
+/// with their rank prefix there) and their homeserver. The display name
+/// fills mIRC's "real name" slot; the nick is the one a room knows them
+/// by, else the display name, else the ID.
 pub(super) fn whois_lines(
-    member: &RoomMemberSummary,
+    profile: &UserProfile,
+    room_nick: Option<&str>,
     shared_rooms: &[(RoomMemberRank, &str)],
 ) -> Vec<String> {
-    let nick = member_nick(member);
-    let mut lines = vec![format!("* {nick} is {}", member.user_id)];
+    let nick = room_nick
+        .or(profile.display_name.as_deref())
+        .unwrap_or(&profile.user_id);
+    let mut lines = vec![match &profile.display_name {
+        Some(display_name) => format!("* {nick} is {} * {display_name}", profile.user_id),
+        None => format!("* {nick} is {}", profile.user_id),
+    }];
     if !shared_rooms.is_empty() {
         let rooms = shared_rooms
             .iter()
@@ -1131,6 +1141,13 @@ pub(super) fn whois_lines(
             .join(" ");
         lines.push(format!("* {nick} on {rooms}"));
     }
+    let (_, server) = profile.user_id.split_once(':').unwrap_or_else(|| {
+        panic!(
+            "a Matrix user ID is @localpart:server, got {}",
+            profile.user_id
+        )
+    });
+    lines.push(format!("* {nick} using {server}"));
     lines.push(format!("* {nick} End of /WHOIS list"));
     lines
 }
@@ -2068,24 +2085,45 @@ mod tests {
                 "* End of /NAMES list".to_owned(),
             ]
         );
+        let profile = |user_id: &str, display_name: Option<&str>| UserProfile {
+            user_id: user_id.to_owned(),
+            display_name: display_name.map(str::to_owned),
+        };
         assert_eq!(
             whois_lines(
-                &members[2],
+                &profile("@mod:example", Some("Moderator Mo")),
+                Some("Mod"),
                 &[
                     (RoomMemberRank::Moderator, "Ops"),
                     (RoomMemberRank::Member, "Lobby")
                 ]
             ),
             vec![
-                "* Mod is @mod:example".to_owned(),
+                "* Mod is @mod:example * Moderator Mo".to_owned(),
                 "* Mod on @Ops Lobby".to_owned(),
+                "* Mod using example".to_owned(),
                 "* Mod End of /WHOIS list".to_owned(),
             ]
         );
+        // A stranger: no shared rooms, and the display name is the nick.
         assert_eq!(
-            whois_lines(&members[4], &[]),
+            whois_lines(&profile("@far:remote.org:8448", Some("Far")), None, &[]),
+            vec![
+                "* Far is @far:remote.org:8448 * Far".to_owned(),
+                "* Far using remote.org:8448".to_owned(),
+                "* Far End of /WHOIS list".to_owned(),
+            ]
+        );
+        assert_eq!(
+            whois_lines(
+                &profile("@ghost:example", None),
+                None,
+                &[(RoomMemberRank::Member, "Ops")]
+            ),
             vec![
                 "* @ghost:example is @ghost:example".to_owned(),
+                "* @ghost:example on Ops".to_owned(),
+                "* @ghost:example using example".to_owned(),
                 "* @ghost:example End of /WHOIS list".to_owned(),
             ]
         );

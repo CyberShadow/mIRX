@@ -33,8 +33,8 @@ use mirx_core::{
     SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
     SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
     SetRoomNotificationModeRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
-    UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, login_server, start,
+    UnbanRoomMemberRequest, UserProfile, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -9158,8 +9158,10 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             }
             state.model.ignored_users = Some(ignored_users);
         }
-        // Shown by /whois, which a later change asks the server.
-        Event::UserProfile(_) => {}
+        Event::UserProfile(profile) => {
+            let lines = whois_lines(&state.model, &profile);
+            echo_lines_in_active_view(state, lines);
+        }
         Event::E2eeStatus(status) => {
             for line in status_log::e2ee_status(&status) {
                 log_status(state, StatusLineKind::Info, line);
@@ -15286,9 +15288,10 @@ unsafe fn run_slash_command(hwnd: HWND, command: SlashCommand) -> Result<Option<
             Ok(None)
         }
         SlashCommand::Whois { nick } => {
-            let lines = whois_lines(&state_ref(hwnd).model, &nick)?;
-            echo_in_active_view(hwnd, lines)?;
-            Ok(None)
+            let state = state_mut(hwnd);
+            let user_id = commands::resolve_user(all_room_members(&state.model), &nick)?.user_id;
+            enqueue_command(state, Command::FetchUserProfile(user_id.clone()))?;
+            Ok(Some(format!("whois requested: {user_id}")))
         }
         SlashCommand::Ignore { target: None } => {
             let lines = {
@@ -15837,13 +15840,9 @@ fn msg_target_room_id(model: &UiModel, target: &str) -> Result<String, String> {
     }
 }
 
-/// `/whois` from what the client knows: the member and the joined rooms
-/// shared with them.
-fn whois_lines(model: &UiModel, nick: &str) -> Result<Vec<String>, String> {
-    let target = commands::resolve_user(all_room_members(model), nick)?;
-    let member = target
-        .member
-        .ok_or_else(|| format!("no such nick: {nick}"))?;
+/// `/whois`'s answer: the server's profile, with the nick and the joined
+/// rooms shared with the user from what the client knows.
+fn whois_lines(model: &UiModel, profile: &UserProfile) -> Vec<String> {
     let shared_rooms = model
         .rooms
         .iter()
@@ -15854,11 +15853,12 @@ fn whois_lines(model: &UiModel, nick: &str) -> Result<Vec<String>, String> {
                 .get(&room.room_id)?
                 .members
                 .iter()
-                .find(|member| member.user_id == target.user_id)?;
+                .find(|member| member.user_id == profile.user_id)?;
             Some((member.rank, room.display_name.as_str()))
         })
         .collect::<Vec<_>>();
-    Ok(commands::whois_lines(member, &shared_rooms))
+    let room_nick = known_nick(model, &profile.user_id);
+    commands::whois_lines(profile, room_nick.as_deref(), &shared_rooms)
 }
 
 fn resolve_joined_room_target(state: &WindowState, target: Option<&str>) -> Result<String, String> {
@@ -28846,23 +28846,97 @@ mod tests {
             with_test_compose_window(state, |hwnd| {
                 install_test_view_content(hwnd);
                 type_compose_line(hwnd, "/names");
-                type_compose_line(hwnd, "/whois alice");
-                type_compose_line(hwnd, "/whois @stranger:example");
                 type_compose_line(hwnd, "/names Nowhere");
+                // /whois asks the server, for members and strangers alike,
+                // and prints its answer.
+                type_compose_line(hwnd, "/whois Nobody");
+                type_compose_line(hwnd, "/whois alice");
+                type_compose_line(hwnd, "/whois @stranger:remote");
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        Command::FetchUserProfile("@alice:example".to_owned()),
+                        Command::FetchUserProfile("@stranger:remote".to_owned()),
+                    ]
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "whois requested: @stranger:remote"
+                );
+                for profile in [
+                    UserProfile {
+                        user_id: "@alice:example".to_owned(),
+                        display_name: Some("Alice Liddell".to_owned()),
+                    },
+                    UserProfile {
+                        user_id: "@stranger:remote".to_owned(),
+                        display_name: None,
+                    },
+                ] {
+                    apply_core_event(state_mut(hwnd), Event::UserProfile(profile)).unwrap();
+                }
                 let lines = render_room_lines(state_ref(hwnd), "!ops:example");
                 assert_eq!(
-                    &lines[lines.len() - 7..],
+                    &lines[lines.len() - 11..],
                     [
                         "[22:12] * Names Ops: Alice @Bob",
                         "[22:12] * End of /NAMES list",
-                        "[22:12] * Alice is @alice:example",
-                        "[22:12] * Alice on Ops Alice",
-                        "[22:12] * Alice End of /WHOIS list",
-                        "[22:12] * /whois: no such nick: @stranger:example",
                         "[22:12] * /names: unknown room: Nowhere",
+                        "[22:12] * /whois: no such nick: Nobody",
+                        "[22:12] * Alice is @alice:example * Alice Liddell",
+                        "[22:12] * Alice on Ops Alice",
+                        "[22:12] * Alice using example",
+                        "[22:12] * Alice End of /WHOIS list",
+                        "[22:12] * @stranger:remote is @stranger:remote",
+                        "[22:12] * @stranger:remote using remote",
+                        "[22:12] * @stranger:remote End of /WHOIS list",
                     ]
                 );
-                assert!(state_ref(hwnd).recorded_commands.is_empty());
+            });
+        }
+        stop_test_core(handle);
+    }
+
+    #[test]
+    fn ignore_and_unignore_check_locally_and_submit_core_commands() {
+        let (mut state, handle) = irc_command_state();
+        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.ignored_users = Some(vec!["@spam:remote".to_owned()]);
+        unsafe {
+            with_test_compose_window(state, |hwnd| {
+                install_test_view_content(hwnd);
+                for input in [
+                    "/ignore alice",
+                    "/ignore @me:example",
+                    "/ignore @spam:remote",
+                    "/unignore Bob",
+                    "/unignore @spam:remote",
+                    "/ignore",
+                ] {
+                    type_compose_line(hwnd, input);
+                }
+                assert_eq!(
+                    state_ref(hwnd).recorded_commands,
+                    vec![
+                        Command::IgnoreUser("@alice:example".to_owned()),
+                        Command::UnignoreUser("@spam:remote".to_owned()),
+                    ]
+                );
+                assert_eq!(
+                    state_ref(hwnd).model.status,
+                    "unignore submitted: @spam:remote"
+                );
+                let lines = render_room_lines(state_ref(hwnd), "!ops:example");
+                assert_eq!(
+                    &lines[lines.len() - 5..],
+                    [
+                        "[22:12] * /ignore: you cannot ignore yourself",
+                        "[22:12] * /ignore: @spam:remote is already ignored",
+                        "[22:12] * /unignore: Bob is not ignored",
+                        "[22:12] * Ignore list:",
+                        "[22:12] *   @spam:remote",
+                    ]
+                );
             });
         }
         stop_test_core(handle);

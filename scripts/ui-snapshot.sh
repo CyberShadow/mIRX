@@ -1678,11 +1678,13 @@ configure_case_expectations() {
       expect_active_view='room:!ops:example'
       # Typed after the fixture's 22:10/22:11 lines, at the fixed 22:12
       # render-state clock, so the command lines print below them.
+      # /whois's server answer is appended rather than typed: the snapshot
+      # core is not signed in and would refuse it at no fixed moment.
       ordered_actions=(
         'input:/names'
         'input:/kick'
         'input:/kick Sam'
-        'input:/whois Alice'
+        "append:$root_dir/tests/ui-state-updates/irc-commands-whois.json"
         'input:/msg Alice hi there'
         'input:/help kick'
       )
@@ -1696,8 +1698,9 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:12] * End of /NAMES list'
         --expect-room-view '!ops:example::[22:12] * /kick: insufficient parameters'
         --expect-room-view '!ops:example::[22:12] * /kick: Sam is ambiguous (@sam-one:example, @sam-two:example)'
-        --expect-room-view '!ops:example::[22:12] * Alice is @alice:example'
+        --expect-room-view '!ops:example::[22:12] * Alice is @alice:example * Alice Liddell'
         --expect-room-view '!ops:example::[22:12] * Alice on Ops Alice'
+        --expect-room-view '!ops:example::[22:12] * Alice using example'
         --expect-room-view '!ops:example::[22:12] * Alice End of /WHOIS list'
         --expect-room-view '!ops:example::[22:12] -> *Alice* hi there'
         --expect-room-view '!ops:example::[22:12] * /kick <nick> [reason] - kick a member from this room'
