@@ -1795,6 +1795,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::RestoreSession => "restore_session",
         Operation::SessionUpdate => "session_update",
         Operation::StartSync => "start_sync",
+        Operation::StopSync => "stop_sync",
         Operation::JoinRoom => "join_room",
         Operation::AcceptRoomInvite => "accept_room_invite",
         Operation::CreateDirectRoom => "create_direct_room",

@@ -6,7 +6,7 @@
 //! line holds the text after its `[hh:mm]` timestamp, so a command's echo
 //! may print other lines too, such as `-> *Alice* hi`.
 
-use mirx_core::{E2eeStatus, VerificationState, VerificationStateEvent};
+use mirx_core::{E2eeStatus, SyncStopReason, VerificationState, VerificationStateEvent};
 
 use super::{
     e2ee_cross_signing_label, e2ee_local_backup_label, e2ee_recovery_state_label,
@@ -76,6 +76,16 @@ pub(super) const E2EE_RECOVERY_SET_UP: &str =
     "E2EE recovery set up; the recovery key was shown in a dialog";
 pub(super) const E2EE_RECOVERY_COMPLETE: &str = "E2EE recovery complete";
 pub(super) const E2EE_STATUS_UNKNOWN: &str = "E2EE status not yet known";
+
+/// mIRC's `* Disconnected`, with the reason when sync ended by itself.
+pub(super) fn disconnected(reason: &SyncStopReason) -> (StatusLineKind, String) {
+    match reason {
+        SyncStopReason::Requested => (StatusLineKind::Info, "Disconnected".to_owned()),
+        SyncStopReason::Failed(message) => {
+            (StatusLineKind::Error, format!("Disconnected: {message}"))
+        }
+    }
+}
 
 pub(super) fn synced(joined: usize, invited: usize) -> String {
     format!("Synced rooms: {joined} joined, {invited} invited")
@@ -174,6 +184,19 @@ mod tests {
             "Logged in as @alice:example (device DEVICE)"
         );
         assert_eq!(synced(3, 1), "Synced rooms: 3 joined, 1 invited");
+        assert_eq!(
+            disconnected(&SyncStopReason::Requested),
+            (StatusLineKind::Info, "Disconnected".to_owned())
+        );
+        assert_eq!(
+            disconnected(&SyncStopReason::Failed(
+                "continuous Matrix sync failed: timeout".to_owned()
+            )),
+            (
+                StatusLineKind::Error,
+                "Disconnected: continuous Matrix sync failed: timeout".to_owned()
+            )
+        );
         assert_eq!(
             error("send message", "message send failed"),
             "Error during send message: message send failed"

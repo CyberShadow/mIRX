@@ -15,6 +15,7 @@ pub enum Command {
     Login(LoginRequest),
     RestoreSession(RestoreSessionRequest),
     StartSync,
+    StopSync,
     JoinRoom(JoinRoomRequest),
     AcceptRoomInvite(AcceptRoomInviteRequest),
     CreateDirectRoom(CreateDirectRoomRequest),
@@ -52,12 +53,16 @@ pub struct LoginRequest {
     pub username: String,
     pub password: String,
     pub device_display_name: String,
+    /// Start continuous sync once the session is ready, as `StartSync` would.
+    pub start_sync: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoreSessionRequest {
     pub homeserver_url: String,
     pub session: StoredSession,
+    /// Start continuous sync once the session is ready, as `StartSync` would.
+    pub start_sync: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1025,6 +1030,7 @@ pub enum Operation {
     RestoreSession,
     SessionUpdate,
     StartSync,
+    StopSync,
     JoinRoom,
     AcceptRoomInvite,
     CreateDirectRoom,
@@ -1055,6 +1061,15 @@ pub enum Operation {
     Shutdown,
 }
 
+/// Why continuous sync ended. The session stays signed in either way.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SyncStopReason {
+    /// `Command::StopSync`.
+    Requested,
+    /// The sync loop ended with this error.
+    Failed(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     Started,
@@ -1062,6 +1077,7 @@ pub enum Event {
     SessionUpdated { session: StoredSession },
     RestoredSession,
     SyncStarted,
+    SyncStopped(SyncStopReason),
     SyncedRooms(Vec<RoomSummary>),
     RoomActivity(Box<RoomActivity>),
     RoomActivityUpdate(RoomActivityUpdate),

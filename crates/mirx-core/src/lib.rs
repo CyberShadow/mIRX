@@ -26,9 +26,9 @@ pub use api::{
     RoomUserProfile, RoomVideoActivity, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget,
     SendMessageRequest, SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest,
-    SpaceChildSummary, StoredSession, UnbanRoomMemberRequest, UnsupportedRoomMessageActivity,
-    VerificationDecimals, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent,
+    SpaceChildSummary, StoredSession, SyncStopReason, UnbanRoomMemberRequest,
+    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
+    VerificationRequest, VerificationState, VerificationStateEvent,
 };
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 

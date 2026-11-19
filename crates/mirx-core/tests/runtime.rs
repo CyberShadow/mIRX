@@ -19,9 +19,10 @@ use mirx_core::{
     RoomStateNoticeActivity, RoomStateNoticeContent, RoomSummary, RoomTagSummary, RoomTyping,
     RoomUserProfile, SendFileRequest, SendMessageRequest, SendReactionRequest,
     SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, UnbanRoomMemberRequest,
-    UnsupportedRoomMessageActivity, VerificationDecimals, VerificationEmoji, VerificationFlowId,
-    VerificationRequest, VerificationState, VerificationStateEvent, start,
+    SetupE2eeRecoveryRequest, SpaceChildSummary, StoredSession, SyncStopReason,
+    UnbanRoomMemberRequest, UnsupportedRoomMessageActivity, VerificationDecimals,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, start,
 };
 use tempfile::TempDir;
 
@@ -250,6 +251,10 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .expect("send start sync");
     handle
         .command_sender()
+        .send(Command::StopSync)
+        .expect("send stop sync");
+    handle
+        .command_sender()
         .send(Command::SendMessage(SendMessageRequest {
             room_id: "!room:example.org".to_owned(),
             presentation: RoomMessagePresentationKind::Text,
@@ -280,6 +285,10 @@ fn invalid_command_ordering_emits_typed_error_events() {
         .events()
         .recv_timeout(Duration::from_secs(2))
         .expect("start sync error");
+    let stop_sync_error = handle
+        .events()
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stop sync error");
     let send_message_error = handle
         .events()
         .recv_timeout(Duration::from_secs(2))
@@ -300,6 +309,13 @@ fn invalid_command_ordering_emits_typed_error_events() {
     match start_sync_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::StartSync),
         other => panic!("expected start sync error, got {other:?}"),
+    }
+    match stop_sync_error {
+        Event::Error(err) => {
+            assert_eq!(err.operation, Operation::StopSync);
+            assert_eq!(err.message, "stop sync requires an authenticated session");
+        }
+        other => panic!("expected stop sync error, got {other:?}"),
     }
     match send_message_error {
         Event::Error(err) => assert_eq!(err.operation, Operation::SendMessage),
@@ -747,6 +763,7 @@ fn login_store_initialization_failure_emits_typed_error_event() {
             username: "user".to_owned(),
             password: "password".to_owned(),
             device_display_name: "mirx runtime test".to_owned(),
+            start_sync: false,
         }))
         .expect("send login");
 
@@ -1556,6 +1573,26 @@ fn sync_started_event_round_trips_and_logged_in_no_longer_uses_unit_shape() {
         serde_json::from_str::<Event>(r#""LoggedIn""#).is_err(),
         "logged-in event must include a session payload"
     );
+}
+
+#[test]
+fn sync_stopped_event_round_trips_both_reasons() {
+    for (event, json) in [
+        (
+            Event::SyncStopped(SyncStopReason::Requested),
+            r#"{"SyncStopped":"Requested"}"#,
+        ),
+        (
+            Event::SyncStopped(SyncStopReason::Failed("boom".to_owned())),
+            r#"{"SyncStopped":{"Failed":"boom"}}"#,
+        ),
+    ] {
+        assert_eq!(serde_json::to_string(&event).expect("serialize"), json);
+        assert_eq!(
+            serde_json::from_str::<Event>(json).expect("deserialize"),
+            event
+        );
+    }
 }
 
 #[test]

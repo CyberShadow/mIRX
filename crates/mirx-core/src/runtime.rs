@@ -17,7 +17,7 @@ use crate::api::{
     RecoverE2eeRequest, RedactEventRequest, RejectRoomInviteRequest, RestoreSessionRequest,
     RoomMembers, RoomMembership, RoomReadState, RoomSummary, SendReactionRequest,
     SetDisplayNameRequest, SetRoomMemberPowerLevelRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, UnbanRoomMemberRequest, VerificationFlowId,
+    SetupE2eeRecoveryRequest, SyncStopReason, UnbanRoomMemberRequest, VerificationFlowId,
 };
 use crate::matrix::{self, BackupServerStatusMode, MatrixCoreError};
 
@@ -193,6 +193,7 @@ async fn handle_command(
             handle_restore_session(config, event_tx, state, request).await
         }
         Command::StartSync => handle_start_sync(event_tx, state),
+        Command::StopSync => handle_stop_sync(event_tx, state),
         Command::JoinRoom(request) => handle_join_room(event_tx, state, request).await,
         Command::AcceptRoomInvite(request) => {
             handle_accept_room_invite(event_tx, state, request).await
@@ -339,6 +340,9 @@ async fn handle_login(
         verification_tasks: HashMap::new(),
     };
 
+    if request.start_sync {
+        handle_start_sync(event_tx, state);
+    }
     false
 }
 
@@ -428,6 +432,9 @@ async fn handle_restore_session(
         verification_tasks: HashMap::new(),
     };
 
+    if request.start_sync {
+        handle_start_sync(event_tx, state);
+    }
     false
 }
 
@@ -458,6 +465,28 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
 
     *sync_task = Some(matrix::start_sync_task(client.clone(), event_tx.clone()));
     emit_event(event_tx, Event::SyncStarted);
+    false
+}
+
+/// Stops continuous sync and keeps the session: mIRC's Disconnect, not a
+/// logout.
+fn handle_stop_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
+    let WorkerState::Ready { sync_task, .. } = state else {
+        emit_invalid_state(
+            event_tx,
+            Operation::StopSync,
+            "stop sync requires an authenticated session",
+        );
+        return false;
+    };
+
+    if !sync_task.as_ref().is_some_and(|task| !task.is_finished()) {
+        emit_invalid_state(event_tx, Operation::StopSync, "sync is not running");
+        return false;
+    }
+
+    abort_sync_task(sync_task);
+    emit_event(event_tx, Event::SyncStopped(SyncStopReason::Requested));
     false
 }
 
@@ -1367,12 +1396,14 @@ mod tests {
 
     use super::{
         EventSender, WorkerState, emit_initial_synced_rooms_members_and_read_states,
-        handle_command, handle_start_sync, run_worker, shutdown_state,
+        handle_command, handle_login, handle_start_sync, handle_stop_sync, run_worker,
+        shutdown_state,
     };
     use crate::api::CoreConfig;
     use crate::api::{
-        BanRoomMemberRequest, Command, Event, KickRoomMemberRequest, Operation, RoomMemberRank,
-        RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState, RoomSummary,
+        BanRoomMemberRequest, Command, Event, KickRoomMemberRequest, LoginRequest, Operation,
+        RoomMemberRank, RoomMemberSummary, RoomMembers, RoomMembership, RoomReadState, RoomSummary,
+        SyncStopReason,
     };
     use matrix_sdk::{
         ruma::{
@@ -1912,6 +1943,260 @@ mod tests {
                     .expect("stopped event"),
                 Event::Stopped
             );
+        });
+    }
+
+    fn run_local(test: impl std::future::Future<Output = ()>) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        tokio::task::LocalSet::new().block_on(&runtime, test);
+    }
+
+    async fn offline_client() -> matrix_sdk::Client {
+        matrix_sdk::Client::builder()
+            .homeserver_url("http://localhost")
+            .build()
+            .await
+            .expect("build matrix client")
+    }
+
+    fn drain_events(event_rx: &mpsc::Receiver<Event>) -> Vec<Event> {
+        event_rx.try_iter().collect()
+    }
+
+    /// Waits for the next event while letting the `LocalSet`'s tasks run;
+    /// a blocking `recv_timeout` would starve the sync task.
+    async fn next_event(event_rx: &mpsc::Receiver<Event>) -> Event {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match event_rx.try_recv() {
+                Ok(event) => return event,
+                Err(TryRecvError::Empty) => {
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "timed out waiting for a core event"
+                    );
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(TryRecvError::Disconnected) => panic!("event channel closed"),
+            }
+        }
+    }
+
+    fn sync_task_is_none(state: &WorkerState) -> bool {
+        let WorkerState::Ready { sync_task, .. } = state else {
+            panic!("expected a ready worker");
+        };
+        sync_task.is_none()
+    }
+
+    fn assert_stop_sync_error(event_rx: &mpsc::Receiver<Event>, message: &str) {
+        match drain_events(event_rx).as_slice() {
+            [Event::Error(err)] => {
+                assert_eq!(err.operation, Operation::StopSync);
+                assert_eq!(err.message, message);
+            }
+            other => panic!("expected one stop sync error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stop_sync_aborts_running_sync_and_emits_sync_stopped() {
+        run_local(async {
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(offline_client().await);
+            let WorkerState::Ready { sync_task, .. } = &mut state else {
+                unreachable!();
+            };
+            *sync_task = Some(tokio::task::spawn_local(std::future::pending::<()>()));
+
+            assert!(!handle_stop_sync(&event_tx, &mut state));
+
+            assert_eq!(
+                drain_events(&event_rx),
+                vec![Event::SyncStopped(SyncStopReason::Requested)]
+            );
+            assert!(sync_task_is_none(&state));
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn stop_sync_without_running_sync_emits_typed_error() {
+        run_local(async {
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(offline_client().await);
+
+            assert!(!handle_stop_sync(&event_tx, &mut state));
+            assert_stop_sync_error(&event_rx, "sync is not running");
+
+            let finished = tokio::task::spawn_local(async {});
+            while !finished.is_finished() {
+                tokio::task::yield_now().await;
+            }
+            let WorkerState::Ready { sync_task, .. } = &mut state else {
+                unreachable!();
+            };
+            *sync_task = Some(finished);
+
+            assert!(!handle_stop_sync(&event_tx, &mut state));
+            assert_stop_sync_error(&event_rx, "sync is not running");
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn stop_sync_without_session_emits_invalid_state() {
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut state = WorkerState::NoClient;
+
+        assert!(!handle_stop_sync(&event_tx, &mut state));
+
+        assert_stop_sync_error(&event_rx, "stop sync requires an authenticated session");
+    }
+
+    #[test]
+    fn start_sync_after_stop_sync_restarts() {
+        run_local(async {
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(offline_client().await);
+
+            assert!(!handle_start_sync(&event_tx, &mut state));
+            assert!(!handle_stop_sync(&event_tx, &mut state));
+            assert!(!handle_start_sync(&event_tx, &mut state));
+
+            assert_eq!(
+                drain_events(&event_rx),
+                vec![
+                    Event::SyncStarted,
+                    Event::SyncStopped(SyncStopReason::Requested),
+                    Event::SyncStarted,
+                ]
+            );
+            assert!(!sync_task_is_none(&state));
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn sync_failure_emits_sync_stopped_failed() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .mock_sync()
+                .error_unknown_token(false)
+                .mount()
+                .await;
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = ready_state(client);
+
+            assert!(!handle_start_sync(&event_tx, &mut state));
+
+            assert_eq!(next_event(&event_rx).await, Event::SyncStarted);
+            match next_event(&event_rx).await {
+                Event::SyncStopped(SyncStopReason::Failed(message)) => {
+                    assert!(
+                        message.starts_with("continuous Matrix sync failed"),
+                        "{message}"
+                    );
+                }
+                other => panic!("expected a failed sync stop, got {other:?}"),
+            }
+            assert_eq!(drain_events(&event_rx), Vec::new());
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    fn login_request(mock_server: &MatrixMockServer, start_sync: bool) -> LoginRequest {
+        LoginRequest {
+            homeserver_url: mock_server.uri(),
+            username: "example".to_owned(),
+            password: "wordpass".to_owned(),
+            device_display_name: "mirx".to_owned(),
+            start_sync,
+        }
+    }
+
+    async fn mock_login_server() -> MatrixMockServer {
+        let mock_server = MatrixMockServer::new().await;
+        mock_server.mock_versions().ok().mount().await;
+        mock_server.mock_login().ok().mount().await;
+        mock_server.mock_sync().ok(|_| {}).mount().await;
+        mock_server
+    }
+
+    /// Runs `handle_login` and returns the events it emitted up to its
+    /// return; the sync task, if any, has not run yet.
+    async fn login_events(
+        mock_server: &MatrixMockServer,
+        start_sync: bool,
+    ) -> (tempfile::TempDir, WorkerState, Vec<Event>) {
+        let profile = tempfile::TempDir::new().expect("temporary profile directory");
+        let config = CoreConfig {
+            profile_dir: profile.path().join("profile"),
+            store_passphrase: "test-store-passphrase".to_owned(),
+        };
+        let (event_tx, event_rx) = mpsc::channel::<Event>();
+        let mut state = WorkerState::NoClient;
+
+        assert!(
+            !handle_login(
+                &config,
+                &event_tx,
+                &mut state,
+                login_request(mock_server, start_sync)
+            )
+            .await
+        );
+
+        (profile, state, drain_events(&event_rx))
+    }
+
+    fn event_position(events: &[Event], matches: impl Fn(&Event) -> bool) -> Option<usize> {
+        events.iter().position(matches)
+    }
+
+    #[test]
+    fn login_with_start_sync_emits_logged_in_then_sync_started() {
+        run_local(async {
+            let mock_server = mock_login_server().await;
+            let (_profile, mut state, events) = login_events(&mock_server, true).await;
+
+            let logged_in =
+                event_position(&events, |event| matches!(event, Event::LoggedIn { .. }))
+                    .unwrap_or_else(|| panic!("LoggedIn in {events:?}"));
+            let synced_rooms =
+                event_position(&events, |event| matches!(event, Event::SyncedRooms(_)))
+                    .unwrap_or_else(|| panic!("SyncedRooms in {events:?}"));
+            assert_eq!(
+                event_position(&events, |event| *event == Event::SyncStarted),
+                Some(events.len() - 1),
+                "{events:?}"
+            );
+            assert!(logged_in < synced_rooms);
+            assert!(!sync_task_is_none(&state));
+            shutdown_state(&mut state).await;
+        });
+    }
+
+    #[test]
+    fn login_without_start_sync_leaves_sync_idle() {
+        run_local(async {
+            let mock_server = mock_login_server().await;
+            let (_profile, mut state, events) = login_events(&mock_server, false).await;
+
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::LoggedIn { .. })),
+                "{events:?}"
+            );
+            assert!(!events.contains(&Event::SyncStarted), "{events:?}");
+            assert!(sync_task_is_none(&state));
+            shutdown_state(&mut state).await;
         });
     }
 }

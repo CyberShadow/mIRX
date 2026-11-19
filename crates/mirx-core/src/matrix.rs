@@ -2577,10 +2577,9 @@ pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle
         {
             emit_event(
                 &events,
-                Event::Error(crate::api::CoreErrorEvent {
-                    operation: Operation::StartSync,
-                    message: format!("continuous Matrix sync failed: {err}"),
-                }),
+                Event::SyncStopped(crate::api::SyncStopReason::Failed(format!(
+                    "continuous Matrix sync failed: {err}"
+                ))),
             );
         }
     })

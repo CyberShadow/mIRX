@@ -102,6 +102,7 @@ fn live_send_login(
             username,
             password,
             device_display_name: device_display_name.to_owned(),
+            start_sync: false,
         }))
         .expect("send login");
 }

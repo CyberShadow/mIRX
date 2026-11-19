@@ -8494,6 +8494,11 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
             state.model.status = "continuous sync started".to_owned();
             state.model.lifecycle_state = LifecycleState::Syncing;
         }
+        Event::SyncStopped(reason) => {
+            let (kind, line) = status_log::disconnected(&reason);
+            log_status(state, kind, line);
+            state.model.status = "continuous sync stopped".to_owned();
+        }
         Event::Error(error) => {
             if error.operation == Operation::BackfillRoomHistory {
                 apply_backfill_room_history_error(state, error.message.clone());
@@ -14321,6 +14326,7 @@ fn submit_login(
             username,
             password,
             device_display_name,
+            start_sync: false,
         }))
         .map_err(|err| format!("failed to enqueue login command: {err}"))?;
 
@@ -14359,6 +14365,7 @@ fn submit_restore_session(
         .send(Command::RestoreSession(RestoreSessionRequest {
             homeserver_url: homeserver_url.clone(),
             session,
+            start_sync: false,
         }))
         .map_err(|err| format!("failed to enqueue restore session command: {err}"))?;
 
@@ -15544,6 +15551,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::RestoreSession => "restore session",
         Operation::SessionUpdate => "session update",
         Operation::StartSync => "start sync",
+        Operation::StopSync => "stop sync",
         Operation::JoinRoom => "join room",
         Operation::AcceptRoomInvite => "accept room invitation",
         Operation::CreateDirectRoom => "create direct room",
@@ -15694,7 +15702,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use mirx_core::{RoomMemberChange, RoomMemberRank, RoomStateNoticeActivity};
+    use mirx_core::{RoomMemberChange, RoomMemberRank, RoomStateNoticeActivity, SyncStopReason};
 
     use super::*;
 
@@ -28644,6 +28652,15 @@ mod tests {
             apply_core_event(&mut state, Event::SyncedRooms(rooms.clone())).unwrap();
             // The core re-sends the room list on every change.
             apply_core_event(&mut state, Event::SyncedRooms(rooms)).unwrap();
+            apply_core_event(&mut state, Event::SyncStopped(SyncStopReason::Requested)).unwrap();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(
+                &mut state,
+                Event::SyncStopped(SyncStopReason::Failed(
+                    "continuous Matrix sync failed: boom".to_owned(),
+                )),
+            )
+            .unwrap();
             apply_core_event(&mut state, Event::LoggedOut).unwrap();
             apply_core_event(&mut state, Event::Stopped).unwrap();
 
@@ -28654,6 +28671,9 @@ mod tests {
                     "[22:12] * Logged in as @alice:example (device DEVICE)".to_owned(),
                     "[22:12] * Syncing with the homeserver".to_owned(),
                     "[22:12] * Synced rooms: 1 joined, 1 invited".to_owned(),
+                    "[22:12] * Disconnected".to_owned(),
+                    "[22:12] * Syncing with the homeserver".to_owned(),
+                    "[22:12] * Disconnected: continuous Matrix sync failed: boom".to_owned(),
                     "[22:12] * Logged out".to_owned(),
                     "[22:12] * Disconnected".to_owned(),
                 ]
