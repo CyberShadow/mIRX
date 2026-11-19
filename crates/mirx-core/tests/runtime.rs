@@ -5,13 +5,13 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command, CoreConfig,
     CreateDirectRoomRequest, E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus,
     E2eeRecoveryOperation, E2eeRecoverySetupSucceeded, E2eeRecoveryState, E2eeRecoverySucceeded,
-    E2eeStatus, EditMessageRequest, Event, FetchRoomMediaRequest, InviteRoomMemberRequest,
-    JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest,
-    MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT,
-    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest,
-    RejectRoomInviteRequest, RoomActivity, RoomActivityKind, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    E2eeStatus, EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest,
+    RedactEventRequest, RejectRoomInviteRequest, RoomActivity, RoomActivityKind,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
@@ -558,6 +558,18 @@ fn fetch_room_media_before_login_emits_fetch_room_media_error() {
         }),
         Operation::FetchRoomMedia,
         "fetch room media requires an authenticated session",
+    );
+}
+
+#[test]
+fn fetch_room_event_before_login_emits_fetch_room_event_error() {
+    assert_invalid_authenticated_command(
+        Command::FetchRoomEvent(FetchRoomEventRequest {
+            room_id: "!ops:example.org".to_owned(),
+            event_id: "$question:example.org".to_owned(),
+        }),
+        Operation::FetchRoomEvent,
+        "fetch room event requires an authenticated session",
     );
 }
 

@@ -79,11 +79,12 @@ use tokio::task::JoinHandle;
 use crate::api::{
     BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreConfig, CoreErrorEvent, E2eeBackupState,
     E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus, EditMessageRequest,
-    Event, FetchRoomMediaRequest, InviteRoomMemberRequest, KickRoomMemberRequest, LoginRequest,
-    MarkRoomReadRequest, MemberPowerRole, Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX,
-    RecoverE2eeRequest, RedactEventRequest, RoomActivity, RoomActivityKind, RoomActivityRelation,
-    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-    RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    Event, FetchRoomEventRequest, FetchRoomMediaRequest, InviteRoomMemberRequest,
+    KickRoomMemberRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    ROOM_HISTORY_BACKFILL_LIMIT_MAX, RecoverE2eeRequest, RedactEventRequest, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
+    RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
+    RoomEncryptedFileKey, RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
     RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMedia,
     RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank,
     RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
@@ -3692,6 +3693,55 @@ async fn room_history_backfill_event_from_timeline_event(
     Ok(None)
 }
 
+pub(crate) async fn fetch_room_event(
+    client: &Client,
+    request: FetchRoomEventRequest,
+) -> RoomEventFetch {
+    let result = match fetch_room_event_activity(client, &request).await {
+        Ok(activity) => RoomEventFetchResult::Loaded {
+            activity: Box::new(activity),
+        },
+        Err(err) => RoomEventFetchResult::Failed {
+            message: err.to_string(),
+        },
+    };
+    RoomEventFetch {
+        room_id: request.room_id,
+        event_id: request.event_id,
+        result,
+    }
+}
+
+/// The event as the timeline line backfill would make of it, from the event
+/// cache or else the server. An event that is no line of its own (an edit,
+/// a reaction, a redaction) is unsupported.
+async fn fetch_room_event_activity(
+    client: &Client,
+    request: &FetchRoomEventRequest,
+) -> Result<RoomActivity, MatrixCoreError> {
+    let room = joined_room_by_id(client, &request.room_id)?;
+    let event_id = owned_event_id_from_str(&request.event_id)?;
+    let event = room
+        .load_or_fetch_event(&event_id, None)
+        .await
+        .map_err(|err| MatrixCoreError::new(format!("failed to fetch Matrix event: {err}")))?;
+    let redaction_rules = room.clone_info().room_version_rules_or_default().redaction;
+    match room_history_backfill_event_from_timeline_event(
+        &room,
+        &event,
+        &redaction_rules,
+        &mut BTreeMap::new(),
+        &mut SenderProfileCache::new(&room),
+    )
+    .await?
+    {
+        Some(RoomHistoryBackfillEvent::Activity(activity)) => Ok(*activity),
+        Some(RoomHistoryBackfillEvent::ActivityUpdate(_)) | None => {
+            Err(MatrixCoreError::new("unsupported event"))
+        }
+    }
+}
+
 pub(crate) async fn logout(client: Client) -> Result<(), MatrixCoreError> {
     client
         .logout()
@@ -3720,8 +3770,8 @@ mod tests {
         ReactionEventIndex, ReactionEventIndexEntry, SenderProfileCache, activity_highlight,
         attach_reply_relation, attach_thread_relation, attach_thread_reply_relation,
         backfill_room_history, ban_room_member, cancelled_state,
-        direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_media,
-        insert_pending_outgoing_kind, invite_room_member, joined_room_members,
+        direct_user_ids_by_room_from_content, emit_member_snapshots_after_sync, fetch_room_event,
+        fetch_room_media, insert_pending_outgoing_kind, invite_room_member, joined_room_members,
         joined_room_members_no_sync, joined_room_update_changes_members, kick_room_member,
         map_cross_signing_status, map_decimals, map_e2ee_backup_state, map_e2ee_recovery_state,
         map_emoji_array, map_emoji_short_auth_string, map_local_echo, map_local_message_activity,
@@ -5009,14 +5059,15 @@ mod tests {
     }
     use crate::api::{
         BackfillRoomHistoryRequest, BanRoomMemberRequest, CoreErrorEvent, E2eeBackupState,
-        E2eeCrossSigningStatus, E2eeRecoveryState, Event, FetchRoomMediaRequest,
-        InviteRoomMemberRequest, KickRoomMemberRequest, MemberPowerRole, Operation,
-        ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind, RoomActivityRelation,
-        RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
-        RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity,
-        RoomFileInfo, RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat,
-        RoomMediaKind, RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary,
-        RoomMembers, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
+        E2eeCrossSigningStatus, E2eeRecoveryState, Event, FetchRoomEventRequest,
+        FetchRoomMediaRequest, InviteRoomMemberRequest, KickRoomMemberRequest, MemberPowerRole,
+        Operation, ROOM_HISTORY_BACKFILL_LIMIT_MAX, RoomActivity, RoomActivityKind,
+        RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
+        RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes, RoomEncryptedFileKey,
+        RoomEventFetch, RoomEventFetchResult, RoomFileActivity, RoomFileInfo,
+        RoomHistoryBackfillEvent, RoomImageActivity, RoomImageInfo, RoomMediaFormat, RoomMediaKind,
+        RoomMediaSource, RoomMemberChange, RoomMemberRank, RoomMemberSummary, RoomMembers,
+        RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
         RoomPowerLevelUserChange, RoomPowerLevelValueChange, RoomReadState,
         RoomStateNoticeActivity, RoomStateNoticeContent, RoomTagSummary, RoomTyping,
         RoomUnableToDecryptActivity, RoomUnableToDecryptReason, RoomUserProfile, RoomVideoActivity,
@@ -8240,6 +8291,121 @@ mod tests {
                         reason: Some("flooding".to_owned()),
                     },
                 })
+            );
+        });
+    }
+
+    #[test]
+    fn fetch_room_event_maps_the_event_or_reports_why_not() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+
+        runtime.block_on(async {
+            let mock_server = MatrixMockServer::new().await;
+            let client = mock_server.client_builder().build().await;
+            mock_server
+                .sync_room(
+                    &client,
+                    JoinedRoomBuilder::new(room_id().as_ref())
+                        .add_state_bulk(raw_sync_state_events(&profile_test_state_events())),
+                )
+                .await;
+            let in_room = |mut event: serde_json::Value| {
+                event["room_id"] = serde_json::json!(room_id().as_str());
+                timeline_event(event)
+            };
+            mock_server
+                .mock_room_event()
+                .room(room_id())
+                .match_event_id()
+                .ok(in_room(text_message_json(
+                    "$old:localhost",
+                    "@bob:localhost",
+                    "are we deploying today?",
+                )))
+                .mount()
+                .await;
+            mock_server
+                .mock_room_event()
+                .room(room_id())
+                .match_event_id()
+                .ok(in_room(serde_json::json!({
+                    "type": "m.room.message",
+                    "content": {
+                        "msgtype": "m.text",
+                        "body": "* fixed",
+                        "m.new_content": { "msgtype": "m.text", "body": "fixed" },
+                        "m.relates_to": { "rel_type": "m.replace", "event_id": "$old:localhost" }
+                    },
+                    "event_id": "$edit:localhost",
+                    "sender": "@bob:localhost",
+                    "origin_server_ts": 1700000000001u64
+                })))
+                .mount()
+                .await;
+            mock_server
+                .mock_room_event()
+                .room(room_id())
+                .ok_with_template(wiremock::ResponseTemplate::new(404).set_body_json(
+                    serde_json::json!({ "errcode": "M_NOT_FOUND", "error": "Event not found." }),
+                ))
+                .mount()
+                .await;
+            let fetch = |room_id: &str, event_id: &str| {
+                fetch_room_event(
+                    &client,
+                    FetchRoomEventRequest {
+                        room_id: room_id.to_owned(),
+                        event_id: event_id.to_owned(),
+                    },
+                )
+            };
+
+            let loaded = fetch("!room:example.org", "$old:localhost").await;
+            let RoomEventFetchResult::Loaded { activity } = loaded.result else {
+                panic!("expected a loaded event, got {loaded:?}");
+            };
+            assert_eq!(
+                (loaded.room_id.as_str(), loaded.event_id.as_str()),
+                ("!room:example.org", "$old:localhost")
+            );
+            let RoomActivityKind::Message(message) = &activity.kind else {
+                panic!("expected a message, got {activity:?}");
+            };
+            assert_eq!(message.body, "are we deploying today?");
+            assert_eq!(message.event_id.as_deref(), Some("$old:localhost"));
+            assert_eq!(
+                sender_of(&activity),
+                &member_profile("@bob:localhost", "Bob", false)
+            );
+
+            assert_eq!(
+                fetch("!room:example.org", "$edit:localhost").await,
+                RoomEventFetch {
+                    room_id: "!room:example.org".to_owned(),
+                    event_id: "$edit:localhost".to_owned(),
+                    result: RoomEventFetchResult::Failed {
+                        message: "unsupported event".to_owned(),
+                    },
+                }
+            );
+
+            let missing = fetch("!room:example.org", "$missing:localhost").await;
+            let RoomEventFetchResult::Failed { message } = &missing.result else {
+                panic!("expected a failure, got {missing:?}");
+            };
+            assert!(
+                message.starts_with("failed to fetch Matrix event"),
+                "{message}"
+            );
+
+            assert_eq!(
+                fetch("!other:example.org", "$old:localhost").await.result,
+                RoomEventFetchResult::Failed {
+                    message: "joined room not found: !other:example.org".to_owned(),
+                }
             );
         });
     }

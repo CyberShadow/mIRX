@@ -1822,6 +1822,7 @@ pub(crate) fn operation_code(operation: Operation) -> &'static str {
         Operation::MarkRoomRead => "mark_room_read",
         Operation::BackfillRoomHistory => "backfill_room_history",
         Operation::FetchRoomMedia => "fetch_room_media",
+        Operation::FetchRoomEvent => "fetch_room_event",
         Operation::RoomList => "room_list",
         Operation::RoomReadState => "room_read_state",
         Operation::E2eeStatus => "e2ee_status",

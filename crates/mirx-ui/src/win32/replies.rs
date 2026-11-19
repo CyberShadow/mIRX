@@ -53,6 +53,9 @@ pub(super) const QUOTE_REDACTED_TEXT: &str = "message redacted";
 /// A quoted message not loaded yet.
 pub(super) const QUOTE_LOADING_TEXT: &str = "(loading the replied-to message...)";
 
+/// A quoted message the server could not give.
+pub(super) const QUOTE_UNAVAILABLE_TEXT: &str = "(the replied-to message is unavailable)";
+
 #[cfg(test)]
 mod tests {
     use super::*;

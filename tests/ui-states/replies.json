@@ -258,5 +258,36 @@
         }
       }
     }
+  },
+  {
+    "RoomEvent": {
+      "room_id": "!replies:example",
+      "event_id": "$not-loaded",
+      "result": {
+        "type": "loaded",
+        "activity": {
+          "room_id": "!replies:example",
+          "activity_id": "event:$not-loaded",
+          "timestamp_ms": 1699000000000,
+          "highlight": false,
+          "relation": null,
+          "kind": {
+            "type": "message",
+            "event_id": "$not-loaded",
+            "transaction_id": null,
+            "sender": {
+              "user_id": "@dave:example",
+              "display_name": "Dave",
+              "display_name_ambiguous": false
+            },
+            "presentation": "text",
+            "body": "the login page times out on the second try",
+            "send_state": {
+              "state": "sent"
+            }
+          }
+        }
+      }
+    }
   }
 ]

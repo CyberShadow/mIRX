@@ -1008,6 +1008,7 @@ configure_case_expectations() {
         --expect-room-view '!replies:example::    > <Bob> yes, after lunch'
         --expect-room-view '!replies:example::[22:15] * Carol cheers'
         --expect-room-view '!replies:example::[22:16] <Dave> I will tag the release'
+        --expect-room-view '!replies:example::    > <Dave> the login page times out on the second try'
         --expect-room-view '!replies:example::    > (loading the replied-to message...)'
       )
       switchbar_no_activity_expect_args=(

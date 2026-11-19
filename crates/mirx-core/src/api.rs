@@ -36,6 +36,7 @@ pub enum Command {
     MarkRoomRead(MarkRoomReadRequest),
     BackfillRoomHistory(BackfillRoomHistoryRequest),
     FetchRoomMedia(FetchRoomMediaRequest),
+    FetchRoomEvent(FetchRoomEventRequest),
     RefreshE2eeStatus,
     SetupE2eeRecovery(SetupE2eeRecoveryRequest),
     RecoverE2ee(RecoverE2eeRequest),
@@ -261,6 +262,15 @@ pub struct FetchRoomMediaRequest {
     pub event_id: String,
     pub source: RoomMediaSource,
     pub format: RoomMediaFormat,
+}
+
+/// One event of a joined room, such as the message a reply answers when it
+/// is not loaded.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FetchRoomEventRequest {
+    pub room_id: String,
+    pub event_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -754,6 +764,27 @@ pub struct RoomMedia {
     pub kind: RoomMediaKind,
 }
 
+/// The answer to `Command::FetchRoomEvent`; a fetch always ends in one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoomEventFetch {
+    pub room_id: String,
+    pub event_id: String,
+    pub result: RoomEventFetchResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RoomEventFetchResult {
+    /// The event as the timeline line it would be.
+    Loaded {
+        activity: Box<RoomActivity>,
+    },
+    Failed {
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoomTyping {
@@ -1068,6 +1099,7 @@ pub enum Operation {
     MarkRoomRead,
     BackfillRoomHistory,
     FetchRoomMedia,
+    FetchRoomEvent,
     RoomList,
     RoomReadState,
     E2eeStatus,
@@ -1107,6 +1139,7 @@ pub enum Event {
     RoomActivityUpdate(RoomActivityUpdate),
     RoomHistoryBackfill(RoomHistoryBackfill),
     RoomMedia(RoomMedia),
+    RoomEvent(RoomEventFetch),
     RoomTyping(RoomTyping),
     RoomMembers(RoomMembers),
     RoomReadState(RoomReadState),

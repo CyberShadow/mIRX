@@ -18,20 +18,22 @@ use mirx_core::{
     AcceptRoomInviteRequest, BackfillRoomHistoryRequest, BanRoomMemberRequest, Command,
     CommandSender, CoreConfig, CoreErrorEvent, CoreHandle, CreateDirectRoomRequest,
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    EditMessageRequest, Event, FetchRoomMediaRequest, InviteRoomMemberRequest, JoinRoomRequest,
-    KickRoomMemberRequest, LeaveRoomRequest, LoginRequest, MarkRoomReadRequest, MemberPowerRole,
-    Operation, ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
+    EditMessageRequest, Event, FetchRoomEventRequest, FetchRoomMediaRequest,
+    InviteRoomMemberRequest, JoinRoomRequest, KickRoomMemberRequest, LeaveRoomRequest,
+    LoginRequest, MarkRoomReadRequest, MemberPowerRole, Operation,
+    ROOM_HISTORY_BACKFILL_DEFAULT_LIMIT, RecoverE2eeRequest, RedactEventRequest,
     RejectRoomInviteRequest, RestoreSessionRequest, RoomActivity, RoomActivityKind,
     RoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget,
-    RoomAudioInfo, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent, RoomImageInfo,
-    RoomMedia, RoomMediaFormat, RoomMediaKind, RoomMediaSource, RoomMemberSummary, RoomMembers,
-    RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReadState, RoomRedactedActivity, RoomStateNoticeContent, RoomSummary, RoomTyping,
-    RoomUserProfile, RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
-    SendMessageThreadTarget, SendReactionRequest, SetDisplayNameRequest,
-    SetRoomMemberPowerLevelRequest, SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession,
-    UnbanRoomMemberRequest, VerificationEmoji, VerificationFlowId, VerificationRequest,
-    VerificationState, VerificationStateEvent, login_server, start,
+    RoomAudioInfo, RoomEventFetch, RoomEventFetchResult, RoomFileInfo, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomImageInfo, RoomMedia, RoomMediaFormat, RoomMediaKind,
+    RoomMediaSource, RoomMemberSummary, RoomMembers, RoomMembership, RoomMessageActivity,
+    RoomMessagePresentationKind, RoomMessageSendState, RoomReadState, RoomRedactedActivity,
+    RoomStateNoticeContent, RoomSummary, RoomTyping, RoomUserProfile, RoomVideoInfo,
+    SendFileRequest, SendMessageReplyTarget, SendMessageRequest, SendMessageThreadTarget,
+    SendReactionRequest, SetDisplayNameRequest, SetRoomMemberPowerLevelRequest,
+    SetRoomTopicRequest, SetupE2eeRecoveryRequest, StoredSession, UnbanRoomMemberRequest,
+    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    VerificationStateEvent, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -705,6 +707,8 @@ struct RoomViewModel {
     reactions_by_target: BTreeMap<String, BTreeMap<String, RoomReactionEntry>>,
     threads: BTreeMap<String, ThreadViewModel>,
     preview_media: BTreeMap<String, RoomPreviewMediaState>,
+    /// Messages replies answer that are not among `activities`, by event ID.
+    reply_targets: BTreeMap<String, ReplyTargetState>,
     typing_user_ids: Vec<String>,
     members: Vec<RoomMemberSummary>,
     history: RoomHistoryBackfillState,
@@ -722,6 +726,21 @@ struct TimelineBackfillAnchor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ThreadViewModel {
     label: String,
+}
+
+/// A replied-to message fetched from the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReplyTargetState {
+    Pending,
+    Loaded(Box<RoomActivity>),
+    Failed,
+}
+
+/// What a reply answers, as far as the window knows.
+enum ReplyTarget<'a> {
+    Known(&'a RoomActivity),
+    Loading,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1347,6 +1366,19 @@ impl RoomViewModel {
         }
 
         None
+    }
+
+    /// A loaded message wins over a fetched one: it is live, with its
+    /// edits and redaction.
+    fn reply_target(&self, event_id: &str) -> ReplyTarget<'_> {
+        if let Some(index) = self.find_activity_index_by_event_id(event_id) {
+            return ReplyTarget::Known(&self.activities[index]);
+        }
+        match self.reply_targets.get(event_id) {
+            Some(ReplyTargetState::Loaded(activity)) => ReplyTarget::Known(activity),
+            Some(ReplyTargetState::Failed) => ReplyTarget::Unavailable,
+            Some(ReplyTargetState::Pending) | None => ReplyTarget::Loading,
+        }
     }
 
     fn find_activity_index_by_event_id(&self, event_id: &str) -> Option<usize> {
@@ -2069,6 +2101,18 @@ fn decoded_image_from_loaded_media(
         width,
         height,
     })
+}
+
+fn apply_room_event_fetch(state: &mut WindowState, fetch: RoomEventFetch) {
+    // The room was left while the fetch ran: no window shows its replies.
+    let Some(room_view) = state.model.room_views.get_mut(&fetch.room_id) else {
+        return;
+    };
+    let target = match fetch.result {
+        RoomEventFetchResult::Loaded { activity } => ReplyTargetState::Loaded(activity),
+        RoomEventFetchResult::Failed { .. } => ReplyTargetState::Failed,
+    };
+    room_view.reply_targets.insert(fetch.event_id, target);
 }
 
 fn apply_room_media_event(state: &mut WindowState, media: RoomMedia) {
@@ -8660,6 +8704,7 @@ fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, Strin
         Event::RoomActivityUpdate(update) => apply_room_activity_update_event(state, update),
         Event::RoomHistoryBackfill(backfill) => apply_room_history_backfill_event(state, backfill),
         Event::RoomMedia(media) => apply_room_media_event(state, media),
+        Event::RoomEvent(fetch) => apply_room_event_fetch(state, fetch),
         Event::RoomTyping(typing) => apply_room_typing_event(state, typing),
         Event::RoomMembers(members) => apply_room_members_event(state, members),
         Event::RoomReadState(read_state) => apply_room_read_state_event(state, read_state),
@@ -8972,16 +9017,16 @@ fn push_reply_quote_row(
     else {
         return;
     };
-    let quoted = match room_view
-        .find_activity_index_by_event_id(target_event_id)
-        .map(|index| &room_view.activities[index])
-    {
-        Some(RoomActivity {
+    let quoted = match room_view.reply_target(target_event_id) {
+        ReplyTarget::Known(RoomActivity {
             kind: RoomActivityKind::Redacted(_),
             ..
         }) => replies::QUOTE_REDACTED_TEXT.to_owned(),
-        Some(target) => replies::quote_excerpt(&activity_line_text(room_view, target, "").1),
-        None => replies::QUOTE_LOADING_TEXT.to_owned(),
+        ReplyTarget::Known(target) => {
+            replies::quote_excerpt(&activity_line_text(room_view, target, "").1)
+        }
+        ReplyTarget::Loading => replies::QUOTE_LOADING_TEXT.to_owned(),
+        ReplyTarget::Unavailable => replies::QUOTE_UNAVAILABLE_TEXT.to_owned(),
     };
     rows.push(
         TimelineRow::full_width(TimelineRowKind::ReplyQuote, replies::quote_line(&quoted))
@@ -10752,6 +10797,61 @@ fn dispatch_lazy_room_preview_media_requests(
     Ok(())
 }
 
+/// The replied-to messages `activities` quote that the room view neither
+/// has nor has asked for.
+fn collect_reply_target_requests<'a>(
+    room_view: &RoomViewModel,
+    activities: impl IntoIterator<Item = &'a RoomActivity>,
+) -> BTreeSet<String> {
+    activities
+        .into_iter()
+        .filter_map(|activity| activity.relation.as_ref())
+        .filter_map(replies::reply_quote_target)
+        .filter(|event_id| {
+            room_view
+                .find_activity_index_by_event_id(event_id)
+                .is_none()
+                && !room_view.reply_targets.contains_key(*event_id)
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Asks the server for replied-to messages. Only a connected session can:
+/// events a synthetic load replays come from no server, and without a
+/// session there is nobody to ask.
+fn dispatch_reply_target_fetches(
+    state: &mut WindowState,
+    room_id: &str,
+    event_ids: BTreeSet<String>,
+) -> Result<(), String> {
+    if state.synthetic_load_in_progress
+        || !matches!(
+            state.model.connection,
+            ConnectionState::SignedIn | ConnectionState::Syncing
+        )
+    {
+        return Ok(());
+    }
+    for event_id in event_ids {
+        enqueue_command(
+            state,
+            Command::FetchRoomEvent(FetchRoomEventRequest {
+                room_id: room_id.to_owned(),
+                event_id: event_id.clone(),
+            }),
+        )?;
+        state
+            .model
+            .room_views
+            .get_mut(room_id)
+            .expect("reply target fetches require an existing room view")
+            .reply_targets
+            .insert(event_id, ReplyTargetState::Pending);
+    }
+    Ok(())
+}
+
 unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), String> {
     let (child, content, title) = {
         let state = state_ref(hwnd);
@@ -10781,24 +10881,22 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             InvalidateRect(content, null(), 1);
         }
         ViewId::Room(room_id) => {
-            let (rows, indent_sample, member_rows, image_requests) = {
+            let (rows, indent_sample, member_rows, image_requests, reply_target_requests) = {
                 let state = state_ref(hwnd);
                 let room = room_by_id(&state.model.rooms, room_id)
                     .expect("room view must target an existing room");
                 let room_view = state.model.room_views.get(room_id);
                 let timestamps = state.timestamps();
                 let rows = build_room_timeline_rows(&state.model, room_id, timestamps);
-                let image_requests = if is_sendable_room(room) {
-                    room_view
-                        .map(|room_view| {
-                            collect_lazy_room_preview_media_requests(
-                                room_view,
-                                room_view.activities.iter(),
-                            )
-                        })
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
+                let (image_requests, reply_target_requests) = match room_view {
+                    Some(room_view) if is_sendable_room(room) => (
+                        collect_lazy_room_preview_media_requests(
+                            room_view,
+                            room_view.activities.iter(),
+                        ),
+                        collect_reply_target_requests(room_view, room_view.activities.iter()),
+                    ),
+                    _ => (Vec::new(), BTreeSet::new()),
                 };
                 let member_rows = if is_sendable_room(room) {
                     room_member_view_rows(
@@ -10814,9 +10912,11 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                     timestamps.indent_sample(),
                     member_rows,
                     image_requests,
+                    reply_target_requests,
                 )
             };
             dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
+            dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows, indent_sample);
@@ -10835,7 +10935,7 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
             room_id,
             thread_root_event_id,
         } => {
-            let (rows, indent_sample, member_rows, image_requests) = {
+            let (rows, indent_sample, member_rows, image_requests, reply_target_requests) = {
                 let state = state_ref(hwnd);
                 let room_view = state
                     .model
@@ -10849,21 +10949,26 @@ unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Result<(), Strin
                     thread_root_event_id,
                     timestamps,
                 );
-                let image_requests = collect_lazy_room_preview_media_requests(
-                    room_view,
+                let thread_activities = || {
                     room_view.activities.iter().filter(|activity| {
                         room_activity_belongs_to_thread(activity, thread_root_event_id)
-                    }),
-                );
+                    })
+                };
+                let image_requests =
+                    collect_lazy_room_preview_media_requests(room_view, thread_activities());
+                let reply_target_requests =
+                    collect_reply_target_requests(room_view, thread_activities());
                 let member_rows = room_member_view_rows(room_view.members.as_slice());
                 (
                     rows,
                     timestamps.indent_sample(),
                     member_rows,
                     image_requests,
+                    reply_target_requests,
                 )
             };
             dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
+            dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
             set_timeline_rows(timeline, &rows, indent_sample);
@@ -15821,6 +15926,7 @@ fn operation_name(operation: Operation) -> &'static str {
         Operation::MarkRoomRead => "mark room read",
         Operation::BackfillRoomHistory => "backfill room history",
         Operation::FetchRoomMedia => "fetch room image media",
+        Operation::FetchRoomEvent => "fetch message",
         Operation::RoomList => "room list",
         Operation::RoomReadState => "room read state",
         Operation::E2eeStatus => "e2ee status",
@@ -17979,6 +18085,92 @@ mod tests {
             room_lines(&state)[2],
             "    > (loading the replied-to message...)"
         );
+    }
+
+    fn fetch_reply_targets(state: &mut WindowState) {
+        let view = &state.model.room_views["!ops:example"];
+        let requests = collect_reply_target_requests(view, view.activities.iter());
+        dispatch_reply_target_fetches(state, "!ops:example", requests).unwrap();
+    }
+
+    fn reply_target_fetched(result: RoomEventFetchResult) -> Event {
+        Event::RoomEvent(RoomEventFetch {
+            room_id: "!ops:example".to_owned(),
+            event_id: "$elsewhere".to_owned(),
+            result,
+        })
+    }
+
+    #[test]
+    fn a_reply_target_not_loaded_is_fetched_once_while_connected() {
+        let mut state = reply_quote_state("$elsewhere");
+        let (sender, _commands) = inert_command_sender();
+        state.command_sender = Some(sender);
+
+        fetch_reply_targets(&mut state);
+        assert!(state.recorded_commands.is_empty(), "no session to ask");
+
+        state.model.connection = ConnectionState::Syncing;
+        fetch_reply_targets(&mut state);
+        fetch_reply_targets(&mut state);
+        assert_eq!(
+            state.recorded_commands,
+            vec![Command::FetchRoomEvent(FetchRoomEventRequest {
+                room_id: "!ops:example".to_owned(),
+                event_id: "$elsewhere".to_owned(),
+            })]
+        );
+        assert_eq!(
+            room_lines(&state)[2],
+            "    > (loading the replied-to message...)"
+        );
+
+        apply_core_event(
+            &mut state,
+            reply_target_fetched(RoomEventFetchResult::Loaded {
+                activity: Box::new(sent_message_activity(
+                    "!ops:example",
+                    "$elsewhere",
+                    None,
+                    "from long ago",
+                    1_600_000_000_000,
+                )),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            room_lines(&state)[2],
+            "    > <@alice:example> from long ago"
+        );
+    }
+
+    #[test]
+    fn a_reply_target_the_server_cannot_give_is_unavailable() {
+        let mut state = reply_quote_state("$elsewhere");
+        apply_core_event(
+            &mut state,
+            reply_target_fetched(RoomEventFetchResult::Failed {
+                message: "unsupported event".to_owned(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            room_lines(&state)[2],
+            "    > (the replied-to message is unavailable)"
+        );
+    }
+
+    #[test]
+    fn a_fetched_reply_target_for_a_room_without_a_view_is_dropped() {
+        let mut state = test_state();
+        apply_core_event(
+            &mut state,
+            reply_target_fetched(RoomEventFetchResult::Failed {
+                message: "joined room not found: !ops:example".to_owned(),
+            }),
+        )
+        .unwrap();
+        assert!(state.model.room_views.is_empty());
     }
 
     #[test]
@@ -23277,6 +23469,7 @@ mod tests {
                 reactions_by_target: BTreeMap::new(),
                 threads: BTreeMap::new(),
                 preview_media: BTreeMap::new(),
+                reply_targets: BTreeMap::new(),
                 typing_user_ids: vec!["@alice:example.org".to_owned()],
                 members: Vec::new(),
                 history: RoomHistoryBackfillState::default(),

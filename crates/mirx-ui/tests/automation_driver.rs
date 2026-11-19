@@ -602,6 +602,24 @@ fn spawn_mock_homeserver(
                 continue;
             }
 
+            // A message replied to in the timeline but not part of it. The
+            // SDK sends `!`, `:` and `$` in the path unencoded.
+            if path == "/_matrix/client/v3/rooms/!beta:example/event/$old" {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({
+                        "content": { "msgtype": "m.text", "body": "from the archive" },
+                        "event_id": "$old",
+                        "origin_server_ts": 1690000000000u64,
+                        "room_id": "!beta:example",
+                        "sender": "@alice:example",
+                        "type": "m.room.message"
+                    }),
+                );
+                continue;
+            }
+
             if path.contains("/rooms/%21beta%3Aexample/messages")
                 || path.contains("/rooms/!beta:example/messages")
             {
@@ -5262,6 +5280,59 @@ fn automation_driver_initial_sync_state_is_not_logged_as_joins()
         unsafe { listbox_texts(active_room_member_list_hwnd(&app)) },
         ["&Alice", "@Bob", "Carol"]
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn automation_driver_fetches_unloaded_reply_target() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver(
+        MockMessages::Hang,
+        vec![serde_json::json!({
+            "content": {
+                "msgtype": "m.text",
+                "body": "still true",
+                "m.relates_to": { "m.in_reply_to": { "event_id": "$old" } }
+            },
+            "event_id": "$bob-reply",
+            "origin_server_ts": 1700000000011u64,
+            "sender": "@bob:example",
+            "type": "m.room.message"
+        })],
+    )?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    app.select_room("!beta:example")?;
+
+    let quote = "    > <Alice> from the archive";
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let lines = loop {
+        let ui_state = app.dump_ui_state()?;
+        let lines = find_view(&ui_state, &room_identity("!beta:example"))
+            .lines
+            .clone();
+        if lines.iter().any(|line| line == quote) || std::time::Instant::now() > deadline {
+            break lines;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let reply = lines
+        .iter()
+        .position(|line| line.ends_with("<Bob> still true"))
+        .ok_or_else(|| format!("no reply line in {lines:?}"))?;
+    assert_eq!(lines[reply - 1], quote, "{lines:?}");
+    assert_eq!(app.dump_model()?.last_error, None);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
