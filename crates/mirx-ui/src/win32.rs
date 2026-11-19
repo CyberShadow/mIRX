@@ -8137,24 +8137,6 @@ fn timeline_message_send_state(send_state: &RoomMessageSendState) -> TimelineMes
     }
 }
 
-fn append_room_label_markers(label: &mut String, room: &RoomSummary) {
-    if is_invited_room(room) {
-        label.push_str(" [invite]");
-    }
-    if room.is_direct {
-        if room.direct_user_ids.is_empty() {
-            label.push_str(" [query]");
-        } else {
-            label.push_str(" [query: ");
-            label.push_str(&room.direct_user_ids.join(", "));
-            label.push(']');
-        }
-    }
-    if room.encrypted {
-        label.push_str(" [e2ee]");
-    }
-}
-
 fn append_room_read_state_tokens(label: &mut String, read_state: Option<&RoomReadState>) {
     let Some(read_state) = read_state else {
         return;
@@ -9241,6 +9223,38 @@ fn is_navigable_room(room: &RoomSummary) -> bool {
     is_joined_message_room(room) || is_invited_room(room)
 }
 
+/// What kind of mIRC window a navigable room is. The order is mIRC's
+/// window order: channels, then queries; invites, which mIRC lacks, last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RoomWindowKind {
+    Channel,
+    Query,
+    Invite,
+}
+
+fn room_window_kind(room: &RoomSummary) -> RoomWindowKind {
+    assert!(
+        is_navigable_room(room),
+        "only navigable rooms have windows: {}",
+        room.room_id
+    );
+    match room.membership {
+        RoomMembership::Invite => RoomWindowKind::Invite,
+        RoomMembership::Join if room.is_direct => RoomWindowKind::Query,
+        RoomMembership::Join => RoomWindowKind::Channel,
+    }
+}
+
+/// The navigable rooms in window order, each kind in model order.
+fn rooms_in_window_order(rooms: &[RoomSummary]) -> Vec<&RoomSummary> {
+    let mut ordered = rooms
+        .iter()
+        .filter(|room| is_navigable_room(room))
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|room| room_window_kind(room));
+    ordered
+}
+
 fn is_sendable_room(room: &RoomSummary) -> bool {
     is_joined_message_room(room)
 }
@@ -9305,10 +9319,14 @@ fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
     }
 }
 
+/// A room's name, as the treebar, switchbar and caption show it. An invite
+/// is marked, since mIRC has no invite windows to tell it by.
 fn room_tree_label(room: &RoomSummary) -> String {
-    let mut label = room.display_name.clone();
-    append_room_label_markers(&mut label, room);
-    label
+    if is_invited_room(room) {
+        format!("{} [invite]", room.display_name)
+    } else {
+        room.display_name.clone()
+    }
 }
 
 fn room_navigation_label(model: &UiModel, room: &RoomSummary) -> String {
@@ -9321,17 +9339,27 @@ fn space_tree_label(space: &RoomSummary) -> String {
     space.display_name.clone()
 }
 
-/// The MDI window caption: the short title, with the topic for rooms.
+/// The MDI window caption: the short title, with the topic for channels and
+/// the other user's ID for queries. A query ignores its room's topic, as
+/// mIRC queries have none.
 fn view_caption(model: &UiModel, view_id: &ViewId) -> String {
     let title = view_short_title(model, view_id);
     match view_id {
-        ViewId::Room(room_id) => mdi::room_caption(
-            &title,
-            model
-                .room_views
-                .get(room_id)
-                .and_then(|room_view| room_view.topic.as_deref()),
-        ),
+        ViewId::Room(room_id) => {
+            let room = room_by_id(&model.rooms, room_id)
+                .expect("room view caption must target an existing room");
+            match (room_window_kind(room), room.direct_user_ids.as_slice()) {
+                (RoomWindowKind::Query, [user_id]) => mdi::query_caption(&title, user_id),
+                (RoomWindowKind::Query, _) => title,
+                (RoomWindowKind::Channel | RoomWindowKind::Invite, _) => mdi::room_caption(
+                    &title,
+                    model
+                        .room_views
+                        .get(room_id)
+                        .and_then(|room_view| room_view.topic.as_deref()),
+                ),
+            }
+        }
         ViewId::Status => mdi::status_caption(model.own_user_id.as_deref()),
         ViewId::Thread { .. } => title,
     }
@@ -9349,7 +9377,12 @@ fn view_short_title(model: &UiModel, view_id: &ViewId) -> String {
     }
 
     match view_id {
-        ViewId::Status => "Status".to_owned(),
+        // mIRC labels a connection's Status window with its network; a
+        // Matrix user ID names both the account and its server.
+        ViewId::Status => model
+            .own_user_id
+            .clone()
+            .unwrap_or_else(|| "Status".to_owned()),
         ViewId::Room(room_id) => {
             let room = room_by_id(&model.rooms, room_id)
                 .expect("room view activation must target an existing room");
@@ -9420,8 +9453,8 @@ fn switchbar_custom_draw(state: &WindowState, draw: &mut NMTBCUSTOMDRAW) -> LRES
     })
 }
 
-/// Treebar items are identified by their `HTREEITEM`. Group labels such as
-/// `rooms: 2` map to no view, so keep the tree's text colour.
+/// Treebar items are identified by their `HTREEITEM`. Space folders map to
+/// no view, so keep the tree's text colour.
 fn tree_custom_draw(state: &WindowState, draw: &mut NMTVCUSTOMDRAW) -> LRESULT {
     let tree_item = draw.nmcd.dwItemSpec as isize;
     activity_custom_draw(draw.nmcd.dwDrawStage, &mut draw.clrText, || {
@@ -10193,144 +10226,28 @@ unsafe fn refresh_tree(hwnd: HWND) {
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
-    let root = insert_tree_item(tree, TVI_ROOT, "mirx");
-    let status = insert_mapped_tree_item(state, root, "status", ViewId::Status);
+    let layout = navigation_layout(&state.model);
+    insert_nav_item(state, TVI_ROOT, &layout);
+}
 
-    let rooms = state.model.rooms.clone();
-    let joined_rooms = rooms
-        .iter()
-        .filter(|room| is_joined_message_room(room))
-        .cloned()
-        .collect::<Vec<_>>();
-    let invited_rooms = rooms
-        .iter()
-        .filter(|room| is_invited_room(room))
-        .cloned()
-        .collect::<Vec<_>>();
-    let rooms_label = if rooms.is_empty() {
-        "rooms: offline".to_owned()
-    } else {
-        format!("rooms: {}", joined_rooms.len())
-    };
-    let rooms_root = insert_tree_item(tree, root, &rooms_label);
-
-    let joined_room_tree_source = rooms
-        .iter()
-        .filter(|room| room.membership == RoomMembership::Join)
-        .cloned()
-        .collect::<Vec<_>>();
-    let flat_mode = joined_room_tree_source
-        .iter()
-        .all(|room| !room.is_space && room.space_children.is_empty());
-    if flat_mode {
-        for room in &joined_rooms {
-            render_room_tree_leaf(state, rooms_root, room);
-        }
-    } else {
-        let room_map = joined_room_tree_source
-            .iter()
-            .cloned()
-            .map(|room| (room.room_id.clone(), room))
-            .collect::<BTreeMap<_, _>>();
-        let valid_space_children = joined_room_tree_source
-            .iter()
-            .filter(|room| room.is_space)
-            .map(|room| {
-                (
-                    room.room_id.clone(),
-                    room.space_children
-                        .iter()
-                        .filter(|child| room_map.contains_key(&child.room_id))
-                        .map(|child| child.room_id.clone())
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        let child_space_ids = valid_space_children
-            .values()
-            .flatten()
-            .filter_map(|child_id| {
-                room_map
-                    .get(child_id)
-                    .filter(|room| room.is_space)
-                    .map(|_| child_id.clone())
-            })
-            .collect::<BTreeSet<_>>();
-        let rooted_room_ids = valid_space_children
-            .values()
-            .flatten()
-            .filter_map(|child_id| {
-                room_map
-                    .get(child_id)
-                    .filter(|room| !room.is_space)
-                    .map(|_| child_id.clone())
-            })
-            .collect::<BTreeSet<_>>();
-
-        let mut rendered_roots = joined_room_tree_source
-            .iter()
-            .filter(|room| room.is_space && !child_space_ids.contains(&room.room_id))
-            .map(|room| room.room_id.clone())
-            .collect::<Vec<_>>();
-        let mut covered_space_ids = BTreeSet::new();
-        for root_id in &rendered_roots {
-            mark_reachable_space_ids(
-                &mut covered_space_ids,
-                &room_map,
-                &valid_space_children,
-                root_id,
-            );
-        }
-        for room in joined_room_tree_source.iter().filter(|room| room.is_space) {
-            if covered_space_ids.contains(&room.room_id) {
-                continue;
-            }
-            rendered_roots.push(room.room_id.clone());
-            mark_reachable_space_ids(
-                &mut covered_space_ids,
-                &room_map,
-                &valid_space_children,
-                &room.room_id,
-            );
-        }
-
-        for root_id in rendered_roots {
-            render_space_tree(
-                state,
-                rooms_root,
-                &room_map,
-                &valid_space_children,
-                &root_id,
-            );
-        }
-
-        let unspaced_rooms = joined_rooms
-            .into_iter()
-            .filter(|room| !rooted_room_ids.contains(&room.room_id))
-            .collect::<Vec<_>>();
-        if !unspaced_rooms.is_empty() {
-            let label = format!("unspaced rooms: {}", unspaced_rooms.len());
-            let unspaced_root = insert_tree_item(tree, rooms_root, &label);
-            for room in &unspaced_rooms {
-                render_room_tree_leaf(state, unspaced_root, room);
-            }
-            expand_tree_item(tree, unspaced_root);
-        }
+/// Inserts `item` and its subtree, mapping each view's item, and expands
+/// every item that has children.
+unsafe fn insert_nav_item(state: &mut WindowState, parent: isize, item: &NavItem) {
+    let tree = state.controls.tree;
+    let tree_item = insert_tree_item(tree, parent, &item.label);
+    if let Some(view_id) = &item.view {
+        state.tree_items.insert(tree_item, view_id.clone());
+        state
+            .primary_tree_items
+            .entry(view_id.clone())
+            .or_insert(tree_item);
     }
-
-    let invites_root = insert_tree_item(tree, root, &format!("invites: {}", invited_rooms.len()));
-    for room in &invited_rooms {
-        render_room_tree_leaf(state, invites_root, room);
+    for child in &item.children {
+        insert_nav_item(state, tree_item, child);
     }
-
-    expand_tree_item(tree, root);
-    expand_tree_item(tree, rooms_root);
-    expand_tree_item(tree, invites_root);
-    debug_assert_eq!(
-        status,
-        *state.primary_tree_items.get(&ViewId::Status).unwrap()
-    );
+    if !item.children.is_empty() {
+        expand_tree_item(tree, tree_item);
+    }
 }
 
 unsafe fn select_tree_item(hwnd: HWND, view_id: &ViewId, preferred_tree_item: Option<isize>) {
@@ -10383,148 +10300,168 @@ unsafe fn expand_tree_item(tree: HWND, item: isize) {
     SendMessageW(tree, TVM_EXPAND, TVE_EXPAND as WPARAM, item as LPARAM);
 }
 
-unsafe fn insert_mapped_tree_item(
-    state: &mut WindowState,
-    parent: isize,
-    label: &str,
-    view_id: ViewId,
-) -> isize {
-    let item = insert_tree_item(state.controls.tree, parent, label);
-    state.tree_items.insert(item, view_id.clone());
-    state.primary_tree_items.entry(view_id).or_insert(item);
-    item
+/// One treebar item: a window's view, or a space folder, which has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NavItem {
+    label: String,
+    view: Option<ViewId>,
+    children: Vec<NavItem>,
 }
 
-unsafe fn render_room_tree_leaf(state: &mut WindowState, parent: isize, room: &RoomSummary) {
-    let room_item = insert_mapped_tree_item(
-        state,
-        parent,
-        &room_navigation_label(&state.model, room),
-        ViewId::Room(room.room_id.clone()),
-    );
-    if !is_sendable_room(room) {
-        return;
-    }
-    let threads = state
-        .model
-        .room_views
-        .get(&room.room_id)
-        .map(|room_view| {
-            room_view
-                .threads
-                .iter()
-                .map(|(thread_root_event_id, thread)| {
-                    (thread_root_event_id.clone(), thread.label.clone())
-                })
-                .collect::<Vec<_>>()
+/// The treebar, laid out like mIRC's: the Status window is the root, and the
+/// windows sit under it. Joined spaces become folders holding their rooms
+/// (a room in two spaces appears in both), then come the rooms in no space
+/// in window order (channels, queries, invites). Threads sit under their
+/// room. Closing a window does not remove its room: the tree is the room
+/// navigator, and selecting an item opens its window.
+fn navigation_layout(model: &UiModel) -> NavItem {
+    let joined = model
+        .rooms
+        .iter()
+        .filter(|room| room.membership == RoomMembership::Join)
+        .map(|room| (room.room_id.as_str(), room))
+        .collect::<BTreeMap<_, _>>();
+    let space_children = joined
+        .values()
+        .filter(|room| room.is_space)
+        .map(|space| {
+            (
+                space.room_id.as_str(),
+                space
+                    .space_children
+                    .iter()
+                    .filter(|child| joined.contains_key(child.room_id.as_str()))
+                    .map(|child| child.room_id.as_str())
+                    .collect::<Vec<_>>(),
+            )
         })
-        .unwrap_or_default();
-    for (thread_root_event_id, label) in threads {
-        insert_mapped_tree_item(
-            state,
-            room_item,
-            &label,
-            ViewId::Thread {
-                room_id: room.room_id.clone(),
-                thread_root_event_id,
-            },
-        );
+        .collect::<BTreeMap<_, _>>();
+    let spaced_ids = space_children
+        .values()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    // Top-level folders: spaces that are nobody's child, in model order, then
+    // one entry point into each cycle of spaces that only contain each other.
+    let mut folder_ids = model
+        .rooms
+        .iter()
+        .filter(|room| space_children.contains_key(room.room_id.as_str()))
+        .filter(|space| !spaced_ids.contains(space.room_id.as_str()))
+        .map(|space| space.room_id.as_str())
+        .collect::<Vec<_>>();
+    let mut covered = BTreeSet::new();
+    for folder_id in &folder_ids {
+        mark_reachable_spaces(&mut covered, &joined, &space_children, folder_id);
     }
-    if state
-        .model
-        .room_views
-        .get(&room.room_id)
-        .is_some_and(|room_view| !room_view.threads.is_empty())
+    for space in model
+        .rooms
+        .iter()
+        .filter(|room| space_children.contains_key(room.room_id.as_str()))
     {
-        expand_tree_item(state.controls.tree, room_item);
+        if !covered.contains(space.room_id.as_str()) {
+            folder_ids.push(&space.room_id);
+            mark_reachable_spaces(&mut covered, &joined, &space_children, &space.room_id);
+        }
+    }
+
+    let mut children = folder_ids
+        .into_iter()
+        .map(|folder_id| space_nav_item(model, &joined, &space_children, folder_id, &[]))
+        .collect::<Vec<_>>();
+    children.extend(
+        rooms_in_window_order(&model.rooms)
+            .into_iter()
+            .filter(|room| !spaced_ids.contains(room.room_id.as_str()))
+            .map(|room| room_nav_item(model, room)),
+    );
+    NavItem {
+        label: view_short_title(model, &ViewId::Status),
+        view: Some(ViewId::Status),
+        children,
     }
 }
 
-fn mark_reachable_space_ids(
-    covered: &mut BTreeSet<String>,
-    room_map: &BTreeMap<String, RoomSummary>,
-    valid_space_children: &BTreeMap<String, Vec<String>>,
-    root_id: &str,
+fn mark_reachable_spaces<'a>(
+    covered: &mut BTreeSet<&'a str>,
+    joined: &BTreeMap<&str, &'a RoomSummary>,
+    space_children: &BTreeMap<&str, Vec<&'a str>>,
+    root_id: &'a str,
 ) {
-    let mut stack = vec![root_id.to_owned()];
+    let mut stack = vec![root_id];
     while let Some(space_id) = stack.pop() {
-        if !covered.insert(space_id.clone()) {
+        if !covered.insert(space_id) {
             continue;
         }
-        for child_id in valid_space_children
-            .get(&space_id)
-            .into_iter()
-            .flatten()
-            .rev()
-        {
-            let child = room_map
-                .get(child_id)
-                .expect("valid space child must exist in room map");
-            if child.is_space {
-                stack.push(child_id.clone());
-            }
-        }
-    }
-}
-
-unsafe fn render_space_tree_children(
-    state: &mut WindowState,
-    parent: isize,
-    room_map: &BTreeMap<String, RoomSummary>,
-    valid_space_children: &BTreeMap<String, Vec<String>>,
-    space_id: &str,
-    ancestor_chain: &[String],
-) {
-    let mut next_ancestor_chain = ancestor_chain.to_vec();
-    next_ancestor_chain.push(space_id.to_owned());
-
-    for child_id in valid_space_children.get(space_id).into_iter().flatten() {
-        let child = room_map
-            .get(child_id)
-            .expect("valid space child must exist in room map");
-        if child.is_space {
-            let child_item =
-                insert_tree_item(state.controls.tree, parent, &space_tree_label(child));
-            if !next_ancestor_chain
+        stack.extend(
+            space_children[space_id]
                 .iter()
-                .any(|ancestor| ancestor == child_id)
-            {
-                render_space_tree_children(
-                    state,
-                    child_item,
-                    room_map,
-                    valid_space_children,
-                    child_id,
-                    &next_ancestor_chain,
-                );
-            }
-            expand_tree_item(state.controls.tree, child_item);
-        } else {
-            render_room_tree_leaf(state, parent, child);
-        }
+                .rev()
+                .copied()
+                .filter(|child_id| joined[child_id].is_space),
+        );
     }
 }
 
-unsafe fn render_space_tree(
-    state: &mut WindowState,
-    parent: isize,
-    room_map: &BTreeMap<String, RoomSummary>,
-    valid_space_children: &BTreeMap<String, Vec<String>>,
+/// A space folder with its rooms and nested folders. A space already on the
+/// path from the top-level folder shows as an empty folder, which ends a
+/// cycle.
+fn space_nav_item(
+    model: &UiModel,
+    joined: &BTreeMap<&str, &RoomSummary>,
+    space_children: &BTreeMap<&str, Vec<&str>>,
     space_id: &str,
-) {
-    let space = room_map
-        .get(space_id)
-        .expect("rendered root space must exist in room map");
-    let space_item = insert_tree_item(state.controls.tree, parent, &space_tree_label(space));
-    render_space_tree_children(
-        state,
-        space_item,
-        room_map,
-        valid_space_children,
-        space_id,
-        &[],
-    );
-    expand_tree_item(state.controls.tree, space_item);
+    ancestors: &[&str],
+) -> NavItem {
+    let mut chain = ancestors.to_vec();
+    chain.push(space_id);
+    let children = space_children[space_id]
+        .iter()
+        .map(|child_id| {
+            let child = joined[child_id];
+            if !child.is_space {
+                room_nav_item(model, child)
+            } else if chain.contains(child_id) {
+                NavItem {
+                    label: space_tree_label(child),
+                    view: None,
+                    children: Vec::new(),
+                }
+            } else {
+                space_nav_item(model, joined, space_children, child_id, &chain)
+            }
+        })
+        .collect();
+    NavItem {
+        label: space_tree_label(joined[space_id]),
+        view: None,
+        children,
+    }
+}
+
+/// A room's item, with its threads under it; an invite has none.
+fn room_nav_item(model: &UiModel, room: &RoomSummary) -> NavItem {
+    let children = match (is_sendable_room(room), model.room_views.get(&room.room_id)) {
+        (true, Some(room_view)) => room_view
+            .threads
+            .iter()
+            .map(|(thread_root_event_id, thread)| NavItem {
+                label: thread.label.clone(),
+                view: Some(ViewId::Thread {
+                    room_id: room.room_id.clone(),
+                    thread_root_event_id: thread_root_event_id.clone(),
+                }),
+                children: Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    NavItem {
+        label: room_navigation_label(model, room),
+        view: Some(ViewId::Room(room.room_id.clone())),
+        children,
+    }
 }
 
 unsafe fn enable_automation(hwnd: HWND) -> Result<(), String> {
@@ -11394,16 +11331,15 @@ fn normalize_timeline_text(text: &str) -> (String, Vec<String>) {
     (normalized, lines)
 }
 
+/// The switchbar order, mIRC's: Status, channels, queries, then invites,
+/// each room followed by its open threads; then views of rooms that left.
 fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
     let mut ordered = Vec::new();
     if state.views.contains_key(&ViewId::Status) {
         ordered.push(ViewId::Status);
     }
 
-    for room in &state.model.rooms {
-        if !is_joined_message_room(room) {
-            continue;
-        }
+    for room in rooms_in_window_order(&state.model.rooms) {
         let view_id = ViewId::Room(room.room_id.clone());
         if state.views.contains_key(&view_id) {
             ordered.push(view_id);
@@ -11418,16 +11354,6 @@ fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
                     ordered.push(thread_view_id);
                 }
             }
-        }
-    }
-
-    for room in &state.model.rooms {
-        if !is_invited_room(room) {
-            continue;
-        }
-        let view_id = ViewId::Room(room.room_id.clone());
-        if state.views.contains_key(&view_id) {
-            ordered.push(view_id);
         }
     }
 
@@ -11585,7 +11511,7 @@ unsafe fn read_tree_item_text(tree: HWND, item: isize) -> Result<String, String>
     Ok(String::from_utf16_lossy(&buffer[..text_len]))
 }
 
-/// Group labels (`rooms: 2`) map to no view, so carry no activity.
+/// Space folders map to no view, so carry no activity.
 unsafe fn read_navigation_node(
     state: &WindowState,
     tree: HWND,
@@ -18763,35 +18689,28 @@ mod tests {
     }
 
     #[test]
-    fn room_tree_label_marks_direct_rooms_as_queries_before_e2ee() {
+    fn room_tree_label_has_no_e2ee_or_query_markers() {
         let mut direct_room = room("!direct:example", "Direct", true);
         direct_room.is_direct = true;
         direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
+        assert_eq!(room_tree_label(&direct_room), "Direct");
 
-        assert_eq!(
-            room_tree_label(&direct_room),
-            "Direct [query: @alice:example] [e2ee]"
-        );
+        direct_room.direct_user_ids.clear();
+        assert_eq!(room_tree_label(&direct_room), "Direct");
+
+        assert_eq!(room_tree_label(&room("!ops:example", "Ops", true)), "Ops");
     }
 
     #[test]
-    fn room_tree_label_uses_query_fallback_for_direct_rooms_without_user_ids() {
-        let mut direct_room = room("!direct:example", "Direct", true);
-        direct_room.is_direct = true;
-
-        assert_eq!(room_tree_label(&direct_room), "Direct [query] [e2ee]");
+    fn room_tree_label_marks_invites() {
+        let mut invite = room("!invite:example", "Lobby", true);
+        invite.membership = RoomMembership::Invite;
+        invite.is_direct = true;
+        assert_eq!(room_tree_label(&invite), "Lobby [invite]");
     }
 
     #[test]
-    fn room_tree_label_ignores_direct_user_ids_when_room_is_not_direct() {
-        let mut room = room("!ops:example", "Ops", true);
-        room.direct_user_ids = vec!["@alice:example".to_owned()];
-
-        assert_eq!(room_tree_label(&room), "Ops [e2ee]");
-    }
-
-    #[test]
-    fn room_navigation_label_appends_read_state_suffix_after_existing_markers() {
+    fn room_navigation_label_appends_read_state_suffix_to_the_name() {
         let mut state = test_state();
         let mut direct_room = room("!direct:example", "Direct", true);
         direct_room.is_direct = true;
@@ -18812,7 +18731,7 @@ mod tests {
 
         assert_eq!(
             room_navigation_label(&state.model, &state.model.rooms[0]),
-            "Direct [query: @alice:example] [e2ee] [@1 !2 *3 M]"
+            "Direct [@1 !2 *3 M]"
         );
     }
 
@@ -22182,6 +22101,246 @@ mod tests {
         );
     }
 
+    fn query(room_id: &str, display_name: &str, user_id: &str) -> RoomSummary {
+        let mut room = room(room_id, display_name, true);
+        room.is_direct = true;
+        room.direct_user_ids = vec![user_id.to_owned()];
+        room
+    }
+
+    fn space_with_children(room_id: &str, display_name: &str, children: &[&str]) -> RoomSummary {
+        let mut space = space(room_id, display_name);
+        space.space_children = children
+            .iter()
+            .map(|child_id| mirx_core::SpaceChildSummary {
+                room_id: (*child_id).to_owned(),
+                suggested: false,
+                order: None,
+            })
+            .collect();
+        space
+    }
+
+    fn nav_view(label: &str, view: ViewId, children: Vec<NavItem>) -> NavItem {
+        NavItem {
+            label: label.to_owned(),
+            view: Some(view),
+            children,
+        }
+    }
+
+    fn nav_room(label: &str, room_id: &str) -> NavItem {
+        nav_view(label, room_view_id(room_id), Vec::new())
+    }
+
+    fn nav_folder(label: &str, children: Vec<NavItem>) -> NavItem {
+        NavItem {
+            label: label.to_owned(),
+            view: None,
+            children,
+        }
+    }
+
+    #[test]
+    fn navigation_layout_roots_at_status_labelled_with_the_user_id() {
+        let mut state = test_state();
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view("Status", ViewId::Status, Vec::new())
+        );
+
+        state.model.own_user_id = Some("@me:example".to_owned());
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "@me:example",
+                ViewId::Status,
+                vec![nav_room("Ops", "!ops:example")]
+            )
+        );
+    }
+
+    #[test]
+    fn navigation_layout_lists_channels_then_queries_then_invites() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            invited_room("!invite:example", "Lobby"),
+            query("!alice:example", "Alice", "@alice:example"),
+            room("!ops:example", "Ops", true),
+            query("!bob:example", "Bob", "@bob:example"),
+            room("!random:example", "Random", false),
+        ];
+
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![
+                    nav_room("Ops", "!ops:example"),
+                    nav_room("Random", "!random:example"),
+                    nav_room("Alice", "!alice:example"),
+                    nav_room("Bob", "!bob:example"),
+                    nav_room("Lobby [invite]", "!invite:example"),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn navigation_layout_nests_rooms_in_space_folders_and_lists_unspaced_after() {
+        let mut state = test_state();
+        let mut invited_space = space_with_children("!invited-space:example", "Invited", &[]);
+        invited_space.membership = RoomMembership::Invite;
+        state.model.rooms = vec![
+            query("!direct:example", "Direct", "@alice:example"),
+            room("!lobby:example", "Lobby", false),
+            space_with_children(
+                "!work:example",
+                "Work",
+                &["!ops:example", "!team:example", "!missing:example"],
+            ),
+            space_with_children(
+                "!team:example",
+                "Team",
+                &["!shared:example", "!team:example"],
+            ),
+            space_with_children(
+                "!social:example",
+                "Social",
+                &["!shared:example", "!dm:example"],
+            ),
+            // Two spaces containing only each other, reachable from no root.
+            space_with_children("!loop-a:example", "Loop A", &["!loop-b:example"]),
+            space_with_children("!loop-b:example", "Loop B", &["!loop-a:example"]),
+            room("!ops:example", "Ops", true),
+            room("!shared:example", "Shared", false),
+            query("!dm:example", "Dm", "@bob:example"),
+            invited_space,
+        ];
+
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![
+                    nav_folder(
+                        "Work",
+                        vec![
+                            nav_room("Ops", "!ops:example"),
+                            nav_folder(
+                                "Team",
+                                vec![
+                                    nav_room("Shared", "!shared:example"),
+                                    // A space containing itself ends in an empty folder.
+                                    nav_folder("Team", Vec::new()),
+                                ]
+                            ),
+                        ]
+                    ),
+                    nav_folder(
+                        "Social",
+                        vec![
+                            nav_room("Shared", "!shared:example"),
+                            // Rooms under a space stay there whatever their kind.
+                            nav_room("Dm", "!dm:example"),
+                        ]
+                    ),
+                    nav_folder(
+                        "Loop A",
+                        vec![nav_folder("Loop B", vec![nav_folder("Loop A", Vec::new())])]
+                    ),
+                    nav_room("Lobby", "!lobby:example"),
+                    nav_room("Direct", "!direct:example"),
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn navigation_layout_puts_threads_under_their_room() {
+        let mut state = test_state();
+        state.model.rooms = vec![room("!ops:example", "Ops", false)];
+        state.model.room_views.insert(
+            "!ops:example".to_owned(),
+            RoomViewModel {
+                threads: BTreeMap::from([(
+                    "$root".to_owned(),
+                    ThreadViewModel {
+                        label: "root msg".to_owned(),
+                    },
+                )]),
+                ..RoomViewModel::default()
+            },
+        );
+
+        assert_eq!(
+            navigation_layout(&state.model),
+            nav_view(
+                "Status",
+                ViewId::Status,
+                vec![nav_view(
+                    "Ops",
+                    room_view_id("!ops:example"),
+                    vec![nav_view(
+                        "root msg",
+                        thread_view_id("!ops:example", "$root"),
+                        Vec::new()
+                    )]
+                )]
+            )
+        );
+    }
+
+    #[test]
+    fn ordered_view_ids_group_channels_before_queries() {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            invited_room("!invite:example", "Lobby"),
+            query("!alice:example", "Alice", "@alice:example"),
+            room("!ops:example", "Ops", false),
+        ];
+        state.model.room_views.insert(
+            "!alice:example".to_owned(),
+            RoomViewModel {
+                threads: BTreeMap::from([(
+                    "$root".to_owned(),
+                    ThreadViewModel {
+                        label: "root msg".to_owned(),
+                    },
+                )]),
+                ..RoomViewModel::default()
+            },
+        );
+        for (index, view_id) in [
+            ViewId::Status,
+            room_view_id("!invite:example"),
+            room_view_id("!alice:example"),
+            thread_view_id("!alice:example", "$root"),
+            room_view_id("!ops:example"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            state
+                .views
+                .insert(view_id, tracked_view(10 * (index as isize + 1)));
+        }
+
+        assert_eq!(
+            ordered_view_ids(&state),
+            vec![
+                ViewId::Status,
+                room_view_id("!ops:example"),
+                room_view_id("!alice:example"),
+                thread_view_id("!alice:example", "$root"),
+                room_view_id("!invite:example"),
+            ]
+        );
+    }
+
     #[test]
     fn ordered_view_ids_exclude_spaces_from_model_order() {
         let mut state = test_state();
@@ -22751,29 +22910,31 @@ mod tests {
 
         assert_eq!(
             view_short_title(&state.model, &room_view_id("!room:example")),
-            "Room [query: @alice:example] [e2ee]"
+            "Room"
         );
         assert_eq!(
             switchbar_button_text(&state, &room_view_id("!room:example")),
-            "Room [query: @alice:example] [e2ee] [@1 !2 *3 M]"
+            "Room [@1 !2 *3 M]"
         );
         assert_eq!(
             switchbar_button_text(&state, &thread_view_id("!room:example", "$thread-root")),
             "Thread: root msg"
         );
         assert_eq!(switchbar_button_text(&state, &ViewId::Status), "Status");
+        state.model.own_user_id = Some("@me:example".to_owned());
+        assert_eq!(
+            switchbar_button_text(&state, &ViewId::Status),
+            "@me:example"
+        );
     }
 
     #[test]
     fn view_caption_adds_the_room_topic_to_the_short_title() {
         let mut state = test_state();
-        let mut direct_room = room("!room:example", "Room", true);
-        direct_room.is_direct = true;
-        direct_room.direct_user_ids = vec!["@alice:example".to_owned()];
         let mut invited_room = room("!invite:example", "Invite", false);
         invited_room.membership = RoomMembership::Invite;
         state.model.rooms = vec![
-            direct_room,
+            room("!room:example", "Room", true),
             invited_room,
             room("!plain:example", "Plain", false),
         ];
@@ -22798,7 +22959,7 @@ mod tests {
 
         assert_eq!(
             view_caption(&state.model, &room_view_id("!room:example")),
-            "Room [query: @alice:example] [e2ee]: pairing notes"
+            "Room: pairing notes"
         );
         assert_eq!(
             view_caption(&state.model, &room_view_id("!invite:example")),
@@ -22823,6 +22984,36 @@ mod tests {
                 &thread_view_id("!room:example", "$thread-root")
             ),
             "Thread: root msg"
+        );
+    }
+
+    #[test]
+    fn view_caption_names_a_query_by_user_id() {
+        let mut state = test_state();
+        let mut query = room("!alice:example", "Alice", true);
+        query.is_direct = true;
+        query.direct_user_ids = vec!["@alice:example".to_owned()];
+        let mut group_query = room("!group:example", "Group", false);
+        group_query.is_direct = true;
+        group_query.direct_user_ids = vec!["@alice:example".to_owned(), "@bob:example".to_owned()];
+        state.model.rooms = vec![query, group_query];
+        for room_id in ["!alice:example", "!group:example"] {
+            state.model.room_views.insert(
+                room_id.to_owned(),
+                RoomViewModel {
+                    topic: Some("ignored".to_owned()),
+                    ..RoomViewModel::default()
+                },
+            );
+        }
+
+        assert_eq!(
+            view_caption(&state.model, &room_view_id("!alice:example")),
+            "Alice (@alice:example)"
+        );
+        assert_eq!(
+            view_caption(&state.model, &room_view_id("!group:example")),
+            "Group"
         );
     }
 

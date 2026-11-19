@@ -78,6 +78,12 @@ pub(super) fn room_caption(label: &str, topic: Option<&str>) -> String {
     }
 }
 
+/// A query window's caption, after mIRC's `nick (user@host)`: the other
+/// user's name, then their Matrix user ID.
+pub(super) fn query_caption(label: &str, user_id: &str) -> String {
+    format!("{label} ({user_id})")
+}
+
 /// The Status window's caption. mIRC shows `Status: nick [+modes] on
 /// Network`; a Matrix user ID names both the account and, by its server part,
 /// the network.
@@ -133,8 +139,16 @@ mod tests {
     #[test]
     fn room_caption_appends_the_topic() {
         assert_eq!(
-            room_caption("Ops [e2ee]", Some("incident review")),
-            "Ops [e2ee]: incident review"
+            room_caption("Ops", Some("incident review")),
+            "Ops: incident review"
+        );
+    }
+
+    #[test]
+    fn query_caption_names_the_user_by_id() {
+        assert_eq!(
+            query_caption("Alice", "@alice:example.org"),
+            "Alice (@alice:example.org)"
         );
     }
 

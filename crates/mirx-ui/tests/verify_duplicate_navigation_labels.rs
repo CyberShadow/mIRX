@@ -127,8 +127,7 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
     assert_eq!(
         path,
         vec![
-            NavigationPathSegment::first("mirx"),
-            NavigationPathSegment::first("rooms: 2"),
+            NavigationPathSegment::first("Status"),
             NavigationPathSegment::first("Space"),
             NavigationPathSegment {
                 text: "Same".to_owned(),
@@ -218,8 +217,7 @@ fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
     assert_eq!(
         path,
         vec![
-            NavigationPathSegment::first("mirx"),
-            NavigationPathSegment::first("rooms: 2"),
+            NavigationPathSegment::first("Status"),
             NavigationPathSegment::first("Space"),
             NavigationPathSegment {
                 text: "Same [@1 !2 *3 M]".to_owned(),

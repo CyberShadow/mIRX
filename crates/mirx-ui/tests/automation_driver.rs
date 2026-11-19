@@ -2447,7 +2447,7 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
             .iter()
             .map(|item| item.title.as_str())
             .collect::<Vec<_>>(),
-        vec!["Status", "Beta [e2ee]", "Alpha"]
+        vec!["Status", "Beta", "Alpha"]
     );
     assert_active_switchbar_item(&ui_state, &ui_state.mdi.active);
     assert_switchbar_activity(&ui_state, &ViewIdentity::Status, None);
@@ -2463,10 +2463,11 @@ fn automation_driver_launches_real_ui_and_reads_event_state()
     assert!(beta_view.title.contains("Beta"));
     assert!(view_contains(beta_view, "beta first"));
     assert!(view_contains(beta_view, "beta second"));
-    assert!(navigation_contains(&ui_state.navigation, "status"));
-    assert!(navigation_contains(&ui_state.navigation, "rooms: 2"));
-    assert!(navigation_contains(&ui_state.navigation, "Beta [e2ee]"));
+    assert_eq!(ui_state.navigation.text, "Status");
+    assert_eq!(ui_state.navigation.view, Some(ViewIdentity::Status));
+    assert!(navigation_contains(&ui_state.navigation, "Beta"));
     assert!(navigation_contains(&ui_state.navigation, "Alpha"));
+    assert_navigation_not_contains(&ui_state.navigation, "[e2ee]");
     assert_navigation_not_contains(&ui_state.navigation, "beta first");
     assert_navigation_not_contains(&ui_state.navigation, "beta second");
 
@@ -2964,8 +2965,9 @@ fn automation_driver_updates_lifecycle_from_synthetic_events_without_leaking_tok
     );
     assert_eq!(
         find_switchbar_item(&ui_state, &ViewIdentity::Status).title,
-        "Status"
+        "@alice:example"
     );
+    assert_eq!(ui_state.navigation.text, "@alice:example");
 
     app.load_events(&serde_json::to_string(&vec![
         Event::Started,
@@ -6179,53 +6181,40 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     let initial_state = app.dump_ui_state()?;
     assert_eq!(
         initial_state.navigation,
-        nav_folder(
-            "mirx",
+        nav_view(
+            "Status",
+            ViewIdentity::Status,
             vec![
-                nav_view("status", ViewIdentity::Status, vec![]),
                 nav_folder(
-                    "rooms: 4",
+                    "Work",
                     vec![
-                        nav_folder(
-                            "Work",
-                            vec![
-                                nav_view("Ops [e2ee]", room_identity("!ops:example"), vec![]),
-                                nav_view_with_activity(
-                                    "Shared",
-                                    room_identity("!shared:example"),
-                                    Some(ViewActivityLevel::Message),
-                                    vec![]
-                                ),
-                            ],
-                        ),
-                        nav_folder(
-                            "Social",
-                            vec![
-                                nav_view_with_activity(
-                                    "Shared",
-                                    room_identity("!shared:example"),
-                                    Some(ViewActivityLevel::Message),
-                                    vec![]
-                                ),
-                                nav_view_with_activity(
-                                    "Random",
-                                    room_identity("!random:example"),
-                                    Some(ViewActivityLevel::Message),
-                                    vec![]
-                                ),
-                            ],
-                        ),
-                        nav_folder(
-                            "unspaced rooms: 1",
-                            vec![nav_view(
-                                "Direct [query: @alice:example] [e2ee]",
-                                room_identity("!direct:example"),
-                                vec![]
-                            )],
+                        nav_view("Ops", room_identity("!ops:example"), vec![]),
+                        nav_view_with_activity(
+                            "Shared",
+                            room_identity("!shared:example"),
+                            Some(ViewActivityLevel::Message),
+                            vec![]
                         ),
                     ],
                 ),
-                nav_folder("invites: 0", vec![]),
+                nav_folder(
+                    "Social",
+                    vec![
+                        nav_view_with_activity(
+                            "Shared",
+                            room_identity("!shared:example"),
+                            Some(ViewActivityLevel::Message),
+                            vec![]
+                        ),
+                        nav_view_with_activity(
+                            "Random",
+                            room_identity("!random:example"),
+                            Some(ViewActivityLevel::Message),
+                            vec![]
+                        ),
+                    ],
+                ),
+                nav_view("Direct", room_identity("!direct:example"), vec![]),
             ],
         )
     );
@@ -6302,7 +6291,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     );
     assert_eq!(
         find_view(&initial_state, &room_identity("!direct:example")).title,
-        "Direct [query: @alice:example] [e2ee]"
+        "Direct (@alice:example)"
     );
     assert!(
         find_view(&initial_state, &room_identity("!direct:example"))
@@ -6311,7 +6300,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     );
     assert_eq!(
         find_switchbar_item(&initial_state, &room_identity("!direct:example")).title,
-        "Direct [query: @alice:example] [e2ee]"
+        "Direct"
     );
     assert_switchbar_activity(&initial_state, &room_identity("!ops:example"), None);
     assert_switchbar_activity(
@@ -6330,10 +6319,10 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         Some(room_identity("!ops:example"))
     );
 
-    app.select_navigation_path(&nav_path(&["mirx", "rooms: 4", "Work"]))?;
+    app.select_navigation_path(&nav_path(&["Status", "Work"]))?;
     assert_eq!(
         app.selected_navigation_path()?,
-        nav_path(&["mirx", "rooms: 4", "Work"])
+        nav_path(&["Status", "Work"])
     );
     assert_eq!(app.selected_navigation_view()?, None);
     let work_state = app.dump_ui_state()?;
@@ -6342,13 +6331,9 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
         app.dump_model()?.selected_room.as_deref(),
         Some("!ops:example")
     );
-    assert!(navigation_contains(
-        &work_state.navigation,
-        "Direct [query: @alice:example] [e2ee]"
-    ));
     assert_eq!(
         find_view(&work_state, &room_identity("!direct:example")).title,
-        "Direct [query: @alice:example] [e2ee]"
+        "Direct (@alice:example)"
     );
     assert!(
         find_view(&work_state, &room_identity("!direct:example"))
@@ -6357,7 +6342,7 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     );
     assert_eq!(
         find_switchbar_item(&work_state, &room_identity("!direct:example")).title,
-        "Direct [query: @alice:example] [e2ee]"
+        "Direct"
     );
 
     let shared_paths = initial_state
@@ -6366,8 +6351,8 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
     assert_eq!(
         shared_paths,
         vec![
-            nav_path(&["mirx", "rooms: 4", "Work", "Shared"]),
-            nav_path(&["mirx", "rooms: 4", "Social", "Shared"]),
+            nav_path(&["Status", "Work", "Shared"]),
+            nav_path(&["Status", "Social", "Shared"]),
         ]
     );
     app.select_navigation_path(&shared_paths[1])?;
@@ -6423,6 +6408,73 @@ fn automation_driver_renders_space_hierarchy_and_preserves_duplicate_tree_select
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// mIRC's treebar: the Status window is the root, labelled with the account;
+/// spaces are folders; then channels, queries and invites. The switchbar
+/// follows the same window order.
+#[test]
+fn automation_driver_lays_out_the_treebar_like_mirc() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("treebar-status-root.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        ui_state.navigation,
+        nav_view(
+            "@me:example",
+            ViewIdentity::Status,
+            vec![
+                nav_folder(
+                    "Work",
+                    vec![
+                        nav_view("Ops", room_identity("!ops:example"), vec![]),
+                        nav_view("Shared", room_identity("!shared:example"), vec![]),
+                    ],
+                ),
+                nav_view("Lobby", room_identity("!lobby:example"), vec![]),
+                nav_view("Alice", room_identity("!alice:example"), vec![]),
+                nav_view("Invited [invite]", room_identity("!invite:example"), vec![]),
+            ],
+        )
+    );
+    assert_eq!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| (item.identity.clone(), item.title.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ViewIdentity::Status, "@me:example"),
+            (room_identity("!ops:example"), "Ops"),
+            (room_identity("!shared:example"), "Shared"),
+            (room_identity("!lobby:example"), "Lobby"),
+            (room_identity("!alice:example"), "Alice"),
+            (room_identity("!invite:example"), "Invited [invite]"),
+        ]
+    );
+    assert_eq!(
+        find_view(&ui_state, &ViewIdentity::Status).title,
+        "Status: @me:example"
+    );
+    assert_eq!(
+        find_view(&ui_state, &room_identity("!alice:example")).title,
+        "Alice (@alice:example)"
+    );
+
+    app.select_navigation_view(&ViewIdentity::Status)?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, ViewIdentity::Status);
+    assert_eq!(app.selected_navigation_path()?, nav_path(&["@me:example"]));
+
     Ok(())
 }
 
@@ -8542,7 +8594,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     );
     assert_eq!(
         find_switchbar_item(&initial_state, &room_identity("!alpha:example")).title,
-        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+        "Alpha [@1 !2 *1 M]"
     );
     assert_switchbar_activity(&initial_state, &room_identity("!beta:example"), None);
     assert_switchbar_activity(
@@ -8552,7 +8604,7 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     );
     assert!(navigation_contains(
         &initial_state.navigation,
-        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+        "Alpha [@1 !2 *1 M]"
     ));
     assert_eq!(
         find_ui_room(&initial_state, "!beta:example"),
@@ -8615,12 +8667,12 @@ fn automation_driver_applies_room_read_state_fixture_activity_and_clears_it_on_a
     );
     assert_eq!(
         find_switchbar_item(&activated_state, &room_identity("!alpha:example")).title,
-        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+        "Alpha [@1 !2 *1 M]"
     );
     assert_switchbar_activity(&activated_state, &room_identity("!alpha:example"), None);
     assert!(navigation_contains(
         &activated_state.navigation,
-        "Alpha [query: @alice:example] [@1 !2 *1 M]"
+        "Alpha [@1 !2 *1 M]"
     ));
     assert_eq!(
         find_ui_room(&activated_state, "!alpha:example"),
@@ -8684,15 +8736,17 @@ fn automation_driver_caught_up_read_state_fixture_clears_navigation_suffixes()
     );
     assert_eq!(
         find_switchbar_item(&cleared_state, &room_identity("!alpha:example")).title,
-        "Alpha [query: @alice:example]"
+        "Alpha"
     );
-    assert!(navigation_contains(
-        &cleared_state.navigation,
-        "Alpha [query: @alice:example]"
-    ));
-    assert_navigation_not_contains(
-        &cleared_state.navigation,
-        "Alpha [query: @alice:example] [@1 !2 *1 M]",
+    let alpha_nodes = cleared_state
+        .navigation
+        .find_view(&room_identity("!alpha:example"));
+    assert_eq!(
+        alpha_nodes
+            .iter()
+            .map(|node| node.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Alpha"]
     );
 
     let _ = fs::remove_file(&state_path);
@@ -10024,8 +10078,6 @@ fn automation_driver_invited_rooms_render_in_navigation_model_and_ui_state()
 
     let initial_state = app.dump_ui_state()?;
     assert_eq!(initial_state.mdi.active, room_identity("!beta:example"));
-    assert!(navigation_contains(&initial_state.navigation, "rooms: 1"));
-    assert!(navigation_contains(&initial_state.navigation, "invites: 1"));
     assert!(navigation_contains(
         &initial_state.navigation,
         "Lobby [invite]"
@@ -10190,8 +10242,6 @@ fn automation_driver_invited_room_list_fixture_renders_expected_invite_state()
     let state = app.dump_ui_state()?;
     assert_eq!(state.mdi.active, room_identity("!invite:example"));
     assert_active_switchbar_item(&state, &room_identity("!invite:example"));
-    assert!(navigation_contains(&state.navigation, "rooms: 1"));
-    assert!(navigation_contains(&state.navigation, "invites: 1"));
     assert!(navigation_contains(&state.navigation, "Lobby [invite]"));
     assert_eq!(
         find_ui_room(&state, "!invite:example").membership,
@@ -10251,12 +10301,7 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
     let state = app.dump_ui_state()?;
     assert_eq!(state.mdi.active, room_identity("!invite-direct:example"));
     assert_active_switchbar_item(&state, &room_identity("!invite-direct:example"));
-    assert!(navigation_contains(&state.navigation, "rooms: 1"));
-    assert!(navigation_contains(&state.navigation, "invites: 1"));
-    assert!(navigation_contains(
-        &state.navigation,
-        "Daria [invite] [query: @daria:example]"
-    ));
+    assert!(navigation_contains(&state.navigation, "Daria [invite]"));
     let invite_room = find_ui_room(&state, "!invite-direct:example");
     assert_eq!(invite_room.membership, RoomMembership::Invite);
     assert!(invite_room.is_direct);
@@ -10266,7 +10311,7 @@ fn automation_driver_invited_direct_room_fixture_renders_expected_direct_invite_
     );
     assert_eq!(
         find_switchbar_item(&state, &room_identity("!invite-direct:example")).title,
-        "Daria [invite] [query: @daria:example]"
+        "Daria [invite]"
     );
     let invite_view = find_view(&state, &room_identity("!invite-direct:example"));
     assert!(invite_view.title.contains("Daria [invite]"));
@@ -10318,8 +10363,6 @@ fn automation_driver_invited_room_accept_fixture_update_promotes_invite_to_joine
     let state = app.dump_ui_state()?;
     assert_eq!(state.mdi.active, room_identity("!invite:example"));
     assert_active_switchbar_item(&state, &room_identity("!invite:example"));
-    assert!(navigation_contains(&state.navigation, "rooms: 2"));
-    assert!(navigation_contains(&state.navigation, "invites: 0"));
     assert!(navigation_contains(&state.navigation, "Lobby"));
     assert_navigation_not_contains(&state.navigation, "Lobby [invite]");
     assert_eq!(
@@ -10379,8 +10422,6 @@ fn automation_driver_invited_room_reject_fixture_update_removes_invite_room()
     let state = app.dump_ui_state()?;
     assert_eq!(state.mdi.active, room_identity("!beta:example"));
     assert_active_switchbar_item(&state, &room_identity("!beta:example"));
-    assert!(navigation_contains(&state.navigation, "rooms: 1"));
-    assert!(navigation_contains(&state.navigation, "invites: 0"));
     assert_navigation_not_contains(&state.navigation, "Lobby [invite]");
     assert!(
         state
@@ -10423,10 +10464,8 @@ fn automation_driver_hierarchical_tree_ignores_invited_spaces()
     app.wait_idle(Duration::from_secs(5))?;
 
     let state = app.dump_ui_state()?;
-    assert!(navigation_contains(&state.navigation, "rooms: 1"));
     assert!(navigation_contains(&state.navigation, "Space"));
     assert!(navigation_contains(&state.navigation, "Beta"));
-    assert!(navigation_contains(&state.navigation, "invites: 0"));
     assert_navigation_not_contains(&state.navigation, "Invite Space");
 
     drop(app);

@@ -1,0 +1,126 @@
+[
+  "Started",
+  {
+    "LoggedIn": {
+      "session": {
+        "user_id": "@me:example",
+        "device_id": "MIRXDEVICE",
+        "access_token": "fixture-access-token",
+        "refresh_token": null
+      }
+    }
+  },
+  {
+    "SyncedRooms": [
+      {
+        "room_id": "!ops:example",
+        "display_name": "Ops",
+        "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!work:example",
+        "display_name": "Work",
+        "topic": null,
+        "encrypted": false,
+        "is_space": true,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [
+          {
+            "room_id": "!ops:example",
+            "suggested": false,
+            "order": null
+          },
+          {
+            "room_id": "!shared:example",
+            "suggested": false,
+            "order": null
+          }
+        ],
+        "membership": "join"
+      },
+      {
+        "room_id": "!alice:example",
+        "display_name": "Alice",
+        "topic": null,
+        "encrypted": true,
+        "is_space": false,
+        "is_direct": true,
+        "direct_user_ids": [
+          "@alice:example"
+        ],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!shared:example",
+        "display_name": "Shared",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!lobby:example",
+        "display_name": "Lobby",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "join"
+      },
+      {
+        "room_id": "!invite:example",
+        "display_name": "Invited",
+        "topic": null,
+        "encrypted": false,
+        "is_space": false,
+        "is_direct": false,
+        "direct_user_ids": [],
+        "tags": [],
+        "space_children": [],
+        "membership": "invite"
+      }
+    ]
+  },
+  {
+    "RoomActivity": {
+      "room_id": "!ops:example",
+      "activity_id": "event:$ops-1",
+      "timestamp_ms": 1700000000000,
+      "highlight": false,
+      "kind": {
+        "type": "message",
+        "event_id": "$ops-1",
+        "transaction_id": null,
+        "sender": {
+          "user_id": "@alice:example",
+          "display_name": "Alice",
+          "display_name_ambiguous": false
+        },
+        "presentation": "text",
+        "body": "the treebar roots at the Status window",
+        "send_state": {
+          "state": "sent"
+        }
+      },
+      "relation": null
+    }
+  }
+]

@@ -227,7 +227,7 @@ configure_case_expectations() {
       mdi_title_expect_args=(
         --expect-mdi-title 'status::Status'
         --expect-mdi-title 'room:!lobby:example::Lobby: welcome to the lobby'
-        --expect-mdi-title 'room:!ops:example::Ops [e2ee]: incident review'
+        --expect-mdi-title 'room:!ops:example::Ops: incident review'
       )
       case "$case_name" in
         mdi-tiled)
@@ -301,7 +301,7 @@ configure_case_expectations() {
         --expect-room-view '!ops:example::[22:15] <Alice> ops topic: incident review'
       )
       mdi_title_expect_args=(
-        --expect-mdi-title 'room:!ops:example::Ops [e2ee]: incident review'
+        --expect-mdi-title 'room:!ops:example::Ops: incident review'
       )
       status_bar_expect_args=(
         --expect-status-bar 'synced 3 room(s)'
@@ -358,8 +358,6 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!invite:example'
       navigation_expect_args=(
-        --expect-navigation-text 'rooms: 1'
-        --expect-navigation-text 'invites: 1'
         --expect-navigation-text 'Beta'
         --expect-navigation-text 'Lobby [invite]'
       )
@@ -389,7 +387,7 @@ configure_case_expectations() {
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!beta:example::Beta'
-        --expect-switchbar-item 'room:!invite-direct:example::Daria [invite] [query: @daria:example]'
+        --expect-switchbar-item 'room:!invite-direct:example::Daria [invite]'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!beta:example'
@@ -398,10 +396,8 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!invite-direct:example'
       navigation_expect_args=(
-        --expect-navigation-text 'rooms: 1'
-        --expect-navigation-text 'invites: 1'
         --expect-navigation-text 'Beta'
-        --expect-navigation-text 'Daria [invite] [query: @daria:example]'
+        --expect-navigation-text 'Daria [invite]'
       )
       ;;
     invited-room-accept)
@@ -435,8 +431,6 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!invite:example'
       navigation_expect_args=(
-        --expect-navigation-text 'rooms: 2'
-        --expect-navigation-text 'invites: 0'
         --expect-navigation-text 'Beta'
         --expect-navigation-text 'Lobby'
       )
@@ -475,12 +469,48 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!beta:example'
       navigation_expect_args=(
-        --expect-navigation-text 'rooms: 1'
-        --expect-navigation-text 'invites: 0'
         --expect-navigation-text 'Beta'
       )
       navigation_forbid_args=(
         --expect-no-navigation-text 'Lobby [invite]'
+      )
+      ;;
+    treebar-status-root)
+      expect_selected='!ops:example'
+      expect_active_view='room:!ops:example'
+      room_view_expect_args=(
+        --expect-room-view '!ops:example::the treebar roots at the Status window'
+      )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'status::Status: @me:example'
+        --expect-mdi-title 'room:!ops:example::Ops'
+        --expect-mdi-title 'room:!alice:example::Alice (@alice:example)'
+        --expect-mdi-title 'room:!invite:example::Invited [invite]'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::@me:example'
+        --expect-switchbar-item 'room:!ops:example::Ops'
+        --expect-switchbar-item 'room:!shared:example::Shared'
+        --expect-switchbar-item 'room:!lobby:example::Lobby'
+        --expect-switchbar-item 'room:!alice:example::Alice'
+        --expect-switchbar-item 'room:!invite:example::Invited [invite]'
+      )
+      switchbar_no_item_expect_args=(
+        --expect-no-switchbar-item 'room:!work:example'
+      )
+      expect_switchbar_active='room:!ops:example'
+      navigation_expect_args=(
+        --expect-navigation-text '@me:example'
+        --expect-navigation-text 'Work'
+        --expect-navigation-text 'Alice'
+        --expect-navigation-text 'Invited [invite]'
+      )
+      navigation_forbid_args=(
+        --expect-no-navigation-text '[e2ee]'
+        --expect-no-navigation-text '[query'
+        --expect-no-navigation-text 'rooms:'
+        --expect-no-navigation-text 'invites:'
+        --expect-no-navigation-text 'mirx'
       )
       ;;
     space-hierarchy)
@@ -510,7 +540,10 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!ops:example::Ops'
         --expect-switchbar-item 'room:!shared:example::Shared'
         --expect-switchbar-item 'room:!random:example::Random'
-        --expect-switchbar-item 'room:!direct:example::Direct [query: @alice:example] [e2ee]'
+        --expect-switchbar-item 'room:!direct:example::Direct'
+      )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'room:!direct:example::Direct (@alice:example)'
       )
       switchbar_no_item_expect_args=(
         --expect-no-switchbar-item 'room:!work:example'
@@ -529,13 +562,16 @@ configure_case_expectations() {
       navigation_expect_args=(
         --expect-navigation-text 'Work'
         --expect-navigation-text 'Social'
-        --expect-navigation-text 'unspaced rooms: 1'
-        --expect-navigation-text 'Ops [e2ee]'
+        --expect-navigation-text 'Ops'
         --expect-navigation-text 'Shared'
         --expect-navigation-text 'Random'
-        --expect-navigation-text 'Direct [query: @alice:example] [e2ee]'
+        --expect-navigation-text 'Direct'
       )
       navigation_forbid_args=(
+        --expect-no-navigation-text '[e2ee]'
+        --expect-no-navigation-text '[query'
+        --expect-no-navigation-text 'rooms:'
+        --expect-no-navigation-text 'invites:'
         --expect-no-navigation-text 'ops workspace is ready'
         --expect-no-navigation-text 'shared room has updates'
         --expect-no-navigation-text 'random room has updates'
@@ -787,7 +823,7 @@ configure_case_expectations() {
         --expect-mdi-title 'status::Status: @me:example'
       )
       switchbar_item_expect_args=(
-        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'status::@me:example'
         --expect-switchbar-item 'room:!ops:example::Ops'
       )
       switchbar_no_activity_expect_args=(
@@ -1802,7 +1838,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'room:!focus:example::Focus'
         --expect-switchbar-item 'room:!alerts:example::Alerts'
         --expect-switchbar-item 'room:!support:example::Support Queue'
-        --expect-switchbar-item 'room:!query:example::Casey [query: @casey:example] [e2ee]'
+        --expect-switchbar-item 'room:!query:example::Casey'
         --expect-switchbar-item 'thread:!focus:example|$focus-root::review thread root'
       )
       switchbar_activity_expect_args=(
@@ -1818,7 +1854,7 @@ configure_case_expectations() {
         --expect-navigation-text 'Alerts'
         --expect-navigation-text 'Focus'
         --expect-navigation-text 'Support Queue'
-        --expect-navigation-text 'Casey [query: @casey:example] [e2ee]'
+        --expect-navigation-text 'Casey'
         --expect-navigation-text 'review thread root'
       )
       navigation_activity_expect_args=(
@@ -1852,7 +1888,7 @@ configure_case_expectations() {
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!long-focus:example::Extremely Long Focus Room Name For Native Shell Layout Review'
         --expect-switchbar-item 'room:!long-inbox:example::Incoming Updates With An Intentionally Long Descriptive Room Label'
-        --expect-switchbar-item 'room:!long-query:example::@very-long-direct-user-identifier-for-constrained-shell:example [query: @very-long-direct-user-identifier-for-constrained-shell:example] [e2ee]'
+        --expect-switchbar-item 'room:!long-query:example::@very-long-direct-user-identifier-for-constrained-shell:example'
       )
       switchbar_activity_expect_args=(
         --expect-switchbar-activity 'room:!long-inbox:example::message'
@@ -1864,7 +1900,7 @@ configure_case_expectations() {
       navigation_expect_args=(
         --expect-navigation-text 'Extremely Long Focus Room Name For Native Shell Layout Review'
         --expect-navigation-text 'Incoming Updates With An Intentionally Long Descriptive Room Label'
-        --expect-navigation-text '@very-long-direct-user-identifier-for-constrained-shell:example [query: @very-long-direct-user-identifier-for-constrained-shell:example] [e2ee]'
+        --expect-navigation-text '@very-long-direct-user-identifier-for-constrained-shell:example'
       )
       expect_switchbar_active='room:!long-focus:example'
       ;;
@@ -1992,7 +2028,7 @@ configure_case_expectations() {
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!beta:example::Beta'
-        --expect-switchbar-item 'room:!alpha:example::Alpha [query: @alice:example] [@1 !2 *1 M]'
+        --expect-switchbar-item 'room:!alpha:example::Alpha [@1 !2 *1 M]'
       )
       switchbar_activity_expect_args=(
         --expect-switchbar-activity 'room:!alpha:example::highlight'
@@ -2002,7 +2038,7 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       navigation_expect_args=(
-        --expect-navigation-text 'Alpha [query: @alice:example] [@1 !2 *1 M]'
+        --expect-navigation-text 'Alpha [@1 !2 *1 M]'
       )
       expect_switchbar_active='room:!beta:example'
       ;;
@@ -2025,7 +2061,7 @@ configure_case_expectations() {
       switchbar_item_expect_args=(
         --expect-switchbar-item 'status::Status'
         --expect-switchbar-item 'room:!beta:example::Beta'
-        --expect-switchbar-item 'room:!alpha:example::Alpha [query: @alice:example]'
+        --expect-switchbar-item 'room:!alpha:example::Alpha'
       )
       switchbar_no_activity_expect_args=(
         --expect-no-switchbar-activity 'room:!alpha:example'
@@ -2033,10 +2069,10 @@ configure_case_expectations() {
         --expect-no-switchbar-activity 'status'
       )
       navigation_expect_args=(
-        --expect-navigation-text 'Alpha [query: @alice:example]'
+        --expect-navigation-text 'Alpha'
       )
       navigation_forbid_args=(
-        --expect-no-navigation-text 'Alpha [query: @alice:example] [@1 !2 *1 M]'
+        --expect-no-navigation-text 'Alpha [@1 !2 *1 M]'
       )
       expect_switchbar_active='room:!beta:example'
       ;;
