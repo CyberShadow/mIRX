@@ -58,13 +58,25 @@ MIRX_HS=... MIRX_USER=... MIRX_PASS=... MIRX_ROOM=... \
 
 The UI session file still lives at `%LOCALAPPDATA%\mirx\ui-shell\session.json`, but its payload is now DPAPI-protected binary data rather than cleartext JSON. The Matrix SDK SQLite store passphrase is generated per profile and persisted separately in `%LOCALAPPDATA%\mirx\ui-shell\store-passphrase.dpapi`, and refreshed Matrix access/refresh tokens are written back through the same protected session store. The password is never persisted.
 
+Presentation settings live in `%LOCALAPPDATA%\mirx\ui-shell\mirx.ini`, next to the session file, and are saved as soon as they change:
+
+```ini
+[fonts]
+text=Fixedsys,9
+[timestamp]
+show=on
+format=[HH:nn]
+```
+
+`/font [-b] <size> <font name>` (or `/font` and every window's system-menu `Font...` for the font dialog) sets the one text font used by every window's text area, nick list and editbox; mIRC's default is Fixedsys 9. `/timestamp [on|off|-f format]` shows, toggles or formats line timestamps, which are in local time; the format takes mIRC `$asctime` tokens (`HH H hh h nn n ss s tt TT dd d mm m yy yyyy`, everything else literal). A missing file means the defaults; a file mirx cannot parse stops startup with an error naming the line, rather than being overwritten. The Wine test scripts pin `TZ=UTC` so timestamps are deterministic.
+
 Find is UI-scoped. Status and Thread Find search only loaded text, while Room Find searches loaded text first and can page older room history through backfill. `/find <text>`, `Edit > Find...`, and `Ctrl+F` all invoke the same behavior; Find does not use Matrix server-side search.
 
 ## Release Measurement
 
 Measured artifact: `target/x86_64-pc-windows-gnu/release/mirx-ui.exe`
 
-- Size: `13754880` bytes (`14MiB`)
+- Size: `16195584` bytes (`16MiB`)
 - Target/runtime note: this is the Windows GNU release binary, with the current linked `matrix-sdk` E2EE stack and bundled SQLite stack included in the executable build.
 
 DLL imports from `scripts/measure.sh`:
@@ -76,10 +88,14 @@ api-ms-win-core-synch-l1-2-0.dll
 bcrypt.dll
 bcryptprimitives.dll
 comctl32.dll
+comdlg32.dll
 crypt32.dll
+gdi32.dll
+gdiplus.dll
 kernel32.dll
 msvcrt.dll
 ntdll.dll
+ole32.dll
 user32.dll
 ws2_32.dll
 ```
