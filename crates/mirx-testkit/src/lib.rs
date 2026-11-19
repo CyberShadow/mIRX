@@ -2989,9 +2989,8 @@ mod imp {
         FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId, SB_PAGEUP,
-        SB_TOP, SendMessageW, WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE,
-        WM_VSCROLL,
+        EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId, SB_TOP,
+        SendMessageW, WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_VSCROLL,
     };
 
     use super::*;
@@ -3493,12 +3492,14 @@ mod imp {
             self.require_active_timeline_view(active_child)?;
             let content = self.active_mdi_content_hwnd()?;
             let timeline_hwnd = self.child_window_with_class(content, TIMELINE_CLASS_NAME)?;
+            // One scroll to the top, as one user gesture: each one at the
+            // top asks for older history unless a request is in flight, and
+            // a request can fail (and so stop being in flight) between two.
             unsafe { send_timeline_scroll(timeline_hwnd, SB_TOP as usize) };
-            unsafe { send_timeline_scroll(timeline_hwnd, SB_PAGEUP as usize) };
-            let after_page_up = unsafe { timeline_top_line(timeline_hwnd) };
-            if after_page_up != 0 {
+            let top_line = unsafe { timeline_top_line(timeline_hwnd) };
+            if top_line != 0 {
                 return Err(TestkitError::InvalidResponse(format!(
-                    "page-up did not return the active room timeline to the top: top_line={after_page_up}"
+                    "scrolling to the top left the active timeline at top_line={top_line}"
                 )));
             }
 
