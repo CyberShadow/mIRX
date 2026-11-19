@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 41;
+pub(crate) const PROTOCOL_VERSION: u32 = 42;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -990,6 +990,13 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) heading: String,
     /// The ids of the shown page's controls.
     pub(crate) visible_controls: Vec<u16>,
+    /// The Highlight page's list, top to bottom.
+    pub(crate) highlight_items: Vec<String>,
+    /// Whether the Highlight page's list, word box and Add are enabled
+    /// (signed in).
+    pub(crate) highlight_controls_enabled: bool,
+    /// Whether the Highlight page's Delete is enabled (an item selected).
+    pub(crate) highlight_delete_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3047,8 +3054,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_41() {
-        assert_eq!(PROTOCOL_VERSION, 41);
+    fn protocol_version_is_42() {
+        assert_eq!(PROTOCOL_VERSION, 42);
     }
 
     #[test]
@@ -4860,7 +4867,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":41,
+                    "protocol_version":42,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5471,6 +5478,9 @@ mod tests {
                         selected: "Connect/Options".to_owned(),
                         heading: "Connect > Options".to_owned(),
                         visible_controls: vec![6101],
+                        highlight_items: vec!["deploy".to_owned()],
+                        highlight_controls_enabled: true,
+                        highlight_delete_enabled: false,
                     }),
                     active_timeline: Some(super::UiActiveTimeline {
                         top_line: 2,
@@ -5632,7 +5642,10 @@ mod tests {
                         "tree":["Connect","Connect/Options"],
                         "selected":"Connect/Options",
                         "heading":"Connect > Options",
-                        "visible_controls":[6101]
+                        "visible_controls":[6101],
+                        "highlight_items":["deploy"],
+                        "highlight_controls_enabled":true,
+                        "highlight_delete_enabled":false
                     },
                     "active_timeline":{
                         "top_line":2,

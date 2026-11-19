@@ -14,10 +14,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
     E2eeBackupState, E2eeBackupStatus, E2eeCrossSigningStatus, E2eeRecoveryState, E2eeStatus,
-    Event, RoomActivity as CoreRoomActivity, RoomActivityKind as CoreRoomActivityKind,
-    RoomActivityRelation as CoreRoomActivityRelation, RoomActivityUpdate, RoomActivityUpdateKind,
-    RoomActivityUpdateTarget, RoomHistoryBackfill, RoomHistoryBackfillEvent,
-    RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
+    Event, HighlightWord, RoomActivity as CoreRoomActivity,
+    RoomActivityKind as CoreRoomActivityKind, RoomActivityRelation as CoreRoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomHistoryBackfill,
+    RoomHistoryBackfillEvent, RoomMedia as CoreRoomMedia, RoomMediaFormat as CoreRoomMediaFormat,
     RoomMediaKind as CoreRoomMediaKind, RoomMemberRank, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity as CoreRoomMessageActivity,
     RoomMessagePresentationKind as CoreRoomMessagePresentationKind,
@@ -2864,7 +2864,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 41);
+    assert_eq!(version.protocol_version, 42);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -12106,6 +12106,11 @@ const OPTIONS_TIMESTAMP_SHOW_ID: i32 = 6201;
 const OPTIONS_TIMESTAMP_FORMAT_ID: i32 = 6202;
 const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
 const OPTIONS_SWITCHBAR_BUTTONS_ID: i32 = 6301;
+const OPTIONS_HIGHLIGHT_LIST_ID: i32 = 6401;
+const OPTIONS_HIGHLIGHT_WORD_ID: i32 = 6402;
+const OPTIONS_HIGHLIGHT_ADD_ID: i32 = 6403;
+const OPTIONS_HIGHLIGHT_DELETE_ID: i32 = 6404;
+const OPTIONS_HIGHLIGHT_NOTE_ID: i32 = 6405;
 
 /// Waits for the Options dialog to be open and shown, and returns it.
 fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
@@ -12166,6 +12171,7 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             "Connect/Options",
             "IRC",
             "IRC/Messages",
+            "IRC/Highlight",
             "Display"
         ]
     );
@@ -12306,6 +12312,242 @@ fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
     assert_eq!(after.timestamp, before.timestamp);
     assert_eq!(after.switchbar, before.switchbar);
     assert!(!settings_file_path(&local_app_data).exists());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Launches with the close-lifecycle rooms and, as a signed-in session's
+/// push rules give, the highlight words `deploy` and the notify-only
+/// `build`.
+fn launch_highlight_words_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::HighlightWords(vec![
+        HighlightWord {
+            word: "deploy".to_owned(),
+            highlights: true,
+        },
+        HighlightWord {
+            word: "build".to_owned(),
+            highlights: false,
+        },
+    ])])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok((app, local_app_data))
+}
+
+/// Selects IRC > Highlight with the tree's arrow keys: Down to the IRC
+/// category shows IRC > Messages, Down again is Highlight.
+fn show_options_highlight_page(
+    app: &MirxApp,
+    dialog: HWND,
+) -> Result<mirx_testkit::UiOptionsDialog, Box<dyn std::error::Error>> {
+    let tree = unsafe { GetDlgItem(dialog, 6001) };
+    for page in ["IRC/Messages", "IRC/Highlight"] {
+        assert_ne!(
+            unsafe { PostMessageW(tree, WM_KEYDOWN, VK_DOWN as WPARAM, 0) },
+            0
+        );
+        app.wait_for_ui_state(page, Duration::from_secs(5), |ui_state| {
+            ui_state
+                .options_dialog
+                .as_ref()
+                .is_some_and(|options| options.selected == page)
+        })?;
+    }
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open");
+    assert_eq!(options.heading, "IRC > Highlight");
+    assert_eq!(
+        options.visible_controls,
+        [
+            OPTIONS_HIGHLIGHT_LIST_ID,
+            OPTIONS_HIGHLIGHT_DELETE_ID,
+            OPTIONS_HIGHLIGHT_WORD_ID,
+            OPTIONS_HIGHLIGHT_ADD_ID,
+            OPTIONS_HIGHLIGHT_NOTE_ID,
+        ]
+        .map(|id| id as u16)
+    );
+    Ok(options)
+}
+
+fn options_highlight(
+    app: &MirxApp,
+) -> Result<mirx_testkit::UiOptionsDialog, Box<dyn std::error::Error>> {
+    Ok(app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open"))
+}
+
+/// Types `text` into the word box and presses Enter there.
+fn enter_highlight_words(
+    app: &MirxApp,
+    dialog: HWND,
+    text: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let word = unsafe { GetDlgItem(dialog, OPTIONS_HIGHLIGHT_WORD_ID) };
+    unsafe { set_options_text(dialog, OPTIONS_HIGHLIGHT_WORD_ID, text) };
+    post_left_click(word, &UiPoint { x: 4, y: 4 }, false);
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(unsafe { focused_hwnd(app) }, word);
+    assert_ne!(
+        unsafe { PostMessageW(word, WM_KEYDOWN, VK_RETURN as WPARAM, 0) },
+        0
+    );
+    Ok(())
+}
+
+#[test]
+fn options_highlight_page_lists_adds_deletes_and_submits_on_ok()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_highlight_words_app()?;
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    let options = show_options_highlight_page(&app, dialog)?;
+    assert_eq!(options.highlight_items, ["deploy", "build (notify only)"]);
+    assert!(options.highlight_controls_enabled);
+    assert!(!options.highlight_delete_enabled);
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_HIGHLIGHT_NOTE_ID)) },
+        "Words are matched as whole words; * and ? are wildcards. Highlight words are \
+         kept on your Matrix server and shared with your other clients."
+    );
+
+    // Enter in the word box adds, several at once; `build` now highlights.
+    enter_highlight_words(&app, dialog, "release, build")?;
+    app.wait_for_ui_state("the added words", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .options_dialog
+            .as_ref()
+            .is_some_and(|options| options.highlight_items == ["deploy", "build", "release"])
+    })?;
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_HIGHLIGHT_WORD_ID)) },
+        ""
+    );
+    assert_ne!(unsafe { IsWindow(dialog) }, 0, "Enter there is not OK");
+
+    // A wrong word says why and keeps the text to fix.
+    enter_highlight_words(&app, dialog, "ok, a/b")?;
+    let (message_box, text) = wait_for_owned_message_box(dialog);
+    assert_eq!(
+        text,
+        "Highlight \"a/b\": a highlight word cannot contain / or \\"
+    );
+    answer_message_box(&app, message_box, IDOK)?;
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_HIGHLIGHT_WORD_ID)) },
+        "ok, a/b"
+    );
+    assert_eq!(
+        options_highlight(&app)?.highlight_items,
+        ["deploy", "build", "release"]
+    );
+
+    // Selecting an item enables Delete, which greys again once it deletes.
+    let list = unsafe { GetDlgItem(dialog, OPTIONS_HIGHLIGHT_LIST_ID) };
+    post_left_click(list, &UiPoint { x: 8, y: 4 }, false);
+    app.wait_for_ui_state("Delete enabled", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .options_dialog
+            .as_ref()
+            .is_some_and(|options| options.highlight_delete_enabled)
+    })?;
+    post_options_command(dialog, OPTIONS_HIGHLIGHT_DELETE_ID)?;
+    app.wait_for_ui_state("deploy deleted", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .options_dialog
+            .as_ref()
+            .is_some_and(|options| options.highlight_items == ["build", "release"])
+    })?;
+    assert!(!options_highlight(&app)?.highlight_delete_enabled);
+    assert!(app.dump_model()?.submitted_notification_commands.is_empty());
+
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.dump_model()?.submitted_notification_commands,
+        [
+            SubmittedNotificationCommand::AddHighlightWord {
+                word: "build".to_owned()
+            },
+            SubmittedNotificationCommand::AddHighlightWord {
+                word: "release".to_owned()
+            },
+            SubmittedNotificationCommand::RemoveHighlightWord {
+                word: "deploy".to_owned()
+            },
+        ]
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn options_highlight_page_cancel_sends_nothing() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_highlight_words_app()?;
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    unsafe { set_options_text(dialog, OPTIONS_HIGHLIGHT_WORD_ID, "release") };
+    post_options_command(dialog, OPTIONS_HIGHLIGHT_ADD_ID)?;
+    app.wait_for_ui_state("release added", Duration::from_secs(5), |ui_state| {
+        ui_state.options_dialog.as_ref().is_some_and(|options| {
+            options.highlight_items == ["deploy", "build (notify only)", "release"]
+        })
+    })?;
+    post_options_command(dialog, IDCANCEL)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(app.dump_model()?.submitted_notification_commands.is_empty());
+
+    // The next opening starts from the server's list again.
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    assert_eq!(
+        options_highlight(&app)?.highlight_items,
+        ["deploy", "build (notify only)"]
+    );
+    // OK with no highlight changes sends nothing either.
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(app.dump_model()?.submitted_notification_commands.is_empty());
+    assert_eq!(app.dump_ui_state()?.status_bar.text, "options saved");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn options_highlight_page_is_greyed_while_signed_out() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    let options = show_options_highlight_page(&app, dialog)?;
+    assert_eq!(options.highlight_items, Vec::<String>::new());
+    assert!(!options.highlight_controls_enabled);
+    assert!(!options.highlight_delete_enabled);
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_HIGHLIGHT_NOTE_ID)) },
+        "Connect to edit highlight words."
+    );
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(app.dump_model()?.submitted_notification_commands.is_empty());
+
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

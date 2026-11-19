@@ -1235,6 +1235,13 @@ pub struct UiOptionsDialog {
     pub heading: String,
     /// The ids of the shown page's controls.
     pub visible_controls: Vec<u16>,
+    /// The Highlight page's list, top to bottom.
+    pub highlight_items: Vec<String>,
+    /// Whether the Highlight page's list, word box and Add are enabled
+    /// (signed in).
+    pub highlight_controls_enabled: bool,
+    /// Whether the Highlight page's Delete is enabled (an item selected).
+    pub highlight_delete_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,6 +4,8 @@
 //! The pages hold mirx's settings under the categories mIRC files them
 //! under; `options_dialog` shows them.
 
+use mirx_core::{HighlightWord, validate_highlight_word};
+
 use super::settings::{ConnectSetting, Settings, parse_button_width};
 use super::timestamp::TimestampFormat;
 
@@ -11,10 +13,11 @@ use super::timestamp::TimestampFormat;
 pub(super) enum OptionsPage {
     ConnectOptions,
     IrcMessages,
+    IrcHighlight,
     Display,
 }
 
-use OptionsPage::{ConnectOptions, Display, IrcMessages};
+use OptionsPage::{ConnectOptions, Display, IrcHighlight, IrcMessages};
 
 /// The tree, in order: (label, depth, page). A category without a page of
 /// its own shows its first child's.
@@ -23,6 +26,7 @@ pub(super) const OPTIONS_TREE: &[(&str, u8, OptionsPage)] = &[
     ("Options", 1, ConnectOptions),
     ("IRC", 0, IrcMessages),
     ("Messages", 1, IrcMessages),
+    ("Highlight", 1, IrcHighlight),
     ("Display", 0, Display),
 ];
 
@@ -127,6 +131,110 @@ impl OptionsForm {
     }
 }
 
+/// The words typed into the Highlight page's box, which takes several at
+/// once as mIRC's does: `deploy, build, *help*`. Each must be a valid
+/// highlight word, as the core checks.
+pub(super) fn parse_highlight_input(input: &str) -> Result<Vec<String>, String> {
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            validate_highlight_word(word)
+                .map(|()| word.to_owned())
+                .map_err(|reason| format!("Highlight \"{word}\": {reason}"))
+        })
+        .collect()
+}
+
+/// Adds words to the list as highlighting ones: a word already listed
+/// highlights from now on, a new one goes at the end.
+pub(super) fn add_highlight_words(list: &mut Vec<HighlightWord>, words: Vec<String>) {
+    for word in words {
+        match list.iter_mut().find(|listed| listed.word == word) {
+            Some(listed) => listed.highlights = true,
+            None => list.push(HighlightWord {
+                word,
+                highlights: true,
+            }),
+        }
+    }
+}
+
+/// What OK sends to the server for the Highlight page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct HighlightChanges {
+    pub(super) add: Vec<String>,
+    pub(super) remove: Vec<String>,
+}
+
+/// The requests that turn the server's list into the edited one, in list
+/// order: every edited highlighting word the server does not highlight
+/// yet, and every server word the edit deleted.
+pub(super) fn highlight_word_changes(
+    current: &[HighlightWord],
+    edited: &[HighlightWord],
+) -> HighlightChanges {
+    HighlightChanges {
+        add: edited
+            .iter()
+            .filter(|word| word.highlights && !current.contains(word))
+            .map(|word| word.word.clone())
+            .collect(),
+        remove: current
+            .iter()
+            .filter(|word| !edited.iter().any(|edited| edited.word == word.word))
+            .map(|word| word.word.clone())
+            .collect(),
+    }
+}
+
+/// A list item's text: the word, marked when it only notifies, as words
+/// other clients add do; mirx colours only the highlighting ones.
+pub(super) fn highlight_item_text(word: &HighlightWord) -> String {
+    if word.highlights {
+        word.word.clone()
+    } else {
+        format!("{} (notify only)", word.word)
+    }
+}
+
+/// The Highlight page's list as edited, next to the server's list it
+/// started from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HighlightList {
+    current: Vec<HighlightWord>,
+    edited: Vec<HighlightWord>,
+}
+
+impl HighlightList {
+    pub(super) fn new(current: Vec<HighlightWord>) -> Self {
+        Self {
+            edited: current.clone(),
+            current,
+        }
+    }
+
+    pub(super) fn items(&self) -> Vec<String> {
+        self.edited.iter().map(highlight_item_text).collect()
+    }
+
+    /// Adds what was typed, or says what is wrong with it and changes
+    /// nothing.
+    pub(super) fn add(&mut self, input: &str) -> Result<(), String> {
+        add_highlight_words(&mut self.edited, parse_highlight_input(input)?);
+        Ok(())
+    }
+
+    pub(super) fn delete(&mut self, index: usize) {
+        self.edited.remove(index);
+    }
+
+    pub(super) fn changes(&self) -> HighlightChanges {
+        highlight_word_changes(&self.current, &self.edited)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::settings::{ButtonWidth, FontSetting};
@@ -151,14 +259,17 @@ mod tests {
                 "Connect/Options",
                 "IRC",
                 "IRC/Messages",
+                "IRC/Highlight",
                 "Display"
             ]
         );
         assert_eq!(page_tree_index(ConnectOptions), 1);
         assert_eq!(page_tree_index(IrcMessages), 3);
-        assert_eq!(page_tree_index(Display), 4);
+        assert_eq!(page_tree_index(IrcHighlight), 4);
+        assert_eq!(page_tree_index(Display), 5);
         assert_eq!(page_heading(ConnectOptions), "Connect > Options");
         assert_eq!(page_heading(IrcMessages), "IRC > Messages");
+        assert_eq!(page_heading(IrcHighlight), "IRC > Highlight");
         assert_eq!(page_heading(Display), "Display");
         assert_eq!(FIRST_PAGE, ConnectOptions);
         for field in [
@@ -246,6 +357,99 @@ mod tests {
         assert_eq!(
             form.apply(&current).unwrap_err().field,
             OptionsField::TimestampFormat
+        );
+    }
+
+    fn word(word: &str, highlights: bool) -> HighlightWord {
+        HighlightWord {
+            word: word.to_owned(),
+            highlights,
+        }
+    }
+
+    #[test]
+    fn highlight_input_takes_comma_separated_words() {
+        assert_eq!(
+            parse_highlight_input(" deploy, build ,, *help*, release day,"),
+            Ok(vec![
+                "deploy".to_owned(),
+                "build".to_owned(),
+                "*help*".to_owned(),
+                "release day".to_owned(),
+            ])
+        );
+        assert_eq!(parse_highlight_input("  "), Ok(Vec::new()));
+        assert_eq!(
+            parse_highlight_input("deploy, a/b"),
+            Err(r#"Highlight "a/b": a highlight word cannot contain / or \"#.to_owned())
+        );
+        assert_eq!(
+            parse_highlight_input(".m.rule"),
+            Err(r#"Highlight ".m.rule": a highlight word cannot start with ."#.to_owned())
+        );
+    }
+
+    #[test]
+    fn adding_a_listed_word_makes_it_highlight_and_a_new_one_goes_last() {
+        let mut list = vec![word("deploy", true), word("build", false)];
+        add_highlight_words(&mut list, vec!["release".to_owned(), "build".to_owned()]);
+        assert_eq!(
+            list,
+            [
+                word("deploy", true),
+                word("build", true),
+                word("release", true)
+            ]
+        );
+    }
+
+    #[test]
+    fn highlight_changes_add_new_and_upgraded_words_and_remove_deleted_ones() {
+        let current = [
+            word("deploy", true),
+            word("build", false),
+            word("ci", false),
+        ];
+        assert_eq!(
+            highlight_word_changes(&current, &current),
+            HighlightChanges::default()
+        );
+        assert_eq!(
+            highlight_word_changes(
+                &current,
+                &[
+                    word("build", true),
+                    word("ci", false),
+                    word("release", true)
+                ]
+            ),
+            HighlightChanges {
+                add: vec!["build".to_owned(), "release".to_owned()],
+                remove: vec!["deploy".to_owned()],
+            }
+        );
+    }
+
+    #[test]
+    fn the_highlight_list_marks_notify_only_words_and_tracks_edits() {
+        let mut list = HighlightList::new(vec![word("deploy", true), word("build", false)]);
+        assert_eq!(list.items(), ["deploy", "build (notify only)"]);
+
+        assert_eq!(
+            list.add("a/b"),
+            Err(r#"Highlight "a/b": a highlight word cannot contain / or \"#.to_owned())
+        );
+        assert_eq!(list.items(), ["deploy", "build (notify only)"]);
+
+        list.add("release, build").unwrap();
+        assert_eq!(list.items(), ["deploy", "build", "release"]);
+        list.delete(0);
+        assert_eq!(
+            list.changes(),
+            HighlightChanges {
+                add: vec!["build".to_owned(), "release".to_owned()],
+                remove: vec!["deploy".to_owned()],
+            }
         );
     }
 }

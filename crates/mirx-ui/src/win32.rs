@@ -8740,13 +8740,23 @@ unsafe fn show_single_field_dialog(
 }
 
 /// Tools > Options... (Alt+O): saves what OK saves in one write, then
-/// applies only what changed.
+/// applies only what changed, and sends the highlight words' changes to the
+/// server, whose push rules echo back as the new list.
 unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
-    let dialog = options_dialog::OptionsDialog::open(hwnd, state_ref(hwnd).settings.settings())?;
+    let state = state_ref(hwnd);
+    let dialog = options_dialog::OptionsDialog::open(
+        hwnd,
+        state.settings.settings(),
+        state.model.highlight_words.as_deref(),
+    )?;
     state_mut(hwnd).options_dialog = Some(dialog.hwnd());
     let saved = dialog.run();
     state_mut(hwnd).options_dialog = None;
-    let Some(new) = saved else {
+    let Some(options_dialog::OptionsResult {
+        settings: new,
+        highlight_changes,
+    }) = saved
+    else {
         return Ok(());
     };
     let old = state_ref(hwnd).settings.settings().clone();
@@ -8763,7 +8773,26 @@ unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
         );
         layout_controls(hwnd);
     }
-    set_local_command_status(hwnd, "options saved".to_owned())
+    let commands = highlight_changes
+        .add
+        .into_iter()
+        .map(Command::AddHighlightWord)
+        .chain(
+            highlight_changes
+                .remove
+                .into_iter()
+                .map(Command::RemoveHighlightWord),
+        )
+        .collect::<Vec<_>>();
+    let status = if commands.is_empty() {
+        "options saved"
+    } else {
+        "options saved; highlight words sent to the server"
+    };
+    for command in commands {
+        enqueue_command(state_mut(hwnd), command)?;
+    }
+    set_local_command_status(hwnd, status.to_owned())
 }
 
 /// Help > About mirx: modal over `owner`; OK, Enter and Esc close it.

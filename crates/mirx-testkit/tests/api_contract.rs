@@ -922,6 +922,9 @@ fn data_models_round_trip_through_json() {
             selected: "Display".to_owned(),
             heading: "Display".to_owned(),
             visible_controls: vec![6301],
+            highlight_items: vec!["build (notify only)".to_owned()],
+            highlight_controls_enabled: true,
+            highlight_delete_enabled: true,
         }),
         active_timeline: Some(UiActiveTimeline {
             top_line: 0,
@@ -1185,6 +1188,9 @@ fn data_models_round_trip_through_json() {
                 "selected": "Display",
                 "heading": "Display",
                 "visible_controls": [6301],
+                "highlight_items": ["build (notify only)"],
+                "highlight_controls_enabled": true,
+                "highlight_delete_enabled": true,
             },
             "active_timeline": {
                 "top_line": 0,
