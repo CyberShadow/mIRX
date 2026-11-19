@@ -129,6 +129,8 @@ const COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU: u32 = 55;
 #[cfg(windows)]
 const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
 #[cfg(windows)]
+const COMMAND_ID_SELECT_NAVIGATION_VIEW: u32 = 57;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -1199,48 +1201,64 @@ pub struct UiRoomReadState {
 #[serde(deny_unknown_fields)]
 pub struct NavigationNode {
     pub text: String,
-    /// `None` for nodes without activity and for group labels.
+    /// The view the item stands for; `None` for a folder.
+    pub view: Option<ViewIdentity>,
+    /// `None` for nodes without activity and for folders.
     pub activity: Option<ViewActivityLevel>,
     pub children: Vec<NavigationNode>,
 }
 
 impl NavigationNode {
-    pub fn find_by_exact_text_path<'a>(&'a self, path: &[&str]) -> Option<&'a NavigationNode> {
-        find_navigation_node_by_path(self, path, |text, segment| text == segment)
+    /// Every node standing for `view`, in tree order. A room listed under
+    /// two spaces has two.
+    pub fn find_view(&self, view: &ViewIdentity) -> Vec<&NavigationNode> {
+        let mut found = Vec::new();
+        self.collect_view(view, &mut found);
+        found
     }
 
-    pub fn find_by_substring_path<'a>(&'a self, path: &[&str]) -> Option<&'a NavigationNode> {
-        find_navigation_node_by_path(self, path, |text, segment| text.contains(segment))
-    }
-}
-
-fn find_navigation_node_by_path<'a, F>(
-    node: &'a NavigationNode,
-    path: &[&str],
-    matches: F,
-) -> Option<&'a NavigationNode>
-where
-    F: Copy + Fn(&str, &str) -> bool,
-{
-    let (segment, remaining) = path.split_first()?;
-    if !matches(&node.text, segment) {
-        return None;
-    }
-    if remaining.is_empty() {
-        return Some(node);
-    }
-
-    let mut found = None;
-    for child in &node.children {
-        if let Some(match_node) = find_navigation_node_by_path(child, remaining, matches) {
-            if found.is_some() {
-                return None;
-            }
-            found = Some(match_node);
+    fn collect_view<'a>(&'a self, view: &ViewIdentity, found: &mut Vec<&'a NavigationNode>) {
+        if self.view.as_ref() == Some(view) {
+            found.push(self);
+        }
+        for child in &self.children {
+            child.collect_view(view, found);
         }
     }
 
-    found
+    /// The paths of every node standing for `view`, in tree order, with the
+    /// sibling indexes `select_navigation_path` needs to tell duplicate
+    /// labels apart.
+    pub fn view_paths(&self, view: &ViewIdentity) -> Vec<Vec<NavigationPathSegment>> {
+        let mut paths = Vec::new();
+        let mut prefix = vec![NavigationPathSegment::first(self.text.clone())];
+        self.collect_view_paths(view, &mut prefix, &mut paths);
+        paths
+    }
+
+    fn collect_view_paths(
+        &self,
+        view: &ViewIdentity,
+        prefix: &mut Vec<NavigationPathSegment>,
+        paths: &mut Vec<Vec<NavigationPathSegment>>,
+    ) {
+        if self.view.as_ref() == Some(view) {
+            paths.push(prefix.clone());
+        }
+        for (index, child) in self.children.iter().enumerate() {
+            let same_text_index = self.children[..index]
+                .iter()
+                .filter(|sibling| sibling.text == child.text)
+                .count();
+            prefix.push(NavigationPathSegment {
+                text: child.text.clone(),
+                same_text_index: u32::try_from(same_text_index)
+                    .expect("sibling count must fit in u32"),
+            });
+            child.collect_view_paths(view, prefix, paths);
+            prefix.pop();
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1737,12 +1755,18 @@ impl MirxApp {
         self.inner.select_navigation_path(path)
     }
 
-    pub fn select_navigation_labels(&self, path: &[&str]) -> Result<(), TestkitError> {
-        self.inner.select_navigation_labels(path)
+    /// Selects the view's (first) treebar item, as a click on it does.
+    pub fn select_navigation_view(&self, view: &ViewIdentity) -> Result<(), TestkitError> {
+        self.inner.select_navigation_view(view)
     }
 
     pub fn selected_navigation_path(&self) -> Result<Vec<NavigationPathSegment>, TestkitError> {
         self.inner.selected_navigation_path()
+    }
+
+    /// The view of the selected treebar item; `None` for a folder.
+    pub fn selected_navigation_view(&self) -> Result<Option<ViewIdentity>, TestkitError> {
+        self.inner.selected_navigation_view()
     }
 
     pub fn select_status_view(&self) -> Result<(), TestkitError> {
@@ -2236,6 +2260,7 @@ struct AcceptedResponse {
 #[serde(deny_unknown_fields)]
 struct SelectedNavigationPathResponse {
     path: Vec<NavigationPathSegment>,
+    view: Option<ViewIdentity>,
 }
 
 #[cfg(windows)]
@@ -2532,7 +2557,10 @@ mod imp {
             ))
         }
 
-        pub(crate) fn select_navigation_labels(&self, _path: &[&str]) -> Result<(), TestkitError> {
+        pub(crate) fn select_navigation_view(
+            &self,
+            _view: &ViewIdentity,
+        ) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
             ))
@@ -2541,6 +2569,14 @@ mod imp {
         pub(crate) fn selected_navigation_path(
             &self,
         ) -> Result<Vec<NavigationPathSegment>, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn selected_navigation_view(
+            &self,
+        ) -> Result<Option<ViewIdentity>, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
             ))
@@ -3222,12 +3258,15 @@ mod imp {
             }
         }
 
-        pub(crate) fn select_navigation_labels(&self, path: &[&str]) -> Result<(), TestkitError> {
-            let path = path
-                .iter()
-                .map(|segment| NavigationPathSegment::first(*segment))
-                .collect::<Vec<_>>();
-            self.select_navigation_path(&path)
+        pub(crate) fn select_navigation_view(
+            &self,
+            view: &ViewIdentity,
+        ) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_SELECT_NAVIGATION_VIEW,
+                SelectViewArgs { view: view.clone() },
+                "SELECT_NAVIGATION_VIEW",
+            )
         }
 
         pub(crate) fn selected_navigation_path(
@@ -3236,6 +3275,14 @@ mod imp {
             let response: SelectedNavigationPathResponse =
                 self.send_command(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, EmptyArgs {})?;
             Ok(response.path)
+        }
+
+        pub(crate) fn selected_navigation_view(
+            &self,
+        ) -> Result<Option<ViewIdentity>, TestkitError> {
+            let response: SelectedNavigationPathResponse =
+                self.send_command(COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, EmptyArgs {})?;
+            Ok(response.view)
         }
 
         pub(crate) fn select_status_view(&self) -> Result<(), TestkitError> {

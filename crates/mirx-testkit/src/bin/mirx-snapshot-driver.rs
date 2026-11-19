@@ -51,7 +51,7 @@ mod cli {
         pub(crate) expect_navigation_texts: Vec<String>,
         pub(crate) expect_no_navigation_texts: Vec<String>,
         pub(crate) expect_navigation_activity: Vec<NavigationActivityExpectation>,
-        pub(crate) expect_no_navigation_activity: Vec<String>,
+        pub(crate) expect_no_navigation_activity: Vec<ViewIdentity>,
         pub(crate) expect_direct_rooms: Vec<String>,
         pub(crate) expect_room_tags: Vec<RoomTagExpectation>,
         pub(crate) expect_room_read_targets: Vec<RoomReadTargetExpectation>,
@@ -121,7 +121,7 @@ mod cli {
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(crate) struct NavigationActivityExpectation {
-        pub(crate) path_or_label: String,
+        pub(crate) identity: ViewIdentity,
         pub(crate) level: ViewActivityLevel,
     }
 
@@ -512,21 +512,28 @@ mod cli {
                     let value = args.next().ok_or_else(|| {
                         "missing value for --expect-navigation-activity".to_owned()
                     })?;
-                    let (path_or_label, level) =
+                    let (identity, level) =
                         parse_activity_expectation("--expect-navigation-activity", &value)?;
                     config
                         .expect_navigation_activity
                         .push(NavigationActivityExpectation {
-                            path_or_label: path_or_label.to_owned(),
+                            identity: parse_view_identity_arg(
+                                "--expect-navigation-activity",
+                                identity,
+                            )?,
                             level,
                         });
                 }
                 "--expect-no-navigation-activity" => {
+                    let value = args.next().ok_or_else(|| {
+                        "missing value for --expect-no-navigation-activity".to_owned()
+                    })?;
                     config
                         .expect_no_navigation_activity
-                        .push(args.next().ok_or_else(|| {
-                            "missing value for --expect-no-navigation-activity".to_owned()
-                        })?);
+                        .push(parse_view_identity_arg(
+                            "--expect-no-navigation-activity",
+                            &value,
+                        )?);
                 }
                 "--expect-mdi-placement" => {
                     let value = args
@@ -600,8 +607,8 @@ mod cli {
             "  --expect-no-switchbar-activity <identity>",
             "  --expect-navigation-text <substring>",
             "  --expect-no-navigation-text <substring>",
-            "  --expect-navigation-activity <path-or-label>::<event|message|highlight>",
-            "  --expect-no-navigation-activity <path-or-label>",
+            "  --expect-navigation-activity <identity>::<event|message|highlight>",
+            "  --expect-no-navigation-activity <identity>",
             "  --expect-mdi-placement <identity>::<state>",
             "  --expect-mdi-title <identity>::<caption>",
         ]
@@ -875,10 +882,11 @@ mod cli {
                 "--expect-room-unread <room_id>::<num_unread>::<num_notifications>::<num_mentions>::<marked_unread>"
             ));
             assert!(usage().contains("thread:<room_id>|<thread_root_event_id>"));
-            assert!(usage().contains(
-                "--expect-navigation-activity <path-or-label>::<event|message|highlight>"
-            ));
-            assert!(usage().contains("--expect-no-navigation-activity <path-or-label>"));
+            assert!(
+                usage()
+                    .contains("--expect-navigation-activity <identity>::<event|message|highlight>")
+            );
+            assert!(usage().contains("--expect-no-navigation-activity <identity>"));
         }
 
         #[test]
@@ -1206,9 +1214,9 @@ mod cli {
                     "--expect-no-navigation-text",
                     "plain",
                     "--expect-navigation-activity",
-                    "Alpha/root msg::event",
+                    "thread:!alpha:example|$root::event",
                     "--expect-no-navigation-activity",
-                    "Beta",
+                    "room:!beta:example",
                 ]
                 .into_iter()
                 .map(str::to_owned),
@@ -1297,13 +1305,18 @@ mod cli {
             assert_eq!(
                 config.expect_navigation_activity,
                 vec![NavigationActivityExpectation {
-                    path_or_label: "Alpha/root msg".to_owned(),
+                    identity: ViewIdentity::Thread {
+                        room_id: "!alpha:example".to_owned(),
+                        thread_root_event_id: "$root".to_owned(),
+                    },
                     level: ViewActivityLevel::Event,
                 }]
             );
             assert_eq!(
                 config.expect_no_navigation_activity,
-                vec!["Beta".to_owned()]
+                vec![ViewIdentity::Room {
+                    room_id: "!beta:example".to_owned(),
+                }]
             );
         }
 
@@ -1356,7 +1369,7 @@ mod cli {
             for (flag, value) in [
                 ("--expect-switchbar-activity", "room:!ops:example"),
                 ("--expect-switchbar-activity", "room:!ops:example::loud"),
-                ("--expect-navigation-activity", "Beta"),
+                ("--expect-navigation-activity", "room:!beta:example"),
             ] {
                 let error = parse_args([flag, value].into_iter().map(str::to_owned))
                     .err()
@@ -1696,99 +1709,6 @@ mod cli {
 }
 
 #[cfg(any(windows, test))]
-fn find_navigation_node_by_path_or_label<'a>(
-    root: &'a mirx_testkit::NavigationNode,
-    path_or_label: &str,
-) -> Option<&'a mirx_testkit::NavigationNode> {
-    let path = path_or_label
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    match path.len() {
-        0 => None,
-        1 => find_unique_navigation_substring_match(root, path[0]),
-        _ => find_unique_navigation_path_match(root, &path, |text, segment| text == segment)
-            .or_else(|| {
-                find_unique_navigation_path_match(root, &path, |text, segment| {
-                    text.contains(segment)
-                })
-            }),
-    }
-}
-
-#[cfg(any(windows, test))]
-fn find_unique_navigation_substring_match<'a>(
-    node: &'a mirx_testkit::NavigationNode,
-    substring: &str,
-) -> Option<&'a mirx_testkit::NavigationNode> {
-    let mut matches = Vec::new();
-    collect_navigation_substring_matches(node, substring, &mut matches);
-    if matches.len() == 1 {
-        matches.pop()
-    } else {
-        None
-    }
-}
-
-#[cfg(any(windows, test))]
-fn collect_navigation_substring_matches<'a>(
-    node: &'a mirx_testkit::NavigationNode,
-    substring: &str,
-    matches: &mut Vec<&'a mirx_testkit::NavigationNode>,
-) {
-    if node.text.contains(substring) {
-        matches.push(node);
-    }
-    for child in &node.children {
-        collect_navigation_substring_matches(child, substring, matches);
-    }
-}
-
-#[cfg(any(windows, test))]
-fn find_unique_navigation_path_match<'a, F>(
-    root: &'a mirx_testkit::NavigationNode,
-    path: &[&str],
-    segment_matches: F,
-) -> Option<&'a mirx_testkit::NavigationNode>
-where
-    F: Copy + Fn(&str, &str) -> bool,
-{
-    let mut matches = Vec::new();
-    collect_navigation_path_matches(root, path, segment_matches, &mut matches);
-    if matches.len() == 1 {
-        matches.pop()
-    } else {
-        None
-    }
-}
-
-#[cfg(any(windows, test))]
-fn collect_navigation_path_matches<'a, F>(
-    node: &'a mirx_testkit::NavigationNode,
-    path: &[&str],
-    segment_matches: F,
-    matches: &mut Vec<&'a mirx_testkit::NavigationNode>,
-) where
-    F: Copy + Fn(&str, &str) -> bool,
-{
-    if let Some((segment, remaining)) = path.split_first()
-        && segment_matches(&node.text, segment)
-    {
-        if remaining.is_empty() {
-            matches.push(node);
-        } else {
-            for child in &node.children {
-                collect_navigation_path_matches(child, remaining, segment_matches, matches);
-            }
-        }
-    }
-
-    for child in &node.children {
-        collect_navigation_path_matches(child, path, segment_matches, matches);
-    }
-}
-
-#[cfg(any(windows, test))]
 fn assert_room_membership(
     rooms: &[mirx_testkit::Room],
     room_id: &str,
@@ -1823,68 +1743,6 @@ fn format_room_membership(membership: &mirx_core::RoomMembership) -> &'static st
     match membership {
         mirx_core::RoomMembership::Join => "join",
         mirx_core::RoomMembership::Invite => "invite",
-    }
-}
-
-#[cfg(test)]
-mod navigation_lookup_tests {
-    use super::find_navigation_node_by_path_or_label;
-    use mirx_testkit::NavigationNode;
-
-    fn nav(text: &str, children: Vec<NavigationNode>) -> NavigationNode {
-        NavigationNode {
-            text: text.to_owned(),
-            activity: None,
-            children,
-        }
-    }
-
-    fn sample_navigation() -> NavigationNode {
-        nav(
-            "mirx",
-            vec![
-                nav("status", vec![]),
-                nav(
-                    "rooms: 2",
-                    vec![
-                        nav("Alpha", vec![nav("alpha root", vec![])]),
-                        nav("Beta", vec![]),
-                    ],
-                ),
-            ],
-        )
-    }
-
-    #[test]
-    fn navigation_lookup_finds_unique_bare_label_anywhere_in_tree() {
-        let navigation = sample_navigation();
-
-        assert_eq!(
-            find_navigation_node_by_path_or_label(&navigation, "Beta")
-                .map(|node| node.text.as_str()),
-            Some("Beta")
-        );
-    }
-
-    #[test]
-    fn navigation_lookup_finds_root_omitted_path() {
-        let navigation = sample_navigation();
-
-        assert_eq!(
-            find_navigation_node_by_path_or_label(&navigation, "Alpha/alpha root")
-                .map(|node| node.text.as_str()),
-            Some("alpha root")
-        );
-    }
-
-    #[test]
-    fn navigation_lookup_rejects_ambiguous_bare_label() {
-        let navigation = nav(
-            "mirx",
-            vec![nav("Beta", vec![]), nav("Beta thread", vec![])],
-        );
-
-        assert!(find_navigation_node_by_path_or_label(&navigation, "Beta").is_none());
     }
 }
 
@@ -2592,45 +2450,44 @@ mod windows_main {
             }
 
             for expectation in &config.expect_navigation_activity {
-                let path_or_label = &expectation.path_or_label;
-                let node = crate::find_navigation_node_by_path_or_label(
-                    &ui_state.navigation,
-                    path_or_label,
-                )
-                .ok_or_else(|| {
-                    format!(
-                        "navigation activity assertion failed: missing unique node matching {:?}",
-                        path_or_label
-                    )
-                })?;
-                if node.activity != Some(expectation.level) {
+                let identity = format_view_identity(&expectation.identity);
+                let nodes = ui_state.navigation.find_view(&expectation.identity);
+                if nodes.is_empty() {
                     return Err(format!(
-                        "navigation activity assertion failed: expected {:?} to have {:?} activity, found {:?}",
-                        path_or_label, expectation.level, node.activity
+                        "navigation activity assertion failed: no node for {identity}"
                     ));
                 }
+                for node in nodes {
+                    if node.activity != Some(expectation.level) {
+                        return Err(format!(
+                            "navigation activity assertion failed: expected {identity} ({:?}) to have {:?} activity, found {:?}",
+                            node.text, expectation.level, node.activity
+                        ));
+                    }
+                }
                 println!(
-                    "PASS navigation activity {:?} {:?}",
-                    path_or_label, expectation.level
+                    "PASS navigation activity {identity} {:?}",
+                    expectation.level
                 );
             }
 
-            for path_or_label in &config.expect_no_navigation_activity {
-                let node =
-                    crate::find_navigation_node_by_path_or_label(&ui_state.navigation, path_or_label)
-                        .ok_or_else(|| {
-                            format!(
-                                "navigation no-activity assertion failed: missing unique node matching {:?}",
-                                path_or_label
-                            )
-                        })?;
-                if let Some(level) = node.activity {
+            for view in &config.expect_no_navigation_activity {
+                let identity = format_view_identity(view);
+                let nodes = ui_state.navigation.find_view(view);
+                if nodes.is_empty() {
                     return Err(format!(
-                        "navigation no-activity assertion failed: expected {:?} to have no activity, found {level:?}",
-                        path_or_label
+                        "navigation no-activity assertion failed: no node for {identity}"
                     ));
                 }
-                println!("PASS navigation no activity {:?}", path_or_label);
+                for node in nodes {
+                    if let Some(level) = node.activity {
+                        return Err(format!(
+                            "navigation no-activity assertion failed: expected {identity} ({:?}) to have no activity, found {level:?}",
+                            node.text
+                        ));
+                    }
+                }
+                println!("PASS navigation no activity {identity}");
             }
 
             for expected_room_id in &config.expect_direct_rooms {

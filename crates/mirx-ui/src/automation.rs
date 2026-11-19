@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 29;
+pub(crate) const PROTOCOL_VERSION: u32 = 30;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -72,6 +72,7 @@ pub(crate) const COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU: u32 = 53;
 pub(crate) const COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU: u32 = 54;
 pub(crate) const COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU: u32 = 55;
 pub(crate) const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
+pub(crate) const COMMAND_ID_SELECT_NAVIGATION_VIEW: u32 = 57;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -131,6 +132,7 @@ pub(crate) enum CommandKind {
     OpenSelectedMemberContextMenu,
     ArrangeWindowsViaWindowMenu,
     SetViewWindowState,
+    SelectNavigationView,
 }
 
 impl CommandKind {
@@ -202,6 +204,7 @@ impl CommandKind {
             }
             COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU => Some(Self::ArrangeWindowsViaWindowMenu),
             COMMAND_ID_SET_VIEW_WINDOW_STATE => Some(Self::SetViewWindowState),
+            COMMAND_ID_SELECT_NAVIGATION_VIEW => Some(Self::SelectNavigationView),
             _ => None,
         }
     }
@@ -411,6 +414,11 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: SetViewWindowStateArgs,
     },
+    /// Selects the treebar item of a view, as a click on it does.
+    SelectNavigationView {
+        id: String,
+        args: SelectViewArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -482,6 +490,7 @@ impl ParsedCommand {
             }
             Self::ArrangeWindowsViaWindowMenu { .. } => CommandKind::ArrangeWindowsViaWindowMenu,
             Self::SetViewWindowState { .. } => CommandKind::SetViewWindowState,
+            Self::SelectNavigationView { .. } => CommandKind::SelectNavigationView,
         }
     }
 }
@@ -907,6 +916,8 @@ pub(crate) struct NavigationPathSegment {
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectedNavigationPathResponse {
     pub(crate) path: Vec<NavigationPathSegment>,
+    /// The view the selected item stands for; `None` for a folder.
+    pub(crate) view: Option<ViewIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1009,7 +1020,9 @@ pub(crate) struct UiRoomReadState {
 #[serde(deny_unknown_fields)]
 pub(crate) struct NavigationNode {
     pub(crate) text: String,
-    /// `None` for nodes without activity and for group labels.
+    /// The view the item stands for; `None` for a folder.
+    pub(crate) view: Option<ViewIdentity>,
+    /// `None` for nodes without activity and for folders.
     pub(crate) activity: Option<ViewActivityLevel>,
     pub(crate) children: Vec<NavigationNode>,
 }
@@ -2318,6 +2331,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SetViewWindowStateArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::SelectNavigationView => Ok(ParsedCommand::SelectNavigationView {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SelectViewArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -2589,26 +2606,26 @@ mod tests {
         COMMAND_ID_REJECT_VERIFICATION_SAS, COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU,
         COMMAND_ID_RESTORE_SAVED_SESSION, COMMAND_ID_RESTORE_SESSION,
         COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU, COMMAND_ID_SELECT_MEMBER,
-        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_ROOM,
-        COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
-        COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
-        COMMAND_ID_SET_VIEW_WINDOW_STATE, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
-        COMMAND_ID_WAIT_IDLE, CommandKind, ComposeKey, ComposeTextResponse, ContextMenuCommand,
-        DumpE2eeRecoverySetupResult, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
-        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
-        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
-        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
-        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
-        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
-        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
-        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
-        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand,
-        DumpSubmittedRedactionCommand, DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget,
-        DumpSubmittedRoomTopicCommand, DumpSubmittedSetupRecoveryCommand,
-        DumpUnsupportedRoomMessageActivity, FindActiveViewArgs, FindActiveViewResponse,
-        GetVersionResponse, LifecycleState, ListRoomsResponse, LoadEventsArgs, LoginArgs,
-        MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState, NavigationNode,
-        NavigationPathSegment, NoArgs, OpenMemberContextMenuArgs,
+        COMMAND_ID_SELECT_NAVIGATION_PATH, COMMAND_ID_SELECT_NAVIGATION_VIEW,
+        COMMAND_ID_SELECT_ROOM, COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW,
+        COMMAND_ID_SEND_COMPOSE_KEY, COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT,
+        COMMAND_ID_SET_COMPOSE_TEXT, COMMAND_ID_SET_VIEW_WINDOW_STATE,
+        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
+        ComposeKey, ComposeTextResponse, ContextMenuCommand, DumpE2eeRecoverySetupResult,
+        DumpModel, DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind,
+        DumpRoomActivityRelation, DumpRoomActivityResponse, DumpRoomAudioActivity,
+        DumpRoomAudioInfo, DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey,
+        DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo,
+        DumpRoomMediaSource, DumpRoomMessageActivity, DumpRoomMessageActivityLine,
+        DumpRoomMessageSendState, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
+        DumpRoomRedactedActivity, DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent,
+        DumpRoomVideoActivity, DumpRoomVideoInfo, DumpSubmittedEditCommand,
+        DumpSubmittedHistoryCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
+        DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
+        DumpSubmittedSetupRecoveryCommand, DumpUnsupportedRoomMessageActivity, FindActiveViewArgs,
+        FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
+        LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
+        MdiWindowState, NavigationNode, NavigationPathSegment, NoArgs, OpenMemberContextMenuArgs,
         OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION, ParsedCommand, PongResponse,
         RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs, RoomMemberView, SelectMemberArgs,
         SelectNavigationPathArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
@@ -2698,8 +2715,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_29() {
-        assert_eq!(PROTOCOL_VERSION, 29);
+    fn protocol_version_is_30() {
+        assert_eq!(PROTOCOL_VERSION, 30);
     }
 
     #[test]
@@ -2913,7 +2930,11 @@ mod tests {
             Some(CommandKind::SetViewWindowState)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SET_VIEW_WINDOW_STATE + 1),
+            CommandKind::from_id(COMMAND_ID_SELECT_NAVIGATION_VIEW),
+            Some(CommandKind::SelectNavigationView)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SELECT_NAVIGATION_VIEW + 1),
             None
         );
     }
@@ -4006,6 +4027,35 @@ mod tests {
     }
 
     #[test]
+    fn select_navigation_view_args_round_trip() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_NAVIGATION_VIEW,
+                br#"{"id":"select-nav-view","args":{"view":{"kind":"thread","room_id":"!ops:example","thread_root_event_id":"$root:example"}}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SelectNavigationView {
+                id: "select-nav-view".to_owned(),
+                args: SelectViewArgs {
+                    view: ViewIdentity::Thread {
+                        room_id: "!ops:example".to_owned(),
+                        thread_root_event_id: "$root:example".to_owned(),
+                    },
+                },
+            }
+        );
+        for request in [
+            br#"{"id":"select-nav-view","args":{}}"#.as_slice(),
+            br#"{"id":"select-nav-view","args":{"view":{"kind":"status"},"unexpected":true}}"#
+                .as_slice(),
+        ] {
+            let error =
+                parse_command_request(COMMAND_ID_SELECT_NAVIGATION_VIEW, request).unwrap_err();
+            assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
+        }
+    }
+
+    #[test]
     fn login_defaults_device_display_name_when_omitted() {
         assert_eq!(
             parse_command_request(
@@ -4463,7 +4513,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":29,
+                    "protocol_version":30,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -4566,18 +4616,21 @@ mod tests {
                 SelectedNavigationPathResponse {
                     path: vec![
                         NavigationPathSegment {
-                            text: "mirx".to_owned(),
-                            same_text_index: 0,
-                        },
-                        NavigationPathSegment {
-                            text: "rooms: 4".to_owned(),
+                            text: "Status".to_owned(),
                             same_text_index: 0,
                         },
                         NavigationPathSegment {
                             text: "Work".to_owned(),
                             same_text_index: 0,
                         },
+                        NavigationPathSegment {
+                            text: "Shared".to_owned(),
+                            same_text_index: 1,
+                        },
                     ],
+                    view: Some(ViewIdentity::Room {
+                        room_id: "!shared:example".to_owned(),
+                    }),
                 },
             ))
             .unwrap(),
@@ -4586,10 +4639,11 @@ mod tests {
                 "ok":true,
                 "json":{
                     "path":[
-                        {"text":"mirx","same_text_index":0},
-                        {"text":"rooms: 4","same_text_index":0},
-                        {"text":"Work","same_text_index":0}
-                    ]
+                        {"text":"Status","same_text_index":0},
+                        {"text":"Work","same_text_index":0},
+                        {"text":"Shared","same_text_index":1}
+                    ],
+                    "view":{"kind":"room","room_id":"!shared:example"}
                 }
             })
         );
@@ -4847,24 +4901,22 @@ mod tests {
                 "ui",
                 UiState {
                     navigation: NavigationNode {
-                        text: "mirx".to_owned(),
+                        text: "Status".to_owned(),
+                        view: Some(ViewIdentity::Status),
                         activity: None,
-                        children: vec![
-                            NavigationNode {
-                                text: "status".to_owned(),
-                                activity: None,
+                        children: vec![NavigationNode {
+                            text: "Work".to_owned(),
+                            view: None,
+                            activity: None,
+                            children: vec![NavigationNode {
+                                text: "Room".to_owned(),
+                                view: Some(ViewIdentity::Room {
+                                    room_id: "!room:example".to_owned(),
+                                }),
+                                activity: Some(ViewActivityLevel::Message),
                                 children: vec![],
-                            },
-                            NavigationNode {
-                                text: "rooms: 1".to_owned(),
-                                activity: None,
-                                children: vec![NavigationNode {
-                                    text: "Room".to_owned(),
-                                    activity: Some(ViewActivityLevel::Message),
-                                    children: vec![],
-                                }],
-                            },
-                        ],
+                            }],
+                        }],
                     },
                     mdi: MdiState {
                         active: ViewIdentity::Room {
@@ -5001,11 +5053,13 @@ mod tests {
                 "ok":true,
                 "json":{
                     "navigation":{
-                        "text":"mirx",
+                        "text":"Status",
+                        "view":{"kind":"status"},
                         "activity":null,
                         "children":[
-                            {"text":"status","activity":null,"children":[]},
-                            {"text":"rooms: 1","activity":null,"children":[{"text":"Room","activity":"message","children":[]}]}
+                            {"text":"Work","view":null,"activity":null,"children":[
+                                {"text":"Room","view":{"kind":"room","room_id":"!room:example"},"activity":"message","children":[]}
+                            ]}
                         ]
                     },
                     "mdi":{

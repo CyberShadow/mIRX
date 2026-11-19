@@ -642,24 +642,22 @@ fn data_models_round_trip_through_json() {
     };
     let ui_state = UiState {
         navigation: NavigationNode {
-            text: "mirx".to_owned(),
+            text: "Status".to_owned(),
+            view: Some(ViewIdentity::Status),
             activity: None,
-            children: vec![
-                NavigationNode {
-                    text: "status".to_owned(),
-                    activity: None,
+            children: vec![NavigationNode {
+                text: "Work".to_owned(),
+                view: None,
+                activity: None,
+                children: vec![NavigationNode {
+                    text: "Room".to_owned(),
+                    view: Some(ViewIdentity::Room {
+                        room_id: "!room:example".to_owned(),
+                    }),
+                    activity: Some(ViewActivityLevel::Message),
                     children: vec![],
-                },
-                NavigationNode {
-                    text: "rooms: 1".to_owned(),
-                    activity: None,
-                    children: vec![NavigationNode {
-                        text: "Room".to_owned(),
-                        activity: Some(ViewActivityLevel::Message),
-                        children: vec![],
-                    }],
-                },
-            ],
+                }],
+            }],
         },
         mdi: MdiState {
             active: ViewIdentity::Room {
@@ -904,20 +902,18 @@ fn data_models_round_trip_through_json() {
             .expect("deserialize ui state value"),
         serde_json::json!({
             "navigation": {
-                "text": "mirx",
+                "text": "Status",
+                "view": {"kind": "status"},
                 "activity": null,
                 "children": [
                     {
-                        "text": "status",
-                        "activity": null,
-                        "children": [],
-                    },
-                    {
-                        "text": "rooms: 1",
+                        "text": "Work",
+                        "view": null,
                         "activity": null,
                         "children": [
                             {
                                 "text": "Room",
+                                "view": {"kind": "room", "room_id": "!room:example"},
                                 "activity": "message",
                                 "children": [],
                             }
@@ -6068,7 +6064,8 @@ fn room_state_notice_content_rejects_impossible_tagged_combinations() {
 fn switchbar_helpers_find_items_and_active_item() {
     let ui_state = UiState {
         navigation: NavigationNode {
-            text: "mirx".to_owned(),
+            text: "Status".to_owned(),
+            view: Some(ViewIdentity::Status),
             activity: None,
             children: vec![],
         },
@@ -6144,101 +6141,99 @@ fn view_activity_levels_serialize_in_snake_case() {
     );
 }
 
-#[test]
-fn navigation_node_path_helpers_match_unique_paths() {
-    let navigation = NavigationNode {
-        text: "mirx".to_owned(),
-        activity: None,
-        children: vec![NavigationNode {
-            text: "rooms: 1".to_owned(),
-            activity: None,
-            children: vec![NavigationNode {
-                text: "Alpha [query: @alice:example]".to_owned(),
-                activity: Some(ViewActivityLevel::Message),
-                children: vec![NavigationNode {
-                    text: "thread root".to_owned(),
-                    activity: Some(ViewActivityLevel::Message),
-                    children: vec![],
-                }],
-            }],
-        }],
-    };
-
-    assert_eq!(
-        navigation
-            .find_by_exact_text_path(&["mirx", "rooms: 1", "Alpha [query: @alice:example]"])
-            .map(|node| node.text.as_str()),
-        Some("Alpha [query: @alice:example]")
-    );
-    assert_eq!(
-        navigation
-            .find_by_substring_path(&["mirx", "rooms", "Alpha [query", "thread"])
-            .map(|node| node.text.as_str()),
-        Some("thread root")
-    );
+fn room_view(room_id: &str) -> ViewIdentity {
+    ViewIdentity::Room {
+        room_id: room_id.to_owned(),
+    }
 }
 
-#[test]
-fn navigation_node_substring_path_returns_none_for_ambiguous_matches() {
-    let navigation = NavigationNode {
-        text: "mirx".to_owned(),
+fn nav_node(
+    text: &str,
+    view: Option<ViewIdentity>,
+    children: Vec<NavigationNode>,
+) -> NavigationNode {
+    NavigationNode {
+        text: text.to_owned(),
+        view,
         activity: None,
-        children: vec![
-            NavigationNode {
-                text: "rooms: 1".to_owned(),
-                activity: None,
-                children: vec![NavigationNode {
-                    text: "Alpha".to_owned(),
-                    activity: None,
-                    children: vec![],
-                }],
-            },
-            NavigationNode {
-                text: "threads: 1".to_owned(),
-                activity: None,
-                children: vec![NavigationNode {
-                    text: "Alpha thread".to_owned(),
-                    activity: Some(ViewActivityLevel::Message),
-                    children: vec![],
-                }],
-            },
+        children,
+    }
+}
+
+/// `Status` > (`Work` > `Shared`, `Ops`), (`Social` > `Shared`), `Shared`:
+/// one room listed under two spaces, and a different room with its label.
+fn duplicate_view_navigation() -> NavigationNode {
+    nav_node(
+        "Status",
+        Some(ViewIdentity::Status),
+        vec![
+            nav_node(
+                "Work",
+                None,
+                vec![
+                    nav_node("Shared", Some(room_view("!shared:example")), vec![]),
+                    nav_node("Ops", Some(room_view("!ops:example")), vec![]),
+                ],
+            ),
+            nav_node(
+                "Social",
+                None,
+                vec![nav_node(
+                    "Shared",
+                    Some(room_view("!shared:example")),
+                    vec![],
+                )],
+            ),
+            nav_node("Shared", Some(room_view("!other:example")), vec![]),
         ],
-    };
+    )
+}
 
+#[test]
+fn navigation_node_find_view_returns_every_node_of_the_view() {
+    let navigation = duplicate_view_navigation();
+
+    let shared = navigation.find_view(&room_view("!shared:example"));
+    assert_eq!(shared.len(), 2);
+    assert!(shared.iter().all(|node| node.text == "Shared"));
+    assert_eq!(navigation.find_view(&ViewIdentity::Status).len(), 1);
     assert!(
         navigation
-            .find_by_substring_path(&["mirx", "Alpha"])
-            .is_none()
+            .find_view(&room_view("!missing:example"))
+            .is_empty()
     );
 }
 
 #[test]
-fn navigation_node_exact_text_path_returns_none_for_ambiguous_matches() {
-    let navigation = NavigationNode {
-        text: "mirx".to_owned(),
-        activity: None,
-        children: vec![NavigationNode {
-            text: "rooms: 1".to_owned(),
-            activity: None,
-            children: vec![
-                NavigationNode {
-                    text: "Alpha".to_owned(),
-                    activity: None,
-                    children: vec![],
-                },
-                NavigationNode {
-                    text: "Alpha".to_owned(),
-                    activity: Some(ViewActivityLevel::Message),
-                    children: vec![],
-                },
-            ],
-        }],
+fn navigation_node_view_paths_index_duplicate_sibling_labels() {
+    let navigation = duplicate_view_navigation();
+    let segment = |text: &str, same_text_index: u32| NavigationPathSegment {
+        text: text.to_owned(),
+        same_text_index,
     };
 
-    assert!(
-        navigation
-            .find_by_exact_text_path(&["mirx", "rooms: 1", "Alpha"])
-            .is_none()
+    assert_eq!(
+        navigation.view_paths(&room_view("!shared:example")),
+        vec![
+            vec![
+                segment("Status", 0),
+                segment("Work", 0),
+                segment("Shared", 0)
+            ],
+            vec![
+                segment("Status", 0),
+                segment("Social", 0),
+                segment("Shared", 0)
+            ],
+        ]
+    );
+    assert_eq!(
+        navigation.view_paths(&ViewIdentity::Status),
+        vec![vec![segment("Status", 0)]]
+    );
+    assert_eq!(
+        navigation.view_paths(&room_view("!other:example")),
+        vec![vec![segment("Status", 0), segment("Shared", 0)]]
     );
 }
 
@@ -6598,8 +6593,8 @@ fn non_windows_new_methods_report_unsupported_driver() {
     );
 
     let error = app
-        .select_navigation_labels(&["mirx", "status"])
-        .expect_err("select_navigation_labels must fail off Windows");
+        .select_navigation_view(&ViewIdentity::Status)
+        .expect_err("select_navigation_view must fail off Windows");
     assert_eq!(
         error.to_string(),
         "mirx-testkit requires the Windows target"
@@ -6608,6 +6603,14 @@ fn non_windows_new_methods_report_unsupported_driver() {
     let error = app
         .selected_navigation_path()
         .expect_err("selected_navigation_path must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mirx-testkit requires the Windows target"
+    );
+
+    let error = app
+        .selected_navigation_view()
+        .expect_err("selected_navigation_view must fail off Windows");
     assert_eq!(
         error.to_string(),
         "mirx-testkit requires the Windows target"

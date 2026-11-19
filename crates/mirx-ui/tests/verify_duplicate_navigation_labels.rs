@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{Event, RoomMembership, RoomReadState, RoomSummary, SpaceChildSummary};
-use mirx_testkit::{LaunchOptions, MirxApp, NavigationPathSegment};
+use mirx_testkit::{LaunchOptions, MirxApp, NavigationPathSegment, ViewIdentity};
 
 fn mirx_ui_exe_path() -> Result<PathBuf, String> {
     if let Some(path) = option_env!("CARGO_BIN_EXE_mirx-ui") {
@@ -65,6 +65,12 @@ fn space(room_id: &str, display_name: &str, children: Vec<&str>) -> RoomSummary 
                 order: None,
             })
             .collect(),
+    }
+}
+
+fn room_view(room_id: &str) -> ViewIdentity {
+    ViewIdentity::Room {
+        room_id: room_id.to_owned(),
     }
 }
 
@@ -131,11 +137,25 @@ fn selected_navigation_path_round_trips_for_duplicate_sibling_labels()
         ]
     );
 
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(room_view("!room2:example"))
+    );
+
+    app.select_room("!room1:example")?;
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(room_view("!room1:example"))
+    );
     app.select_navigation_path(&path)?;
     assert_eq!(
         app.dump_model()?.selected_room.as_deref(),
         Some("!room2:example"),
-        "re-selecting the exported navigation path should keep the same room selected",
+        "selecting the exported navigation path must select the room it was exported from",
+    );
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(room_view("!room2:example"))
     );
 
     let _ = fs::remove_file(&state_path);
@@ -208,11 +228,25 @@ fn selected_navigation_path_round_trips_for_decorated_duplicate_sibling_labels()
         ]
     );
 
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(room_view("!room2:example"))
+    );
+
+    app.select_room("!room1:example")?;
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(room_view("!room1:example"))
+    );
     app.select_navigation_path(&path)?;
     assert_eq!(
         app.dump_model()?.selected_room.as_deref(),
         Some("!room2:example"),
-        "re-selecting the exported navigation path should keep the same room selected",
+        "selecting the exported navigation path must select the room it was exported from",
+    );
+    assert_eq!(
+        app.selected_navigation_view()?,
+        Some(room_view("!room2:example"))
     );
 
     let _ = fs::remove_file(&state_path);

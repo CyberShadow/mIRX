@@ -10923,10 +10923,10 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::DumpSelectedNavigationPath { id } => {
-            let path = dump_selected_navigation_path(hwnd).map_err(|message| {
+            let response = dump_selected_navigation_path(hwnd).map_err(|message| {
                 failure_response(Some(id.clone()), "ui_state_unavailable", message)
             })?;
-            serialize_success_json(&id, SelectedNavigationPathResponse { path })
+            serialize_success_json(&id, response)
         }
         ParsedCommand::DumpRoomActivity { id, args } => {
             let room_id = resolve_timeline_room_id(state_ref(hwnd), args.room_id.as_deref())
@@ -10995,6 +10995,12 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
         ParsedCommand::SelectNavigationPath { id, args } => {
             select_navigation_path(hwnd, &args.path).map_err(|message| {
                 failure_response(Some(id.clone()), "unknown_navigation", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::SelectNavigationView { id, args } => {
+            select_navigation_view(hwnd, &args.view).map_err(|message| {
+                failure_response(Some(id.clone()), "unknown_navigation_view", message)
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
@@ -11282,6 +11288,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SetComposeText { id, .. }
         | ParsedCommand::SendComposeKey { id, .. }
         | ParsedCommand::SelectNavigationPath { id, .. }
+        | ParsedCommand::SelectNavigationView { id, .. }
         | ParsedCommand::FindActiveView { id, .. }
         | ParsedCommand::AppendSyntheticEvents { id, .. }
         | ParsedCommand::RecoverE2ee { id, .. }
@@ -11585,9 +11592,8 @@ unsafe fn read_navigation_node(
     item: isize,
 ) -> Result<NavigationNode, String> {
     let text = read_tree_item_text(tree, item)?;
-    let activity = state
-        .tree_items
-        .get(&item)
+    let view_id = state.tree_items.get(&item);
+    let activity = view_id
         .and_then(|view_id| state.room_activity.get(view_id))
         .copied();
     let mut children = Vec::new();
@@ -11600,6 +11606,7 @@ unsafe fn read_navigation_node(
 
     Ok(NavigationNode {
         text,
+        view: view_id.map(view_identity_from_view_id),
         activity,
         children,
     })
@@ -11667,7 +11674,9 @@ unsafe fn same_text_index_for_tree_item(tree: HWND, item: isize) -> Result<u32, 
     ))
 }
 
-unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<NavigationPathSegment>, String> {
+unsafe fn dump_selected_navigation_path(
+    hwnd: HWND,
+) -> Result<SelectedNavigationPathResponse, String> {
     let tree = state_ref(hwnd).controls.tree;
     if tree.is_null() {
         return Err("tree control was not created".to_owned());
@@ -11677,6 +11686,10 @@ unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<NavigationPath
     if item == 0 {
         return Err("navigation tree selection was missing".to_owned());
     }
+    let view = state_ref(hwnd)
+        .tree_items
+        .get(&item)
+        .map(view_identity_from_view_id);
 
     let mut path = Vec::new();
     while item != 0 {
@@ -11687,7 +11700,7 @@ unsafe fn dump_selected_navigation_path(hwnd: HWND) -> Result<Vec<NavigationPath
         item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_PARENT as WPARAM, item as LPARAM) as isize;
     }
     path.reverse();
-    Ok(path)
+    Ok(SelectedNavigationPathResponse { path, view })
 }
 
 unsafe fn select_navigation_path(hwnd: HWND, path: &[NavigationPathSegment]) -> Result<(), String> {
@@ -11739,18 +11752,31 @@ unsafe fn select_navigation_path(hwnd: HWND, path: &[NavigationPathSegment]) -> 
             .ok_or_else(|| format!("unknown navigation path: {}", format_navigation_path(path)))?;
     }
 
+    select_navigation_item(hwnd, tree, current)
+}
+
+/// Selects the view's first tree item: a room listed under two spaces has two
+/// items, and `primary_tree_items` holds the first.
+unsafe fn select_navigation_view(hwnd: HWND, identity: &ViewIdentity) -> Result<(), String> {
+    let tree = state_ref(hwnd).controls.tree;
+    let item = *state_ref(hwnd)
+        .primary_tree_items
+        .get(&view_id_from_identity(identity))
+        .ok_or_else(|| format!("unknown navigation view: {identity:?}"))?;
+    select_navigation_item(hwnd, tree, item)
+}
+
+/// Selects a tree item like a click does, and activates its view. Activation
+/// runs here too because a selection that is already the caret sends no
+/// `TVN_SELCHANGEDW`, yet a click on it still brings its window forward.
+unsafe fn select_navigation_item(hwnd: HWND, tree: HWND, item: isize) -> Result<(), String> {
     let selected = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CARET as WPARAM, 0) as isize;
-    if selected != current {
-        SendMessageW(
-            tree,
-            TVM_SELECTITEM,
-            TVGN_CARET as WPARAM,
-            current as LPARAM,
-        );
+    if selected != item {
+        SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, item as LPARAM);
     }
-    let view_id = state_ref(hwnd).tree_items.get(&current).cloned();
+    let view_id = state_ref(hwnd).tree_items.get(&item).cloned();
     if let Some(view_id) = view_id {
-        activate_view(hwnd, &view_id, Some(current))?;
+        activate_view(hwnd, &view_id, Some(item))?;
     }
 
     Ok(())
