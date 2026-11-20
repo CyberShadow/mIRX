@@ -1,5 +1,6 @@
 mod api;
 mod matrix;
+mod matrix_link;
 mod rich_text;
 mod runtime;
 
@@ -36,6 +37,7 @@ pub use api::{
     VerificationState, VerificationStateEvent, check_text_styles, login_server,
     validate_highlight_word,
 };
+pub use matrix_link::{MatrixLink, matrix_link};
 pub use runtime::{CommandSender, CoreHandle, SendCommandError, StartError, start};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
