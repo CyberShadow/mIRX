@@ -852,6 +852,60 @@ pub fn check_text_styles(body: &str, styles: &[TextStyleSpan]) -> Result<(), Str
     Ok(())
 }
 
+/// `body[start..end]`, in UTF-8 byte offsets, links to the user `user_id`:
+/// a pill.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserLinkSpan {
+    pub start: usize,
+    pub end: usize,
+    pub user_id: String,
+}
+
+/// Checks that `links` describe `body` in the one canonical way: sorted,
+/// non-overlapping, non-empty spans on char boundaries, none covering a
+/// `\n`, each naming a valid user ID. Unlike styles, two spans may touch:
+/// adjacent pills are two links.
+pub fn check_user_links(body: &str, links: &[UserLinkSpan]) -> Result<(), String> {
+    let mut previous_end = 0;
+    for UserLinkSpan {
+        start,
+        end,
+        user_id,
+    } in links
+    {
+        if start >= end {
+            return Err(format!("empty user link span {start}..{end}"));
+        }
+        if *end > body.len() {
+            return Err(format!(
+                "user link span {start}..{end} is past the body's {} bytes",
+                body.len()
+            ));
+        }
+        if !body.is_char_boundary(*start) || !body.is_char_boundary(*end) {
+            return Err(format!(
+                "user link span {start}..{end} is not on char boundaries"
+            ));
+        }
+        if body[*start..*end].contains('\n') {
+            return Err(format!("user link span {start}..{end} crosses a line"));
+        }
+        if *start < previous_end {
+            return Err(format!(
+                "user link span {start}..{end} overlaps or precedes the one ending at {previous_end}"
+            ));
+        }
+        if let Err(err) = <&matrix_sdk::ruma::UserId>::try_from(user_id.as_str()) {
+            return Err(format!(
+                "user link span {start}..{end} names an invalid user ID {user_id:?}: {err}"
+            ));
+        }
+        previous_end = *end;
+    }
+    Ok(())
+}
+
 /// A text, notice or emote message. `styles` format `body`; they pass
 /// [`check_text_styles`], which the wire form enforces.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1833,6 +1887,72 @@ mod tests {
         ] {
             let err = check_text_styles(body, &styles).unwrap_err();
             assert!(err.contains(expected), "{styles:?}: {err}");
+        }
+    }
+
+    fn user_link(start: usize, end: usize, user_id: &str) -> UserLinkSpan {
+        UserLinkSpan {
+            start,
+            end,
+            user_id: user_id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn user_links_round_trip_and_reject_unknown_fields() {
+        let json = serde_json::json!({ "start": 3, "end": 8, "user_id": "@alice:example.org" });
+        let link = user_link(3, 8, "@alice:example.org");
+        assert_eq!(serde_json::to_value(&link).unwrap(), json);
+        assert_eq!(serde_json::from_value::<UserLinkSpan>(json).unwrap(), link);
+        assert!(
+            serde_json::from_value::<UserLinkSpan>(serde_json::json!({
+                "start": 3, "end": 8, "user_id": "@alice:example.org", "room": true,
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn check_user_links_accepts_canonical_spans() {
+        assert_eq!(check_user_links("", &[]), Ok(()));
+        assert_eq!(
+            check_user_links(
+                "Ärger,Bob\nCarol",
+                &[
+                    user_link(0, 6, "@aerger:example.org"),
+                    user_link(6, 7, "@comma:example.org"),
+                    user_link(7, 10, "@bob:example.org"),
+                    user_link(11, 16, "@carol:example.org"),
+                ]
+            ),
+            Ok(()),
+            "spans may touch"
+        );
+    }
+
+    #[test]
+    fn check_user_links_rejects_each_invariant_violation() {
+        let body = "Ärger Bob\nCarol";
+        let alice = "@alice:example.org";
+        for (links, expected) in [
+            (vec![user_link(3, 3, alice)], "empty"),
+            (vec![user_link(4, 2, alice)], "empty"),
+            (vec![user_link(0, 17, alice)], "past the body"),
+            (vec![user_link(1, 6, alice)], "char boundaries"),
+            (vec![user_link(7, 13, alice)], "crosses a line"),
+            (
+                vec![user_link(0, 7, alice), user_link(6, 10, alice)],
+                "overlaps",
+            ),
+            (
+                vec![user_link(7, 10, alice), user_link(0, 6, alice)],
+                "overlaps",
+            ),
+            (vec![user_link(7, 10, "bob")], "invalid user ID"),
+            (vec![user_link(7, 10, "")], "invalid user ID"),
+        ] {
+            let err = check_user_links(body, &links).unwrap_err();
+            assert!(err.contains(expected), "{links:?}: {err}");
         }
     }
 

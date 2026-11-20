@@ -3822,7 +3822,7 @@ fn room_message_type(
             RoomMessagePresentationKind::Emote => MessageType::emote_plain(body),
         };
     }
-    let html = html_from_styled_text(&body, styles);
+    let html = html_from_styled_text(&body, styles, &[]);
     match presentation {
         RoomMessagePresentationKind::Text => MessageType::text_html(body, html),
         RoomMessagePresentationKind::Notice => MessageType::notice_html(body, html),

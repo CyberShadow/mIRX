@@ -7,9 +7,14 @@
 //! text. Everything the timeline cannot show (fonts, sizes, images) becomes
 //! its text.
 
+use std::ops::Range;
+
+use matrix_sdk::ruma::UserId;
 use ruma_html::{Html, NodeData, NodeRef, SanitizerConfig};
 
-use crate::api::{TextColor, TextStyle, TextStyleSpan, check_text_styles};
+use crate::api::{
+    TextColor, TextStyle, TextStyleSpan, UserLinkSpan, check_text_styles, check_user_links,
+};
 
 /// A message's display text and the styles that format it, which pass
 /// [`check_text_styles`].
@@ -66,7 +71,8 @@ struct List {
 /// Writes lines of styled text. Line prefixes (quote markers, list
 /// indents and item markers) are written lazily with a line's first text,
 /// so empty lines never carry them; collapsed whitespace is held back
-/// until more text follows on the line, so lines never end in a space.
+/// until more text follows on the line, so lines end in a space only when
+/// a no-break space put it there.
 #[derive(Default)]
 struct Writer {
     body: String,
@@ -308,7 +314,9 @@ impl Writer {
         if let Some(space_style) = self.pending_space.take() {
             self.push(" ", space_style);
         }
-        self.push(text, style);
+        // A no-break space is a space that HTML keeps: mirx writes runs of
+        // spaces and spaces at a line's ends as `&nbsp;`.
+        self.push(&text.replace('\u{a0}', " "), style);
     }
 
     fn push(&mut self, text: &str, style: TextStyle) {
@@ -354,62 +362,113 @@ impl Writer {
     }
 }
 
-/// Matrix HTML for `body` formatted by `styles`, which must pass
-/// [`check_text_styles`]: each span as a `<span>` with its colours (new
-/// messages use `span`, not the deprecated `font`; spec v1.10) around
-/// `<b><i><u><del>`, in that order. Spans are flat, so the elements always
-/// nest properly. `\n` is `<br>`.
-pub(crate) fn html_from_styled_text(body: &str, styles: &[TextStyleSpan]) -> String {
+/// Matrix HTML for `body` formatted by `styles` and linked by `pills`,
+/// which must pass [`check_text_styles`] and [`check_user_links`].
+///
+/// Each style span is a `<span>` with its colours (new messages use `span`,
+/// not the deprecated `font`; spec v1.10) around `<b><i><u><del>`, in that
+/// order, and each pill an `<a>` to the user's matrix.to permalink, which
+/// clients show as a pill. Spans are flat and a style span is cut at a
+/// pill's edges, so the elements always nest properly. `\n` is `<br>`, and
+/// spaces that HTML would collapse or drop are `&nbsp;`, so the text reads
+/// as typed: see [`push_escaped_html`].
+pub(crate) fn html_from_styled_text(
+    body: &str,
+    styles: &[TextStyleSpan],
+    pills: &[UserLinkSpan],
+) -> String {
     check_text_styles(body, styles).expect("styles sent must describe their body");
+    check_user_links(body, pills).expect("pills sent must describe their body");
+    let mut edges = vec![0, body.len()];
+    edges.extend(styles.iter().flat_map(|span| [span.start, span.end]));
+    edges.extend(pills.iter().flat_map(|pill| [pill.start, pill.end]));
+    edges.sort_unstable();
+    edges.dedup();
+    let mut styles = styles.iter().peekable();
+    let mut pills = pills.iter().peekable();
     let mut html = String::new();
-    let mut written = 0;
-    for span in styles {
-        push_escaped_html(&mut html, &body[written..span.start]);
-        let style = span.style;
-        let mut closing = Vec::new();
-        if style.foreground.is_some() || style.background.is_some() {
-            html.push_str("<span");
-            if let Some(color) = style.foreground {
-                html.push_str(&format!(" data-mx-color=\"{color}\""));
-            }
-            if let Some(color) = style.background {
-                html.push_str(&format!(" data-mx-bg-color=\"{color}\""));
-            }
-            html.push('>');
-            closing.push("</span>");
+    for segment in edges.windows(2) {
+        let (start, end) = (segment[0], segment[1]);
+        if let Some(pill) = pills.peek().filter(|pill| pill.start == start) {
+            let user_id = <&UserId>::try_from(pill.user_id.as_str()).expect("checked user ID");
+            html.push_str(&format!("<a href=\"{}\">", user_id.matrix_to_uri()));
         }
-        for (on, open, close) in [
-            (style.bold, "<b>", "</b>"),
-            (style.italic, "<i>", "</i>"),
-            (style.underline, "<u>", "</u>"),
-            (style.strikethrough, "<del>", "</del>"),
-        ] {
-            if on {
-                html.push_str(open);
-                closing.push(close);
-            }
+        // A segment is wholly inside one style span or outside them all.
+        let style = styles
+            .peek()
+            .filter(|span| span.start <= start)
+            .map(|span| span.style);
+        push_styled_html(&mut html, body, start..end, style);
+        if styles.peek().is_some_and(|span| span.end == end) {
+            styles.next();
         }
-        push_escaped_html(&mut html, &body[span.start..span.end]);
-        for close in closing.into_iter().rev() {
-            html.push_str(close);
+        if pills.peek().is_some_and(|pill| pill.end == end) {
+            html.push_str("</a>");
+            pills.next();
         }
-        written = span.end;
     }
-    push_escaped_html(&mut html, &body[written..]);
     html
 }
 
-fn push_escaped_html(html: &mut String, text: &str) {
-    for c in text.chars() {
+/// `body[range]` as HTML in `style`, if any.
+fn push_styled_html(html: &mut String, body: &str, range: Range<usize>, style: Option<TextStyle>) {
+    let Some(style) = style else {
+        return push_escaped_html(html, body, range);
+    };
+    let mut closing = Vec::new();
+    if style.foreground.is_some() || style.background.is_some() {
+        html.push_str("<span");
+        if let Some(color) = style.foreground {
+            html.push_str(&format!(" data-mx-color=\"{color}\""));
+        }
+        if let Some(color) = style.background {
+            html.push_str(&format!(" data-mx-bg-color=\"{color}\""));
+        }
+        html.push('>');
+        closing.push("</span>");
+    }
+    for (on, open, close) in [
+        (style.bold, "<b>", "</b>"),
+        (style.italic, "<i>", "</i>"),
+        (style.underline, "<u>", "</u>"),
+        (style.strikethrough, "<del>", "</del>"),
+    ] {
+        if on {
+            html.push_str(open);
+            closing.push(close);
+        }
+    }
+    push_escaped_html(html, body, range);
+    for close in closing.into_iter().rev() {
+        html.push_str(close);
+    }
+}
+
+/// `body[range]` as HTML text, `\n` as `<br>`.
+fn push_escaped_html(html: &mut String, body: &str, range: Range<usize>) {
+    for (index, c) in body[range.clone()].char_indices() {
         match c {
             '&' => html.push_str("&amp;"),
             '<' => html.push_str("&lt;"),
             '>' => html.push_str("&gt;"),
             '"' => html.push_str("&quot;"),
             '\n' => html.push_str("<br>"),
+            ' ' if space_needs_nbsp(body, range.start + index) => html.push_str("&nbsp;"),
             c => html.push(c),
         }
     }
+}
+
+/// Whether the space at `body[index]` would be lost in HTML, which
+/// collapses a run of spaces to one and drops spaces at a line's start and
+/// end: one that starts or ends a line, or follows another space. A run of
+/// n spaces after a word is then one space and n - 1 `&nbsp;`, which reads
+/// back as n spaces.
+fn space_needs_nbsp(body: &str, index: usize) -> bool {
+    let is_line_edge = |c: Option<char>| c.is_none_or(|c| c == '\n');
+    let previous = body[..index].chars().next_back();
+    let next = body[index + 1..].chars().next();
+    is_line_edge(previous) || previous == Some(' ') || is_line_edge(next)
 }
 
 const BLACK: TextColor = TextColor {
@@ -825,9 +884,9 @@ mod tests {
 
     #[test]
     fn styled_text_becomes_flat_matrix_html() {
-        assert_eq!(html_from_styled_text("plain", &[]), "plain");
+        assert_eq!(html_from_styled_text("plain", &[], &[]), "plain");
         assert_eq!(
-            html_from_styled_text("a & <b> \"c\"\nnext", &[]),
+            html_from_styled_text("a & <b> \"c\"\nnext", &[], &[]),
             "a &amp; &lt;b&gt; &quot;c&quot;<br>next"
         );
         let everything = TextStyle {
@@ -839,7 +898,7 @@ mod tests {
             background: Some(color(0, 0, 0x7f)),
         };
         assert_eq!(
-            html_from_styled_text("all of it", &[span(4, 6, everything)]),
+            html_from_styled_text("all of it", &[span(4, 6, everything)], &[]),
             "all <span data-mx-color=\"#ff0000\" data-mx-bg-color=\"#00007f\">\
              <b><i><u><del>of</del></u></i></b></span> it"
         );
@@ -857,22 +916,115 @@ mod tests {
                             ..TextStyle::default()
                         }
                     ),
-                ]
+                ],
+                &[]
             ),
             "<b>bold</b>, <span data-mx-color=\"#ff0000\">red</span> \
              <span data-mx-bg-color=\"#000000\">bg &lt;tag&gt;</span>"
         );
         // Without a colour there is no span.
         assert_eq!(
-            html_from_styled_text("x", &[span(0, 1, italic())]),
+            html_from_styled_text("x", &[span(0, 1, italic())], &[]),
             "<i>x</i>"
         );
+    }
+
+    fn pill(start: usize, end: usize, user_id: &str) -> UserLinkSpan {
+        UserLinkSpan {
+            start,
+            end,
+            user_id: user_id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn user_ids_link_to_their_matrix_to_permalink() {
+        let alice = <&UserId>::try_from("@alice:example.org").unwrap();
+        assert_eq!(
+            alice.matrix_to_uri().to_string(),
+            "https://matrix.to/#/@alice:example.org"
+        );
+    }
+
+    #[test]
+    fn pills_link_their_text_to_the_user() {
+        assert_eq!(
+            html_from_styled_text(
+                "Alice: ask Bob&Co",
+                &[],
+                &[
+                    pill(0, 5, "@alice:example.org"),
+                    pill(11, 17, "@bob:example.org")
+                ]
+            ),
+            "<a href=\"https://matrix.to/#/@alice:example.org\">Alice</a>: ask \
+             <a href=\"https://matrix.to/#/@bob:example.org\">Bob&amp;Co</a>"
+        );
+        assert_eq!(
+            html_from_styled_text(
+                "AB",
+                &[],
+                &[pill(0, 1, "@a:example.org"), pill(1, 2, "@b:example.org")]
+            ),
+            "<a href=\"https://matrix.to/#/@a:example.org\">A</a>\
+             <a href=\"https://matrix.to/#/@b:example.org\">B</a>",
+            "touching pills stay two links"
+        );
+    }
+
+    #[test]
+    fn styles_crossing_a_pill_edge_nest_inside_and_outside_it() {
+        assert_eq!(
+            html_from_styled_text(
+                "hey Alice ok",
+                &[span(0, 6, bold()), span(6, 12, italic())],
+                &[pill(4, 9, "@alice:example.org")]
+            ),
+            "<b>hey </b><a href=\"https://matrix.to/#/@alice:example.org\"><b>Al</b>\
+             <i>ice</i></a><i> ok</i>"
+        );
+        assert_eq!(
+            html_from_styled_text(
+                "x Alice y",
+                &[span(0, 9, foreground(color(0xff, 0, 0)))],
+                &[pill(2, 7, "@alice:example.org")]
+            ),
+            "<span data-mx-color=\"#ff0000\">x </span>\
+             <a href=\"https://matrix.to/#/@alice:example.org\">\
+             <span data-mx-color=\"#ff0000\">Alice</span></a>\
+             <span data-mx-color=\"#ff0000\"> y</span>"
+        );
+    }
+
+    #[test]
+    fn spaces_html_would_lose_are_no_break_spaces() {
+        let html = |body: &str| html_from_styled_text(body, &[], &[]);
+        assert_eq!(html("a b"), "a b");
+        assert_eq!(html("a  b"), "a &nbsp;b");
+        assert_eq!(html("a    b"), "a &nbsp;&nbsp;&nbsp;b");
+        assert_eq!(html(" a"), "&nbsp;a");
+        assert_eq!(html("a "), "a&nbsp;");
+        assert_eq!(html("a\n  b \nc"), "a<br>&nbsp;&nbsp;b&nbsp;<br>c");
+        assert_eq!(html(" "), "&nbsp;");
+        // Across element edges, the body decides.
+        assert_eq!(
+            html_from_styled_text("a  b", &[span(2, 4, bold())], &[]),
+            "a <b>&nbsp;b</b>"
+        );
+    }
+
+    #[test]
+    fn no_break_spaces_read_as_spaces_html_keeps() {
+        assert_eq!(plain_text("a &nbsp;&nbsp;b"), "a   b");
+        assert_eq!(plain_text("&nbsp;a&nbsp;"), " a ");
+        assert_eq!(plain_text("a\u{a0}b"), "a b");
+        assert_eq!(plain_text("<p>&nbsp;</p>x"), " \nx");
     }
 
     #[test]
     #[should_panic(expected = "styles sent must describe their body")]
     fn styled_text_html_refuses_invalid_styles() {
-        html_from_styled_text("x", &[span(0, 2, bold())]);
+        html_from_styled_text("x", &[span(0, 2, bold())], &[]);
     }
 
     #[test]
@@ -894,11 +1046,10 @@ mod tests {
                 ..TextStyle::default()
             },
         ];
-        // Text as HTML keeps it: single spaces, none at a line's ends.
-        let words = ["héllo", "<w&>", "x", "👋", "two words", "\"q\""];
+        let words = ["héllo", "<w&>", "x", "👋", "two words", "\"q\"", " pad  "];
         for (first, first_style) in styles.iter().enumerate() {
             for (second, second_style) in styles.iter().enumerate() {
-                for separator in [" ", "", "\n"] {
+                for separator in [" ", "", "\n", "   ", " \n ", "\n\n"] {
                     let mut body = String::new();
                     let mut spans = Vec::new();
                     for (word, style) in
@@ -918,7 +1069,7 @@ mod tests {
                             }
                         }
                     }
-                    let html = html_from_styled_text(&body, &spans);
+                    let html = html_from_styled_text(&body, &spans, &[]);
                     assert_eq!(
                         styled_text_from_html(&html),
                         StyledText {
