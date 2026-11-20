@@ -995,7 +995,9 @@ pub(super) fn dispatch_reply_target_fetches(
     if state.synthetic_load_in_progress
         || !matches!(
             state.model.connection,
-            ConnectionState::SignedIn | ConnectionState::Syncing
+            ConnectionState::SignedIn
+                | ConnectionState::WaitingToReconnect
+                | ConnectionState::Syncing
         )
     {
         return Ok(());

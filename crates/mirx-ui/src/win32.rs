@@ -211,6 +211,7 @@ mod open_link;
 mod options;
 mod options_dialog;
 mod reactions;
+mod reconnect;
 mod replies;
 mod room_list;
 mod room_list_window;
@@ -333,7 +334,7 @@ use frame_menus::{
     default_context_point_for_window, disconnect, handle_menu_command, handle_switchbar_command,
     handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
-    open_dialog_for_automation, refresh_menu_popup, refresh_message_menu_state,
+    log_out, open_dialog_for_automation, refresh_menu_popup, refresh_message_menu_state,
     refresh_room_menu_state, refresh_tools_menu_state, select_timeline_event_for_automation,
     selected_message_quote_target, selected_timeline_event_id,
     selected_timeline_event_id_for_automation, selected_timeline_media_attachment,
@@ -498,6 +499,8 @@ const WM_CONNECT_AT_STARTUP: u32 = WM_APP + 3;
 const WM_TRAY_ICON: u32 = WM_APP + 4;
 const AUTO_CLOSE_TIMER_ID: usize = 1;
 const AUTO_CLOSE_DELAY_MS: u32 = 250;
+/// A connect retry is due (`reconnect`).
+const RECONNECT_TIMER_ID: usize = 2;
 const TREE_WIDTH: i32 = 240;
 const TIMELINE_LEFT_PADDING: i32 = 8;
 const TIMELINE_RIGHT_PADDING: i32 = 8;
@@ -691,6 +694,8 @@ struct WindowState {
     /// The Colors dialog while it is open, for the automation dump.
     colors_dialog: Option<HWND>,
     tray: TrayState,
+    /// The retry bookkeeping; `reconnect` and the sync events move it.
+    reconnect: connection::Reconnect,
 }
 
 /// Where Status lines get their arrival time. Render-state snapshots must not
@@ -873,6 +878,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         options_dialog: None,
         colors_dialog: None,
         tray: TrayState::default(),
+        reconnect: connection::Reconnect::default(),
     });
 
     let hwnd = create_main_window(instance, state, frame_size_for_command(&command))?;

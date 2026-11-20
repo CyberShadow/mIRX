@@ -107,19 +107,35 @@ pub(super) const E2EE_RECOVERY_SET_UP: &str =
 pub(super) const E2EE_RECOVERY_COMPLETE: &str = "E2EE recovery complete";
 pub(super) const E2EE_STATUS_UNKNOWN: &str = "E2EE status not yet known";
 
-/// The server of `user_id` (`@alice:example.org` is on `example.org`), as
-/// connection lines name it: mIRC names the server it is connected to.
-pub(super) fn user_server(user_id: &str) -> &str {
-    user_id
-        .split_once(':')
-        .expect("a Matrix user ID names its server")
-        .1
-}
-
 /// mIRC's `* Disconnected` when the connection ended by itself; the user's
 /// own Disconnect logs `STOPPED`.
 pub(super) fn connection_lost(message: &str) -> String {
     format!("Disconnected: {message}")
+}
+
+/// mIRC's `* Connect retry #2 server`. `server` is the session's
+/// (`own_server`), here and in the other connection lines.
+pub(super) fn connect_retry(attempt: u32, server: &str) -> String {
+    format!("Connect retry #{attempt} {server}")
+}
+
+/// Reconnect on disconnection, at once.
+pub(super) fn reconnecting(server: &str) -> String {
+    format!("Reconnecting to {server}")
+}
+
+pub(super) fn reconnected(server: &str) -> String {
+    format!("Reconnected to {server}")
+}
+
+pub(super) fn not_retrying(attempts: u32) -> String {
+    let retries = if attempts == 1 { "retry" } else { "retries" };
+    format!("Not retrying: {attempts} {retries} failed. File > Connect or /server tries again.")
+}
+
+/// The status while a retry is due.
+pub(super) fn retrying_in(delay: std::time::Duration) -> String {
+    format!("disconnected; retrying in {} seconds", delay.as_secs())
 }
 
 /// The server no longer accepts the session: no retry can help.
@@ -231,8 +247,24 @@ mod tests {
             "Logged in as @alice:example (device DEVICE)"
         );
         assert_eq!(synced(3, 1), "Synced rooms: 3 joined, 1 invited");
-        assert_eq!(user_server("@alice:example.org"), "example.org");
-        assert_eq!(user_server("@alice:localhost:8448"), "localhost:8448");
+        assert_eq!(
+            connect_retry(2, "example.org"),
+            "Connect retry #2 example.org"
+        );
+        assert_eq!(reconnecting("example.org"), "Reconnecting to example.org");
+        assert_eq!(reconnected("example.org"), "Reconnected to example.org");
+        assert_eq!(
+            not_retrying(1),
+            "Not retrying: 1 retry failed. File > Connect or /server tries again."
+        );
+        assert_eq!(
+            not_retrying(99),
+            "Not retrying: 99 retries failed. File > Connect or /server tries again."
+        );
+        assert_eq!(
+            retrying_in(std::time::Duration::from_secs(10)),
+            "disconnected; retrying in 10 seconds"
+        );
         assert_eq!(
             connection_lost("connection refused"),
             "Disconnected: connection refused"

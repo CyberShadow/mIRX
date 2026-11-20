@@ -696,7 +696,7 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
         ParsedCommand::Logout { id } => {
-            submit_logout(state_mut(hwnd))
+            log_out(hwnd)
                 .map_err(|message| failure_response(Some(id.clone()), "logout_failed", message))?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }

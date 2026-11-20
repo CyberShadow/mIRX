@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 57;
+pub(crate) const PROTOCOL_VERSION: u32 = 58;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1734,6 +1734,9 @@ pub(crate) enum ConnectionState {
     WaitingForBrowser,
     /// Signed in, not syncing: offline, with the session kept.
     SignedIn,
+    /// Signed in, not syncing, and a connect retry is due: mIRC's
+    /// `Retry...` delay between attempts.
+    WaitingToReconnect,
     Syncing,
 }
 
@@ -1743,6 +1746,9 @@ pub(crate) struct DumpModel {
     pub(crate) status: String,
     pub(crate) lifecycle_state: LifecycleState,
     pub(crate) connection: ConnectionState,
+    /// The connect retries since the connection was lost, or since the
+    /// user's own Connect.
+    pub(crate) reconnect_attempts: u32,
     pub(crate) rooms: Vec<DumpRoom>,
     pub(crate) last_activity: Option<DumpRoomMessageActivityLine>,
     pub(crate) e2ee_status: Option<E2eeStatus>,
@@ -3354,7 +3360,7 @@ mod tests {
         let dump = json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -3434,8 +3440,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_57() {
-        assert_eq!(PROTOCOL_VERSION, 57);
+    fn protocol_version_is_58() {
+        assert_eq!(PROTOCOL_VERSION, 58);
     }
 
     #[test]
@@ -5427,7 +5433,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":57,
+                    "protocol_version":58,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5461,6 +5467,7 @@ mod tests {
                     status: "ready".to_owned(),
                     lifecycle_state: LifecycleState::Ready,
                     connection: ConnectionState::Syncing,
+                    reconnect_attempts: 0,
                     rooms: vec![super::DumpRoom {
                         room_id: "!room:example".to_owned(),
                         display_name: "Room".to_owned(),
@@ -5512,7 +5519,7 @@ mod tests {
                 "json":{
                     "status":"ready",
                     "lifecycle_state":"ready",
-                    "connection":"syncing",
+                    "connection":"syncing", "reconnect_attempts":0,
                     "rooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":true,"direct_user_ids":["@alice:example"],"tags":[{"tag":"m.favourite","order":"0.25"}],"space_children":[]}],
                     "last_activity":null,
                     "e2ee_status":{
@@ -6374,6 +6381,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: Some(sample_e2ee_status()),
@@ -6410,7 +6418,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":{
@@ -6426,7 +6434,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":{
@@ -6441,7 +6449,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":{
@@ -6464,6 +6472,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -6503,13 +6512,13 @@ mod tests {
 
         for invalid_json in [
             json!({
-                "status":"ready", "lifecycle_state":"ready", "connection":"syncing", "rooms":[], "last_activity":null,
+                "status":"ready", "lifecycle_state":"ready", "connection":"syncing", "reconnect_attempts":0, "rooms":[], "last_activity":null,
                 "e2ee_status":null,
                 "last_e2ee_recovery_setup_result":{"recovery_key_present":true,"unexpected":true},
                 "last_verification":null, "last_error":null, "selected_room":null,
             }),
             json!({
-                "status":"ready", "lifecycle_state":"ready", "connection":"syncing", "rooms":[], "last_activity":null,
+                "status":"ready", "lifecycle_state":"ready", "connection":"syncing", "reconnect_attempts":0, "rooms":[], "last_activity":null,
                 "e2ee_status":null, "last_e2ee_recovery_setup_result":null, "last_verification":null,
                 "submitted_setup_recovery_commands":[{"passphrase_redacted":true,"wait_for_backups_to_upload":true,"unexpected":true}],
                 "last_error":null, "selected_room":null,
@@ -6525,6 +6534,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -6563,7 +6573,7 @@ mod tests {
         let error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -6593,6 +6603,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -6633,7 +6644,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
@@ -6655,7 +6666,7 @@ mod tests {
         let error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -6688,6 +6699,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -6730,7 +6742,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
@@ -6753,7 +6765,7 @@ mod tests {
         let error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -6789,6 +6801,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -6834,7 +6847,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
@@ -6861,7 +6874,7 @@ mod tests {
         let error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -6900,6 +6913,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -6942,7 +6956,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
@@ -6969,7 +6983,7 @@ mod tests {
         let reaction_error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -6999,7 +7013,7 @@ mod tests {
         let redaction_error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -7032,6 +7046,7 @@ mod tests {
             status: "ready".to_owned(),
             lifecycle_state: LifecycleState::Ready,
             connection: ConnectionState::Syncing,
+            reconnect_attempts: 0,
             rooms: Vec::new(),
             last_activity: None,
             e2ee_status: None,
@@ -7078,7 +7093,7 @@ mod tests {
             json!({
                 "status":"ready",
                 "lifecycle_state":"ready",
-                "connection":"syncing",
+                "connection":"syncing", "reconnect_attempts":0,
                 "rooms":[],
                 "last_activity":null,
                 "e2ee_status":null,
@@ -7107,7 +7122,7 @@ mod tests {
         let model = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,
@@ -7123,6 +7138,7 @@ mod tests {
                 status: "ready".to_owned(),
                 lifecycle_state: LifecycleState::Ready,
                 connection: ConnectionState::Syncing,
+                reconnect_attempts: 0,
                 rooms: Vec::new(),
                 last_activity: None,
                 e2ee_status: None,
@@ -7160,7 +7176,7 @@ mod tests {
         let error = serde_json::from_value::<DumpModel>(json!({
             "status":"ready",
             "lifecycle_state":"ready",
-            "connection":"syncing",
+            "connection":"syncing", "reconnect_attempts":0,
             "rooms":[],
             "last_activity":null,
             "e2ee_status":null,

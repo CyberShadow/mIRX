@@ -4,8 +4,11 @@
 //! Pure code: the connection state follows core events, and Connect picks
 //! the step that brings the account online from where it is.
 
+use std::time::Duration;
+
 use mirx_core::{Event, Operation};
 
+use super::settings::ConnectSetting;
 use crate::automation::ConnectionState;
 
 /// The connection after `event`. Submitting a login or restore moves it to
@@ -35,6 +38,85 @@ pub(super) fn after_event(connection: ConnectionState, event: &Event) -> Connect
     }
 }
 
+/// What to do when sync stops by itself (`SyncStopReason::Lost`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AfterSyncLost {
+    /// mIRC's Reconnect on disconnection: the connection was up.
+    ReconnectNow,
+    /// mIRC's connect retry: the attempt never connected.
+    RetryAfter(Duration),
+    /// Every retry failed.
+    GiveUp { attempts: u32 },
+    /// Reconnect or retry is off: stay disconnected, as mIRC does.
+    Stay,
+}
+
+/// `was_connected`: the sync that stopped had connected. `attempts`: the
+/// retries made since the connection was lost or the user connected.
+/// Retrying an attempt that connected and was then lost would be a
+/// reconnection; a reconnection that fails is an attempt, so a server that
+/// is down is retried with the delay, never in a tight loop.
+pub(super) fn after_sync_lost(
+    settings: &ConnectSetting,
+    was_connected: bool,
+    attempts: u32,
+) -> AfterSyncLost {
+    match (was_connected, settings.retry) {
+        (true, _) if settings.reconnect => AfterSyncLost::ReconnectNow,
+        (true, _) | (false, false) => AfterSyncLost::Stay,
+        (false, true) if attempts < settings.retry_times.get() => {
+            AfterSyncLost::RetryAfter(settings.retry_delay.duration())
+        }
+        (false, true) => AfterSyncLost::GiveUp { attempts },
+    }
+}
+
+/// The connection's retry bookkeeping, as the core's sync events and the
+/// retries move it.
+#[derive(Debug, Default)]
+pub(super) struct Reconnect {
+    /// A `SyncConnected` came since the last `SyncStarted`.
+    connected: bool,
+    /// The retries made since the connection was lost, or since the user's
+    /// own Connect.
+    attempts: u32,
+    /// The connection was lost and has not come back: its return is news.
+    lost: bool,
+}
+
+impl Reconnect {
+    pub(super) fn sync_started(&mut self) {
+        self.connected = false;
+    }
+
+    /// Returns whether the connection came back after it was lost.
+    pub(super) fn sync_connected(&mut self) -> bool {
+        self.connected = true;
+        self.attempts = 0;
+        std::mem::take(&mut self.lost)
+    }
+
+    pub(super) fn sync_lost(&mut self, settings: &ConnectSetting) -> AfterSyncLost {
+        self.lost = true;
+        after_sync_lost(settings, self.connected, self.attempts)
+    }
+
+    /// A retry starts; returns its number, from 1.
+    pub(super) fn retry(&mut self) -> u32 {
+        self.attempts += 1;
+        self.attempts
+    }
+
+    /// The user connected, disconnected or logged out: retries start over.
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(super) fn attempts(&self) -> u32 {
+        self.attempts
+    }
+}
+
 /// What File > Connect or `/server` does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ConnectAction {
@@ -44,6 +126,8 @@ pub(super) enum ConnectAction {
     SelectServer { server: String },
     /// Signed in but offline: start syncing.
     StartSync,
+    /// A retry is due: stop waiting and start syncing now.
+    RetryNow,
 }
 
 /// `server` is `/server`'s argument. Signing in takes a password or the
@@ -60,7 +144,10 @@ pub(super) fn connect_action(
         }
         (ConnectionState::Syncing, _) => Err("already connected"),
         (ConnectionState::SignedIn, None) => Ok(ConnectAction::StartSync),
-        (ConnectionState::SignedIn, Some(_)) => Err("already signed in; log out to change server"),
+        (ConnectionState::WaitingToReconnect, None) => Ok(ConnectAction::RetryNow),
+        (ConnectionState::SignedIn | ConnectionState::WaitingToReconnect, Some(_)) => {
+            Err("already signed in; log out to change server")
+        }
         (ConnectionState::SignedOut, Some(server)) => Ok(ConnectAction::SelectServer {
             server: server.to_owned(),
         }),
@@ -81,6 +168,8 @@ pub(super) enum DisconnectAction {
     /// Stop waiting for the browser, as mIRC's Disconnect cancels a
     /// connect in progress.
     CancelSignIn,
+    /// Stop retrying, as mIRC's `/quit` does.
+    CancelReconnect,
 }
 
 pub(super) fn disconnect_action(
@@ -89,6 +178,7 @@ pub(super) fn disconnect_action(
     match connection {
         ConnectionState::Syncing => Ok(DisconnectAction::StopSync),
         ConnectionState::WaitingForBrowser => Ok(DisconnectAction::CancelSignIn),
+        ConnectionState::WaitingToReconnect => Ok(DisconnectAction::CancelReconnect),
         ConnectionState::SignedOut | ConnectionState::SigningIn | ConnectionState::SignedIn => {
             Err("not connected")
         }
@@ -103,9 +193,9 @@ pub(super) fn check_sign_in(connection: ConnectionState) -> Result<(), &'static 
         ConnectionState::SigningIn | ConnectionState::WaitingForBrowser => {
             Err("already connecting")
         }
-        ConnectionState::SignedIn | ConnectionState::Syncing => {
-            Err("already signed in; log out first")
-        }
+        ConnectionState::SignedIn
+        | ConnectionState::WaitingToReconnect
+        | ConnectionState::Syncing => Err("already signed in; log out first"),
     }
 }
 
@@ -113,11 +203,21 @@ pub(super) fn check_sign_in(connection: ConnectionState) -> Result<(), &'static 
 mod tests {
     use mirx_core::{CoreErrorEvent, SessionAuth, StoredSession, SyncStopReason};
 
+    use super::super::settings::{RetryDelay, RetryTimes};
     use super::*;
 
-    use ConnectionState::{SignedIn, SignedOut, SigningIn, Syncing, WaitingForBrowser};
+    use ConnectionState::{
+        SignedIn, SignedOut, SigningIn, Syncing, WaitingForBrowser, WaitingToReconnect,
+    };
 
-    const ALL: [ConnectionState; 5] = [SignedOut, SigningIn, WaitingForBrowser, SignedIn, Syncing];
+    const ALL: [ConnectionState; 6] = [
+        SignedOut,
+        SigningIn,
+        WaitingForBrowser,
+        SignedIn,
+        WaitingToReconnect,
+        Syncing,
+    ];
 
     fn error(operation: Operation) -> Event {
         Event::Error(CoreErrorEvent {
@@ -247,9 +347,15 @@ mod tests {
             Ok(ConnectAction::StartSync)
         );
         assert_eq!(
-            connect_action(SignedIn, Some("matrix.org"), true),
-            Err("already signed in; log out to change server")
+            connect_action(WaitingToReconnect, None, true),
+            Ok(ConnectAction::RetryNow)
         );
+        for signed_in in [SignedIn, WaitingToReconnect] {
+            assert_eq!(
+                connect_action(signed_in, Some("matrix.org"), true),
+                Err("already signed in; log out to change server")
+            );
+        }
         for server in [None, Some("matrix.org")] {
             for connecting in [SigningIn, WaitingForBrowser] {
                 assert_eq!(
@@ -271,6 +377,10 @@ mod tests {
             disconnect_action(WaitingForBrowser),
             Ok(DisconnectAction::CancelSignIn)
         );
+        assert_eq!(
+            disconnect_action(WaitingToReconnect),
+            Ok(DisconnectAction::CancelReconnect)
+        );
         for connection in [SignedOut, SigningIn, SignedIn] {
             assert_eq!(disconnect_action(connection), Err("not connected"));
         }
@@ -278,11 +388,94 @@ mod tests {
         for connecting in [SigningIn, WaitingForBrowser] {
             assert_eq!(check_sign_in(connecting), Err("already connecting"));
         }
-        for connection in [SignedIn, Syncing] {
+        for connection in [SignedIn, WaitingToReconnect, Syncing] {
             assert_eq!(
                 check_sign_in(connection),
                 Err("already signed in; log out first")
             );
         }
+    }
+
+    fn connect_setting(reconnect: bool, retry: bool, retry_times: u16) -> ConnectSetting {
+        ConnectSetting {
+            reconnect,
+            retry,
+            retry_times: RetryTimes::new(retry_times).unwrap(),
+            retry_delay: RetryDelay::new(10).unwrap(),
+            ..ConnectSetting::default()
+        }
+    }
+
+    #[test]
+    fn a_lost_connection_reconnects_and_a_failed_attempt_retries_until_the_count() {
+        use AfterSyncLost::{GiveUp, ReconnectNow, RetryAfter, Stay};
+        let ten = Duration::from_secs(10);
+        for (reconnect, retry, was_connected, attempts, expected) in [
+            (true, true, true, 0, ReconnectNow),
+            // A connected sync reconnects however many retries came first.
+            (true, false, true, 5, ReconnectNow),
+            (false, true, true, 0, Stay),
+            (false, false, true, 0, Stay),
+            (true, true, false, 0, RetryAfter(ten)),
+            (false, true, false, 0, RetryAfter(ten)),
+            (true, true, false, 2, RetryAfter(ten)),
+            (true, true, false, 3, GiveUp { attempts: 3 }),
+            (true, false, false, 0, Stay),
+            (false, false, false, 0, Stay),
+        ] {
+            assert_eq!(
+                after_sync_lost(
+                    &connect_setting(reconnect, retry, 3),
+                    was_connected,
+                    attempts
+                ),
+                expected,
+                "reconnect {reconnect}, retry {retry}, connected {was_connected}, attempts {attempts}"
+            );
+        }
+    }
+
+    #[test]
+    fn reconnect_counts_retries_until_the_connection_comes_back() {
+        let settings = connect_setting(true, true, 2);
+        let mut reconnect = Reconnect::default();
+        reconnect.sync_started();
+        assert_eq!(
+            reconnect.sync_lost(&settings),
+            AfterSyncLost::RetryAfter(Duration::from_secs(10))
+        );
+        assert_eq!(reconnect.retry(), 1);
+        reconnect.sync_started();
+        assert_eq!(
+            reconnect.sync_lost(&settings),
+            AfterSyncLost::RetryAfter(Duration::from_secs(10))
+        );
+        assert_eq!(reconnect.retry(), 2);
+        reconnect.sync_started();
+        assert_eq!(
+            reconnect.sync_lost(&settings),
+            AfterSyncLost::GiveUp { attempts: 2 }
+        );
+        assert_eq!(reconnect.attempts(), 2);
+
+        // The user's Connect starts over; the connection's return is no
+        // reconnection then.
+        reconnect.reset();
+        reconnect.sync_started();
+        assert!(!reconnect.sync_connected());
+
+        // Lost once connected: reconnect at once, and say it came back.
+        assert_eq!(reconnect.sync_lost(&settings), AfterSyncLost::ReconnectNow);
+        reconnect.sync_started();
+        // The immediate reconnection failed too: now it is a retry.
+        assert_eq!(
+            reconnect.sync_lost(&settings),
+            AfterSyncLost::RetryAfter(Duration::from_secs(10))
+        );
+        assert_eq!(reconnect.retry(), 1);
+        reconnect.sync_started();
+        assert!(reconnect.sync_connected());
+        assert_eq!(reconnect.attempts(), 0);
+        assert!(!reconnect.sync_connected());
     }
 }

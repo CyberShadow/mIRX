@@ -8,8 +8,8 @@ use std::net::TcpListener;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::ptr::{copy_nonoverlapping, null_mut};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mirx_core::{
@@ -391,6 +391,17 @@ fn write_state_file(events: &[Event]) -> Result<PathBuf, Box<dyn std::error::Err
 
 struct MockBackfillHomeserver {
     base_url: String,
+    faults: Arc<MockFaults>,
+}
+
+/// What the mock homeserver fails, as the network would: a failed request
+/// gets its connection closed without an answer.
+#[derive(Default)]
+struct MockFaults {
+    /// The next this many `/sync` requests fail.
+    drop_syncs: AtomicUsize,
+    /// Every `/send/` request fails while this is set.
+    send_down: AtomicBool,
 }
 
 /// How the mock homeserver answers `/messages` history requests.
@@ -434,6 +445,8 @@ fn spawn_mock_homeserver_with_auth(
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let issuer = format!("http://{address}/");
+    let faults = Arc::new(MockFaults::default());
+    let mock_faults = Arc::clone(&faults);
     std::thread::spawn(move || {
         let alice_member = serde_json::json!({
             "content": {
@@ -504,6 +517,21 @@ fn spawn_mock_homeserver_with_auth(
             let request = String::from_utf8_lossy(&request);
             let request_line = request.lines().next().unwrap_or_default();
             let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+            // The request was read: closing now is a connection the
+            // network dropped, not a reset of unread bytes.
+            let dropped_sync = path.contains("/sync")
+                && mock_faults
+                    .drop_syncs
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                        count.checked_sub(1)
+                    })
+                    .is_ok();
+            let dropped_send =
+                path.contains("/send/") && mock_faults.send_down.load(Ordering::SeqCst);
+            if dropped_sync || dropped_send {
+                continue;
+            }
 
             if auth == MockAuth::OAuth {
                 let body = match path {
@@ -837,6 +865,7 @@ fn spawn_mock_homeserver_with_auth(
 
     Ok(MockBackfillHomeserver {
         base_url: format!("http://{address}"),
+        faults,
     })
 }
 
@@ -2987,7 +3016,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 57);
+    assert_eq!(version.protocol_version, 58);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -3470,6 +3499,279 @@ fn file_disconnect_and_connect_toggle_sync() -> Result<(), Box<dyn std::error::E
         &app,
         "* /quit: Matrix has no quit message"
     )?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+// Reconnect on disconnection and connect retry. The mock homeserver drops
+// `/sync` requests as a network would; every test retries after 1 second
+// unless it needs the wait to last.
+
+/// The Status window's lines.
+fn status_view_lines(app: &MirxApp) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    Ok(find_view(&app.dump_ui_state()?, &ViewIdentity::Status)
+        .lines
+        .clone())
+}
+
+fn wait_for_status_line(
+    app: &MirxApp,
+    line: &str,
+    timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        app.wait_idle(Duration::from_secs(5))?;
+        let lines = status_view_lines(app)?;
+        if lines.iter().any(|status_line| status_line.contains(line)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("Status never showed {line:?}: {lines:?}").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Until the sync's first response came: `SyncConnected`.
+fn wait_until_connected(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        app.wait_idle(Duration::from_secs(5))?;
+        let status = app.dump_model()?.status;
+        if status == "connected to example" {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("never connected; status {status:?}").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// `connect` is the `[connect]` section's keys after `startup`.
+fn write_connect_settings(
+    local_app_data: &Path,
+    connect: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = settings_file_path(local_app_data);
+    fs::create_dir_all(path.parent().ok_or("the settings file has a folder")?)?;
+    fs::write(path, format!("[connect]\r\nstartup=on\r\n{connect}"))?;
+    Ok(())
+}
+
+/// mirx with `connect` settings, connected to a mock homeserver and synced.
+fn reconnect_app(
+    connect: &str,
+) -> Result<(PathBuf, MockBackfillHomeserver, GuiTestApp), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_connect_settings(&local_app_data, connect)?;
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    Ok((local_app_data, server, app))
+}
+
+/// mirx started before the network was up: the restore's sync and the
+/// first attempts fail, the retries go on, and the rooms come with the
+/// first sync that gets through.
+#[test]
+fn reconnect_retries_until_the_first_sync_succeeds() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    // The restore's initial sync, the sync it starts, and retry #1.
+    server.faults.drop_syncs.store(3, Ordering::SeqCst);
+    write_saved_session(&local_app_data, &server.base_url)?;
+    write_connect_settings(&local_app_data, "retry_delay=1\r\n")?;
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    // Not launch_automation_app: the restore starts before the core reports
+    // Started, so the lifecycle never shows core_started.
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+
+    wait_for_status_line(&app, "* Connect retry #2 example", Duration::from_secs(30))?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(
+        ui_state
+            .rooms
+            .iter()
+            .any(|room| room.room_id == "!beta:example"),
+        "{:?}",
+        ui_state.rooms
+    );
+    let lines = status_view_lines(&app)?;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("* Connect retry #"))
+            .count(),
+        2,
+        "{lines:?}"
+    );
+    wait_for_status_line(&app, "* Reconnected to example", Duration::from_secs(30))?;
+    assert_eq!(app.dump_model()?.reconnect_attempts, 0);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A connection that was up and is lost reconnects at once, no retry
+/// counted.
+#[test]
+fn reconnect_after_a_lost_connection_is_immediate() -> Result<(), Box<dyn std::error::Error>> {
+    let (local_app_data, server, app) = reconnect_app("retry_delay=1\r\n")?;
+    wait_until_connected(&app)?;
+
+    server.faults.drop_syncs.store(1, Ordering::SeqCst);
+    wait_for_status_line(&app, "* Reconnected to example", Duration::from_secs(30))?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let lines = status_view_lines(&app)?;
+    let position = |text: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("{text:?} in {lines:?}"))
+    };
+    assert!(
+        position("* Disconnected: ") < position("* Reconnecting to example")
+            && position("* Reconnecting to example") < position("* Reconnected to example"),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("Connect retry")),
+        "{lines:?}"
+    );
+    assert_eq!(app.dump_model()?.reconnect_attempts, 0);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// mIRC without Reconnect on disconnection: a lost connection stays lost.
+#[test]
+fn reconnect_off_stays_disconnected() -> Result<(), Box<dyn std::error::Error>> {
+    let (local_app_data, server, app) = reconnect_app("reconnect=off\r\nretry_delay=1\r\n")?;
+    wait_until_connected(&app)?;
+
+    server.faults.drop_syncs.store(1, Ordering::SeqCst);
+    wait_for_status_line(&app, "* Disconnected: ", Duration::from_secs(30))?;
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+    // Twice the retry delay: a retry, had one been armed, would have run.
+    std::thread::sleep(Duration::from_secs(2));
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+    let lines = status_view_lines(&app)?;
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("Reconnect") || line.contains("Connect retry")),
+        "{lines:?}"
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A server that stays down is retried `retry_times` times, then left.
+#[test]
+fn reconnect_retry_gives_up_after_retry_times() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_connect_settings(&local_app_data, "retry_times=2\r\nretry_delay=1\r\n")?;
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    server.faults.drop_syncs.store(100, Ordering::SeqCst);
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+
+    wait_for_status_line(
+        &app,
+        "* Not retrying: 2 retries failed. File > Connect or /server tries again.",
+        Duration::from_secs(30),
+    )?;
+    assert!(status_view_contains(&app, "* Connect retry #2 example")?);
+    assert!(!status_view_contains(&app, "* Connect retry #3")?);
+    let model = app.dump_model()?;
+    assert_eq!(model.connection, "signed_in");
+    assert_eq!(model.reconnect_attempts, 2);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// File > Disconnect stops the retries, as mIRC's `/quit` does; File >
+/// Connect starts again.
+#[test]
+fn reconnect_disconnect_cancels_a_waiting_retry() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_connect_settings(&local_app_data, "retry_delay=30\r\n")?;
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    server.faults.drop_syncs.store(100, Ordering::SeqCst);
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("waiting_to_reconnect", Duration::from_secs(30))?;
+    assert_eq!(
+        app.dump_model()?.status,
+        "disconnected; retrying in 30 seconds"
+    );
+
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    assert_eq!(app.dump_model()?.connection, "signed_in");
+    let lines = status_view_lines(&app)?;
+    assert!(
+        lines
+            .last()
+            .is_some_and(|line| line.ends_with("] * Disconnected")),
+        "{lines:?}"
+    );
+
+    server.faults.drop_syncs.store(0, Ordering::SeqCst);
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    assert!(!status_view_contains(&app, "* Connect retry")?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// `/server` while a retry is due tries at once.
+#[test]
+fn reconnect_connect_while_waiting_retries_now() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_connect_settings(&local_app_data, "retry_delay=30\r\n")?;
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    server.faults.drop_syncs.store(100, Ordering::SeqCst);
+    invoke_account_menu_command(&app, MENU_ID_FILE_CONNECT)?;
+    app.wait_for_connection("waiting_to_reconnect", Duration::from_secs(30))?;
+
+    server.faults.drop_syncs.store(0, Ordering::SeqCst);
+    app.select_status_view()?;
+    let typed = Instant::now();
+    type_commands(&app, &["/server"])?;
+    app.wait_for_connection("syncing", Duration::from_secs(20))?;
+    assert!(typed.elapsed() < Duration::from_secs(20));
+    assert!(!status_view_contains(&app, "* Connect retry")?);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -5366,7 +5668,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
         fs::read_to_string(settings_file_path(&local_app_data))?,
         "[fonts]\r\ntext=Fixedsys,9\r\n\
          [timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n\
-         [connect]\r\nstartup=on\r\n\
+         [connect]\r\nstartup=on\r\nreconnect=on\r\nretry=on\r\nretry_times=99\r\nretry_delay=10\r\n\
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
          [treebar]\r\nshow=on\r\n\

@@ -875,6 +875,7 @@ pub(super) fn test_state() -> WindowState {
         options_dialog: None,
         colors_dialog: None,
         tray: TrayState::default(),
+        reconnect: connection::Reconnect::default(),
     }
 }
 

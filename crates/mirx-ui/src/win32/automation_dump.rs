@@ -1115,6 +1115,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         status: model.status.clone(),
         lifecycle_state: model.lifecycle_state,
         connection: model.connection,
+        reconnect_attempts: state.reconnect.attempts(),
         rooms: model.rooms.iter().map(dump_room_from_summary).collect(),
         last_activity: model
             .last_activity

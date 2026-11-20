@@ -7,8 +7,7 @@
 use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::settings::{
-    ActivityColors, ConnectSetting, LoggingSetting, Settings, TipsSetting, TraySetting,
-    parse_button_width,
+    ActivityColors, LoggingSetting, Settings, TipsSetting, TraySetting, parse_button_width,
 };
 use super::timestamp::TimestampFormat;
 
@@ -144,9 +143,7 @@ impl OptionsForm {
             )
         })?;
         let mut settings = current.clone();
-        settings.connect = ConnectSetting {
-            on_startup: self.connect_on_startup,
-        };
+        settings.connect.on_startup = self.connect_on_startup;
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
         settings.switchbar.buttons = buttons;

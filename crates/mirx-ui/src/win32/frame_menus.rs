@@ -825,7 +825,7 @@ unsafe fn menu_command_result(
             "Tools",
             submit_menu_verification_action(hwnd, VerificationAction::Reject).map(|_| Some(())),
         ),
-        MENU_ID_LOGOUT => ("File", submit_logout(state_mut(hwnd)).map(|_| Some(()))),
+        MENU_ID_LOGOUT => ("File", log_out(hwnd).map(|_| Some(()))),
         _ => {
             let item = commands_menu_item(command_id)?;
             (
@@ -1188,23 +1188,45 @@ pub(super) unsafe fn connect(hwnd: HWND, server: Option<&str>) -> Result<bool, S
         server,
         session_path()?.is_file(),
     )?;
+    // The user's own Connect: retries start over.
+    state_mut(hwnd).reconnect.reset();
     match action {
         ConnectAction::RestoreSavedSession => submit_restore_saved_session(state_mut(hwnd), true)?,
         ConnectAction::SelectServer { server } => return show_select_server_dialog(hwnd, &server),
         ConnectAction::StartSync => submit_start_sync(state_mut(hwnd))?,
+        ConnectAction::RetryNow => {
+            reconnect::cancel(hwnd);
+            submit_start_sync(state_mut(hwnd))?;
+        }
     }
     refresh_status_bar(hwnd)?;
     Ok(true)
 }
 
-/// File > Disconnect and `/quit`: stop syncing and keep the session, or
-/// stop waiting for a browser sign-in.
+/// File > Disconnect and `/quit`: stop syncing and keep the session, stop
+/// waiting for a browser sign-in, or stop retrying.
 pub(super) unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
     let command = match connection::disconnect_action(state_ref(hwnd).model.connection)? {
         DisconnectAction::StopSync => Command::StopSync,
         DisconnectAction::CancelSignIn => Command::CancelLogin,
+        DisconnectAction::CancelReconnect => {
+            reconnect::cancel(hwnd);
+            // The core is idle already: nothing answers with `SyncStopped`.
+            let state = state_mut(hwnd);
+            log_status(state, StatusLineKind::Info, status_log::STOPPED.to_owned());
+            state.model.status = "disconnected".to_owned();
+            return sync_views_and_tree(hwnd);
+        }
     };
     enqueue_command(state_mut(hwnd), command)
+}
+
+/// File > Log Out: a due retry goes first.
+pub(super) unsafe fn log_out(hwnd: HWND) -> Result<(), String> {
+    if state_ref(hwnd).model.connection == ConnectionState::WaitingToReconnect {
+        reconnect::cancel(hwnd);
+    }
+    submit_logout(state_mut(hwnd))
 }
 
 /// A Commands item runs the slash command it stands for, prompting first

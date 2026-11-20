@@ -212,6 +212,12 @@ unsafe extern "system" fn window_proc(
             DestroyWindow(hwnd);
             0
         }
+        WM_TIMER if wparam == RECONNECT_TIMER_ID => {
+            if let Err(message) = reconnect::retry(hwnd) {
+                show_error_message(hwnd, "Connect", &message);
+            }
+            0
+        }
         WM_TIMER if wparam == AUTO_CLOSE_TIMER_ID => {
             KillTimer(hwnd, AUTO_CLOSE_TIMER_ID);
             DestroyWindow(hwnd);

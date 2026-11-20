@@ -527,16 +527,17 @@ pub(super) struct FileMenuState {
 }
 
 pub(super) fn file_menu_state(connection: ConnectionState) -> FileMenuState {
-    let (signed_out, signed_in, syncing) = (
+    let (signed_out, signed_in, waiting, syncing) = (
         connection == ConnectionState::SignedOut,
         connection == ConnectionState::SignedIn,
+        connection == ConnectionState::WaitingToReconnect,
         connection == ConnectionState::Syncing,
     );
     FileMenuState {
-        connect: signed_out || signed_in,
+        connect: signed_out || signed_in || waiting,
         disconnect: super::connection::disconnect_action(connection).is_ok(),
         select_server: signed_out,
-        log_out: signed_in || syncing,
+        log_out: signed_in || waiting || syncing,
     }
 }
 
@@ -629,6 +630,15 @@ mod tests {
             FileMenuState {
                 connect: true,
                 disconnect: false,
+                select_server: false,
+                log_out: true,
+            }
+        );
+        assert_eq!(
+            file_menu_state(ConnectionState::WaitingToReconnect),
+            FileMenuState {
+                connect: true,
+                disconnect: true,
                 select_server: false,
                 log_out: true,
             }

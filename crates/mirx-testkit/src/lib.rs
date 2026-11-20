@@ -379,8 +379,12 @@ pub struct FindActiveViewResult {
 pub struct Model {
     pub status: String,
     pub lifecycle_state: String,
-    /// `signed_out`, `signing_in`, `waiting_for_browser`, `signed_in` or `syncing`.
+    /// `signed_out`, `signing_in`, `waiting_for_browser`, `signed_in`,
+    /// `waiting_to_reconnect` or `syncing`.
     pub connection: String,
+    /// The connect retries since the connection was lost, or since the
+    /// user's own Connect.
+    pub reconnect_attempts: u32,
     pub rooms: Vec<Room>,
     pub last_activity: Option<RoomMessageActivityLine>,
     pub e2ee_status: Option<E2eeStatus>,

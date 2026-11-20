@@ -103,12 +103,98 @@ pub(super) struct ConnectSetting {
     /// Whether a saved session syncs at startup. Off, mirx starts signed in
     /// but disconnected, until File > Connect or `/server`.
     pub(super) on_startup: bool,
+    /// mIRC's Reconnect on disconnection: a connection that was up and
+    /// ended by itself is tried again at once.
+    pub(super) reconnect: bool,
+    /// mIRC's Enable connect retry: a connect attempt that failed is
+    /// tried again after `retry_delay`, up to `retry_times` times.
+    pub(super) retry: bool,
+    pub(super) retry_times: RetryTimes,
+    pub(super) retry_delay: RetryDelay,
 }
 
 impl Default for ConnectSetting {
     fn default() -> Self {
-        Self { on_startup: true }
+        Self {
+            on_startup: true,
+            reconnect: true,
+            retry: true,
+            retry_times: RetryTimes::new(99).expect("the default retry count must be valid"),
+            retry_delay: RetryDelay::new(10).expect("the default retry delay must be valid"),
+        }
     }
+}
+
+/// How many times a failed connect is retried: 1-999.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RetryTimes(u16);
+
+impl RetryTimes {
+    const TIMES: std::ops::RangeInclusive<u16> = 1..=999;
+
+    pub(super) fn new(times: u16) -> Result<Self, String> {
+        if Self::TIMES.contains(&times) {
+            Ok(Self(times))
+        } else {
+            Err(RETRY_TIMES_ERROR.to_owned())
+        }
+    }
+
+    pub(super) fn get(self) -> u32 {
+        u32::from(self.0)
+    }
+}
+
+impl std::fmt::Display for RetryTimes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+const RETRY_TIMES_ERROR: &str = "retry_times must be 1-999";
+
+/// Parses a retry count: `retry_times must be 1-999` for anything else.
+pub(super) fn parse_retry_times(text: &str) -> Result<RetryTimes, String> {
+    text.parse::<u16>()
+        .map_err(|_| RETRY_TIMES_ERROR.to_owned())
+        .and_then(RetryTimes::new)
+}
+
+/// How long to wait before a connect retry: 1-3600 seconds. Never zero:
+/// offline, the retries would all fail at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RetryDelay(u16);
+
+impl RetryDelay {
+    const SECONDS: std::ops::RangeInclusive<u16> = 1..=3600;
+
+    pub(super) fn new(seconds: u16) -> Result<Self, String> {
+        if Self::SECONDS.contains(&seconds) {
+            Ok(Self(seconds))
+        } else {
+            Err(RETRY_DELAY_ERROR.to_owned())
+        }
+    }
+
+    pub(super) fn duration(self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.0))
+    }
+}
+
+impl std::fmt::Display for RetryDelay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+const RETRY_DELAY_ERROR: &str = "retry_delay must be 1-3600";
+
+/// Parses a retry delay in seconds: `retry_delay must be 1-3600` for
+/// anything else.
+pub(super) fn parse_retry_delay(text: &str) -> Result<RetryDelay, String> {
+    text.parse::<u16>()
+        .map_err(|_| RETRY_DELAY_ERROR.to_owned())
+        .and_then(RetryDelay::new)
 }
 
 impl Settings {
@@ -367,6 +453,20 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Connect, "startup") => {
                 settings.connect.on_startup = parse_on_off(value, "startup").map_err(error)?;
             }
+            (Section::Connect, "reconnect") => {
+                settings.connect.reconnect = parse_on_off(value, "reconnect").map_err(error)?;
+            }
+            (Section::Connect, "retry") => {
+                settings.connect.retry = parse_on_off(value, "retry").map_err(error)?;
+            }
+            (Section::Connect, "retry_times") => {
+                settings.connect.retry_times =
+                    parse_retry_times(value.trim_end()).map_err(error)?;
+            }
+            (Section::Connect, "retry_delay") => {
+                settings.connect.retry_delay =
+                    parse_retry_delay(value.trim_end()).map_err(error)?;
+            }
             (Section::Switchbar, "show") => {
                 settings.switchbar.show = parse_on_off(value, "show").map_err(error)?;
             }
@@ -465,6 +565,7 @@ fn parse_font_value(value: &str) -> Result<FontSetting, String> {
 pub(super) fn to_ini(settings: &Settings) -> String {
     let font = &settings.text_font;
     let bold = if font.bold { ",bold" } else { "" };
+    let connect = &settings.connect;
     let activity = &settings.switchbar.activity;
     let logging = &settings.logging;
     let tray = &settings.tray;
@@ -476,7 +577,8 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     format!(
         "[fonts]\r\ntext={},{}{bold}\r\n\
          [timestamp]\r\nshow={}\r\nformat={}\r\n\
-         [connect]\r\nstartup={}\r\n\
+         [connect]\r\nstartup={}\r\nreconnect={}\r\nretry={}\r\n\
+         retry_times={}\r\nretry_delay={}\r\n\
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
          [treebar]\r\nshow={}\r\n\
@@ -488,7 +590,11 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         font.points,
         on_off(settings.timestamp.show),
         settings.timestamp.format,
-        on_off(settings.connect.on_startup),
+        on_off(connect.on_startup),
+        on_off(connect.reconnect),
+        on_off(connect.retry),
+        connect.retry_times,
+        connect.retry_delay,
         on_off(settings.switchbar.show),
         settings.switchbar.buttons,
         activity.event.get(),
@@ -580,7 +686,7 @@ mod tests {
 
     const DEFAULT_INI: &str = "[fonts]\r\ntext=Fixedsys,9\r\n\
         [timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n\
-        [connect]\r\nstartup=on\r\n\
+        [connect]\r\nstartup=on\r\nreconnect=on\r\nretry=on\r\nretry_times=99\r\nretry_delay=10\r\n\
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
         [treebar]\r\nshow=on\r\n\
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
@@ -627,7 +733,13 @@ mod tests {
     #[test]
     fn connect_and_bar_settings_round_trip() {
         let settings = Settings {
-            connect: ConnectSetting { on_startup: false },
+            connect: ConnectSetting {
+                on_startup: false,
+                reconnect: false,
+                retry: true,
+                retry_times: RetryTimes::new(3).unwrap(),
+                retry_delay: RetryDelay::new(30).unwrap(),
+            },
             switchbar: SwitchbarSetting {
                 show: false,
                 buttons: ButtonWidth::new(90).unwrap(),
@@ -641,7 +753,9 @@ mod tests {
             ..Settings::default()
         };
         let text = to_ini(&settings);
-        assert!(text.contains("[connect]\r\nstartup=off\r\n"));
+        assert!(text.contains(
+            "[connect]\r\nstartup=off\r\nreconnect=off\r\nretry=on\r\nretry_times=3\r\nretry_delay=30\r\n"
+        ));
         assert!(text.contains(
             "[switchbar]\r\nshow=off\r\nbuttons=90\r\nevent=7\r\nmessage=9\r\nhighlight=0\r\n"
         ));
@@ -841,6 +955,35 @@ mod tests {
             (
                 "[connect]\nstartup=maybe",
                 "line 2: startup must be on or off",
+            ),
+            (
+                "[connect]\nreconnect=yes",
+                "line 2: reconnect must be on or off",
+            ),
+            ("[connect]\nretry=1", "line 2: retry must be on or off"),
+            (
+                "[connect]\nretry_times=0",
+                "line 2: retry_times must be 1-999",
+            ),
+            (
+                "[connect]\nretry_times=1000",
+                "line 2: retry_times must be 1-999",
+            ),
+            (
+                "[connect]\nretry_times=many",
+                "line 2: retry_times must be 1-999",
+            ),
+            (
+                "[connect]\nretry_delay=0",
+                "line 2: retry_delay must be 1-3600",
+            ),
+            (
+                "[connect]\nretry_delay=3601",
+                "line 2: retry_delay must be 1-3600",
+            ),
+            (
+                "[connect]\nretry_delay=10s",
+                "line 2: retry_delay must be 1-3600",
             ),
             ("[switchbar]\nbuttons=39", "line 2: buttons must be 40-400"),
             ("[switchbar]\nbuttons=401", "line 2: buttons must be 40-400"),

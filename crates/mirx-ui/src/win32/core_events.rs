@@ -585,6 +585,7 @@ pub(super) fn apply_core_event(
         }
         Event::VerificationState(event) => apply_verification_event(state, event),
         Event::LoggedOut => {
+            state.reconnect.reset();
             delete_saved_session()?;
             state.current_session_homeserver_url = None;
             state.model.own_user_id = None;
@@ -626,8 +627,13 @@ pub(super) fn apply_core_event(
             );
             state.model.status = "continuous sync started".to_owned();
             state.model.lifecycle_state = LifecycleState::Syncing;
+            state.reconnect.sync_started();
         }
         Event::SyncConnected => {
+            if state.reconnect.sync_connected() {
+                let line = status_log::reconnected(session_server(state));
+                log_status(state, StatusLineKind::Info, line);
+            }
             state.model.status = format!("connected to {}", session_server(state));
         }
         Event::SyncStopped(reason) => {
@@ -678,13 +684,7 @@ pub(super) fn apply_core_event(
 
 /// The server the signed-in session is on, as connection lines name it.
 fn session_server(state: &WindowState) -> &str {
-    status_log::user_server(
-        state
-            .model
-            .own_user_id
-            .as_deref()
-            .expect("a syncing session knows its user"),
-    )
+    own_server(&state.model).expect("a session that syncs is signed in")
 }
 
 /// A join the user asked for opens the room's window and makes it active,
@@ -781,15 +781,20 @@ pub(super) unsafe fn apply_events_and_refresh(
             );
         }
         backfill_result |= backfilled_room_id.is_some();
-        // A replayed event load opens nothing.
+        // A replayed event load opens nothing, and reconnects nowhere.
         let sign_in_url = match &event {
             Event::SignInUrl { url } if !state.synthetic_load_in_progress => Some(url.clone()),
             _ => None,
         };
+        let connection_lost = !state.synthetic_load_in_progress
+            && matches!(event, Event::SyncStopped(SyncStopReason::Lost(_)));
         attention = attention.then(apply_core_event(state, event)?);
         state.event_generation += 1;
         if let Some(url) = sign_in_url {
             open_web_link(hwnd, url)?;
+        }
+        if connection_lost {
+            reconnect::after_sync_lost(hwnd)?;
         }
     }
 
@@ -1022,9 +1027,9 @@ pub(super) fn operation_name(operation: Operation) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::time::Duration;
 
-    use mirx_core::SyncStopReason;
-
+    use super::super::connection::AfterSyncLost;
     use super::super::test_fixtures::*;
     use super::*;
 
@@ -4879,6 +4884,65 @@ mod tests {
                     "[22:12] * Disconnected: example signed this session out (token gone). Log out, then sign in again.".to_owned(),
                     "[22:12] * Logged out".to_owned(),
                     "[22:12] * Disconnected".to_owned(),
+                ]
+            );
+        });
+    }
+
+    /// The connection's return is news only after it was lost; the
+    /// retries count from then until it is back.
+    #[test]
+    fn a_connection_that_comes_back_says_so_and_ends_the_retries() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state.synthetic_load_in_progress = true;
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
+                },
+            )
+            .unwrap();
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+            // As the frame does when the core reports the loss.
+            let settings = state.settings.settings().connect.clone();
+            apply_core_event(
+                &mut state,
+                Event::SyncStopped(SyncStopReason::Lost("reset".to_owned())),
+            )
+            .unwrap();
+            assert_eq!(
+                state.reconnect.sync_lost(&settings),
+                AfterSyncLost::ReconnectNow
+            );
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(
+                &mut state,
+                Event::SyncStopped(SyncStopReason::Lost("refused".to_owned())),
+            )
+            .unwrap();
+            assert_eq!(
+                state.reconnect.sync_lost(&settings),
+                AfterSyncLost::RetryAfter(Duration::from_secs(10))
+            );
+            assert_eq!(state.reconnect.retry(), 1);
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+
+            assert_eq!(state.reconnect.attempts(), 0);
+            assert_eq!(state.model.status, "connected to example");
+            assert_eq!(
+                status_log_lines(&state),
+                vec![
+                    "[22:12] * Logged in as @alice:example (device DEVICE)".to_owned(),
+                    "[22:12] * Syncing with the homeserver".to_owned(),
+                    "[22:12] * Disconnected: reset".to_owned(),
+                    "[22:12] * Syncing with the homeserver".to_owned(),
+                    "[22:12] * Disconnected: refused".to_owned(),
+                    "[22:12] * Syncing with the homeserver".to_owned(),
+                    "[22:12] * Reconnected to example".to_owned(),
                 ]
             );
         });
