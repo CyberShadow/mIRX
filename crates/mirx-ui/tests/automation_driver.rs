@@ -194,6 +194,13 @@ impl Deref for GuiTestApp {
     }
 }
 
+impl GuiTestApp {
+    /// Closes mirx and waits for it to exit, still holding the GUI lock.
+    fn close(self, timeout: Duration) -> Result<std::process::ExitStatus, TestkitError> {
+        self.app.close(timeout)
+    }
+}
+
 fn gui_test_lock() -> &'static Mutex<()> {
     static GUI_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     GUI_TEST_LOCK.get_or_init(|| Mutex::new(()))
@@ -3300,6 +3307,90 @@ fn startup_with_saved_session_restores_and_syncs() -> Result<(), Box<dyn std::er
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
     assert!(status_view_contains(&app, "* Syncing with the homeserver")?);
     assert!(!status_view_contains(&app, CONNECT_HINT)?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Unread state lives in the Matrix store: a room left unread when mirx
+/// closed is coloured again at the next start, before anything new arrives.
+#[test]
+fn activity_colours_come_back_after_a_restart() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let bob_message = |event_id: &str, body: &str| {
+        serde_json::json!({
+            "content": { "msgtype": "m.text", "body": body },
+            "event_id": event_id,
+            "origin_server_ts": 1700000000011u64,
+            "sender": "@bob:example",
+            "type": "m.room.message"
+        })
+    };
+    let beta = room_identity("!beta:example");
+
+    // Run 1: Bob's two messages arrive while Status is active, so Beta is
+    // never read.
+    let server = spawn_mock_homeserver(
+        MockMessages::Hang,
+        vec![
+            bob_message("$bob-one", "are you there?"),
+            bob_message("$bob-two", "ping"),
+        ],
+    )?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    // Not launch_automation_app: the restore starts before the core reports
+    // Started, so the lifecycle never shows core_started.
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        app.wait_idle(Duration::from_secs(5))?;
+        let ui_state = app.dump_ui_state()?;
+        if find_ui_room(&ui_state, "!beta:example")
+            .read_state
+            .as_ref()
+            .is_some_and(|read_state| read_state.num_unread == 2)
+        {
+            assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+            assert_switchbar_activity(&ui_state, &beta, Some(ViewActivityLevel::Message));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Beta's two unread messages were not counted: {:?}",
+            find_ui_room(&ui_state, "!beta:example")
+        );
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+
+    // Run 2: the server has nothing new for Beta, and listens on another
+    // port; the saved session follows it, and the store still serves.
+    let server = spawn_mock_backfill_homeserver()?;
+    write_saved_session(&local_app_data, &server.base_url)?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, ViewIdentity::Status);
+    assert_eq!(find_switchbar_item(&ui_state, &beta).title, "Beta");
+    assert_switchbar_activity(&ui_state, &beta, Some(ViewActivityLevel::Message));
+    assert_navigation_activity(&ui_state, &beta, Some(ViewActivityLevel::Message));
+    // The colour comes from the stored read state, not from new lines.
+    let beta_view = find_view(&ui_state, &beta);
+    assert!(!view_contains(beta_view, "<Bob>"), "{:?}", beta_view.lines);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

@@ -1998,6 +1998,13 @@ impl MirxApp {
         self.inner.wait_idle(timeout)
     }
 
+    /// Closes a launched mirx as its close button does, and waits until the
+    /// process has exited: unlike dropping the handle, which kills it, this
+    /// lets mirx shut its core down and close its store.
+    pub fn close(self, timeout: Duration) -> Result<std::process::ExitStatus, TestkitError> {
+        self.inner.close(timeout)
+    }
+
     pub fn dump_model(&self) -> Result<Model, TestkitError> {
         self.inner.dump_model()
     }
@@ -2811,6 +2818,15 @@ mod imp {
             ))
         }
 
+        pub(crate) fn close(
+            self,
+            _timeout: Duration,
+        ) -> Result<std::process::ExitStatus, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn dump_model(&self) -> Result<Model, TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
@@ -3268,8 +3284,8 @@ mod imp {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, FindWindowExW, GW_OWNER, GetClassNameW, GetDlgItem, GetWindow,
-        GetWindowThreadProcessId, IsWindowVisible, SB_TOP, SendMessageW, WM_COPYDATA, WM_GETTEXT,
-        WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_VSCROLL,
+        GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SB_TOP, SendMessageW, WM_CLOSE,
+        WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_VSCROLL,
     };
 
     use super::*;
@@ -3416,6 +3432,32 @@ mod imp {
 
         pub(crate) fn get_version(&self) -> Result<ProtocolVersion, TestkitError> {
             self.send_command(COMMAND_ID_GET_VERSION, EmptyArgs {})
+        }
+
+        pub(crate) fn close(
+            mut self,
+            timeout: Duration,
+        ) -> Result<std::process::ExitStatus, TestkitError> {
+            let mut child = self.owned_child.take().ok_or_else(|| {
+                TestkitError::Launch("only a launched mirx-ui can be closed".to_owned())
+            })?;
+            if unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
+                return Err(TestkitError::Io(std::io::Error::last_os_error()));
+            }
+            let deadline = Instant::now() + timeout;
+            loop {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(status);
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(TestkitError::Timeout(
+                        "timed out waiting for mirx-ui to exit after WM_CLOSE".to_owned(),
+                    ));
+                }
+                thread::sleep(DEFAULT_POLL_INTERVAL);
+            }
         }
 
         pub(crate) fn wait_idle(&self, timeout: Duration) -> Result<(), TestkitError> {
