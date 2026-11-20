@@ -21,10 +21,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DefWindowProcW,
     DestroyWindow, ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK,
-    IsDialogMessageW, LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN,
-    LB_RESETCONTENT, LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK,
-    MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_NCCREATE,
-    WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
+    LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow,
+    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
+    WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use mirx_core::HighlightWord;
@@ -193,7 +193,7 @@ impl OptionsDialog {
             mut state,
         } = self;
         SetFocus(state.tree);
-        run_modal_dialog(owner, hwnd, |message| IsDialogMessageW(hwnd, message) != 0);
+        run_modal_dialog(owner, hwnd);
         state.saved.take()
     }
 }

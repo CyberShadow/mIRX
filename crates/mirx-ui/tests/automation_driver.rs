@@ -61,18 +61,19 @@ use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadI
 use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
-    VK_DOWN, VK_ESCAPE, VK_MENU, VK_RETURN,
+    VK_DOWN, VK_ESCAPE, VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE, GW_OWNER,
-    GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgItem, GetLastActivePopup,
-    GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL,
-    IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT,
-    LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT,
-    SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
-    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, WM_CHAR, WM_CLOSE, WM_COMMAND,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
+    GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
+    LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM,
+    SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SWP_NOMOVE,
+    SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
+    SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
+    WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2256,18 +2257,13 @@ fn acknowledge_recovery_key_handoff(app: &MirxApp) -> Result<(), Box<dyn std::er
         unsafe { read_window_text(acknowledge_button) },
         "I Saved It"
     );
-    assert_ne!(
-        unsafe {
-            PostMessageW(
-                dialog,
-                WM_COMMAND,
-                RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID as WPARAM,
-                0,
-            )
-        },
-        0,
-        "posting recovery key handoff acknowledgement must succeed"
-    );
+    // The key has the focus, so Ctrl+C copies it; its multi-line edit
+    // passes Tab on to the button, and Enter presses it.
+    unsafe { SetForegroundWindow(dialog) };
+    wait_for_dialog_focus(app, dialog, RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID)?;
+    press_keys(&[VK_TAB]);
+    wait_for_dialog_focus(app, dialog, RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID as i32)?;
+    press_keys(&[VK_RETURN]);
 
     let deadline = Instant::now() + Duration::from_secs(5);
     while unsafe { IsWindow(dialog) } != 0 {
@@ -11984,7 +11980,7 @@ fn alt_l_lists_matching_rooms_and_closing_the_window_drops_the_listing()
 
     // Signed out there is no directory to list.
     unsafe { SetForegroundWindow(frame) };
-    send_key_chord(VK_MENU, u16::from(b'L'));
+    press_keys(&[VK_MENU, u16::from(b'L')]);
     answer_commands_prompt("rust")?;
     app.wait_idle(Duration::from_secs(5))?;
     assert!(status_view_contains(
@@ -11998,7 +11994,7 @@ fn alt_l_lists_matching_rooms_and_closing_the_window_drops_the_listing()
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     app.wait_idle(Duration::from_secs(5))?;
     unsafe { SetForegroundWindow(frame) };
-    send_key_chord(VK_MENU, u16::from(b'L'));
+    press_keys(&[VK_MENU, u16::from(b'L')]);
     answer_commands_prompt("rust")?;
     let listed = app.wait_for_ui_state(
         "the matching rooms listed",
@@ -12318,7 +12314,7 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
     let (app, local_app_data) = launch_close_lifecycle_app()?;
     let frame = app.automation_frame_hwnd() as HWND;
     unsafe { SetForegroundWindow(frame) };
-    send_key_chord(VK_MENU, u16::from(b'O'));
+    press_keys(&[VK_MENU, u16::from(b'O')]);
     let dialog = wait_for_options_dialog(&app)?;
     let options = app
         .dump_ui_state()?
@@ -12799,7 +12795,7 @@ fn find_text_in_window_menu_and_ctrl_f() -> Result<(), Box<dyn std::error::Error
     let frame = app.automation_frame_hwnd() as HWND;
     unsafe { SetForegroundWindow(frame) };
     assert_compose_has_focus(&app);
-    send_key_chord(VK_CONTROL, u16::from(b'F'));
+    press_keys(&[VK_CONTROL, u16::from(b'F')]);
     cancel_find_dialog()?;
     app.wait_idle(Duration::from_secs(5))?;
 
@@ -12817,7 +12813,7 @@ fn alt_e_opens_select_server_only_while_signed_out() -> Result<(), Box<dyn std::
     unsafe { SetForegroundWindow(frame) };
     let class_name = wide_null("mirxWin32LoginDialog");
 
-    send_key_chord(VK_MENU, u16::from(b'E'));
+    press_keys(&[VK_MENU, u16::from(b'E')]);
     let dialog = wait_for_window(&class_name, "Select Server dialog")?;
     assert_ne!(
         unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_CANCEL_ID as WPARAM, 0) },
@@ -12831,7 +12827,7 @@ fn alt_e_opens_select_server_only_while_signed_out() -> Result<(), Box<dyn std::
     app.restore_session(&server.base_url, stored_session())?;
     app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
     unsafe { SetForegroundWindow(frame) };
-    send_key_chord(VK_MENU, u16::from(b'E'));
+    press_keys(&[VK_MENU, u16::from(b'E')]);
     app.wait_idle(Duration::from_secs(5))?;
     std::thread::sleep(Duration::from_millis(500));
     assert!(unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) }.is_null());
@@ -12849,9 +12845,13 @@ fn assert_protocol_error(result: Result<(), TestkitError>, expected: &str) {
     }
 }
 
-/// Closes a mirx dialog through its close box and waits until it is gone.
+/// Closes a mirx dialog as Esc does, with `IDCANCEL`, and waits until it
+/// is gone.
 fn close_dialog(app: &MirxApp, dialog: HWND) -> Result<(), Box<dyn std::error::Error>> {
-    assert_ne!(unsafe { PostMessageW(dialog, WM_CLOSE, 0, 0) }, 0);
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, IDCANCEL as WPARAM, 0) },
+        0
+    );
     wait_for_window_gone(dialog, "dialog")?;
     app.wait_idle(Duration::from_secs(5))?;
     Ok(())
@@ -12990,8 +12990,9 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
-/// Presses and releases `modifier`+`key` through `SendInput`.
-fn send_key_chord(modifier: u16, key: u16) {
+/// Presses `keys` in order through `SendInput`, then releases them in
+/// reverse: a chord such as Shift+Tab, or one key.
+fn press_keys(keys: &[u16]) {
     let input = |virtual_key: u16, flags| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -13004,12 +13005,11 @@ fn send_key_chord(modifier: u16, key: u16) {
             },
         },
     };
-    let inputs = [
-        input(modifier, 0),
-        input(key, 0),
-        input(key, KEYEVENTF_KEYUP),
-        input(modifier, KEYEVENTF_KEYUP),
-    ];
+    let inputs = keys
+        .iter()
+        .map(|key| input(*key, 0))
+        .chain(keys.iter().rev().map(|key| input(*key, KEYEVENTF_KEYUP)))
+        .collect::<Vec<_>>();
     assert_eq!(
         unsafe {
             SendInput(
@@ -13021,6 +13021,101 @@ fn send_key_chord(modifier: u16, key: u16) {
         inputs.len() as u32,
         "SendInput must queue every key event"
     );
+}
+
+/// Waits until the control `id` of `dialog` has the focus.
+fn wait_for_dialog_focus(
+    app: &MirxApp,
+    dialog: HWND,
+    id: i32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let control = unsafe { GetDlgItem(dialog, id) };
+    assert!(!control.is_null(), "the dialog has the control {id}");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let focused = unsafe { focused_hwnd(app) };
+        if focused == control {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "the dialog's control {id} did not take the focus; {} has it",
+                unsafe { GetDlgCtrlID(focused) }
+            )
+            .into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+#[test]
+fn select_server_tab_moves_between_fields_and_esc_cancels() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    app.open_dialog(AutomationDialog::SelectServer)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?.hwnd as HWND;
+    unsafe { SetForegroundWindow(dialog) };
+
+    // The server field has the focus; Tab and Shift+Tab move through the
+    // fields in order.
+    wait_for_dialog_focus(&app, dialog, LOGIN_DIALOG_SERVER_ID)?;
+    press_keys(&[VK_TAB]);
+    wait_for_dialog_focus(&app, dialog, LOGIN_DIALOG_USER_ID)?;
+    press_keys(&[VK_TAB]);
+    wait_for_dialog_focus(&app, dialog, LOGIN_DIALOG_PASSWORD_ID)?;
+    press_keys(&[VK_SHIFT, VK_TAB]);
+    wait_for_dialog_focus(&app, dialog, LOGIN_DIALOG_USER_ID)?;
+
+    press_keys(&[VK_ESCAPE]);
+    wait_for_window_gone(dialog, "Select Server dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(app.dump_model()?.last_error.is_none());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn recover_e2ee_enter_submits() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path("e2ee-recovery-needed.json");
+    let args = [
+        OsString::from("--render-state"),
+        fixture_path.as_os_str().to_os_string(),
+    ];
+    let app = launch_app(&exe_path, &args)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    app.open_dialog(AutomationDialog::RecoverE2ee)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?.hwnd as HWND;
+    unsafe { SetForegroundWindow(dialog) };
+    wait_for_dialog_focus(&app, dialog, RECOVER_E2EE_DIALOG_SECRET_ID)?;
+    let secret = wide_null("sample recovery secret");
+    assert_ne!(
+        unsafe {
+            SetWindowTextW(
+                GetDlgItem(dialog, RECOVER_E2EE_DIALOG_SECRET_ID),
+                secret.as_ptr(),
+            )
+        },
+        0
+    );
+    press_keys(&[VK_RETURN]);
+    wait_for_window_gone(dialog, "Recover E2EE dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let model = app.dump_model()?;
+    assert_eq!(model.status, "e2ee recovery submitted");
+    assert_eq!(
+        model.submitted_recovery_commands,
+        vec![SubmittedRecoveryCommand {
+            secret_redacted: true,
+        }]
+    );
+    Ok(())
 }
 
 #[test]

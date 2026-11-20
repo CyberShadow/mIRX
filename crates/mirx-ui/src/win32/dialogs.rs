@@ -9,8 +9,10 @@ use windows_sys::Win32::Graphics::Gdi::{
     COLOR_BTNFACE, DEFAULT_GUI_FONT, DT_CALCRECT, DT_WORDBREAK, DrawTextW, GetStockObject,
 };
 use windows_sys::Win32::System::SystemServices::SS_CENTER;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, EnumChildWindows, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WINDOW_STYLE,
+    AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EnumChildWindows, GetNextDlgTabItem, IDCANCEL,
+    IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WINDOW_STYLE, WM_NEXTDLGCTL,
     WNDPROC,
 };
 use windows_sys::core::BOOL;
@@ -49,6 +51,15 @@ const ABOUT_DIALOG_LINES: [(u16, &str); 5] = [
     (5023, "Licensed under the Apache License 2.0"),
 ];
 pub(super) const ABOUT_DIALOG_OK_ID: usize = 5024;
+/// What `IsDialogMessageW` sends for Esc: every dialog takes it as its
+/// Cancel button.
+const ESC_CANCEL_ID: usize = IDCANCEL as usize;
+
+/// The answer to `DM_GETDEFID`: the dialog's default button, which
+/// `IsDialogMessageW` presses for Enter.
+const fn default_button(id: usize) -> LRESULT {
+    ((DC_HASDEFID as LRESULT) << 16) | id as LRESULT
+}
 
 /// The dialogs' content widths: what their labels and fields need.
 const LOGIN_DIALOG_WIDTH: i32 = 280;
@@ -459,13 +470,14 @@ unsafe extern "system" fn login_dialog_window_proc(
                     DestroyWindow(hwnd);
                     0
                 }
-                LOGIN_DIALOG_CANCEL_ID => {
+                LOGIN_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                     DestroyWindow(hwnd);
                     0
                 }
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
             }
         }
+        DM_GETDEFID => default_button(LOGIN_DIALOG_OK_ID),
         WM_CLOSE => {
             DestroyWindow(hwnd);
             0
@@ -514,7 +526,7 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
                     DestroyWindow(hwnd);
                     0
                 }
-                RECOVER_E2EE_DIALOG_CANCEL_ID => {
+                RECOVER_E2EE_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                     clear_recover_e2ee_dialog_secret(hwnd);
                     DestroyWindow(hwnd);
                     0
@@ -522,6 +534,7 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
             }
         }
+        DM_GETDEFID => default_button(RECOVER_E2EE_DIALOG_OK_ID),
         WM_CLOSE => {
             clear_recover_e2ee_dialog_secret(hwnd);
             DestroyWindow(hwnd);
@@ -570,13 +583,14 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
                 DestroyWindow(hwnd);
                 0
             }
-            SETUP_E2EE_DIALOG_CANCEL_ID => {
+            SETUP_E2EE_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                 clear_setup_e2ee_dialog_passphrase(hwnd);
                 DestroyWindow(hwnd);
                 0
             }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
         },
+        DM_GETDEFID => default_button(SETUP_E2EE_DIALOG_OK_ID),
         WM_CLOSE => {
             clear_setup_e2ee_dialog_passphrase(hwnd);
             DestroyWindow(hwnd);
@@ -599,9 +613,27 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_COMMAND if wparam & 0xffff == RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID => {
+        WM_COMMAND
+            if matches!(
+                wparam & 0xffff,
+                RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID | ESC_CANCEL_ID
+            ) =>
+        {
             clear_recovery_key_handoff_dialog_key(hwnd);
             DestroyWindow(hwnd);
+            0
+        }
+        DM_GETDEFID => default_button(RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID),
+        // The key's multi-line edit takes every key and passes Tab, and
+        // Enter's move to the default button, on as a dialog manager's
+        // WM_NEXTDLGCTL: to the control in `wparam`, or to the previous
+        // (`wparam` set) or next tab stop.
+        WM_NEXTDLGCTL => {
+            let next = match lparam {
+                0 => GetNextDlgTabItem(hwnd, GetFocus(), (wparam != 0).into()),
+                _ => wparam as HWND,
+            };
+            SetFocus(next);
             0
         }
         WM_CLOSE => {
@@ -639,13 +671,14 @@ unsafe extern "system" fn find_dialog_window_proc(
                     DestroyWindow(hwnd);
                     0
                 }
-                FIND_DIALOG_CANCEL_ID => {
+                FIND_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                     DestroyWindow(hwnd);
                     0
                 }
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
             }
         }
+        DM_GETDEFID => default_button(FIND_DIALOG_OK_ID),
         WM_CLOSE => {
             DestroyWindow(hwnd);
             0
@@ -659,6 +692,7 @@ unsafe extern "system" fn find_dialog_window_proc(
 }
 
 /// The About box keeps no state: DefWindowProcW destroys it on WM_CLOSE.
+/// Its OK is the default button and has the focus, so Enter presses it.
 unsafe extern "system" fn about_dialog_window_proc(
     hwnd: HWND,
     message: u32,
@@ -666,7 +700,7 @@ unsafe extern "system" fn about_dialog_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_COMMAND if wparam & 0xffff == ABOUT_DIALOG_OK_ID => {
+        WM_COMMAND if matches!(wparam & 0xffff, ABOUT_DIALOG_OK_ID | ESC_CANCEL_ID) => {
             DestroyWindow(hwnd);
             0
         }
@@ -754,7 +788,8 @@ pub(super) unsafe fn show_login_dialog(
 ) -> Result<Option<LoginForm>, String> {
     let result = Arc::new(Mutex::new(None));
     let dialog = create_login_dialog(owner, server, Arc::clone(&result))?;
-    run_modal_dialog(owner, dialog, |_| false);
+    SetFocus(GetDlgItem(dialog, LOGIN_DIALOG_HOME_SERVER_ID.into()));
+    run_modal_dialog(owner, dialog);
     Ok(result
         .lock()
         .expect("login dialog result mutex poisoned")
@@ -788,7 +823,8 @@ pub(super) unsafe fn show_recover_e2ee_dialog(
 ) -> Result<Option<RecoverE2eeForm>, String> {
     let result = Arc::new(Mutex::new(None));
     let dialog = create_recover_e2ee_dialog(owner, Arc::clone(&result))?;
-    run_modal_dialog(owner, dialog, |_| false);
+    SetFocus(GetDlgItem(dialog, RECOVER_E2EE_DIALOG_SECRET_ID.into()));
+    run_modal_dialog(owner, dialog);
     Ok(result
         .lock()
         .expect("recover e2ee dialog result mutex poisoned")
@@ -823,7 +859,8 @@ pub(super) unsafe fn show_setup_e2ee_dialog(
 ) -> Result<Option<SetupE2eeRecoveryForm>, String> {
     let result = Arc::new(Mutex::new(None));
     let dialog = create_setup_e2ee_dialog(owner, Arc::clone(&result))?;
-    run_modal_dialog(owner, dialog, |_| false);
+    SetFocus(GetDlgItem(dialog, SETUP_E2EE_DIALOG_PASSPHRASE_ID.into()));
+    run_modal_dialog(owner, dialog);
     Ok(result
         .lock()
         .expect("setup e2ee dialog result mutex poisoned")
@@ -868,9 +905,7 @@ pub(super) unsafe fn show_single_field_dialog(
     SendMessageW(edit, EM_SETSEL, len, len as LPARAM);
     SetFocus(edit);
 
-    run_modal_dialog(owner, dialog, |message| {
-        find_dialog_handles_key(dialog, message)
-    });
+    run_modal_dialog(owner, dialog);
     Ok(result
         .lock()
         .expect("find dialog result mutex poisoned")
@@ -921,7 +956,11 @@ unsafe fn create_recovery_key_handoff_dialog(
 
 pub(super) unsafe fn show_e2ee_recovery_key(owner: HWND, recovery_key: &str) -> Result<(), String> {
     let dialog = create_recovery_key_handoff_dialog(owner, recovery_key)?;
-    run_modal_dialog(owner, dialog, |_| false);
+    // Selected, so Ctrl+C copies the key.
+    let key = GetDlgItem(dialog, RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID.into());
+    SendMessageW(key, EM_SETSEL, 0, -1);
+    SetFocus(key);
+    run_modal_dialog(owner, dialog);
     Ok(())
 }
 
@@ -1008,27 +1047,16 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
 pub(super) unsafe fn show_about_dialog(owner: HWND) -> Result<(), String> {
     let dialog = create_about_dialog(owner)?;
     SetFocus(GetDlgItem(dialog, ABOUT_DIALOG_OK_ID as i32));
-    run_modal_dialog(owner, dialog, |message| {
-        let closes = message.message == WM_KEYDOWN
-            && matches!(message.wParam, VK_RETURN_KEY | VK_ESCAPE_KEY)
-            && (message.hwnd == dialog || IsChild(dialog, message.hwnd) != 0);
-        if closes {
-            DestroyWindow(dialog);
-        }
-        closes
-    });
+    run_modal_dialog(owner, dialog);
     Ok(())
 }
 
 /// Runs `dialog`'s message loop until it is destroyed, with `owner`
 /// disabled: every key the user presses is the dialog's, so the frame's
-/// accelerators do not apply. `handles_key` may take a message before it is
-/// dispatched.
-pub(super) unsafe fn run_modal_dialog(
-    owner: HWND,
-    dialog: HWND,
-    mut handles_key: impl FnMut(&MSG) -> bool,
-) {
+/// accelerators do not apply. `IsDialogMessageW` gives the dialog a
+/// dialog's keys: Tab and Shift+Tab move between its controls, Enter
+/// presses the button its `DM_GETDEFID` names and Esc sends `IDCANCEL`.
+pub(super) unsafe fn run_modal_dialog(owner: HWND, dialog: HWND) {
     EnableWindow(owner, 0);
     let mut message = MSG::default();
     while IsWindow(dialog) != 0 {
@@ -1039,11 +1067,10 @@ pub(super) unsafe fn run_modal_dialog(
             PostQuitMessage(message.wParam as i32);
             break;
         }
-        if handles_key(&message) {
-            continue;
+        if IsDialogMessageW(dialog, &message) == 0 {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
         }
-        TranslateMessage(&message);
-        DispatchMessageW(&message);
     }
     EnableWindow(owner, 1);
 }
@@ -1071,26 +1098,6 @@ unsafe fn clear_recovery_key_handoff_dialog_key(hwnd: HWND) {
     );
 }
 
-unsafe fn find_dialog_handles_key(dialog: HWND, message: &MSG) -> bool {
-    if message.message != WM_KEYDOWN
-        || (message.hwnd != dialog && IsChild(dialog, message.hwnd) == 0)
-    {
-        return false;
-    }
-
-    match message.wParam {
-        VK_RETURN_KEY => {
-            SendMessageW(dialog, WM_COMMAND, FIND_DIALOG_OK_ID, 0);
-            true
-        }
-        VK_ESCAPE_KEY => {
-            DestroyWindow(dialog);
-            true
-        }
-        _ => false,
-    }
-}
-
 unsafe fn clear_recover_e2ee_dialog_secret(hwnd: HWND) {
     set_window_text(GetDlgItem(hwnd, RECOVER_E2EE_DIALOG_SECRET_ID.into()), "");
 }
@@ -1111,6 +1118,25 @@ mod tests {
     use super::super::test_fixtures::*;
     use super::*;
 
+    /// The open dialog of `class` that `frame` owns.
+    unsafe fn owned_dialog(frame: HWND, class: &str) -> HWND {
+        unsafe extern "system" fn find_owned_dialog(hwnd: HWND, found: LPARAM) -> BOOL {
+            let found = &mut *(found as *mut (HWND, &str, HWND));
+            if GetWindow(hwnd, GW_OWNER) == found.0 && window_class_is(hwnd, found.1) {
+                found.2 = hwnd;
+            }
+            1
+        }
+        let mut found: (HWND, &str, HWND) = (frame, class, null_mut());
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(find_owned_dialog),
+            &mut found as *mut (HWND, &str, HWND) as LPARAM,
+        );
+        assert!(!found.2.is_null(), "a {class} is open");
+        found.2
+    }
+
     /// Types `c` and Enter into the frame's single-field dialog once its
     /// modal loop runs. The keys are posted to the dialog's own edit control,
     /// so that loop handles messages for the dialog's children.
@@ -1120,25 +1146,40 @@ mod tests {
         timer: usize,
         _time: u32,
     ) {
-        unsafe extern "system" fn find_owned_dialog(hwnd: HWND, found: LPARAM) -> BOOL {
-            let found = &mut *(found as *mut (HWND, HWND));
-            if GetWindow(hwnd, GW_OWNER) == found.0 && window_class_is(hwnd, FIND_DIALOG_CLASS_NAME)
-            {
-                found.1 = hwnd;
-            }
-            1
-        }
         KillTimer(frame, timer);
-        let mut found: (HWND, HWND) = (frame, null_mut());
-        EnumThreadWindows(
-            GetCurrentThreadId(),
-            Some(find_owned_dialog),
-            &mut found as *mut (HWND, HWND) as LPARAM,
-        );
-        assert!(!found.1.is_null(), "the single-field dialog is open");
-        let edit = GetDlgItem(found.1, FIND_DIALOG_QUERY_ID.into());
+        let dialog = owned_dialog(frame, FIND_DIALOG_CLASS_NAME);
+        let edit = GetDlgItem(dialog, FIND_DIALOG_QUERY_ID.into());
         PostMessageW(edit, WM_CHAR, 'c' as WPARAM, 0);
         PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
+    }
+
+    /// Presses Enter in the recovery-key handoff's key. It does not assert
+    /// the key has the focus: unit tests run in parallel, and the focus
+    /// goes with whichever test's window is in the foreground.
+    unsafe extern "system" fn press_enter_in_recovery_key(
+        frame: HWND,
+        _message: u32,
+        timer: usize,
+        _time: u32,
+    ) {
+        KillTimer(frame, timer);
+        let dialog = owned_dialog(frame, RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME);
+        let key = GetDlgItem(dialog, RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID.into());
+        PostMessageW(key, WM_KEYDOWN, VK_RETURN_KEY, 0);
+    }
+
+    /// The key's multi-line edit takes every key itself; Enter in it still
+    /// presses the default button.
+    #[test]
+    fn enter_in_the_recovery_key_presses_i_saved_it() {
+        unsafe {
+            with_test_frame(600, 400, |hwnd| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                SetTimer(hwnd, 1, 0, Some(press_enter_in_recovery_key));
+                show_e2ee_recovery_key(hwnd, "EsTc abcd efgh").unwrap();
+                assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
     }
 
     #[test]
