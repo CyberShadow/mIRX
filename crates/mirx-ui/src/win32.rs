@@ -135,12 +135,12 @@ use self::glyph_fonts::GlyphFonts;
 use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
     automation::{
-        AcceptedResponse, COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_ROOM_ACTIVITY,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING, COMMAND_ID_WAIT_IDLE, ComposeKey,
-        ComposeTextResponse, ConnectionState, ContextMenuCommand, DumpE2eeRecoverySetupResult,
-        DumpMemberMenuState, DumpMemberModerationAction, DumpMemberPowerRole,
-        DumpMembershipCommandAction, DumpMessageMenuState, DumpModel, DumpRoomActivity,
-        DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
+        AcceptedResponse, AutomationDialog, COMMAND_ID_DUMP_COMPOSE_TEXT,
+        COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_PING,
+        COMMAND_ID_WAIT_IDLE, ComposeKey, ComposeTextResponse, ConnectionState, ContextMenuCommand,
+        DumpE2eeRecoverySetupResult, DumpMemberMenuState, DumpMemberModerationAction,
+        DumpMemberPowerRole, DumpMembershipCommandAction, DumpMessageMenuState, DumpModel,
+        DumpRoomActivity, DumpRoomActivityKind, DumpRoomActivityResponse, DumpRoomMenuState,
         DumpRoomMessageActivityLine, DumpRoomPreviewMediaState, DumpRoomReactionSummary,
         DumpSubmittedDirectRoomCommand, DumpSubmittedEditCommand, DumpSubmittedFileCommand,
         DumpSubmittedHistoryCommand, DumpSubmittedMemberModerationCommand,
@@ -315,12 +315,12 @@ use frame_menus::{
     context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
     default_context_point_for_window, disconnect, handle_menu_command, handle_switchbar_command,
     invoke_menu_command_for_automation, invoke_navigation_context_menu_for_automation,
-    invoke_timeline_context_menu_for_automation, refresh_menu_popup, refresh_message_menu_state,
-    refresh_room_menu_state, refresh_tools_menu_state, select_timeline_event_for_automation,
-    selected_message_quote_target, selected_timeline_event_id,
-    selected_timeline_event_id_for_automation, selected_timeline_media_attachment,
-    show_context_menu, show_recover_e2ee_menu_dialog, show_timeline_message_context_menu,
-    timeline_row_is_selected, window_menu_command_id,
+    invoke_timeline_context_menu_for_automation, open_dialog_for_automation, refresh_menu_popup,
+    refresh_message_menu_state, refresh_room_menu_state, refresh_tools_menu_state,
+    select_timeline_event_for_automation, selected_message_quote_target,
+    selected_timeline_event_id, selected_timeline_event_id_for_automation,
+    selected_timeline_media_attachment, show_context_menu, show_recover_e2ee_menu_dialog,
+    show_timeline_message_context_menu, timeline_row_is_selected, window_menu_command_id,
 };
 #[cfg(test)]
 use images::room_preview_media_storage_key;

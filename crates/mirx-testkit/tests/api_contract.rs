@@ -18,14 +18,14 @@ use mirx_core::{
     RoomReadState,
 };
 use mirx_testkit::{
-    BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
-    FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult, FrameSize, LaunchOptions,
-    LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement, MdiWindowState,
-    MemberMenuState, MemberModerationAction, MemberPowerRole, MembershipCommandAction, Model,
-    NavigationNode, NavigationPathSegment, ProtocolVersion, RecoverE2eeArgs, RestoreSessionArgs,
-    RoomActivity, RoomActivityKind, RoomActivityRelation, RoomActivityUpdate,
-    RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity, RoomAudioInfo,
-    RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
+    AutomationDialog, BackfillRoomHistoryRequest, ComposeKey, ContextMenuCommand,
+    E2eeRecoverySetupResult, FetchRoomImageMediaRequest, FindActiveViewArgs, FindActiveViewResult,
+    FrameSize, LaunchOptions, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
+    MdiWindowState, MemberMenuState, MemberModerationAction, MemberPowerRole,
+    MembershipCommandAction, Model, NavigationNode, NavigationPathSegment, ProtocolVersion,
+    RecoverE2eeArgs, RestoreSessionArgs, RoomActivity, RoomActivityKind, RoomActivityRelation,
+    RoomActivityUpdate, RoomActivityUpdateKind, RoomActivityUpdateTarget, RoomAudioActivity,
+    RoomAudioInfo, RoomFileActivity, RoomFileInfo, RoomHistoryBackfill, RoomHistoryBackfillEvent,
     RoomImageActivity, RoomImageInfo, RoomImageMedia, RoomImageMediaFormat, RoomImageMediaKind,
     RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMemberView, RoomMessageActivity,
     RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
@@ -945,7 +945,6 @@ fn data_models_round_trip_through_json() {
         options_dialog: Some(UiOptionsDialog {
             tree: vec!["Display".to_owned()],
             selected: "Display".to_owned(),
-            heading: "Display".to_owned(),
             visible_controls: vec![6301],
             highlight_items: vec!["build (notify only)".to_owned()],
             highlight_controls_enabled: true,
@@ -1225,7 +1224,6 @@ fn data_models_round_trip_through_json() {
             "options_dialog": {
                 "tree": ["Display"],
                 "selected": "Display",
-                "heading": "Display",
                 "visible_controls": [6301],
                 "highlight_items": ["build (notify only)"],
                 "highlight_controls_enabled": true,
@@ -7224,6 +7222,22 @@ fn non_windows_new_methods_report_unsupported_driver() {
     );
 
     let error = app
+        .open_dialog(AutomationDialog::Options)
+        .expect_err("open_dialog must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mirx-testkit requires the Windows target"
+    );
+
+    let error = app
+        .select_options_page("IRC/Messages")
+        .expect_err("select_options_page must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mirx-testkit requires the Windows target"
+    );
+
+    let error = app
         .selected_navigation_path()
         .expect_err("selected_navigation_path must fail off Windows");
     assert_eq!(
@@ -7245,6 +7259,31 @@ fn non_windows_new_methods_report_unsupported_driver() {
     assert_eq!(
         error.to_string(),
         "mirx-testkit requires the Windows target"
+    );
+}
+
+#[test]
+fn automation_dialog_round_trips_and_rejects_unknown_values() {
+    for (dialog, text) in [
+        (AutomationDialog::Options, "options"),
+        (AutomationDialog::SelectServer, "select_server"),
+        (AutomationDialog::About, "about"),
+        (AutomationDialog::CommandsJoin, "commands_join"),
+        (AutomationDialog::RecoverE2ee, "recover_e2ee"),
+        (AutomationDialog::SetupE2eeRecovery, "setup_e2ee_recovery"),
+        (AutomationDialog::CloseActiveView, "close_active_view"),
+    ] {
+        assert_eq!(
+            serde_json::to_value(dialog).unwrap(),
+            serde_json::json!(text)
+        );
+        assert_eq!(
+            serde_json::from_value::<AutomationDialog>(serde_json::json!(text)).unwrap(),
+            dialog
+        );
+    }
+    assert!(
+        serde_json::from_value::<AutomationDialog>(serde_json::json!("select-server")).is_err()
     );
 }
 

@@ -127,6 +127,10 @@ const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
 #[cfg(windows)]
 const COMMAND_ID_SELECT_NAVIGATION_VIEW: u32 = 57;
 #[cfg(windows)]
+const COMMAND_ID_OPEN_DIALOG: u32 = 58;
+#[cfg(windows)]
+const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -1286,8 +1290,6 @@ pub struct UiOptionsDialog {
     pub tree: Vec<String>,
     /// The selected item's path.
     pub selected: String,
-    /// The shown page's heading, `Connect > Options`.
-    pub heading: String,
     /// The ids of the shown page's controls.
     pub visible_controls: Vec<u16>,
     /// The Highlight page's list, top to bottom.
@@ -1807,6 +1809,36 @@ pub enum MdiWindowState {
     Minimized,
 }
 
+/// The dialogs `MirxApp::open_dialog` opens, each as the user's gesture
+/// does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationDialog {
+    /// Tools > Options...
+    Options,
+    /// File > Select Server...
+    SelectServer,
+    /// Help > About mirx
+    About,
+    /// Commands > Join room...
+    CommandsJoin,
+    /// Tools > Recover E2EE...
+    RecoverE2ee,
+    /// Tools > Set Up E2EE Recovery...
+    SetupE2eeRecovery,
+    /// The active window's close box, which asks before leaving a room.
+    CloseActiveView,
+}
+
+/// A top-level window open over the mirx frame: a dialog or message box.
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModalDialog {
+    pub hwnd: isize,
+    pub class: String,
+    pub title: String,
+}
+
 /// The Window menu's arrangements of the MDI windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2068,6 +2100,35 @@ impl MirxApp {
 
     pub fn select_view(&self, view: ViewIdentity) -> Result<(), TestkitError> {
         self.inner.select_view(view)
+    }
+
+    /// Opens `dialog` as the user's gesture does. The app posts the
+    /// gesture, so this returns before the dialog exists; see
+    /// `wait_for_modal_dialog`. While it is open, only dumps, `wait_idle`
+    /// and `select_options_page` are answered without waiting for it.
+    pub fn open_dialog(&self, dialog: AutomationDialog) -> Result<(), TestkitError> {
+        self.inner.open_dialog(dialog)
+    }
+
+    /// Selects the open Options dialog's tree item at `path`
+    /// (`IRC/Messages`), as a click on it does.
+    pub fn select_options_page(&self, path: &str) -> Result<(), TestkitError> {
+        self.inner.select_options_page(path)
+    }
+
+    /// Waits for the one visible window the frame owns: a mirx dialog, or
+    /// a message box, which Windows makes the frame's even when an MDI
+    /// child shows it. Two at once is an error.
+    #[cfg(windows)]
+    pub fn wait_for_modal_dialog(&self, timeout: Duration) -> Result<ModalDialog, TestkitError> {
+        self.inner.wait_for_modal_dialog(timeout)
+    }
+
+    /// Repaints another thread's window, frame and children included, and
+    /// returns once it has painted.
+    #[cfg(windows)]
+    pub fn redraw_window(&self, hwnd: isize) -> Result<(), TestkitError> {
+        imp::redraw_window(hwnd as _)
     }
 
     /// Picks the arrangement from the Window menu.
@@ -2431,6 +2492,18 @@ struct OpenSelectedTimelineContextMenuArgs {
     command: ContextMenuCommand,
 }
 
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpenDialogArgs {
+    dialog: AutomationDialog,
+}
+#[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct SelectOptionsPageArgs<'a> {
+    path: &'a str,
+}
 #[cfg(windows)]
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
@@ -2894,6 +2967,18 @@ mod imp {
             ))
         }
 
+        pub(crate) fn open_dialog(&self, _dialog: AutomationDialog) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn select_options_page(&self, _path: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
         pub(crate) fn set_view_window_state(
             &self,
             _view: ViewIdentity,
@@ -3135,13 +3220,17 @@ mod imp {
     use std::time::Instant;
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{
+        RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
+    };
     use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
     use windows_sys::Win32::System::Memory::{
         FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS, MapViewOfFile, OpenFileMappingW, UnmapViewOfFile,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, FindWindowExW, GetClassNameW, GetDlgItem, GetWindowThreadProcessId, SB_TOP,
-        SendMessageW, WM_COPYDATA, WM_GETTEXT, WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_VSCROLL,
+        EnumWindows, FindWindowExW, GW_OWNER, GetClassNameW, GetDlgItem, GetWindow,
+        GetWindowThreadProcessId, IsWindowVisible, SB_TOP, SendMessageW, WM_COPYDATA, WM_GETTEXT,
+        WM_GETTEXTLENGTH, WM_MDIGETACTIVE, WM_VSCROLL,
     };
 
     use super::*;
@@ -3539,6 +3628,69 @@ mod imp {
                     "SELECT_ROOM returned selected_room={}, expected {}",
                     response.selected_room, room_id
                 )))
+            }
+        }
+
+        pub(crate) fn open_dialog(&self, dialog: AutomationDialog) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_OPEN_DIALOG,
+                OpenDialogArgs { dialog },
+                "OPEN_DIALOG",
+            )
+        }
+
+        pub(crate) fn select_options_page(&self, path: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_SELECT_OPTIONS_PAGE,
+                SelectOptionsPageArgs { path },
+                "SELECT_OPTIONS_PAGE",
+            )
+        }
+
+        pub(crate) fn wait_for_modal_dialog(
+            &self,
+            timeout: Duration,
+        ) -> Result<ModalDialog, TestkitError> {
+            let deadline = Instant::now() + timeout;
+            loop {
+                let mut search = OwnedWindowSearch {
+                    owner: self.hwnd,
+                    found: Vec::new(),
+                };
+                unsafe {
+                    EnumWindows(
+                        Some(enum_owned_windows_callback),
+                        (&mut search as *mut OwnedWindowSearch) as LPARAM,
+                    );
+                }
+                match search.found.as_slice() {
+                    [] => {}
+                    [dialog] => {
+                        return Ok(ModalDialog {
+                            hwnd: *dialog as isize,
+                            class: unsafe { class_name(*dialog) }.ok_or_else(|| {
+                                TestkitError::Transport(last_os_error("GetClassNameW"))
+                            })?,
+                            title: unsafe { read_window_text(*dialog) },
+                        });
+                    }
+                    dialogs => {
+                        return Err(TestkitError::InvalidResponse(format!(
+                            "{} windows are open over the frame: {:?}",
+                            dialogs.len(),
+                            dialogs
+                                .iter()
+                                .map(|dialog| unsafe { read_window_text(*dialog) })
+                                .collect::<Vec<_>>()
+                        )));
+                    }
+                }
+                if Instant::now() >= deadline {
+                    return Err(TestkitError::Timeout(
+                        "no dialog opened over the frame".to_owned(),
+                    ));
+                }
+                thread::sleep(DEFAULT_POLL_INTERVAL);
             }
         }
 
@@ -4276,6 +4428,37 @@ mod imp {
         search.pid = pid;
         search.mapping = mapping;
         0
+    }
+
+    /// The visible top-level windows `owner` owns.
+    struct OwnedWindowSearch {
+        owner: HWND,
+        found: Vec<HWND>,
+    }
+
+    unsafe extern "system" fn enum_owned_windows_callback(hwnd: HWND, lparam: LPARAM) -> i32 {
+        let search = &mut *(lparam as *mut OwnedWindowSearch);
+        if GetWindow(hwnd, GW_OWNER) == search.owner && IsWindowVisible(hwnd) != 0 {
+            search.found.push(hwnd);
+        }
+        1
+    }
+
+    /// `RDW_UPDATENOW` sends another thread's window its `WM_PAINT`, so
+    /// this returns once the window and its children have painted.
+    pub(crate) fn redraw_window(hwnd: HWND) -> Result<(), TestkitError> {
+        let redrawn = unsafe {
+            RedrawWindow(
+                hwnd,
+                std::ptr::null(),
+                null_mut(),
+                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            )
+        };
+        if redrawn == 0 {
+            return Err(TestkitError::Transport(last_os_error("RedrawWindow")));
+        }
+        Ok(())
     }
 
     unsafe fn class_name(hwnd: HWND) -> Option<String> {

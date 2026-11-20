@@ -471,6 +471,24 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
             })?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::OpenDialog { id, args } => {
+            open_dialog_for_automation(hwnd, args.dialog)
+                .map_err(|(code, message)| failure_response(Some(id.clone()), code, message))?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
+        ParsedCommand::SelectOptionsPage { id, args } => {
+            let dialog = state_ref(hwnd).options_dialog.ok_or_else(|| {
+                failure_response(
+                    Some(id.clone()),
+                    "no_options_dialog",
+                    "the Options dialog is not open",
+                )
+            })?;
+            options_dialog::select_path(dialog, &args.path).map_err(|message| {
+                failure_response(Some(id.clone()), "unknown_options_page", message)
+            })?;
+            serialize_success_json(&id, AcceptedResponse { accepted: true })
+        }
         ParsedCommand::SelectNavigationView { id, args } => {
             select_navigation_view(hwnd, &args.view).map_err(|message| {
                 failure_response(Some(id.clone()), "unknown_navigation_view", message)
@@ -761,6 +779,8 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::SendComposeKey { id, .. }
         | ParsedCommand::SelectNavigationPath { id, .. }
         | ParsedCommand::SelectNavigationView { id, .. }
+        | ParsedCommand::OpenDialog { id, .. }
+        | ParsedCommand::SelectOptionsPage { id, .. }
         | ParsedCommand::FindActiveView { id, .. }
         | ParsedCommand::AppendSyntheticEvents { id, .. }
         | ParsedCommand::RecoverE2ee { id, .. }

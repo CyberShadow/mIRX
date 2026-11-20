@@ -572,20 +572,56 @@ pub(super) unsafe fn refresh_menu_popup(hwnd: HWND, popup_menu: HMENU) -> Result
     }
 }
 
-unsafe fn refresh_file_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
-    let state = file_menu_state(state_ref(hwnd).model.connection);
-    for (item, enabled) in [
-        (MENU_ID_FILE_CONNECT, state.connect),
-        (MENU_ID_FILE_DISCONNECT, state.disconnect),
-        (MENU_ID_FILE_SELECT_SERVER, state.select_server),
-        (MENU_ID_LOGOUT, state.log_out),
-    ] {
-        let flags = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
-        if EnableMenuItem(popup_menu, item as u32, flags) == -1 {
+/// Whether a menu bar item is enabled. File greys by connection and the
+/// verification items by the current flow; no other bar item ever greys.
+pub(super) fn frame_menu_item_enabled(state: &WindowState, command_id: usize) -> bool {
+    let file = file_menu_state(state.model.connection);
+    let verification =
+        |action| verification_menu_action_enabled(state.model.last_verification.as_ref(), action);
+    match command_id {
+        MENU_ID_FILE_CONNECT => file.connect,
+        MENU_ID_FILE_DISCONNECT => file.disconnect,
+        MENU_ID_FILE_SELECT_SERVER => file.select_server,
+        MENU_ID_LOGOUT => file.log_out,
+        MENU_ID_VERIFY_ACCEPT => verification(VerificationAction::Accept),
+        MENU_ID_VERIFY_CANCEL => verification(VerificationAction::Cancel),
+        MENU_ID_VERIFY_CONFIRM_SAS => verification(VerificationAction::Confirm),
+        MENU_ID_VERIFY_REJECT_SAS => verification(VerificationAction::Reject),
+        _ => true,
+    }
+}
+
+/// Greys or enables each of `items` in `popup_menu`.
+unsafe fn refresh_frame_menu_items(
+    hwnd: HWND,
+    popup_menu: HMENU,
+    items: &[usize],
+) -> Result<(), String> {
+    for item in items {
+        let flags = MF_BYCOMMAND
+            | if frame_menu_item_enabled(state_ref(hwnd), *item) {
+                MF_ENABLED
+            } else {
+                MF_GRAYED
+            };
+        if EnableMenuItem(popup_menu, *item as u32, flags) == -1 {
             return Err(last_os_error("EnableMenuItem"));
         }
     }
     Ok(())
+}
+
+unsafe fn refresh_file_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
+    refresh_frame_menu_items(
+        hwnd,
+        popup_menu,
+        &[
+            MENU_ID_FILE_CONNECT,
+            MENU_ID_FILE_DISCONNECT,
+            MENU_ID_FILE_SELECT_SERVER,
+            MENU_ID_LOGOUT,
+        ],
+    )
 }
 
 unsafe fn refresh_view_menu_checks(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
@@ -599,49 +635,16 @@ unsafe fn refresh_view_menu_checks(hwnd: HWND, popup_menu: HMENU) -> Result<(), 
 }
 
 pub(super) unsafe fn refresh_tools_menu_state(hwnd: HWND, popup_menu: HMENU) -> Result<(), String> {
-    let last_verification = state_ref(hwnd).model.last_verification.as_ref();
-
-    let accept_flags = MF_BYCOMMAND
-        | if verification_menu_action_enabled(last_verification, VerificationAction::Accept) {
-            MF_ENABLED
-        } else {
-            MF_GRAYED
-        };
-    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_ACCEPT as u32, accept_flags) == -1 {
-        return Err(last_os_error("EnableMenuItem"));
-    }
-
-    let cancel_flags = MF_BYCOMMAND
-        | if verification_menu_action_enabled(last_verification, VerificationAction::Cancel) {
-            MF_ENABLED
-        } else {
-            MF_GRAYED
-        };
-    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_CANCEL as u32, cancel_flags) == -1 {
-        return Err(last_os_error("EnableMenuItem"));
-    }
-
-    let confirm_flags = MF_BYCOMMAND
-        | if verification_menu_action_enabled(last_verification, VerificationAction::Confirm) {
-            MF_ENABLED
-        } else {
-            MF_GRAYED
-        };
-    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_CONFIRM_SAS as u32, confirm_flags) == -1 {
-        return Err(last_os_error("EnableMenuItem"));
-    }
-
-    let reject_flags = MF_BYCOMMAND
-        | if verification_menu_action_enabled(last_verification, VerificationAction::Reject) {
-            MF_ENABLED
-        } else {
-            MF_GRAYED
-        };
-    if EnableMenuItem(popup_menu, MENU_ID_VERIFY_REJECT_SAS as u32, reject_flags) == -1 {
-        return Err(last_os_error("EnableMenuItem"));
-    }
-
-    Ok(())
+    refresh_frame_menu_items(
+        hwnd,
+        popup_menu,
+        &[
+            MENU_ID_VERIFY_ACCEPT,
+            MENU_ID_VERIFY_CANCEL,
+            MENU_ID_VERIFY_CONFIRM_SAS,
+            MENU_ID_VERIFY_REJECT_SAS,
+        ],
+    )
 }
 
 pub(super) unsafe fn select_timeline_event_for_automation(
@@ -865,6 +868,71 @@ pub(super) unsafe fn invoke_menu_command_for_automation(
         return Err(format!("unknown menu command {command_id}"));
     };
     result.and_then(|handled| handled.ok_or_else(|| "menu action was not performed".to_owned()))
+}
+
+/// The user's gesture that opens a dialog automation asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DialogGesture {
+    /// A menu bar item, by command id.
+    MenuCommand(usize),
+    /// The active window's close box.
+    CloseActiveView,
+}
+
+pub(super) fn dialog_gesture(dialog: AutomationDialog) -> DialogGesture {
+    match dialog {
+        AutomationDialog::Options => DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
+        AutomationDialog::SelectServer => DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
+        AutomationDialog::About => DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
+        // Commands > Join room... is the menu's first item.
+        AutomationDialog::CommandsJoin => DialogGesture::MenuCommand(MENU_ID_COMMANDS_FIRST),
+        AutomationDialog::RecoverE2ee => DialogGesture::MenuCommand(MENU_ID_RECOVER_E2EE),
+        AutomationDialog::SetupE2eeRecovery => {
+            DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY)
+        }
+        AutomationDialog::CloseActiveView => DialogGesture::CloseActiveView,
+    }
+}
+
+/// Opens `dialog` as the user's gesture does. The gesture is posted, not
+/// run: the dialog's modal loop must not block the automation request.
+/// Fails, as `(code, message)`, where the gesture would not open it: a
+/// greyed item, or a window that closes without asking.
+pub(super) unsafe fn open_dialog_for_automation(
+    hwnd: HWND,
+    dialog: AutomationDialog,
+) -> Result<(), (&'static str, String)> {
+    let (target, message, wparam) = match dialog_gesture(dialog) {
+        DialogGesture::MenuCommand(command_id) => {
+            if !frame_menu_item_enabled(state_ref(hwnd), command_id) {
+                return Err((
+                    "menu_item_disabled",
+                    format!("the menu item for {dialog:?} is greyed"),
+                ));
+            }
+            (hwnd, WM_COMMAND, command_id)
+        }
+        DialogGesture::CloseActiveView => {
+            let state = state_ref(hwnd);
+            let action = close_action(&state.model, &state.active_view);
+            if !matches!(action, CloseAction::Confirm { .. }) {
+                return Err((
+                    "no_close_confirmation",
+                    format!("closing the active window does not ask: {action:?}"),
+                ));
+            }
+            let child = state
+                .views
+                .get(&state.active_view)
+                .expect("the active view has a window")
+                .child;
+            (child, WM_SYSCOMMAND, SC_CLOSE as usize)
+        }
+    };
+    if PostMessageW(target, message, wparam, 0) == 0 {
+        return Err(("post_failed", last_os_error("PostMessageW")));
+    }
+    Ok(())
 }
 
 pub(super) fn context_menu_command_id(command: &ContextMenuCommand) -> Option<usize> {
@@ -1095,6 +1163,45 @@ unsafe fn show_setup_e2ee_menu_dialog(hwnd: HWND) -> Result<bool, String> {
 mod tests {
     use super::super::test_fixtures::*;
     use super::*;
+
+    #[test]
+    fn each_dialog_opens_from_its_menu_item_or_the_close_box() {
+        for (dialog, gesture) in [
+            (
+                AutomationDialog::Options,
+                DialogGesture::MenuCommand(MENU_ID_TOOLS_OPTIONS),
+            ),
+            (
+                AutomationDialog::SelectServer,
+                DialogGesture::MenuCommand(MENU_ID_FILE_SELECT_SERVER),
+            ),
+            (
+                AutomationDialog::About,
+                DialogGesture::MenuCommand(MENU_ID_HELP_ABOUT),
+            ),
+            (
+                AutomationDialog::RecoverE2ee,
+                DialogGesture::MenuCommand(MENU_ID_RECOVER_E2EE),
+            ),
+            (
+                AutomationDialog::SetupE2eeRecovery,
+                DialogGesture::MenuCommand(MENU_ID_SETUP_E2EE_RECOVERY),
+            ),
+            (
+                AutomationDialog::CloseActiveView,
+                DialogGesture::CloseActiveView,
+            ),
+        ] {
+            assert_eq!(dialog_gesture(dialog), gesture, "{dialog:?}");
+        }
+        let DialogGesture::MenuCommand(join) = dialog_gesture(AutomationDialog::CommandsJoin)
+        else {
+            panic!("Join is a Commands menu item");
+        };
+        let item = commands_menu_item(join).expect("a Commands menu id");
+        assert_eq!(item.command, "join");
+        assert_eq!(commands_menu_title(item), "Join room");
+    }
 
     #[test]
     fn timeline_row_is_selected_requires_a_selection() {

@@ -58,9 +58,9 @@ pub(super) fn tree_paths() -> Vec<String> {
         .collect()
 }
 
-/// The page's heading: its tree path, `Connect > Options`.
-pub(super) fn page_heading(page: OptionsPage) -> String {
-    tree_paths()[page_tree_index(page)].replace('/', " > ")
+/// The tree item whose path (`IRC/Messages`) is `path`.
+pub(super) fn tree_index(path: &str) -> Option<usize> {
+    tree_paths().iter().position(|item_path| item_path == path)
 }
 
 /// The fields of the form, for pointing at the one that is wrong.
@@ -267,10 +267,12 @@ mod tests {
         assert_eq!(page_tree_index(IrcMessages), 3);
         assert_eq!(page_tree_index(IrcHighlight), 4);
         assert_eq!(page_tree_index(Display), 5);
-        assert_eq!(page_heading(ConnectOptions), "Connect > Options");
-        assert_eq!(page_heading(IrcMessages), "IRC > Messages");
-        assert_eq!(page_heading(IrcHighlight), "IRC > Highlight");
-        assert_eq!(page_heading(Display), "Display");
+        assert_eq!(tree_index("Connect"), Some(0));
+        assert_eq!(tree_index("IRC/Messages"), Some(3));
+        assert_eq!(tree_index("Display"), Some(5));
+        for path in ["", "IRC/", "Messages", "irc/messages", "IRC > Messages"] {
+            assert_eq!(tree_index(path), None, "{path:?}");
+        }
         assert_eq!(FIRST_PAGE, ConnectOptions);
         for field in [
             OptionsField::TimestampFormat,

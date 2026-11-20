@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 44;
+pub(crate) const PROTOCOL_VERSION: u32 = 45;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -72,6 +72,8 @@ pub(crate) const COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU: u32 = 54;
 pub(crate) const COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU: u32 = 55;
 pub(crate) const COMMAND_ID_SET_VIEW_WINDOW_STATE: u32 = 56;
 pub(crate) const COMMAND_ID_SELECT_NAVIGATION_VIEW: u32 = 57;
+pub(crate) const COMMAND_ID_OPEN_DIALOG: u32 = 58;
+pub(crate) const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -130,6 +132,8 @@ pub(crate) enum CommandKind {
     ArrangeWindowsViaWindowMenu,
     SetViewWindowState,
     SelectNavigationView,
+    OpenDialog,
+    SelectOptionsPage,
 }
 
 impl CommandKind {
@@ -200,6 +204,8 @@ impl CommandKind {
             COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU => Some(Self::ArrangeWindowsViaWindowMenu),
             COMMAND_ID_SET_VIEW_WINDOW_STATE => Some(Self::SetViewWindowState),
             COMMAND_ID_SELECT_NAVIGATION_VIEW => Some(Self::SelectNavigationView),
+            COMMAND_ID_OPEN_DIALOG => Some(Self::OpenDialog),
+            COMMAND_ID_SELECT_OPTIONS_PAGE => Some(Self::SelectOptionsPage),
             _ => None,
         }
     }
@@ -406,6 +412,17 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: SelectViewArgs,
     },
+    /// Opens a dialog as the user's gesture does. It is posted: the dialog
+    /// runs a modal loop, which must not block the request.
+    OpenDialog {
+        id: String,
+        args: OpenDialogArgs,
+    },
+    /// Selects an Options tree item, as a click on it does.
+    SelectOptionsPage {
+        id: String,
+        args: SelectOptionsPageArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -476,6 +493,8 @@ impl ParsedCommand {
             Self::ArrangeWindowsViaWindowMenu { .. } => CommandKind::ArrangeWindowsViaWindowMenu,
             Self::SetViewWindowState { .. } => CommandKind::SetViewWindowState,
             Self::SelectNavigationView { .. } => CommandKind::SelectNavigationView,
+            Self::OpenDialog { .. } => CommandKind::OpenDialog,
+            Self::SelectOptionsPage { .. } => CommandKind::SelectOptionsPage,
         }
     }
 }
@@ -634,6 +653,39 @@ pub(crate) enum MdiArrangement {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ArrangeWindowsArgs {
     pub(crate) arrangement: MdiArrangement,
+}
+
+/// The dialogs automation opens, each as the user's gesture does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AutomationDialog {
+    /// Tools > Options...
+    Options,
+    /// File > Select Server...
+    SelectServer,
+    /// Help > About mirx
+    About,
+    /// Commands > Join room...
+    CommandsJoin,
+    /// Tools > Recover E2EE...
+    RecoverE2ee,
+    /// Tools > Set Up E2EE Recovery...
+    SetupE2eeRecovery,
+    /// The active window's close box, which asks before leaving a room.
+    CloseActiveView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpenDialogArgs {
+    pub(crate) dialog: AutomationDialog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SelectOptionsPageArgs {
+    /// The tree item's path, `IRC/Messages`.
+    pub(crate) path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1005,8 +1057,6 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) tree: Vec<String>,
     /// The selected item's path.
     pub(crate) selected: String,
-    /// The shown page's heading, `Connect > Options`.
-    pub(crate) heading: String,
     /// The ids of the shown page's controls.
     pub(crate) visible_controls: Vec<u16>,
     /// The Highlight page's list, top to bottom.
@@ -2664,6 +2714,14 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SelectViewArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::OpenDialog => Ok(ParsedCommand::OpenDialog {
+            id: envelope.id.clone(),
+            args: parse_args_required::<OpenDialogArgs>(&envelope.id, envelope.args)?,
+        }),
+        CommandKind::SelectOptionsPage => Ok(ParsedCommand::SelectOptionsPage {
+            id: envelope.id.clone(),
+            args: parse_args_required::<SelectOptionsPageArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -2913,17 +2971,18 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AcceptedResponse, ArrangeWindowsArgs, COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU,
-        COMMAND_ID_ACCEPT_VERIFICATION, COMMAND_ID_APPEND_SYNTHETIC_EVENTS,
-        COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU, COMMAND_ID_CANCEL_VERIFICATION,
-        COMMAND_ID_CONFIRM_VERIFICATION_SAS, COMMAND_ID_DUMP_COMPOSE_TEXT,
-        COMMAND_ID_DUMP_MEMBER_MENU_STATE, COMMAND_ID_DUMP_MESSAGE_MENU_STATE,
-        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
-        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
-        COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
-        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
-        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
-        COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU, COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
+        AcceptedResponse, ArrangeWindowsArgs, AutomationDialog,
+        COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, COMMAND_ID_ACCEPT_VERIFICATION,
+        COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
+        COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CONFIRM_VERIFICATION_SAS,
+        COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MEMBER_MENU_STATE,
+        COMMAND_ID_DUMP_MESSAGE_MENU_STATE, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
+        COMMAND_ID_DUMP_ROOM_MENU_STATE, COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH,
+        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_DUMP_VERIFICATION_MENU_STATE,
+        COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_FIND_ACTIVE_VIEW,
+        COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
+        COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU,
+        COMMAND_ID_OPEN_DIALOG, COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
         COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
@@ -2934,7 +2993,7 @@ mod tests {
         COMMAND_ID_REPLY_TO_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_RESTORE_SAVED_SESSION,
         COMMAND_ID_RESTORE_SESSION, COMMAND_ID_SAVE_ATTACHMENT_VIA_MESSAGE_MENU,
         COMMAND_ID_SELECT_MEMBER, COMMAND_ID_SELECT_NAVIGATION_PATH,
-        COMMAND_ID_SELECT_NAVIGATION_VIEW, COMMAND_ID_SELECT_ROOM,
+        COMMAND_ID_SELECT_NAVIGATION_VIEW, COMMAND_ID_SELECT_OPTIONS_PAGE, COMMAND_ID_SELECT_ROOM,
         COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
         COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
         COMMAND_ID_SET_VIEW_WINDOW_STATE, COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC,
@@ -2957,16 +3016,17 @@ mod tests {
         FindActiveViewResponse, GetVersionResponse, LifecycleState, ListRoomsResponse,
         LoadEventsArgs, LoginArgs, MdiArrangement, MdiState, MdiView, MdiWindowPlacement,
         MdiWindowState, MircFormatKey, NavigationNode, NavigationPathSegment, NoArgs,
-        OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs, PROTOCOL_VERSION,
-        ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope, RestoreSessionArgs,
-        RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs, SelectRoomArgs,
-        SelectRoomResponse, SelectTimelineEventArgs, SelectViewArgs, SelectViewResponse,
-        SelectedNavigationPathResponse, SendComposeKeyArgs, SendFileArgs, SendTextArgs,
-        SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs, SetupE2eeRecoveryArgs,
-        StatusBarState, SwitchbarItem, SwitchbarState, UiFindHistorySearchState, UiFindState,
-        UiFrameLayout, UiRect, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-        VerificationActionArgs, ViewActivityLevel, ViewIdentity, WaitIdleArgs, WaitIdleResponse,
-        failure_response, parse_command_request, success_response,
+        OpenDialogArgs, OpenMemberContextMenuArgs, OpenSelectedMemberContextMenuArgs,
+        PROTOCOL_VERSION, ParsedCommand, PongResponse, RecoverE2eeArgs, ResponseEnvelope,
+        RestoreSessionArgs, RoomMemberView, SelectMemberArgs, SelectNavigationPathArgs,
+        SelectOptionsPageArgs, SelectRoomArgs, SelectRoomResponse, SelectTimelineEventArgs,
+        SelectViewArgs, SelectViewResponse, SelectedNavigationPathResponse, SendComposeKeyArgs,
+        SendFileArgs, SendTextArgs, SendTextResponse, SetComposeTextArgs, SetViewWindowStateArgs,
+        SetupE2eeRecoveryArgs, StatusBarState, SwitchbarItem, SwitchbarState,
+        UiFindHistorySearchState, UiFindState, UiFrameLayout, UiRect, UiRoomHistoryBackfillState,
+        UiRoomReadState, UiRoomState, UiState, VerificationActionArgs, ViewActivityLevel,
+        ViewIdentity, WaitIdleArgs, WaitIdleResponse, failure_response, parse_command_request,
+        success_response,
     };
 
     fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -3131,8 +3191,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_44() {
-        assert_eq!(PROTOCOL_VERSION, 44);
+    fn protocol_version_is_45() {
+        assert_eq!(PROTOCOL_VERSION, 45);
     }
 
     #[test]
@@ -3342,7 +3402,15 @@ mod tests {
             Some(CommandKind::SelectNavigationView)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SELECT_NAVIGATION_VIEW + 1),
+            CommandKind::from_id(COMMAND_ID_OPEN_DIALOG),
+            Some(CommandKind::OpenDialog)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SELECT_OPTIONS_PAGE),
+            Some(CommandKind::SelectOptionsPage)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_SELECT_OPTIONS_PAGE + 1),
             None
         );
     }
@@ -4475,6 +4543,67 @@ mod tests {
     }
 
     #[test]
+    fn open_dialog_parses_each_dialog_and_rejects_unknown_ones() {
+        for (dialog, expected) in [
+            ("options", AutomationDialog::Options),
+            ("select_server", AutomationDialog::SelectServer),
+            ("about", AutomationDialog::About),
+            ("commands_join", AutomationDialog::CommandsJoin),
+            ("recover_e2ee", AutomationDialog::RecoverE2ee),
+            ("setup_e2ee_recovery", AutomationDialog::SetupE2eeRecovery),
+            ("close_active_view", AutomationDialog::CloseActiveView),
+        ] {
+            assert_eq!(
+                parse_command_request(
+                    COMMAND_ID_OPEN_DIALOG,
+                    format!(r#"{{"id":"open","args":{{"dialog":"{dialog}"}}}}"#).as_bytes()
+                )
+                .unwrap(),
+                ParsedCommand::OpenDialog {
+                    id: "open".to_owned(),
+                    args: OpenDialogArgs { dialog: expected },
+                }
+            );
+        }
+        for request in [
+            br#"{"id":"open","args":{"dialog":"colors"}}"#.as_slice(),
+            br#"{"id":"open","args":{"dialog":"select-server"}}"#.as_slice(),
+            br#"{"id":"open","args":{}}"#.as_slice(),
+            br#"{"id":"open"}"#.as_slice(),
+            br#"{"id":"open","args":{"dialog":"about","page":"x"}}"#.as_slice(),
+        ] {
+            let error = parse_command_request(COMMAND_ID_OPEN_DIALOG, request).unwrap_err();
+            assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
+        }
+    }
+
+    #[test]
+    fn select_options_page_parses_a_path_and_rejects_other_shapes() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_SELECT_OPTIONS_PAGE,
+                br#"{"id":"page","args":{"path":"IRC/Messages"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::SelectOptionsPage {
+                id: "page".to_owned(),
+                args: SelectOptionsPageArgs {
+                    path: "IRC/Messages".to_owned(),
+                },
+            }
+        );
+        for request in [
+            br#"{"id":"page","args":{}}"#.as_slice(),
+            br#"{"id":"page"}"#.as_slice(),
+            br#"{"id":"page","args":{"path":["IRC","Messages"]}}"#.as_slice(),
+            br#"{"id":"page","args":{"path":"Display","unexpected":true}}"#.as_slice(),
+        ] {
+            let error = parse_command_request(COMMAND_ID_SELECT_OPTIONS_PAGE, request).unwrap_err();
+            assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
+        }
+    }
+
+    #[test]
     fn select_navigation_view_args_round_trip() {
         assert_eq!(
             parse_command_request(
@@ -4968,7 +5097,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":44,
+                    "protocol_version":45,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5579,7 +5708,6 @@ mod tests {
                     options_dialog: Some(super::UiOptionsDialog {
                         tree: vec!["Connect".to_owned(), "Connect/Options".to_owned()],
                         selected: "Connect/Options".to_owned(),
-                        heading: "Connect > Options".to_owned(),
                         visible_controls: vec![6101],
                         highlight_items: vec!["deploy".to_owned()],
                         highlight_controls_enabled: true,
@@ -5746,7 +5874,6 @@ mod tests {
                     "options_dialog":{
                         "tree":["Connect","Connect/Options"],
                         "selected":"Connect/Options",
-                        "heading":"Connect > Options",
                         "visible_controls":[6101],
                         "highlight_items":["deploy"],
                         "highlight_controls_enabled":true,

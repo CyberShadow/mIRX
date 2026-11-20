@@ -37,7 +37,7 @@ use mirx_core::HighlightWord;
 
 use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
-    OptionsPage, page_heading, page_tree_index,
+    OptionsPage, page_tree_index, tree_index, tree_paths,
 };
 use super::settings::Settings;
 use super::timestamp::format_tokens;
@@ -52,7 +52,6 @@ use crate::automation::UiOptionsDialog;
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
 const OPTIONS_DIALOG_TITLE: &str = "mirx Options";
 pub(super) const OPTIONS_TREE_ID: u16 = 6001;
-pub(super) const OPTIONS_PAGE_HEADING_ID: u16 = 6002;
 pub(super) const OPTIONS_CONNECT_ON_STARTUP_ID: u16 = 6101;
 pub(super) const OPTIONS_TIMESTAMP_SHOW_ID: u16 = 6201;
 pub(super) const OPTIONS_TIMESTAMP_FORMAT_ID: u16 = 6202;
@@ -75,6 +74,7 @@ const TREE_WIDTH: i32 = 150;
 const PAGE_X: i32 = MARGIN + TREE_WIDTH + 12;
 const BUTTON_WIDTH: i32 = 80;
 const BUTTON_HEIGHT: i32 = 26;
+const LABEL_HEIGHT: i32 = 16;
 
 pub(super) fn register_class(instance: *mut std::ffi::c_void) -> Result<(), String> {
     let class_name = wide_null(OPTIONS_DIALOG_CLASS_NAME);
@@ -147,7 +147,6 @@ struct DialogState {
     highlight: Option<HighlightList>,
     highlight_controls: HighlightControls,
     tree: HWND,
-    heading: HWND,
     /// The tree's items, in `OPTIONS_TREE` order.
     tree_items: Vec<isize>,
     /// Every page's controls; only the shown page's are visible.
@@ -182,7 +181,6 @@ impl OptionsDialog {
                 delete: null_mut(),
             },
             tree: null_mut(),
-            heading: null_mut(),
             tree_items: Vec::new(),
             page_controls: Vec::new(),
             fields: Fields {
@@ -268,6 +266,16 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let page_width = client.right - PAGE_X - MARGIN;
     let state = dialog_state(hwnd);
 
+    // mIRC labels its tree, which names the shown page; there is no
+    // page heading.
+    place(
+        control(STATIC_CLASS_NAME, "Category:", WS_VISIBLE, 0, 0)?,
+        MARGIN,
+        MARGIN,
+        TREE_WIDTH,
+        LABEL_HEIGHT,
+    );
+    let tree_top = MARGIN + LABEL_HEIGHT + 2;
     state.tree = place(
         control(
             TREE_CLASS_NAME,
@@ -283,9 +291,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             OPTIONS_TREE_ID,
         )?,
         MARGIN,
-        MARGIN,
+        tree_top,
         TREE_WIDTH,
-        buttons_y - 2 * MARGIN,
+        buttons_y - MARGIN - tree_top,
     );
     let mut category = 0;
     for (label, depth, _) in OPTIONS_TREE {
@@ -309,23 +317,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         }
     }
 
-    state.heading = place(
-        control(
-            STATIC_CLASS_NAME,
-            "",
-            WS_VISIBLE,
-            0,
-            OPTIONS_PAGE_HEADING_ID,
-        )?,
-        PAGE_X,
-        MARGIN,
-        page_width,
-        20,
-    );
-
     let checkbox = WS_TABSTOP | BS_AUTOCHECKBOX as u32;
     let edit = WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32;
-    let page_top = MARGIN + 32;
+    let page_top = tree_top;
 
     state.fields.connect_on_startup = place(
         control(
@@ -588,12 +582,29 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
 }
 
 unsafe fn select_page(hwnd: HWND, page: OptionsPage) {
+    select_tree_index(hwnd, page_tree_index(page));
+}
+
+/// Selects the tree item at `path` (`IRC/Messages`), as a click on it does.
+pub(super) unsafe fn select_path(hwnd: HWND, path: &str) -> Result<(), String> {
+    let index = tree_index(path).ok_or_else(|| {
+        format!(
+            "the Options tree has no {path:?}; its items are {:?}",
+            tree_paths()
+        )
+    })?;
+    select_tree_index(hwnd, index);
+    Ok(())
+}
+
+/// Selecting an item shows its page, through TVN_SELCHANGEDW.
+unsafe fn select_tree_index(hwnd: HWND, index: usize) {
     let state = dialog_state(hwnd);
     SendMessageW(
         state.tree,
         TVM_SELECTITEM,
         TVGN_CARET as WPARAM,
-        state.tree_items[page_tree_index(page)],
+        state.tree_items[index],
     );
 }
 
@@ -612,7 +623,6 @@ unsafe fn handle_selection(hwnd: HWND) {
         select_page(hwnd, page);
         return;
     }
-    set_window_text(state.heading, &page_heading(page));
     for (control_page, control) in &state.page_controls {
         ShowWindow(
             *control,
@@ -830,7 +840,6 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
     Ok(UiOptionsDialog {
         tree: paths,
         selected: selected.ok_or_else(|| "the options tree has no selection".to_owned())?,
-        heading: read_window_text(state.heading),
         visible_controls,
         highlight_items,
         highlight_controls_enabled,

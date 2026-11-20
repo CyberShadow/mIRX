@@ -28,27 +28,27 @@ use mirx_core::{
     VerificationStateEvent as CoreVerificationStateEvent,
 };
 use mirx_testkit::{
-    ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult, FindActiveViewResult, FrameSize,
-    LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement, MdiWindowState,
-    MemberModerationAction, MemberPowerRole, MembershipCommandAction, MircFormatKey, MirxApp,
-    Model, NavigationNode, NavigationPathSegment, Room, RoomActivity, RoomActivityKind,
-    RoomActivityRelation, RoomAudioActivity, RoomAudioInfo, RoomEncryptedFileHashes,
-    RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo, RoomImageActivity, RoomImageInfo,
-    RoomImageMediaState, RoomMediaSource, RoomMemberChange, RoomMessageActivity,
-    RoomMessageActivityLine, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity, RoomStateNoticeContent,
-    RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand, SubmittedEditCommand,
-    SubmittedFileCommand, SubmittedHistoryCommand, SubmittedMemberModerationCommand,
-    SubmittedMembershipCommand, SubmittedMessageCommand, SubmittedNotificationCommand,
-    SubmittedPowerLevelCommand, SubmittedProfileCommand, SubmittedReactionCommand,
-    SubmittedRecoveryCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
-    SubmittedReplyThreadTarget, SubmittedRoomListRequest, SubmittedRoomTopicCommand,
-    SubmittedSetupRecoveryCommand, SubmittedUserCommand, SubmittedVerificationAction,
-    SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget, UiComposeTargetKind, UiError,
-    UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimestamp,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    AutomationDialog, ComposeKey, ContextMenuCommand, E2eeRecoverySetupResult,
+    FindActiveViewResult, FrameSize, LaunchOptions, MdiArrangement, MdiView, MdiWindowPlacement,
+    MdiWindowState, MemberModerationAction, MemberPowerRole, MembershipCommandAction,
+    MircFormatKey, MirxApp, Model, NavigationNode, NavigationPathSegment, Room, RoomActivity,
+    RoomActivityKind, RoomActivityRelation, RoomAudioActivity, RoomAudioInfo,
+    RoomEncryptedFileHashes, RoomEncryptedFileKey, RoomFileActivity, RoomFileInfo,
+    RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
+    RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
+    RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
+    RoomStateNoticeContent, RoomTag, SpaceChild, StoredSession, SubmittedDirectRoomCommand,
+    SubmittedEditCommand, SubmittedFileCommand, SubmittedHistoryCommand,
+    SubmittedMemberModerationCommand, SubmittedMembershipCommand, SubmittedMessageCommand,
+    SubmittedNotificationCommand, SubmittedPowerLevelCommand, SubmittedProfileCommand,
+    SubmittedReactionCommand, SubmittedRecoveryCommand, SubmittedRedactionCommand,
+    SubmittedReplyCommand, SubmittedReplyThreadTarget, SubmittedRoomListRequest,
+    SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand, SubmittedUserCommand,
+    SubmittedVerificationAction, SwitchbarItem, TestkitError, UiActiveTimeline, UiComposeTarget,
+    UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
+    UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
+    UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -70,7 +70,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT,
     LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT,
     SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
-    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, WM_CHAR, WM_COMMAND,
+    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, WM_CHAR, WM_CLOSE, WM_COMMAND,
     WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
@@ -2878,7 +2878,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 44);
+    assert_eq!(version.protocol_version, 45);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -12336,7 +12336,6 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
         ]
     );
     assert_eq!(options.selected, "Connect/Options");
-    assert_eq!(options.heading, "Connect > Options");
     assert_eq!(
         options.visible_controls,
         [OPTIONS_CONNECT_ON_STARTUP_ID as u16]
@@ -12355,7 +12354,6 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             .is_some_and(|options| options.selected == "IRC/Messages")
     })?;
     let options = ui_state.options_dialog.expect("the dialog is open");
-    assert_eq!(options.heading, "IRC > Messages");
     assert_eq!(
         options.visible_controls,
         [
@@ -12519,7 +12517,7 @@ fn show_options_highlight_page(
         .dump_ui_state()?
         .options_dialog
         .expect("the dialog is open");
-    assert_eq!(options.heading, "IRC > Highlight");
+    assert_eq!(options.selected, "IRC/Highlight");
     assert_eq!(
         options.visible_controls,
         [
@@ -12837,6 +12835,155 @@ fn alt_e_opens_select_server_only_while_signed_out() -> Result<(), Box<dyn std::
     app.wait_idle(Duration::from_secs(5))?;
     std::thread::sleep(Duration::from_millis(500));
     assert!(unsafe { FindWindowW(class_name.as_ptr(), std::ptr::null()) }.is_null());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Asserts that `result` failed with the protocol error `expected`.
+fn assert_protocol_error(result: Result<(), TestkitError>, expected: &str) {
+    match result {
+        Err(TestkitError::Protocol { code, .. }) => assert_eq!(code, expected),
+        other => panic!("expected the protocol error {expected}, got {other:?}"),
+    }
+}
+
+/// Closes a mirx dialog through its close box and waits until it is gone.
+fn close_dialog(app: &MirxApp, dialog: HWND) -> Result<(), Box<dyn std::error::Error>> {
+    assert_ne!(unsafe { PostMessageW(dialog, WM_CLOSE, 0, 0) }, 0);
+    wait_for_window_gone(dialog, "dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+#[test]
+fn open_dialog_opens_each_dialog_over_the_frame() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    app.wait_idle(Duration::from_secs(5))?;
+    for (dialog, class, title) in [
+        (
+            AutomationDialog::Options,
+            "mirxWin32OptionsDialog",
+            "mirx Options",
+        ),
+        (
+            AutomationDialog::SelectServer,
+            "mirxWin32LoginDialog",
+            "Select Server",
+        ),
+        (
+            AutomationDialog::About,
+            "mirxWin32AboutDialog",
+            "About mirx",
+        ),
+        (
+            AutomationDialog::CommandsJoin,
+            "mirxWin32FindDialog",
+            "Join room",
+        ),
+        (
+            AutomationDialog::RecoverE2ee,
+            "mirxWin32RecoverE2eeDialog",
+            "Recover E2EE",
+        ),
+        (
+            AutomationDialog::SetupE2eeRecovery,
+            "mirxWin32SetupE2eeDialog",
+            "Set Up E2EE Recovery",
+        ),
+    ] {
+        app.open_dialog(dialog)?;
+        let open = app.wait_for_modal_dialog(Duration::from_secs(5))?;
+        assert_eq!((open.class.as_str(), open.title.as_str()), (class, title));
+        close_dialog(&app, open.hwnd as HWND)?;
+    }
+
+    // The close box asks before leaving the room; No keeps it.
+    app.open_dialog(AutomationDialog::CloseActiveView)?;
+    let open = app.wait_for_modal_dialog(Duration::from_secs(5))?;
+    assert_eq!(
+        (open.class.as_str(), open.title.as_str()),
+        ("#32770", "mirx")
+    );
+    answer_message_box(&app, open.hwnd as HWND, IDNO)?;
+    assert!(
+        app.list_rooms()?
+            .iter()
+            .any(|room| room.room_id == "!beta:example")
+    );
+    assert!(app.dump_model()?.submitted_membership_commands.is_empty());
+
+    // The Status window closes without asking.
+    app.select_view(ViewIdentity::Status)?;
+    assert_protocol_error(
+        app.open_dialog(AutomationDialog::CloseActiveView),
+        "no_close_confirmation",
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn open_dialog_refuses_a_greyed_menu_item() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+
+    assert_protocol_error(
+        app.open_dialog(AutomationDialog::SelectServer),
+        "menu_item_disabled",
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        unsafe { FindWindowW(wide_null("mirxWin32LoginDialog").as_ptr(), std::ptr::null()) }
+            .is_null()
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    assert_protocol_error(app.select_options_page("Display"), "no_options_dialog");
+
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = app.wait_for_modal_dialog(Duration::from_secs(5))?;
+    for (path, selected) in [
+        ("IRC/Messages", "IRC/Messages"),
+        ("IRC/Highlight", "IRC/Highlight"),
+        ("Display", "Display"),
+        ("Connect/Options", "Connect/Options"),
+        // A category without a page of its own shows its first page.
+        ("IRC", "IRC/Messages"),
+    ] {
+        app.select_options_page(path)?;
+        let options = app
+            .dump_ui_state()?
+            .options_dialog
+            .expect("the dialog is open");
+        assert_eq!(options.selected, selected, "{path}");
+    }
+    for path in ["IRC/Logging", "irc/messages", ""] {
+        assert_protocol_error(app.select_options_page(path), "unknown_options_page");
+    }
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open");
+    assert_eq!(options.selected, "IRC/Messages");
+    close_dialog(&app, dialog.hwnd as HWND)?;
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
