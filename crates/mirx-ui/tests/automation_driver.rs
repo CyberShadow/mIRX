@@ -6115,6 +6115,60 @@ fn double_click_while_active_minimizes() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn tray_menu_lists_windows_in_switchbar_order_and_checks_new_messages()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_with_tray("minimize=on\r\n")?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(alpha.clone())?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!beta:example",
+        "@bob:example",
+        now_ms(),
+        "beta news",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_status_view()?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        ui_state
+            .tray
+            .menu
+            .iter()
+            .map(|item| (item.label.as_str(), item.checked))
+            .collect::<Vec<_>>(),
+        [
+            ("Status", false),
+            ("Beta", true),
+            ("Alpha", false),
+            ("Lobby [invite]", false)
+        ]
+    );
+    // The switchbar's order and labels.
+    assert_eq!(
+        ui_state
+            .switchbar
+            .items
+            .iter()
+            .map(|item| item.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Status", "Beta", "Alpha", "Lobby [invite]"]
+    );
+
+    minimize_frame(&app)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    app.choose_tray_menu_item("Alpha")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(frame_shown(&app), (true, false));
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, alpha);
+    assert_eq!((ui_state.tray.icon, ui_state.tray.hidden), (false, false));
+    assert_protocol_error(app.choose_tray_menu_item("Gamma"), "unknown_tray_menu_item");
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn taskbar_created_adds_the_icon_again() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_with_tray("always=on\r\n")?;
     assert_eq!(tray_icon_and_hidden(&app)?, (true, false));

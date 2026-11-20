@@ -75,6 +75,7 @@ pub(crate) const COMMAND_ID_SELECT_NAVIGATION_VIEW: u32 = 57;
 pub(crate) const COMMAND_ID_OPEN_DIALOG: u32 = 58;
 pub(crate) const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
 pub(crate) const COMMAND_ID_SET_NAVIGATION_EXPANDED: u32 = 60;
+pub(crate) const COMMAND_ID_CHOOSE_TRAY_MENU_ITEM: u32 = 61;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -136,6 +137,7 @@ pub(crate) enum CommandKind {
     OpenDialog,
     SelectOptionsPage,
     SetNavigationExpanded,
+    ChooseTrayMenuItem,
 }
 
 impl CommandKind {
@@ -209,6 +211,7 @@ impl CommandKind {
             COMMAND_ID_OPEN_DIALOG => Some(Self::OpenDialog),
             COMMAND_ID_SELECT_OPTIONS_PAGE => Some(Self::SelectOptionsPage),
             COMMAND_ID_SET_NAVIGATION_EXPANDED => Some(Self::SetNavigationExpanded),
+            COMMAND_ID_CHOOSE_TRAY_MENU_ITEM => Some(Self::ChooseTrayMenuItem),
             _ => None,
         }
     }
@@ -431,6 +434,12 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: SetNavigationExpandedArgs,
     },
+    /// Chooses an item of the tray icon's popup by its label, as a click on
+    /// it does.
+    ChooseTrayMenuItem {
+        id: String,
+        args: ChooseTrayMenuItemArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -504,6 +513,7 @@ impl ParsedCommand {
             Self::OpenDialog { .. } => CommandKind::OpenDialog,
             Self::SelectOptionsPage { .. } => CommandKind::SelectOptionsPage,
             Self::SetNavigationExpanded { .. } => CommandKind::SetNavigationExpanded,
+            Self::ChooseTrayMenuItem { .. } => CommandKind::ChooseTrayMenuItem,
         }
     }
 }
@@ -690,6 +700,12 @@ pub(crate) enum AutomationDialog {
 #[serde(deny_unknown_fields)]
 pub(crate) struct OpenDialogArgs {
     pub(crate) dialog: AutomationDialog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChooseTrayMenuItemArgs {
+    pub(crate) label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2907,6 +2923,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<SetNavigationExpandedArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::ChooseTrayMenuItem => Ok(ParsedCommand::ChooseTrayMenuItem {
+            id: envelope.id.clone(),
+            args: parse_args_required::<ChooseTrayMenuItemArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -3159,16 +3179,17 @@ mod tests {
         AcceptedResponse, ArrangeWindowsArgs, AutomationDialog,
         COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, COMMAND_ID_ACCEPT_VERIFICATION,
         COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
-        COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CONFIRM_VERIFICATION_SAS,
-        COMMAND_ID_DUMP_COMPOSE_TEXT, COMMAND_ID_DUMP_MEMBER_MENU_STATE,
-        COMMAND_ID_DUMP_MESSAGE_MENU_STATE, COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY,
-        COMMAND_ID_DUMP_ROOM_MENU_STATE, COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH,
-        COMMAND_ID_DUMP_UI_STATE, COMMAND_ID_DUMP_VERIFICATION_MENU_STATE,
-        COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU, COMMAND_ID_FIND_ACTIVE_VIEW,
-        COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS, COMMAND_ID_LOAD_SYNTHETIC_STATE,
-        COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT, COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU,
-        COMMAND_ID_OPEN_DIALOG, COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU,
-        COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU, COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
+        COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CHOOSE_TRAY_MENU_ITEM,
+        COMMAND_ID_CONFIRM_VERIFICATION_SAS, COMMAND_ID_DUMP_COMPOSE_TEXT,
+        COMMAND_ID_DUMP_MEMBER_MENU_STATE, COMMAND_ID_DUMP_MESSAGE_MENU_STATE,
+        COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
+        COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
+        COMMAND_ID_DUMP_VERIFICATION_MENU_STATE, COMMAND_ID_EDIT_SELECTED_MESSAGE_VIA_MENU,
+        COMMAND_ID_FIND_ACTIVE_VIEW, COMMAND_ID_GET_VERSION, COMMAND_ID_LIST_ROOMS,
+        COMMAND_ID_LOAD_SYNTHETIC_STATE, COMMAND_ID_LOGIN, COMMAND_ID_LOGOUT,
+        COMMAND_ID_MENTION_SELECTED_MEMBER_VIA_MENU, COMMAND_ID_OPEN_DIALOG,
+        COMMAND_ID_OPEN_MEMBER_CONTEXT_MENU, COMMAND_ID_OPEN_NAVIGATION_CONTEXT_MENU,
+        COMMAND_ID_OPEN_SELECTED_MEMBER_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_NAVIGATION_CONTEXT_MENU,
         COMMAND_ID_OPEN_SELECTED_TIMELINE_CONTEXT_MENU, COMMAND_ID_OPEN_TIMELINE_CONTEXT_MENU,
         COMMAND_ID_PART_ROOM_VIA_ROOM_MENU, COMMAND_ID_PING,
@@ -3182,17 +3203,18 @@ mod tests {
         COMMAND_ID_SELECT_TIMELINE_EVENT, COMMAND_ID_SELECT_VIEW, COMMAND_ID_SEND_COMPOSE_KEY,
         COMMAND_ID_SEND_FILE, COMMAND_ID_SEND_TEXT, COMMAND_ID_SET_COMPOSE_TEXT,
         COMMAND_ID_SET_NAVIGATION_EXPANDED, COMMAND_ID_SET_VIEW_WINDOW_STATE,
-        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE, CommandKind,
-        ComposeKey, ComposeTextResponse, ConnectionState, ContextMenuCommand,
-        DumpE2eeRecoverySetupResult, DumpMemberModerationAction, DumpMemberPowerRole, DumpModel,
-        DumpRoomActivity, DumpRoomActivityArgs, DumpRoomActivityKind, DumpRoomActivityRelation,
-        DumpRoomActivityResponse, DumpRoomAudioActivity, DumpRoomAudioInfo,
-        DumpRoomEncryptedFileHashes, DumpRoomEncryptedFileKey, DumpRoomFileActivity,
-        DumpRoomFileInfo, DumpRoomImageActivity, DumpRoomImageInfo, DumpRoomMediaSource,
-        DumpRoomMessageActivity, DumpRoomMessageActivityLine, DumpRoomMessageSendState,
-        DumpRoomPreviewMediaState, DumpRoomReactionSummary, DumpRoomRedactedActivity,
-        DumpRoomStateNoticeActivity, DumpRoomStateNoticeContent, DumpRoomVideoActivity,
-        DumpRoomVideoInfo, DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
+        COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE,
+        ChooseTrayMenuItemArgs, CommandKind, ComposeKey, ComposeTextResponse, ConnectionState,
+        ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberModerationAction,
+        DumpMemberPowerRole, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
+        DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
+        DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
+        DumpRoomEncryptedFileKey, DumpRoomFileActivity, DumpRoomFileInfo, DumpRoomImageActivity,
+        DumpRoomImageInfo, DumpRoomMediaSource, DumpRoomMessageActivity,
+        DumpRoomMessageActivityLine, DumpRoomMessageSendState, DumpRoomPreviewMediaState,
+        DumpRoomReactionSummary, DumpRoomRedactedActivity, DumpRoomStateNoticeActivity,
+        DumpRoomStateNoticeContent, DumpRoomVideoActivity, DumpRoomVideoInfo,
+        DumpSubmittedEditCommand, DumpSubmittedHistoryCommand,
         DumpSubmittedMemberModerationCommand, DumpSubmittedPowerLevelCommand,
         DumpSubmittedProfileCommand, DumpSubmittedReactionCommand, DumpSubmittedRedactionCommand,
         DumpSubmittedReplyCommand, DumpSubmittedReplyThreadTarget, DumpSubmittedRoomTopicCommand,
@@ -3600,7 +3622,11 @@ mod tests {
             Some(CommandKind::SetNavigationExpanded)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_SET_NAVIGATION_EXPANDED + 1),
+            CommandKind::from_id(COMMAND_ID_CHOOSE_TRAY_MENU_ITEM),
+            Some(CommandKind::ChooseTrayMenuItem)
+        );
+        assert_eq!(
+            CommandKind::from_id(COMMAND_ID_CHOOSE_TRAY_MENU_ITEM + 1),
             None
         );
     }
@@ -4797,6 +4823,33 @@ mod tests {
             br#"{"id":"page","args":{"path":"Display","unexpected":true}}"#.as_slice(),
         ] {
             let error = parse_command_request(COMMAND_ID_SELECT_OPTIONS_PAGE, request).unwrap_err();
+            assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
+        }
+    }
+
+    #[test]
+    fn choose_tray_menu_item_parses_a_label_and_rejects_other_shapes() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_CHOOSE_TRAY_MENU_ITEM,
+                br#"{"id":"tray","args":{"label":"Alpha"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::ChooseTrayMenuItem {
+                id: "tray".to_owned(),
+                args: ChooseTrayMenuItemArgs {
+                    label: "Alpha".to_owned(),
+                },
+            }
+        );
+        for request in [
+            br#"{"id":"tray","args":{}}"#.as_slice(),
+            br#"{"id":"tray"}"#.as_slice(),
+            br#"{"id":"tray","args":{"label":1}}"#.as_slice(),
+            br#"{"id":"tray","args":{"label":"Alpha","checked":true}}"#.as_slice(),
+        ] {
+            let error =
+                parse_command_request(COMMAND_ID_CHOOSE_TRAY_MENU_ITEM, request).unwrap_err();
             assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
         }
     }

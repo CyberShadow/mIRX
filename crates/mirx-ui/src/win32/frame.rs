@@ -164,7 +164,7 @@ unsafe extern "system" fn window_proc(
             })
         }
         WM_TRAY_ICON => {
-            if let Err(message) = on_tray_icon(hwnd, lparam) {
+            if let Err(message) = on_tray_icon(hwnd, wparam, lparam) {
                 show_error_message(hwnd, "Tray", &message);
             }
             0

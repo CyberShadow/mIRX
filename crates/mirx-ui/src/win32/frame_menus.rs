@@ -545,7 +545,7 @@ pub(super) unsafe fn refresh_message_menu_state(
     Ok(())
 }
 
-unsafe fn append_menu_text(
+pub(super) unsafe fn append_menu_text(
     menu: HMENU,
     flags: u32,
     item_id: usize,

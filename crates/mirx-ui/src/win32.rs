@@ -328,8 +328,8 @@ use frame::{
 #[cfg(test)]
 use frame_menus::active_message_action_state;
 use frame_menus::{
-    active_message_action_state_for_automation, active_room_action_state, connect,
-    context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
+    active_message_action_state_for_automation, active_room_action_state, append_menu_text,
+    connect, context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
     default_context_point_for_window, disconnect, handle_menu_command, handle_switchbar_command,
     handle_window_key_command, invoke_menu_command_for_automation,
     invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
@@ -451,8 +451,8 @@ use timeline_window::{
 };
 use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 use tray::{
-    TrayState, dump_tray, hide_to_tray, minimize_frame, on_taskbar_created, on_tray_icon,
-    remove_tray_icon, sync_tray_icon, taskbar_created_message,
+    TrayState, choose_tray_menu_item, dump_tray, hide_to_tray, minimize_frame, on_taskbar_created,
+    on_tray_icon, remove_tray_icon, sync_tray_icon, taskbar_created_message,
 };
 use verification::{
     apply_verification_event, e2ee_backup_health_summary, e2ee_cross_signing_label,

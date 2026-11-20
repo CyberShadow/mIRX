@@ -133,6 +133,8 @@ const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
 #[cfg(windows)]
 const COMMAND_ID_SET_NAVIGATION_EXPANDED: u32 = 60;
 #[cfg(windows)]
+const COMMAND_ID_CHOOSE_TRAY_MENU_ITEM: u32 = 61;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -2364,6 +2366,13 @@ impl MirxApp {
         self.inner.set_navigation_expanded(node, expanded)
     }
 
+    /// Chooses the tray icon's popup item labelled `label` (see
+    /// `UiState.tray.menu`), as a click on it does: mirx comes back from
+    /// the tray with that window active.
+    pub fn choose_tray_menu_item(&self, label: &str) -> Result<(), TestkitError> {
+        self.inner.choose_tray_menu_item(label)
+    }
+
     pub fn selected_navigation_path(&self) -> Result<Vec<NavigationPathSegment>, TestkitError> {
         self.inner.selected_navigation_path()
     }
@@ -2820,6 +2829,13 @@ struct SetNavigationExpandedArgs {
 }
 
 #[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct ChooseTrayMenuItemArgs<'a> {
+    label: &'a str,
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FindActiveViewRequestArgs<'a> {
@@ -3237,6 +3253,12 @@ mod imp {
             _node: &NavigationNodeKey,
             _expanded: bool,
         ) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn choose_tray_menu_item(&self, _label: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
             ))
@@ -4033,6 +4055,14 @@ mod imp {
                     expanded,
                 },
                 "SET_NAVIGATION_EXPANDED",
+            )
+        }
+
+        pub(crate) fn choose_tray_menu_item(&self, label: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(
+                COMMAND_ID_CHOOSE_TRAY_MENU_ITEM,
+                ChooseTrayMenuItemArgs { label },
+                "CHOOSE_TRAY_MENU_ITEM",
             )
         }
 

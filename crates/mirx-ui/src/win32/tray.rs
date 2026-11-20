@@ -17,7 +17,8 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, IDI_APPLICATION, IsWindowVisible, LoadIconW,
-    RegisterWindowMessageW, SW_HIDE, SW_RESTORE, SW_SHOW, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+    RegisterWindowMessageW, SW_HIDE, SW_RESTORE, SW_SHOW, WM_CONTEXTMENU, WM_LBUTTONDBLCLK,
+    WM_LBUTTONUP, WM_NULL,
 };
 
 use super::settings::TraySetting;
@@ -224,7 +225,12 @@ unsafe fn toggle_from_tray(hwnd: HWND) -> Result<(), String> {
 
 /// The shell's `WM_TRAY_ICON`: `NOTIFYICON_VERSION_4` puts the event in
 /// `LOWORD(lParam)`.
-pub(super) unsafe fn on_tray_icon(hwnd: HWND, lparam: LPARAM) -> Result<(), String> {
+/// `wParam` is where the icon is, for its popup.
+pub(super) unsafe fn on_tray_icon(
+    hwnd: HWND,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> Result<(), String> {
     let single_click = state_ref(hwnd).settings.settings().tray.single_click;
     match (lparam & 0xffff) as u32 {
         // A double click is up, double click, up: with single click on,
@@ -232,6 +238,12 @@ pub(super) unsafe fn on_tray_icon(hwnd: HWND, lparam: LPARAM) -> Result<(), Stri
         WM_LBUTTONUP if single_click => toggle_from_tray(hwnd),
         WM_LBUTTONDBLCLK if !single_click => toggle_from_tray(hwnd),
         NIN_KEYSELECT => toggle_from_tray(hwnd),
+        // A right click, Shift+F10 or the Apps key.
+        WM_CONTEXTMENU => show_tray_menu(
+            hwnd,
+            (wparam & 0xffff) as u16 as i16 as i32,
+            ((wparam >> 16) & 0xffff) as u16 as i16 as i32,
+        ),
         // Moves, downs and the clicks the option does not use.
         _ => Ok(()),
     }
@@ -275,6 +287,53 @@ pub(super) fn tray_menu_items(state: &WindowState) -> Vec<TrayMenuItem> {
             view,
         })
         .collect()
+}
+
+/// The icon's popup at `x`, `y` on the screen; choosing a window restores
+/// mirx and opens it.
+unsafe fn show_tray_menu(hwnd: HWND, x: i32, y: i32) -> Result<(), String> {
+    let items = tray_menu_items(state_ref(hwnd));
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return Err(last_os_error("CreatePopupMenu"));
+    }
+    let chosen = (|| {
+        for (index, item) in items.iter().enumerate() {
+            let check = if item.checked { MF_CHECKED } else { 0 };
+            append_menu_text(menu, MF_STRING | check, index + 1, &item.label)?;
+        }
+        // Without the foreground, the menu would not close on a click
+        // elsewhere; the WM_NULL after makes the next click work.
+        SetForegroundWindow(hwnd);
+        let command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, x, y, 0, hwnd, null());
+        PostMessageW(hwnd, WM_NULL, 0, 0);
+        Ok::<_, String>(command)
+    })();
+    DestroyMenu(menu);
+    match chosen? {
+        0 => Ok(()),
+        command => choose_tray_view(hwnd, &items[command as usize - 1].view),
+    }
+}
+
+/// A window chosen in the icon's popup: mirx comes back with it active.
+unsafe fn choose_tray_view(hwnd: HWND, view: &ViewId) -> Result<(), String> {
+    restore_from_tray(hwnd)?;
+    // The popup's modal loop ran events: the window may be gone.
+    if state_ref(hwnd).views.contains_key(view) {
+        activate_view(hwnd, view, None)?;
+    }
+    Ok(())
+}
+
+/// The automation's choice of a popup item by its label, as a click on it.
+pub(super) unsafe fn choose_tray_menu_item(hwnd: HWND, label: &str) -> Result<(), String> {
+    let view = tray_menu_items(state_ref(hwnd))
+        .into_iter()
+        .find(|item| item.label == label)
+        .ok_or_else(|| format!("the tray popup has no item {label}"))?
+        .view;
+    choose_tray_view(hwnd, &view)
 }
 
 pub(super) unsafe fn dump_tray(hwnd: HWND) -> UiTray {

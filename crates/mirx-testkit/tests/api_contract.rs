@@ -7360,6 +7360,14 @@ fn non_windows_new_methods_report_unsupported_driver() {
     );
 
     let error = app
+        .choose_tray_menu_item("Status")
+        .expect_err("choose_tray_menu_item must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mirx-testkit requires the Windows target"
+    );
+
+    let error = app
         .selected_navigation_path()
         .expect_err("selected_navigation_path must fail off Windows");
     assert_eq!(
