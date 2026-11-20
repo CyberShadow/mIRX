@@ -964,6 +964,7 @@ fn data_models_round_trip_through_json() {
             top_row: 0,
         }),
         colors_dialog: None,
+        color_index: None,
         options_dialog: Some(UiOptionsDialog {
             tree: vec!["Display".to_owned()],
             selected: "Display".to_owned(),
@@ -1272,6 +1273,7 @@ fn data_models_round_trip_through_json() {
                 "activity_colors": {"event": 5, "message": 9, "highlight": 12},
             },
             "colors_dialog": null,
+            "color_index": null,
             "active_timeline": {
                 "top_line": 0,
                 "visible_lines": [{
@@ -6800,6 +6802,7 @@ fn switchbar_helpers_find_items_and_active_item() {
         room_list: None,
         options_dialog: None,
         colors_dialog: None,
+        color_index: None,
         active_timeline: None,
         ignored_users: None,
     };

@@ -931,6 +931,7 @@ pub(super) unsafe fn with_test_compose_window<T>(
     window_data::lend(frame, &mut *data);
     let state = state_mut(frame);
     state.controls.status_bar = status_bar;
+    state.controls.color_index = create_color_index(frame).unwrap();
     let active_view = state.active_view.clone();
     state.hwnd_views.insert(child as isize, active_view.clone());
     state.views.insert(

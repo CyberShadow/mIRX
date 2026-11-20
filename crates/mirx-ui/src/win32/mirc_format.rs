@@ -66,8 +66,8 @@ pub(super) const MIRC_PALETTE: [TextColor; 99] = [
 /// The `^K` index of the default colour.
 const DEFAULT_COLOR_INDEX: u8 = 99;
 
-/// The code a Ctrl chord in the editbox types, Alt not held: B, K, U, I, O
-/// and R, as in mIRC.
+/// The code a Ctrl chord in the editbox types, Alt not held: B, K, U, I, O,
+/// R and E, as in mIRC.
 pub(super) fn mirc_format_key(ctrl: bool, alt: bool, virtual_key: usize) -> Option<MircFormatKey> {
     if !ctrl || alt {
         return None;
@@ -80,6 +80,7 @@ pub(super) fn mirc_format_key(ctrl: bool, alt: bool, virtual_key: usize) -> Opti
         b'I' => Some(MircFormatKey::Italic),
         b'O' => Some(MircFormatKey::Reset),
         b'R' => Some(MircFormatKey::Reverse),
+        b'E' => Some(MircFormatKey::Strikethrough),
         _ => None,
     }
 }
@@ -92,7 +93,60 @@ pub(super) fn mirc_format_code(key: MircFormatKey) -> char {
         MircFormatKey::Italic => ITALIC,
         MircFormatKey::Reset => RESET,
         MircFormatKey::Reverse => REVERSE,
+        MircFormatKey::Strikethrough => STRIKETHROUGH,
     }
+}
+
+/// Which number of a `^K` colour code is being typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ColorCodePart {
+    Foreground,
+    Background,
+}
+
+/// A `^K` colour code whose number is still being typed at the caret: the
+/// part, and its digits so far (none or one), which a picked colour's two
+/// digits replace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ColorCodeInProgress {
+    pub(super) part: ColorCodePart,
+    pub(super) typed_digits: usize,
+    /// Where the `^K` is in the text before the caret, in UTF-16 units.
+    pub(super) code_offset: usize,
+}
+
+/// The colour code `before_caret` ends in, while a digit can still extend
+/// its number: `^K` and up to one digit, or `^K`, one or two digits, a
+/// comma and up to one digit. A number of two digits is done, so the
+/// colour index goes once it is typed.
+pub(super) fn color_code_in_progress(before_caret: &str) -> Option<ColorCodeInProgress> {
+    type Backwards<'a> = std::iter::Peekable<std::iter::Rev<std::str::Chars<'a>>>;
+    // A number's digits, read backwards: at most two.
+    fn take_digits(chars: &mut Backwards) -> usize {
+        let mut count = 0;
+        while count < 2 && chars.next_if(char::is_ascii_digit).is_some() {
+            count += 1;
+        }
+        count
+    }
+    let mut chars = before_caret.chars().rev().peekable();
+    let typed_digits = take_digits(&mut chars);
+    // The code's length; it is all ASCII, so in UTF-16 units too.
+    let (part, code_length) = match chars.next() {
+        Some(COLOR) if typed_digits < 2 => (ColorCodePart::Foreground, 1 + typed_digits),
+        Some(',') if typed_digits < 2 => match (take_digits(&mut chars), chars.next()) {
+            (foreground @ (1 | 2), Some(COLOR)) => {
+                (ColorCodePart::Background, 1 + foreground + 1 + typed_digits)
+            }
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(ColorCodeInProgress {
+        part,
+        typed_digits,
+        code_offset: before_caret.encode_utf16().count() - code_length,
+    })
 }
 
 /// The formatting the codes so far turn on.
@@ -617,6 +671,7 @@ mod tests {
             (b'I', MircFormatKey::Italic),
             (b'O', MircFormatKey::Reset),
             (b'R', MircFormatKey::Reverse),
+            (b'E', MircFormatKey::Strikethrough),
         ] {
             let virtual_key = usize::from(letter);
             assert_eq!(mirc_format_key(true, false, virtual_key), Some(key));
@@ -628,5 +683,43 @@ mod tests {
         assert_eq!(mirc_format_key(true, false, 0x109), None);
         assert_eq!(mirc_format_code(MircFormatKey::Color), '\x03');
         assert_eq!(mirc_format_code(MircFormatKey::Italic), '\x1d');
+        assert_eq!(mirc_format_code(MircFormatKey::Strikethrough), '\x1e');
+    }
+
+    #[test]
+    fn a_colour_code_is_in_progress_until_its_number_is_complete() {
+        use ColorCodePart::{Background, Foreground};
+        let in_progress = |part, typed_digits, code_offset| {
+            Some(ColorCodeInProgress {
+                part,
+                typed_digits,
+                code_offset,
+            })
+        };
+        for (before_caret, expected) in [
+            ("\x03", in_progress(Foreground, 0, 0)),
+            ("\x034", in_progress(Foreground, 1, 0)),
+            ("\x0304", None),
+            ("\x034,", in_progress(Background, 0, 0)),
+            ("\x034,1", in_progress(Background, 1, 0)),
+            ("\x0304,", in_progress(Background, 0, 0)),
+            ("\x034,12", None),
+            ("a", None),
+            ("\x03x", None),
+            ("", None),
+            (",", None),
+            ("4,1", None),
+            ("\x03,", None),
+            ("\x03123,", None),
+            ("hi \x03", in_progress(Foreground, 0, 3)),
+            ("é \x0312,", in_progress(Background, 0, 2)),
+            ("\u{1f600}\x034", in_progress(Foreground, 1, 2)),
+        ] {
+            assert_eq!(
+                color_code_in_progress(before_caret),
+                expected,
+                "{before_caret:?}"
+            );
+        }
     }
 }

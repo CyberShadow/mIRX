@@ -299,6 +299,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         null_mut(),
     )?;
     set_treebar_colors(state.controls.tree, &state.settings.settings().colors);
+    state.controls.color_index = create_color_index(hwnd)?;
 
     let mut mdi_client: CLIENTCREATESTRUCT = zeroed();
     // No MDI window list in the Window menu: the switchbar is the window

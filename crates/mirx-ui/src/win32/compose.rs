@@ -2,7 +2,15 @@
 //! targets, and submitting what was typed.
 
 use super::*;
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, WM_MOUSEWHEEL};
+use windows_sys::Win32::UI::Controls::EM_UNDO;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetWindowTextLengthW, WM_CLEAR, WM_CUT, WM_KILLFOCUS, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_UNDO,
+};
+
+use super::color_index::{
+    color_code_at_caret, color_index_shown, edit_selection, hide_color_index, update_color_index,
+};
+use super::colors::PaletteIndex;
 
 const VK_DELETE_KEY: WPARAM = 46;
 const VK_TAB_KEY: WPARAM = 9;
@@ -415,6 +423,7 @@ pub(super) unsafe fn set_compose_text(hwnd: HWND, text: &str) -> Result<(), Stri
     let edit = compose_edit(hwnd);
     active_compose_history(state_mut(hwnd)).reset_navigation();
     set_compose_edit_text(edit, text);
+    update_color_index(hwnd);
     Ok(())
 }
 
@@ -441,10 +450,27 @@ pub(super) unsafe fn send_compose_key(hwnd: HWND, key: ComposeKey) -> Result<(),
 
 /// Types a formatting code at the editbox's caret, as one undoable edit.
 unsafe fn insert_mirc_format_code(frame: HWND, edit: HWND, code: char) {
+    insert_compose_text(frame, edit, code.encode_utf8(&mut [0; 4]));
+}
+
+/// A click in the colour index: the colour's two digits replace the
+/// number's digits typed so far, so a digit typed next cannot extend it.
+pub(super) unsafe fn insert_color_number(frame: HWND, index: PaletteIndex) {
+    let edit = compose_edit(frame);
+    let code = color_code_at_caret(edit)
+        .expect("the colour index shows only while a colour number is typed");
+    let (_, caret) = edit_selection(edit);
+    SendMessageW(edit, EM_SETSEL, caret - code.typed_digits, caret as LPARAM);
+    insert_compose_text(frame, edit, &format!("{:02}", index.get()));
+}
+
+/// Types `text` at the editbox's caret, as one undoable edit.
+unsafe fn insert_compose_text(frame: HWND, edit: HWND, text: &str) {
     active_compose_history(state_mut(frame)).reset_navigation();
-    let text = wide_null(code.encode_utf8(&mut [0; 4]));
+    let text = wide_null(text);
     // wParam TRUE: the replacement can be undone.
     SendMessageW(edit, EM_REPLACESEL, 1, text.as_ptr() as LPARAM);
+    update_color_index(frame);
 }
 
 pub(super) unsafe fn submit_compose_from_control(
@@ -461,6 +487,7 @@ pub(super) unsafe fn submit_compose_from_control(
     )?;
     let empty = wide_null("");
     SendMessageW(edit, WM_SETTEXT, 0, empty.as_ptr() as LPARAM);
+    update_color_index(hwnd);
     Ok(room_id)
 }
 
@@ -709,6 +736,37 @@ unsafe extern "system" fn edit_window_proc(
     // The editbox is a child of its MDI child, which is a child of the MDI
     // client: the state lives on the frame.
     let parent = frame_window_for(hwnd);
+    if message == WM_KILLFOCUS {
+        hide_color_index(state_ref(parent));
+    }
+    // While the colour index shows, Esc only hides it (and its character
+    // is swallowed below); the reply or edit target stays armed.
+    if message == WM_KEYDOWN && wparam == VK_ESCAPE_KEY && color_index_shown(parent) {
+        hide_color_index(state_ref(parent));
+        return 0;
+    }
+    let result = edit_message(parent, hwnd, message, wparam, lparam);
+    // Keys, clicks and edit commands go to the focused editbox, which is
+    // the active window's; any of them can start or end a colour number
+    // at its caret. Esc, which hides the index, is not one of them.
+    let escape = matches!(message, WM_KEYDOWN | WM_CHAR) && wparam == VK_ESCAPE_KEY;
+    if matches!(
+        message,
+        WM_KEYDOWN | WM_CHAR | WM_LBUTTONUP | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | EM_UNDO
+    ) && !escape
+    {
+        update_color_index(parent);
+    }
+    result
+}
+
+unsafe fn edit_message(
+    parent: HWND,
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     let original = state_ref(parent).edit_window_proc;
 
     if message == WM_SETFOCUS {
@@ -811,13 +869,13 @@ unsafe extern "system" fn edit_window_proc(
     }
 
     // TranslateMessage also turns the Tab and Esc keys, and the format
-    // chords, into these characters: Ctrl+B, K, U, O and R, and Ctrl+I is
-    // Tab's. The key down already acted, so the edit box must not see them:
+    // chords, into these characters: Ctrl+B, K, U, O, R and E, and Ctrl+I
+    // is Tab's. The key down already acted, so the edit box must not see them:
     // a single-line edit box rejects them, with a beep on Windows.
     if message == WM_CHAR
         && matches!(
             wparam,
-            VK_TAB_KEY | VK_ESCAPE_KEY | 0x02 | 0x0b | 0x15 | 0x0f | 0x12
+            VK_TAB_KEY | VK_ESCAPE_KEY | 0x02 | 0x0b | 0x15 | 0x0f | 0x12 | 0x05
         )
     {
         return 0;
@@ -1432,10 +1490,11 @@ mod tests {
                     (b'I', 0x09),
                     (b'O', 0x0f),
                     (b'R', 0x12),
+                    (b'E', 0x05),
                 ] {
                     chord(letter, ch);
                 }
-                assert_eq!(read_window_text(edit), "\x02\x03\x1f\x1d\x0f\x16");
+                assert_eq!(read_window_text(edit), "\x02\x03\x1f\x1d\x0f\x16\x1e");
                 // The codes undo as typing does: a run of them at once.
                 SendMessageW(edit, EM_UNDO, 0, 0);
                 assert_eq!(read_window_text(edit), "");
@@ -1473,6 +1532,100 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(read_window_text(edit), "a\x03");
+            });
+        }
+    }
+
+    unsafe fn type_chars(edit: HWND, text: &str) {
+        for ch in text.encode_utf16() {
+            SendMessageW(edit, WM_CHAR, usize::from(ch), 0);
+        }
+    }
+
+    unsafe fn press_color_key(hwnd: HWND) {
+        send_compose_key(
+            hwnd,
+            ComposeKey::Format {
+                key: crate::automation::MircFormatKey::Color,
+            },
+        )
+        .unwrap();
+    }
+
+    unsafe fn color_index_part(hwnd: HWND) -> Option<crate::automation::UiColorCodePart> {
+        color_index::dump(hwnd).map(|index| index.part)
+    }
+
+    #[test]
+    fn the_colour_index_shows_while_a_colour_number_is_typed() {
+        use crate::automation::UiColorCodePart::{Background, Foreground};
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                let edit = compose_edit(hwnd);
+                subclass_compose_edit(hwnd, edit).unwrap();
+                set_compose_text(hwnd, "hi ").unwrap();
+                assert!(!color_index_shown(hwnd));
+                press_color_key(hwnd);
+                assert_eq!(color_index_part(hwnd), Some(Foreground));
+                for (typed, part) in [
+                    ("4", Some(Foreground)),
+                    (",", Some(Background)),
+                    ("1", Some(Background)),
+                    ("2", None),
+                ] {
+                    type_chars(edit, typed);
+                    assert_eq!(color_index_part(hwnd), part, "after {typed:?}");
+                }
+                assert_eq!(read_window_text(edit), "hi \x034,12");
+
+                // A click types the colour's two digits over what was
+                // typed of the number.
+                press_color_key(hwnd);
+                type_chars(edit, "1");
+                let cell = color_index::dump(hwnd).unwrap().cells[12];
+                let (x, y) = (cell.x + cell.width / 2, cell.y + cell.height / 2);
+                SendMessageW(
+                    state_ref(hwnd).controls.color_index,
+                    WM_LBUTTONDOWN,
+                    0,
+                    ((y as LPARAM) << 16) | x as LPARAM,
+                );
+                assert_eq!(read_window_text(edit), "hi \x034,12\x0312");
+                assert!(!color_index_shown(hwnd));
+                type_chars(edit, ",");
+                assert_eq!(color_index_part(hwnd), Some(Background));
+                // Moving the caret off the code hides it.
+                SendMessageW(edit, EM_SETSEL, 0, 0);
+                SendMessageW(edit, WM_KEYDOWN, VK_HOME_KEY, 0);
+                assert!(!color_index_shown(hwnd));
+            });
+        }
+    }
+
+    #[test]
+    fn escape_hides_the_colour_index_before_it_cancels_a_reply() {
+        unsafe {
+            with_compose_target_window(|hwnd| {
+                let edit = compose_edit(hwnd);
+                subclass_compose_edit(hwnd, edit).unwrap();
+                type_compose_line(hwnd, "/reply $q");
+                set_compose_text(hwnd, "draft ").unwrap();
+                press_color_key(hwnd);
+                assert!(color_index_shown(hwnd));
+                SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE_KEY, 0);
+                SendMessageW(edit, WM_CHAR, VK_ESCAPE_KEY, 0);
+                assert!(!color_index_shown(hwnd));
+                assert!(active_compose_target(hwnd).is_some());
+                assert_eq!(read_window_text(edit), "draft \x03");
+
+                SendMessageW(edit, WM_KEYDOWN, VK_ESCAPE_KEY, 0);
+                assert_eq!(active_compose_target(hwnd), None);
+                assert_eq!(read_window_text(edit), "draft \x03");
+                // Losing the focus hides it too.
+                type_chars(edit, "4");
+                assert!(color_index_shown(hwnd));
+                SendMessageW(edit, WM_KILLFOCUS, 0, 0);
+                assert!(!color_index_shown(hwnd));
             });
         }
     }

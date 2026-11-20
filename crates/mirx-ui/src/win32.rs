@@ -179,6 +179,7 @@ mod automation_dump;
 mod automation_host;
 mod clipboard;
 mod cmap;
+mod color_index;
 mod colors;
 mod colors_dialog;
 mod command_runner;
@@ -255,6 +256,7 @@ use automation_host::{
     AutomationState, destroy_automation_state, enable_automation, handle_copydata,
     send_automation_request,
 };
+use color_index::{create_color_index, hide_color_index};
 use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 #[cfg(test)]
 use command_runner::run_slash_command;
@@ -513,6 +515,9 @@ struct Controls {
     file_menu: HMENU,
     view_menu: HMENU,
     tools_menu: HMENU,
+    /// The colour index popup over the editbox, hidden but while a `^K`
+    /// colour number is typed (`color_index`).
+    color_index: HWND,
     /// Right-click menus. They hang in no menubar, so `WM_DESTROY`
     /// destroys them.
     room_menu: HMENU,

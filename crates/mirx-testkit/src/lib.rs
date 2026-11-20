@@ -1250,6 +1250,8 @@ pub struct UiState {
     pub options_dialog: Option<UiOptionsDialog>,
     /// The Colors dialog while it is open.
     pub colors_dialog: Option<UiColorsDialog>,
+    /// The colour index while it shows.
+    pub color_index: Option<UiColorIndex>,
     /// The active window's timeline; the Rooms List has none.
     pub active_timeline: Option<UiActiveTimeline>,
     /// The account's ignore list as the server last listed it; `None`
@@ -1493,6 +1495,25 @@ pub struct UiColorsPreviewItem {
     pub item: String,
     /// In the preview control's client coordinates.
     pub click_point: UiPoint,
+}
+
+/// The colour index over the editbox while a `^K` colour number is typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiColorIndex {
+    /// Which number of the code is being typed.
+    pub part: UiColorCodePart,
+    /// The popup, in screen coordinates.
+    pub rect: UiRect,
+    /// Boxes 0-15, in the popup's client coordinates.
+    pub cells: Vec<UiRect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiColorCodePart {
+    Foreground,
+    Background,
 }
 
 /// Options > Display's Event, Message and Highlight palette indices.
@@ -1845,7 +1866,7 @@ pub enum ComposeKey {
     },
 }
 
-/// The mIRC formatting chords: Ctrl+B, K, U, I, O and R.
+/// The mIRC formatting chords: Ctrl+B, K, U, I, O, R and E.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MircFormatKey {
@@ -1855,6 +1876,7 @@ pub enum MircFormatKey {
     Italic,
     Reset,
     Reverse,
+    Strikethrough,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 52;
+pub(crate) const PROTOCOL_VERSION: u32 = 53;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1030,6 +1030,8 @@ pub(crate) struct UiState {
     pub(crate) options_dialog: Option<UiOptionsDialog>,
     /// The Colors dialog while it is open.
     pub(crate) colors_dialog: Option<UiColorsDialog>,
+    /// The colour index while it shows.
+    pub(crate) color_index: Option<UiColorIndex>,
     /// The active window's timeline; the Rooms List has none.
     pub(crate) active_timeline: Option<UiActiveTimeline>,
     /// The account's ignore list as the server last listed it; `None`
@@ -1265,6 +1267,25 @@ pub(crate) struct UiColorsPreviewItem {
     pub(crate) click_point: UiPoint,
 }
 
+/// The colour index over the editbox while a `^K` colour number is typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiColorIndex {
+    /// Which number of the code is being typed.
+    pub(crate) part: UiColorCodePart,
+    /// The popup, in screen coordinates.
+    pub(crate) rect: UiRect,
+    /// Boxes 0-15, in the popup's client coordinates.
+    pub(crate) cells: Vec<UiRect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UiColorCodePart {
+    Foreground,
+    Background,
+}
+
 /// Options > Display's Event, Message and Highlight palette indices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1497,7 +1518,7 @@ pub(crate) enum ComposeKey {
     },
 }
 
-/// The mIRC formatting chords: Ctrl+B, K, U, I, O and R.
+/// The mIRC formatting chords: Ctrl+B, K, U, I, O, R and E.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum MircFormatKey {
@@ -1507,6 +1528,7 @@ pub(crate) enum MircFormatKey {
     Italic,
     Reset,
     Reverse,
+    Strikethrough,
 }
 
 impl<'de> Deserialize<'de> for ComposeKey {
@@ -3316,7 +3338,7 @@ mod tests {
 
     #[test]
     fn protocol_version_is_51() {
-        assert_eq!(PROTOCOL_VERSION, 52);
+        assert_eq!(PROTOCOL_VERSION, 53);
     }
 
     #[test]
@@ -5271,7 +5293,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":52,
+                    "protocol_version":53,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5930,6 +5952,21 @@ mod tests {
                             click_point: super::UiPoint { x: 80, y: 11 },
                         }],
                     }),
+                    color_index: Some(super::UiColorIndex {
+                        part: super::UiColorCodePart::Background,
+                        rect: super::UiRect {
+                            x: 10,
+                            y: 500,
+                            width: 180,
+                            height: 44,
+                        },
+                        cells: vec![super::UiRect {
+                            x: 2,
+                            y: 2,
+                            width: 20,
+                            height: 18,
+                        }],
+                    }),
                     active_timeline: Some(super::UiActiveTimeline {
                         top_line: 2,
                         visible_lines: vec![super::UiTimelineLine {
@@ -6117,6 +6154,11 @@ mod tests {
                         "items":[{"item":"normal","index":1,"color":"#000000"}],
                         "palette_cells":[{"x":0,"y":0,"width":20,"height":20}],
                         "preview_items":[{"item":"join","click_point":{"x":80,"y":11}}]
+                    },
+                    "color_index":{
+                        "part":"background",
+                        "rect":{"x":10,"y":500,"width":180,"height":44},
+                        "cells":[{"x":2,"y":2,"width":20,"height":18}]
                     },
                     "active_timeline":{
                         "top_line":2,

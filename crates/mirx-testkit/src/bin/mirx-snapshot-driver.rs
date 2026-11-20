@@ -10,8 +10,8 @@ mod cli {
 
     use mirx_core::RoomMembership;
     use mirx_testkit::{
-        AutomationDialog, MdiArrangement, MdiWindowState, NavigationNodeKey, ViewActivityLevel,
-        ViewIdentity,
+        AutomationDialog, MdiArrangement, MdiWindowState, MircFormatKey, NavigationNodeKey,
+        ViewActivityLevel, ViewIdentity,
     };
 
     const DEFAULT_FIND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -101,6 +101,11 @@ mod cli {
         Find(String),
         /// Types a line into the active window's editbox and presses Return.
         Input(String),
+        /// Puts text in the active window's editbox, caret at its end,
+        /// without sending it.
+        ComposeText(String),
+        /// Presses a formatting chord in the active window's editbox.
+        ComposeKey(MircFormatKey),
         Append(String),
         Arrange(MdiArrangement),
         WindowState(ViewIdentity, MdiWindowState),
@@ -747,8 +752,9 @@ mod cli {
             "  --trigger-history-backfill",
             "  --append-events <path>",
             "  --find-active-view <query>",
-            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]> (repeatable)",
+            "  --action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)",
             "  <item> is a Colors dialog item's mirx.ini key such as join or editbox_text, and <index> a palette index 0-15",
+            "  <format key> is bold, color, underline, italic, reset, reverse, or strikethrough",
             "  <node> is a treebar item: space:<room_id> for a space folder, or a view identity",
             "  <arrangement> is cascade, tile_horizontal, tile_vertical, or arrange_icons",
             "  <state> is maximized, normal, or minimized",
@@ -841,6 +847,14 @@ mod cli {
                 })
                 .collect::<Option<Vec<_>>>()
                 .map(Action::Colors)
+                .ok_or_else(invalid);
+        }
+        if let Some(text) = value.strip_prefix("compose-text:") {
+            return Ok(Action::ComposeText(text.to_owned()));
+        }
+        if let Some(key) = value.strip_prefix("compose-key:") {
+            return parse_wire_name(key)
+                .map(Action::ComposeKey)
                 .ok_or_else(invalid);
         }
         if let Some(points) = value.strip_prefix("drag:") {
@@ -1088,8 +1102,8 @@ mod cli {
         };
         use mirx_core::RoomMembership;
         use mirx_testkit::{
-            AutomationDialog, MdiArrangement, MdiWindowState, NavigationNodeKey, ViewActivityLevel,
-            ViewIdentity,
+            AutomationDialog, MdiArrangement, MdiWindowState, MircFormatKey, NavigationNodeKey,
+            ViewActivityLevel, ViewIdentity,
         };
         use std::time::Duration;
 
@@ -1101,7 +1115,7 @@ mod cli {
             assert!(usage().contains("--select-view <identity> (repeatable)"));
             assert!(usage().contains("--append-events <path>"));
             assert!(usage().contains(
-                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]> (repeatable)"
+                "--action <find:<query>|input:<text>|append:<path>|arrange:<arrangement>|window-state:<identity>=<state>|collapse:<node>|dialog:<dialog>[:<options page>]|drag:<point>:<point>|colors:<item>=<index>[,...]|compose-text:<text>|compose-key:<format key>> (repeatable)"
             ));
             assert!(usage().contains(
                 "--expect-navigation-node <node>::<expanded|collapsed>::<event|message|highlight|none>"
@@ -1414,6 +1428,37 @@ mod cli {
                     [Action::Arrange(MdiArrangement::Cascade), expected]
                 );
                 assert_eq!(config.expect_dialog_title.as_deref(), Some("mirx Options"));
+            }
+        }
+
+        #[test]
+        fn parse_args_reads_compose_text_and_key_actions() {
+            let config = parse_args(
+                [
+                    "--action",
+                    "compose-text:hello ",
+                    "--action",
+                    "compose-key:color",
+                    "--action",
+                    "compose-key:strikethrough",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap();
+            assert_eq!(
+                config.actions,
+                [
+                    Action::ComposeText("hello ".to_owned()),
+                    Action::ComposeKey(MircFormatKey::Color),
+                    Action::ComposeKey(MircFormatKey::Strikethrough)
+                ]
+            );
+            for bad in ["compose-key:", "compose-key:Color", "compose-key:return"] {
+                assert!(
+                    parse_args(["--action", bad].into_iter().map(str::to_owned)).is_err(),
+                    "{bad}"
+                );
             }
         }
 
@@ -2486,6 +2531,17 @@ mod windows_main {
                 }
                 Action::Colors(pairs) => {
                     set_colors(&app, &config, pairs)?;
+                }
+                Action::ComposeText(text) => {
+                    app.set_compose_text(text)
+                        .map_err(|error| format!("SET_COMPOSE_TEXT failed: {error}"))?;
+                }
+                Action::ComposeKey(key) => {
+                    app.send_compose_key(ComposeKey::Format { key: *key })
+                        .map_err(|error| format!("SEND_COMPOSE_KEY failed: {error}"))?;
+                    app.wait_idle(config.wait_idle).map_err(|error| {
+                        format!("WAIT_IDLE after SEND_COMPOSE_KEY failed: {error}")
+                    })?;
                 }
             }
         }

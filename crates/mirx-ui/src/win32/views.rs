@@ -535,6 +535,7 @@ pub(super) fn take_stale_room_views(state: &mut WindowState) -> Vec<MdiViewState
     );
     if state.active_view != resolved_active_view {
         state.selected_timeline_event = None;
+        hide_color_index(state);
     }
     state.active_view = resolved_active_view;
 
@@ -835,6 +836,7 @@ fn unregister_view_by_child(state: &mut WindowState, child: HWND) -> Option<View
     );
     if state.active_view == view_id {
         state.selected_timeline_event = None;
+        hide_color_index(state);
         state.active_view = resolve_active_view(
             &state.active_view,
             state.model.selected_room.as_deref(),
@@ -1143,6 +1145,7 @@ unsafe fn apply_view_activation_state(
         let newly_active = state.active_view != *view_id;
         if newly_active {
             state.selected_timeline_event = None;
+            hide_color_index(state);
         }
         state.active_view = view_id.clone();
         newly_active

@@ -46,11 +46,12 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiActivityColors, UiColorItem, UiColorsDialog, UiComposeTarget,
-    UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
-    UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
-    UiTimelineLink, UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
+    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu,
+    UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
+    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UnsupportedRoomMessageActivity,
+    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -64,8 +65,8 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_DOWN,
-    VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
-    VK_TAB,
+    VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_OEM_COMMA, VK_PRIOR, VK_RETURN,
+    VK_RIGHT, VK_SHIFT, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows, FindWindowExW,
@@ -2985,7 +2986,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 52);
+    assert_eq!(version.protocol_version, 53);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -19637,6 +19638,133 @@ fn formatted_messages_render_styled_lines() -> Result<(), Box<dyn std::error::Er
     assert!(edited[0].styles[0].style.bold);
     assert!(!edited[0].styles[0].style.italic);
 
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Waits for the active editbox to hold `text`.
+fn wait_for_compose_text(app: &MirxApp, text: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.compose_text()? != text {
+        if Instant::now() >= deadline {
+            return Err(
+                format!("the editbox holds {:?}, not {text:?}", app.compose_text()?).into(),
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    Ok(())
+}
+
+/// Waits for the colour index to show for `part`, or for it to be hidden.
+fn wait_for_color_index(
+    app: &MirxApp,
+    part: Option<UiColorCodePart>,
+) -> Result<UiState, Box<dyn std::error::Error>> {
+    Ok(app.wait_for_ui_state(
+        &format!("the colour index for {part:?}"),
+        Duration::from_secs(5),
+        |ui_state| ui_state.color_index.as_ref().map(|index| index.part) == part,
+    )?)
+}
+
+#[test]
+fn ctrl_k_shows_the_colour_index_until_the_number_is_typed()
+-> Result<(), Box<dyn std::error::Error>> {
+    use UiColorCodePart::{Background, Foreground};
+    let (app, local_app_data) = launch_replies_app()?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    assert_compose_has_focus(&app);
+    let edit = unsafe { compose_edit_hwnd(&app) };
+
+    press_keys(&[VK_CONTROL, u16::from(b'K')]);
+    let index = wait_for_color_index(&app, Some(Foreground))?
+        .color_index
+        .expect("the colour index shows");
+    // Just above the editbox, which keeps the focus.
+    let edit_rect = unsafe { window_rect(edit) };
+    assert_eq!(index.rect.y + index.rect.height, edit_rect.top);
+    assert!(
+        (edit_rect.left..edit_rect.right).contains(&index.rect.x),
+        "{index:?} over {:?}",
+        (edit_rect.left, edit_rect.right)
+    );
+    assert_eq!(index.cells.len(), 16);
+    assert_compose_has_focus(&app);
+
+    for (key, text, part) in [
+        (u16::from(b'4'), "\x034", Some(Foreground)),
+        (VK_OEM_COMMA, "\x034,", Some(Background)),
+        (u16::from(b'1'), "\x034,1", Some(Background)),
+        (u16::from(b'2'), "\x034,12", None),
+    ] {
+        press_keys(&[key]);
+        wait_for_compose_text(&app, text)?;
+        wait_for_color_index(&app, part)?;
+    }
+
+    // A click on a colour types its number; the editbox keeps the focus.
+    press_keys(&[VK_CONTROL, u16::from(b'K')]);
+    let index = wait_for_color_index(&app, Some(Foreground))?
+        .color_index
+        .expect("the colour index shows");
+    let popup = wait_for_window(&wide_null("mirxColorIndex"), "the colour index")?;
+    let cell = &index.cells[12];
+    post_left_click(
+        popup,
+        &UiPoint {
+            x: cell.x + cell.width / 2,
+            y: cell.y + cell.height / 2,
+        },
+        false,
+    );
+    wait_for_compose_text(&app, "\x034,12\x0312")?;
+    wait_for_color_index(&app, None)?;
+    assert_compose_has_focus(&app);
+
+    // Esc hides it and keeps the text.
+    press_keys(&[VK_CONTROL, u16::from(b'K')]);
+    wait_for_color_index(&app, Some(Foreground))?;
+    press_keys(&[VK_ESCAPE]);
+    wait_for_color_index(&app, None)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(app.compose_text()?, "\x034,12\x0312\x03");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn ctrl_e_sends_strikethrough() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_replies_app()?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    assert_compose_has_focus(&app);
+    press_keys(&[VK_CONTROL, u16::from(b'E')]);
+    press_keys(&[u16::from(b'X')]);
+    press_keys(&[VK_CONTROL, u16::from(b'E')]);
+    press_keys(&[u16::from(b'Y')]);
+    wait_for_compose_text(&app, "\x1ex\x1ey")?;
+    press_keys(&[VK_RETURN]);
+    wait_for_compose_text(&app, "")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let sent = app.dump_model()?.submitted_message_commands;
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].body, "xy");
+    assert_eq!(
+        sent[0].styles,
+        [mirx_core::TextStyleSpan {
+            start: 0,
+            end: 1,
+            style: mirx_core::TextStyle {
+                strikethrough: true,
+                ..mirx_core::TextStyle::default()
+            },
+        }]
+    );
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

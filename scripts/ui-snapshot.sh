@@ -341,6 +341,13 @@ configure_case_expectations() {
       )
     ;;
 
+    # Ctrl+K over the editbox of a small room window: the colour index.
+    compose-color-index)
+      expect_selected='!topic:example'
+      expect_active_view='room:!topic:example'
+      ordered_actions=('compose-text:the fix is ' compose-key:color)
+      ;;
+
     multi-room)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'
