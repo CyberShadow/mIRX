@@ -392,7 +392,12 @@ use room_model::{
 };
 use room_targets::{RoomTargetError, resolve_room};
 use self_test::run_self_test;
+use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use status_log::{StatusLineKind, StatusLog};
+use timeline_layout::{
+    TimelinePaintLine, TimelinePaintLineVisual, activity_level_color, paint_timeline,
+    plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
+};
 use timeline_rows::{
     TimelineImageState, TimelineMessageSendState, TimelineRow, TimelineRowIdentity,
     TimelineRowKind, TimelineRowLayout, build_room_timeline_rows, build_status_timeline_rows,
@@ -401,6 +406,11 @@ use timeline_rows::{
 };
 #[cfg(test)]
 use timeline_rows::{TimelineSyntheticRowLabel, render_room_lines};
+use timeline_text::{
+    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
+    member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
+    rank_prefix, topic_change_text, topic_is_text,
+};
 #[cfg(test)]
 use timeline_window::clamped_timeline_top_line;
 use timeline_window::{
@@ -413,6 +423,9 @@ use timeline_window::{
     timeline_top_line_for_source_row_index, timeline_visible_rows, timeline_window_state,
     update_timeline_scrollbar, validate_selected_timeline_event,
 };
+#[cfg(test)]
+use timestamp::TimestampSetting;
+use timestamp::{LocalTime, LocalTimeFn, TimestampStyle};
 use verification::{
     apply_verification_event, e2ee_backup_health_summary, e2ee_cross_signing_label,
     e2ee_local_backup_label, e2ee_recovery_state_label, e2ee_server_backup_label,
@@ -431,19 +444,6 @@ use views::{
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
 
-use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
-use timeline_layout::{
-    TimelinePaintLine, TimelinePaintLineVisual, activity_level_color, paint_timeline,
-    plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
-};
-use timeline_text::{
-    ENCRYPTED_ROOM_TEXT, INVITE_RESPONSE_TEXT, action_line, context_line, event_line, invited_text,
-    member_change_text, message_line, nick_label, now_talking_text, power_levels_change_text,
-    rank_prefix, topic_change_text, topic_is_text,
-};
-#[cfg(test)]
-use timestamp::TimestampSetting;
-use timestamp::{LocalTime, LocalTimeFn, TimestampStyle};
 const TIMELINE_CLASS_NAME: &str = "mirxWin32Timeline";
 const FRAME_TITLE: &str = "mirx";
 const DEFAULT_FRAME_SIZE: FrameSize = FrameSize {
@@ -1121,6 +1121,7 @@ mod tests {
 
     use super::test_fixtures::*;
     use super::*;
+
     #[test]
     fn only_an_interactive_run_without_a_session_opens_select_server_at_startup() {
         let run = |automation, render_state: Option<&str>| {
