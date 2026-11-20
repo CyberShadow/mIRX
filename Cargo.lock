@@ -2241,6 +2241,7 @@ dependencies = [
 name = "mirx-ui"
 version = "0.1.0"
 dependencies = [
+ "miniz_oxide",
  "mirx-core",
  "mirx-testkit",
  "serde",

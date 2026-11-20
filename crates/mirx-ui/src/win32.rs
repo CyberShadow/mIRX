@@ -176,6 +176,8 @@ use crate::{
 };
 
 mod account;
+#[cfg(test)]
+mod app_resources;
 mod attachments;
 mod automation_dump;
 mod automation_host;

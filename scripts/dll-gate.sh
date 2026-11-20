@@ -79,4 +79,23 @@ if ! grep -E '^Subsystem' <<<"$headers" | grep -qF '(Windows GUI)'; then
   exit 1
 fi
 
-printf 'dll-gate ok: %s; subsystem GUI\n' "${imported_dlls[*]}"
+# The resources build.rs links in. Type entries are the least-indented
+# `Entry:` lines of the resource tree, directly under its root Type Table.
+resource_types=$(awk '
+  /^The \.rsrc Resource Directory section:/ { in_rsrc = 1; next }
+  in_rsrc && /^$/ { in_rsrc = 0 }
+  in_rsrc && /^[0-9a-f]+   Entry: ID: / { sub(/,$/, "", $4); print $4 }
+' <<<"$headers" | sort | paste -sd ' ')
+expected_types="0x000003 0x00000e 0x000010 0x000018"
+if [ "$resource_types" != "$expected_types" ]; then
+  echo "dll-gate failed: resource types are '$resource_types', expected '$expected_types' (icon, group icon, version, manifest)" >&2
+  exit 1
+fi
+
+# The manifest declares Windows 10/11.
+if [ "$(grep -a -c '8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a' "$exe_path")" -lt 1 ]; then
+  echo "dll-gate failed: the manifest's Windows 10/11 supportedOS is missing" >&2
+  exit 1
+fi
+
+printf 'dll-gate ok: %s; subsystem GUI; resources: icon, group icon, version, manifest\n' "${imported_dlls[*]}"
