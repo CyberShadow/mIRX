@@ -1,7 +1,19 @@
-//! The sign-in, E2EE and About modal dialogs, and the modal dialog
-//! plumbing they share.
+//! The sign-in, E2EE and About modal dialogs, and the chrome every mirx
+//! dialog shares, Options' too: the class, the font, the metrics, the
+//! placement over the owner and the modal loop.
 
 use super::*;
+
+use windows_sys::Win32::Foundation::ERROR_CLASS_ALREADY_EXISTS;
+use windows_sys::Win32::Graphics::Gdi::{
+    COLOR_BTNFACE, DEFAULT_GUI_FONT, DT_CALCRECT, DT_WORDBREAK, DrawTextW, GetStockObject,
+};
+use windows_sys::Win32::System::SystemServices::SS_CENTER;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    AdjustWindowRectEx, EnumChildWindows, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos, WINDOW_STYLE,
+    WNDPROC,
+};
+use windows_sys::core::BOOL;
 
 const LOGIN_DIALOG_CLASS_NAME: &str = "mirxWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
@@ -38,6 +50,30 @@ const ABOUT_DIALOG_LINES: [(u16, &str); 5] = [
 ];
 pub(super) const ABOUT_DIALOG_OK_ID: usize = 5024;
 
+/// The dialogs' content widths: what their labels and fields need.
+const LOGIN_DIALOG_WIDTH: i32 = 280;
+const SINGLE_FIELD_DIALOG_WIDTH: i32 = 260;
+const RECOVERY_KEY_HANDOFF_DIALOG_WIDTH: i32 = 320;
+
+// Windows' dialog metrics at 96 dpi, in pixels: what the dialog units of
+// mIRC's MS Shell Dlg 8 resource dialogs come to.
+/// Between the dialog's edge and its controls.
+pub(super) const DIALOG_MARGIN: i32 = 11;
+/// Between related controls.
+pub(super) const DIALOG_GAP: i32 = 7;
+/// Between a label and the field under it.
+pub(super) const DIALOG_LABEL_GAP: i32 = 3;
+pub(super) const DIALOG_BUTTON_WIDTH: i32 = 75;
+pub(super) const DIALOG_BUTTON_HEIGHT: i32 = 23;
+pub(super) const DIALOG_EDIT_HEIGHT: i32 = 21;
+pub(super) const DIALOG_CHECKBOX_HEIGHT: i32 = 17;
+/// An edit's style: a native dialog edit has the sunken client edge and no
+/// flat border.
+pub(super) const DIALOG_EDIT_STYLE: u32 = WS_TABSTOP | ES_AUTOHSCROLL as u32;
+pub(super) const DIALOG_EDIT_EX_STYLE: u32 = WS_EX_CLIENTEDGE;
+
+const DIALOG_STYLE: WINDOW_STYLE = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LoginForm {
     pub(super) server: String,
@@ -47,19 +83,7 @@ pub(super) struct LoginForm {
 }
 
 struct LoginDialogState {
-    /// `/server <server>` fills the Server field.
-    initial_server: String,
     result: Arc<Mutex<Option<LoginForm>>>,
-    server_label: HWND,
-    server_edit: HWND,
-    username_label: HWND,
-    username_edit: HWND,
-    password_label: HWND,
-    password_edit: HWND,
-    device_display_name_label: HWND,
-    device_display_name_edit: HWND,
-    ok_button: HWND,
-    cancel_button: HWND,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,10 +93,6 @@ pub(super) struct RecoverE2eeForm {
 
 struct RecoverE2eeDialogState {
     result: Arc<Mutex<Option<RecoverE2eeForm>>>,
-    recovery_secret_label: HWND,
-    recovery_secret_edit: HWND,
-    ok_button: HWND,
-    cancel_button: HWND,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,18 +103,6 @@ pub(super) struct SetupE2eeRecoveryForm {
 
 struct SetupE2eeRecoveryDialogState {
     result: Arc<Mutex<Option<SetupE2eeRecoveryForm>>>,
-    passphrase_label: HWND,
-    passphrase_edit: HWND,
-    wait_for_backups_to_upload_checkbox: HWND,
-    ok_button: HWND,
-    cancel_button: HWND,
-}
-
-struct RecoveryKeyHandoffDialogState {
-    recovery_key: String,
-    instruction_label: HWND,
-    recovery_key_edit: HWND,
-    acknowledge_button: HWND,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,183 +113,313 @@ pub(super) struct SubmittedSetupE2eeRecovery {
 
 pub(super) struct FindDialogState {
     pub(super) result: Arc<Mutex<Option<String>>>,
-    pub(super) label: String,
-    pub(super) query_label: HWND,
-    pub(super) query_edit: HWND,
-    pub(super) ok_button: HWND,
-    pub(super) cancel_button: HWND,
 }
 
-pub(super) fn register_login_dialog_class(instance: *mut c_void) -> Result<(), String> {
-    let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
-        lpfnWndProc: Some(login_dialog_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: null_mut(),
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
-        lpszMenuName: null(),
-        lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
-    };
+/// Every mirx dialog's class and window procedure.
+const DIALOG_CLASSES: [(&str, WNDPROC); 7] = [
+    (LOGIN_DIALOG_CLASS_NAME, Some(login_dialog_window_proc)),
+    (
+        RECOVER_E2EE_DIALOG_CLASS_NAME,
+        Some(recover_e2ee_dialog_window_proc),
+    ),
+    (
+        SETUP_E2EE_DIALOG_CLASS_NAME,
+        Some(setup_e2ee_dialog_window_proc),
+    ),
+    (
+        RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME,
+        Some(recovery_key_handoff_dialog_window_proc),
+    ),
+    (FIND_DIALOG_CLASS_NAME, Some(find_dialog_window_proc)),
+    (ABOUT_DIALOG_CLASS_NAME, Some(about_dialog_window_proc)),
+    (
+        options_dialog::OPTIONS_DIALOG_CLASS_NAME,
+        Some(options_dialog::window_proc),
+    ),
+];
 
-    let atom = unsafe { RegisterClassExW(&window_class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != 1410 {
-            return Err(last_os_error("RegisterClassExW login dialog"));
+/// Registers every dialog class on the button face, the colour labels and
+/// buttons paint their own backgrounds in. A second registration, as each
+/// unit test makes, finds the classes registered.
+pub(super) fn register_dialog_classes(instance: *mut c_void) -> Result<(), String> {
+    for (name, window_proc) in DIALOG_CLASSES {
+        let class_name = wide_null(name);
+        let window_class = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            style: 0,
+            lpfnWndProc: window_proc,
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: instance,
+            hIcon: null_mut(),
+            hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
+            hbrBackground: (COLOR_BTNFACE as isize + 1) as HBRUSH,
+            lpszMenuName: null(),
+            lpszClassName: class_name.as_ptr(),
+            hIconSm: null_mut(),
+        };
+        if unsafe { RegisterClassExW(&window_class) } == 0
+            && unsafe { GetLastError() } != ERROR_CLASS_ALREADY_EXISTS
+        {
+            return Err(last_os_error(&format!("RegisterClassExW {name}")));
         }
     }
-
     Ok(())
 }
 
-pub(super) fn register_recover_e2ee_dialog_class(instance: *mut c_void) -> Result<(), String> {
-    let class_name = wide_null(RECOVER_E2EE_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
-        lpfnWndProc: Some(recover_e2ee_dialog_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: null_mut(),
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
-        lpszMenuName: null(),
-        lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
-    };
-
-    let atom = unsafe { RegisterClassExW(&window_class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != 1410 {
-            return Err(last_os_error("RegisterClassExW recover e2ee dialog"));
-        }
+/// Creates a dialog of `class` over `owner` and shows it, as a dialog
+/// manager shows a resource dialog: `create_controls` fills it, every
+/// control takes the dialog font, and the dialog fits its controls with the
+/// margin on every side, centred on `owner`. The caller runs its modal loop.
+pub(super) unsafe fn create_modal_dialog(
+    owner: HWND,
+    class: &str,
+    title: &str,
+    param: *const c_void,
+    create_controls: impl FnOnce(HWND) -> Result<(), String>,
+) -> Result<HWND, String> {
+    let class_name = wide_null(class);
+    let title = wide_null(title);
+    let dialog = CreateWindowExW(
+        0,
+        class_name.as_ptr(),
+        title.as_ptr(),
+        DIALOG_STYLE,
+        0,
+        0,
+        0,
+        0,
+        owner,
+        null_mut(),
+        GetModuleHandleW(null()),
+        param,
+    );
+    if dialog.is_null() {
+        return Err(last_os_error(&format!("CreateWindowExW {class}")));
     }
+    if let Err(error) = create_controls(dialog) {
+        DestroyWindow(dialog);
+        return Err(error);
+    }
+    apply_dialog_font(dialog);
 
-    Ok(())
+    let (right, bottom) = controls_extent(dialog);
+    let mut frame = RECT {
+        left: 0,
+        top: 0,
+        right: right + DIALOG_MARGIN,
+        bottom: bottom + DIALOG_MARGIN,
+    };
+    if AdjustWindowRectEx(&mut frame, DIALOG_STYLE, 0, 0) == 0 {
+        DestroyWindow(dialog);
+        return Err(last_os_error("AdjustWindowRectEx dialog"));
+    }
+    let (width, height) = (frame.right - frame.left, frame.bottom - frame.top);
+    let mut owner_rect = RECT::default();
+    GetWindowRect(owner, &mut owner_rect);
+    let (x, y) = centered_origin(&owner_rect, width, height);
+    SetWindowPos(
+        dialog,
+        null_mut(),
+        x,
+        y,
+        width,
+        height,
+        SWP_NOZORDER | SWP_NOACTIVATE,
+    );
+    ShowWindow(dialog, SW_SHOW);
+    Ok(dialog)
 }
 
-pub(super) fn register_setup_e2ee_dialog_class(instance: *mut c_void) -> Result<(), String> {
-    let class_name = wide_null(SETUP_E2EE_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
-        lpfnWndProc: Some(setup_e2ee_dialog_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: null_mut(),
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
-        lpszMenuName: null(),
-        lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
-    };
-
-    let atom = unsafe { RegisterClassExW(&window_class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != 1410 {
-            return Err(last_os_error("RegisterClassExW setup e2ee dialog"));
-        }
-    }
-
-    Ok(())
+/// Where a `width` × `height` window centred on `owner` goes.
+fn centered_origin(owner: &RECT, width: i32, height: i32) -> (i32, i32) {
+    (
+        owner.left + (owner.right - owner.left - width) / 2,
+        owner.top + (owner.bottom - owner.top - height) / 2,
+    )
 }
 
-pub(super) fn register_recovery_key_handoff_dialog_class(
-    instance: *mut c_void,
-) -> Result<(), String> {
-    let class_name = wide_null(RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
-        lpfnWndProc: Some(recovery_key_handoff_dialog_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: null_mut(),
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
-        lpszMenuName: null(),
-        lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
-    };
-
-    let atom = unsafe { RegisterClassExW(&window_class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != 1410 {
-            return Err(last_os_error(
-                "RegisterClassExW recovery key handoff dialog",
-            ));
-        }
+/// Gives every control of `dialog` the dialog font (MS Shell Dlg 8, which
+/// mIRC's dialogs use); a control left alone draws in the bold System
+/// font. A stock object, so nothing owns or deletes it.
+unsafe fn apply_dialog_font(dialog: HWND) {
+    unsafe extern "system" fn set_font(control: HWND, font: LPARAM) -> BOOL {
+        SendMessageW(control, WM_SETFONT, font as WPARAM, 0);
+        1
     }
-
-    Ok(())
+    EnumChildWindows(
+        dialog,
+        Some(set_font),
+        GetStockObject(DEFAULT_GUI_FONT) as LPARAM,
+    );
 }
 
-pub(super) fn register_find_dialog_class(instance: *mut c_void) -> Result<(), String> {
-    let class_name = wide_null(FIND_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
-        lpfnWndProc: Some(find_dialog_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: null_mut(),
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
-        lpszMenuName: null(),
-        lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
-    };
-
-    let atom = unsafe { RegisterClassExW(&window_class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != 1410 {
-            return Err(last_os_error("RegisterClassExW find dialog"));
-        }
+/// The right and bottom edges of `dialog`'s controls, shown or not, in its
+/// client coordinates.
+pub(super) unsafe fn controls_extent(dialog: HWND) -> (i32, i32) {
+    unsafe extern "system" fn extend(control: HWND, extent: LPARAM) -> BOOL {
+        let (dialog, right, bottom) = &mut *(extent as *mut (HWND, i32, i32));
+        let mut rect = RECT::default();
+        GetWindowRect(control, &mut rect);
+        MapWindowPoints(null_mut(), *dialog, (&mut rect as *mut RECT).cast(), 2);
+        *right = (*right).max(rect.right);
+        *bottom = (*bottom).max(rect.bottom);
+        1
     }
-
-    Ok(())
+    let mut extent = (dialog, 0, 0);
+    EnumChildWindows(
+        dialog,
+        Some(extend),
+        &mut extent as *mut (HWND, i32, i32) as LPARAM,
+    );
+    (extent.1, extent.2)
 }
 
-pub(super) fn register_about_dialog_class(instance: *mut c_void) -> Result<(), String> {
-    let class_name = wide_null(ABOUT_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        style: 0,
-        lpfnWndProc: Some(about_dialog_window_proc),
-        cbClsExtra: 0,
-        cbWndExtra: 0,
-        hInstance: instance,
-        hIcon: null_mut(),
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
-        lpszMenuName: null(),
-        lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
+/// `text`'s size in the dialog font, wrapped as a label `wrap_width` wide
+/// wraps it.
+pub(super) unsafe fn dialog_text_size(text: &str, wrap_width: i32) -> (i32, i32) {
+    let dc = GetDC(null_mut());
+    let old_font = SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+    let text = text.encode_utf16().collect::<Vec<_>>();
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: wrap_width,
+        bottom: 0,
     };
+    DrawTextW(
+        dc,
+        text.as_ptr(),
+        text.len() as i32,
+        &mut rect,
+        DT_CALCRECT | DT_WORDBREAK,
+    );
+    SelectObject(dc, old_font);
+    ReleaseDC(null_mut(), dc);
+    (rect.right, rect.bottom)
+}
 
-    let atom = unsafe { RegisterClassExW(&window_class) };
-    if atom == 0 {
-        let error = unsafe { GetLastError() };
-        if error != 1410 {
-            return Err(last_os_error("RegisterClassExW about dialog"));
+/// Stacks a simple dialog's controls in one column, a label over each
+/// field and the buttons in a row under them, as mIRC's small dialogs do.
+struct DialogColumn {
+    dialog: HWND,
+    width: i32,
+    /// Where the next control goes.
+    y: i32,
+}
+
+impl DialogColumn {
+    fn new(dialog: HWND, width: i32) -> Self {
+        Self {
+            dialog,
+            width,
+            y: DIALOG_MARGIN,
         }
     }
 
-    Ok(())
+    /// Adds a control at `x` on the next row, and leaves `gap` under it.
+    unsafe fn add(
+        &mut self,
+        (class, text, style, ex_style, id): (&str, &str, u32, u32, u16),
+        (x, width, height): (i32, i32, i32),
+        gap: i32,
+    ) -> Result<HWND, String> {
+        let control = create_child_window(
+            self.dialog,
+            class,
+            text,
+            WS_CHILD | WS_VISIBLE | style,
+            ex_style,
+            id,
+            GetModuleHandleW(null()),
+            null_mut(),
+        )?;
+        MoveWindow(control, x, self.y, width, height, 0);
+        self.y += height + gap;
+        Ok(control)
+    }
+
+    /// A label as tall as its text wrapped to the column; `style` aligns it.
+    unsafe fn label(&mut self, text: &str, id: u16, style: u32) -> Result<HWND, String> {
+        let (_, height) = dialog_text_size(text, self.width);
+        self.add(
+            (STATIC_CLASS_NAME, text, style, 0, id),
+            (DIALOG_MARGIN, self.width, height),
+            DIALOG_LABEL_GAP,
+        )
+    }
+
+    unsafe fn edit(&mut self, id: u16, text: &str, style: u32) -> Result<HWND, String> {
+        self.add(
+            (
+                EDIT_CLASS_NAME,
+                text,
+                DIALOG_EDIT_STYLE | style,
+                DIALOG_EDIT_EX_STYLE,
+                id,
+            ),
+            (DIALOG_MARGIN, self.width, DIALOG_EDIT_HEIGHT),
+            DIALOG_GAP,
+        )
+    }
+
+    unsafe fn checkbox(&mut self, id: u16, text: &str) -> Result<HWND, String> {
+        self.add(
+            (
+                BUTTON_CLASS_NAME,
+                text,
+                WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+                0,
+                id,
+            ),
+            (DIALOG_MARGIN, self.width, DIALOG_CHECKBOX_HEIGHT),
+            DIALOG_GAP,
+        )
+    }
+
+    /// The buttons, right-aligned in a row a margin under the fields; the
+    /// first is the default.
+    unsafe fn buttons(self, buttons: &[(usize, &str)]) -> Result<(), String> {
+        let row_width = buttons.len() as i32 * (DIALOG_BUTTON_WIDTH + DIALOG_GAP) - DIALOG_GAP;
+        let x = DIALOG_MARGIN + self.width - row_width;
+        self.button_row(x, buttons)
+    }
+
+    /// One default button, centred a margin under the fields.
+    unsafe fn centred_button(self, id: usize, text: &str) -> Result<(), String> {
+        let x = DIALOG_MARGIN + (self.width - DIALOG_BUTTON_WIDTH) / 2;
+        self.button_row(x, &[(id, text)])
+    }
+
+    unsafe fn button_row(mut self, mut x: i32, buttons: &[(usize, &str)]) -> Result<(), String> {
+        self.y += DIALOG_MARGIN - DIALOG_GAP;
+        for (index, (id, text)) in buttons.iter().enumerate() {
+            let style = match index {
+                0 => BS_DEFPUSHBUTTON,
+                _ => BS_PUSHBUTTON,
+            };
+            let button = create_child_window(
+                self.dialog,
+                BUTTON_CLASS_NAME,
+                text,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | style as u32,
+                0,
+                *id as u16,
+                GetModuleHandleW(null()),
+                null_mut(),
+            )?;
+            MoveWindow(
+                button,
+                x,
+                self.y,
+                DIALOG_BUTTON_WIDTH,
+                DIALOG_BUTTON_HEIGHT,
+                0,
+            );
+            x += DIALOG_BUTTON_WIDTH + DIALOG_GAP;
+        }
+        Ok(())
+    }
 }
 
 unsafe extern "system" fn login_dialog_window_proc(
@@ -296,25 +434,17 @@ unsafe extern "system" fn login_dialog_window_proc(
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
-        WM_CREATE => match create_login_dialog_controls(hwnd) {
-            Ok(()) => 0,
-            Err(message) => {
-                eprintln!("{message}");
-                -1
-            }
-        },
         WM_COMMAND => {
             let command_id = wparam & 0xffff;
             match command_id {
                 LOGIN_DIALOG_OK_ID => {
-                    let Some(state) = login_dialog_state(hwnd) else {
-                        return 0;
-                    };
+                    let state = login_dialog_state(hwnd);
+                    let field = |id: u16| read_window_text(GetDlgItem(hwnd, id.into()));
                     let form = LoginForm {
-                        server: read_window_text(state.server_edit),
-                        username: read_window_text(state.username_edit),
-                        password: read_window_text(state.password_edit),
-                        device_display_name: read_window_text(state.device_display_name_edit),
+                        server: field(LOGIN_DIALOG_HOME_SERVER_ID),
+                        username: field(LOGIN_DIALOG_USERNAME_ID),
+                        password: field(LOGIN_DIALOG_PASSWORD_ID),
+                        device_display_name: field(LOGIN_DIALOG_DEVICE_ID),
                     };
                     // Like mIRC's dialogs, a form that cannot work stays
                     // open with the reason.
@@ -340,10 +470,6 @@ unsafe extern "system" fn login_dialog_window_proc(
             DestroyWindow(hwnd);
             0
         }
-        WM_SIZE => {
-            layout_login_dialog(hwnd);
-            0
-        }
         WM_NCDESTROY => {
             window_data::drop_owned::<LoginDialogState>(hwnd);
             0
@@ -364,21 +490,13 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
-        WM_CREATE => match create_recover_e2ee_dialog_controls(hwnd) {
-            Ok(()) => 0,
-            Err(message) => {
-                eprintln!("{message}");
-                -1
-            }
-        },
         WM_COMMAND => {
             let command_id = wparam & 0xffff;
             match command_id {
                 RECOVER_E2EE_DIALOG_OK_ID => {
-                    let Some(state) = recover_e2ee_dialog_state(hwnd) else {
-                        return 0;
-                    };
-                    let recovery_secret = read_window_text(state.recovery_secret_edit);
+                    let state = recover_e2ee_dialog_state(hwnd);
+                    let recovery_secret =
+                        read_window_text(GetDlgItem(hwnd, RECOVER_E2EE_DIALOG_SECRET_ID.into()));
                     if recovery_secret.is_empty() {
                         show_error_message(
                             hwnd,
@@ -409,10 +527,6 @@ unsafe extern "system" fn recover_e2ee_dialog_window_proc(
             DestroyWindow(hwnd);
             0
         }
-        WM_SIZE => {
-            layout_recover_e2ee_dialog(hwnd);
-            0
-        }
         WM_NCDESTROY => {
             window_data::drop_owned::<RecoverE2eeDialogState>(hwnd);
             0
@@ -433,22 +547,18 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
-        WM_CREATE => match create_setup_e2ee_dialog_controls(hwnd) {
-            Ok(()) => 0,
-            Err(message) => {
-                eprintln!("{message}");
-                -1
-            }
-        },
         WM_COMMAND => match wparam & 0xffff {
             SETUP_E2EE_DIALOG_OK_ID => {
-                let Some(state) = setup_e2ee_dialog_state(hwnd) else {
-                    return 0;
-                };
-                let passphrase = read_window_text(state.passphrase_edit);
-                let wait_for_backups_to_upload =
-                    SendMessageW(state.wait_for_backups_to_upload_checkbox, BM_GETCHECK, 0, 0) == 1;
-                set_window_text(state.passphrase_edit, "");
+                let state = setup_e2ee_dialog_state(hwnd);
+                let passphrase_edit = GetDlgItem(hwnd, SETUP_E2EE_DIALOG_PASSPHRASE_ID.into());
+                let passphrase = read_window_text(passphrase_edit);
+                let wait_for_backups_to_upload = SendMessageW(
+                    GetDlgItem(hwnd, SETUP_E2EE_DIALOG_WAIT_ID.into()),
+                    BM_GETCHECK,
+                    0,
+                    0,
+                ) == 1;
+                set_window_text(passphrase_edit, "");
                 *state
                     .result
                     .lock()
@@ -472,10 +582,6 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
             DestroyWindow(hwnd);
             0
         }
-        WM_SIZE => {
-            layout_setup_e2ee_dialog(hwnd);
-            0
-        }
         WM_NCDESTROY => {
             window_data::drop_owned::<SetupE2eeRecoveryDialogState>(hwnd);
             0
@@ -484,6 +590,8 @@ unsafe extern "system" fn setup_e2ee_dialog_window_proc(
     }
 }
 
+/// The recovery-key handoff keeps no state: the key is in its edit until
+/// the dialog closes, which clears it.
 unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
     hwnd: HWND,
     message: u32,
@@ -491,18 +599,6 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_NCCREATE => {
-            window_data::adopt_create_param::<RecoveryKeyHandoffDialogState>(hwnd, lparam);
-            // Sets the window text from the CreateWindowExW title.
-            DefWindowProcW(hwnd, message, wparam, lparam)
-        }
-        WM_CREATE => match create_recovery_key_handoff_dialog_controls(hwnd) {
-            Ok(()) => 0,
-            Err(message) => {
-                eprintln!("{message}");
-                -1
-            }
-        },
         WM_COMMAND if wparam & 0xffff == RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID => {
             clear_recovery_key_handoff_dialog_key(hwnd);
             DestroyWindow(hwnd);
@@ -511,14 +607,6 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
         WM_CLOSE => {
             clear_recovery_key_handoff_dialog_key(hwnd);
             DestroyWindow(hwnd);
-            0
-        }
-        WM_SIZE => {
-            layout_recovery_key_handoff_dialog(hwnd);
-            0
-        }
-        WM_NCDESTROY => {
-            window_data::drop_owned::<RecoveryKeyHandoffDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -537,25 +625,17 @@ unsafe extern "system" fn find_dialog_window_proc(
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
-        WM_CREATE => match create_find_dialog_controls(hwnd) {
-            Ok(()) => 0,
-            Err(message) => {
-                eprintln!("{message}");
-                -1
-            }
-        },
         WM_COMMAND => {
             let command_id = wparam & 0xffff;
             match command_id {
                 FIND_DIALOG_OK_ID => {
-                    let Some(state) = find_dialog_state(hwnd) else {
-                        return 0;
-                    };
+                    let state = find_dialog_state(hwnd);
                     *state
                         .result
                         .lock()
-                        .expect("find dialog result mutex poisoned") =
-                        Some(read_window_text(state.query_edit));
+                        .expect("find dialog result mutex poisoned") = Some(read_window_text(
+                        GetDlgItem(hwnd, FIND_DIALOG_QUERY_ID.into()),
+                    ));
                     DestroyWindow(hwnd);
                     0
                 }
@@ -568,10 +648,6 @@ unsafe extern "system" fn find_dialog_window_proc(
         }
         WM_CLOSE => {
             DestroyWindow(hwnd);
-            0
-        }
-        WM_SIZE => {
-            layout_find_dialog(hwnd);
             0
         }
         WM_NCDESTROY => {
@@ -590,13 +666,6 @@ unsafe extern "system" fn about_dialog_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_CREATE => match create_about_dialog_controls(hwnd) {
-            Ok(()) => 0,
-            Err(message) => {
-                eprintln!("{message}");
-                -1
-            }
-        },
         WM_COMMAND if wparam & 0xffff == ABOUT_DIALOG_OK_ID => {
             DestroyWindow(hwnd);
             0
@@ -644,489 +713,47 @@ pub(super) const fn pack_size_lparam(width: i32, height: i32) -> LPARAM {
     (((height as u32) << 16) | (width as u32 & 0xffff)) as LPARAM
 }
 
-unsafe fn create_login_dialog_controls(hwnd: HWND) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let state = login_dialog_state_mut(hwnd).expect("login dialog state must exist");
-
-    state.server_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "Server (matrix.org, or leave empty for a full user ID)",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    let initial_server = state.initial_server.clone();
-    state.server_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        &initial_server,
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-        WS_EX_CLIENTEDGE,
-        LOGIN_DIALOG_HOME_SERVER_ID,
-        instance,
-    )?;
-
-    state.username_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "User (alice or @alice:matrix.org)",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.username_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-        WS_EX_CLIENTEDGE,
-        LOGIN_DIALOG_USERNAME_ID,
-        instance,
-    )?;
-
-    state.password_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "Password",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.password_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-        WS_EX_CLIENTEDGE,
-        LOGIN_DIALOG_PASSWORD_ID,
-        instance,
-    )?;
-
-    state.device_display_name_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "Device name",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.device_display_name_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        DEFAULT_DEVICE_DISPLAY_NAME,
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-        WS_EX_CLIENTEDGE,
-        LOGIN_DIALOG_DEVICE_ID,
-        instance,
-    )?;
-
-    state.ok_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "OK",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        0,
-        LOGIN_DIALOG_OK_ID as u16,
-        instance,
-    )?;
-    state.cancel_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "Cancel",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
-        0,
-        LOGIN_DIALOG_CANCEL_ID as u16,
-        instance,
-    )?;
-
-    layout_login_dialog(hwnd);
-    Ok(())
-}
-
-unsafe fn create_recover_e2ee_dialog_controls(hwnd: HWND) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let state = recover_e2ee_dialog_state_mut(hwnd).expect("recover e2ee dialog state must exist");
-
-    state.recovery_secret_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "Recovery key or passphrase",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.recovery_secret_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-        WS_EX_CLIENTEDGE,
-        RECOVER_E2EE_DIALOG_SECRET_ID,
-        instance,
-    )?;
-    state.ok_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "OK",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        0,
-        RECOVER_E2EE_DIALOG_OK_ID as u16,
-        instance,
-    )?;
-    state.cancel_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "Cancel",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
-        0,
-        RECOVER_E2EE_DIALOG_CANCEL_ID as u16,
-        instance,
-    )?;
-
-    layout_recover_e2ee_dialog(hwnd);
-    Ok(())
-}
-
-unsafe fn create_setup_e2ee_dialog_controls(hwnd: HWND) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let state = setup_e2ee_dialog_state_mut(hwnd).expect("setup e2ee dialog state must exist");
-
-    state.passphrase_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "Passphrase (optional)",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.passphrase_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-        WS_EX_CLIENTEDGE,
-        SETUP_E2EE_DIALOG_PASSPHRASE_ID,
-        instance,
-    )?;
-    state.wait_for_backups_to_upload_checkbox = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "Wait for backups to upload",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-        0,
-        SETUP_E2EE_DIALOG_WAIT_ID,
-        instance,
-    )?;
-    state.ok_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "OK",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        0,
-        SETUP_E2EE_DIALOG_OK_ID as u16,
-        instance,
-    )?;
-    state.cancel_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "Cancel",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
-        0,
-        SETUP_E2EE_DIALOG_CANCEL_ID as u16,
-        instance,
-    )?;
-
-    layout_setup_e2ee_dialog(hwnd);
-    Ok(())
-}
-
-unsafe fn create_find_dialog_controls(hwnd: HWND) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let state = find_dialog_state_mut(hwnd).expect("find dialog state must exist");
-
-    state.query_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        &state.label,
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.query_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-        WS_EX_CLIENTEDGE,
-        FIND_DIALOG_QUERY_ID,
-        instance,
-    )?;
-    state.ok_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "OK",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        0,
-        FIND_DIALOG_OK_ID as u16,
-        instance,
-    )?;
-    state.cancel_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "Cancel",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON as u32,
-        0,
-        FIND_DIALOG_CANCEL_ID as u16,
-        instance,
-    )?;
-
-    layout_find_dialog(hwnd);
-    Ok(())
-}
-
-unsafe fn create_recovery_key_handoff_dialog_controls(hwnd: HWND) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let state = recovery_key_handoff_dialog_state_mut(hwnd)
-        .expect("recovery key handoff dialog state must exist");
-
-    state.instruction_label = create_login_dialog_control(
-        hwnd,
-        STATIC_CLASS_NAME,
-        "Save this recovery key now. It will not be shown again.",
-        WS_CHILD | WS_VISIBLE,
-        0,
-        0,
-        instance,
-    )?;
-    state.recovery_key_edit = create_login_dialog_control(
-        hwnd,
-        EDIT_CLASS_NAME,
-        "",
-        WS_CHILD
-            | WS_VISIBLE
-            | WS_BORDER
-            | WS_TABSTOP
-            | ES_MULTILINE as u32
-            | ES_READONLY as u32
-            | ES_AUTOVSCROLL as u32,
-        WS_EX_CLIENTEDGE,
-        RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID,
-        instance,
-    )?;
-    set_window_text(state.recovery_key_edit, &state.recovery_key);
-    state.acknowledge_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "I Saved It",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        0,
-        RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID as u16,
-        instance,
-    )?;
-
-    layout_recovery_key_handoff_dialog(hwnd);
-    Ok(())
-}
-
-unsafe fn create_about_dialog_controls(hwnd: HWND) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
-    let line_height = 18;
-    let line_spacing = 24;
-    for (index, (control_id, text)) in ABOUT_DIALOG_LINES.into_iter().enumerate() {
-        let line = create_login_dialog_control(
-            hwnd,
-            STATIC_CLASS_NAME,
-            text,
-            WS_CHILD | WS_VISIBLE,
-            0,
-            control_id,
-            instance,
-        )?;
-        MoveWindow(
-            line,
-            16,
-            16 + index as i32 * line_spacing,
-            width - 32,
-            line_height,
-            1,
-        );
-    }
-    let ok_button = create_login_dialog_control(
-        hwnd,
-        BUTTON_CLASS_NAME,
-        "OK",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
-        0,
-        ABOUT_DIALOG_OK_ID as u16,
-        instance,
-    )?;
-    let button_width = 96;
-    let button_height = 28;
-    MoveWindow(
-        ok_button,
-        (width - button_width) / 2,
-        rect.bottom - button_height - 16,
-        button_width,
-        button_height,
-        1,
-    );
-    Ok(())
-}
-
-unsafe fn create_login_dialog_control(
-    parent: HWND,
-    class_name: &str,
-    title: &str,
-    style: u32,
-    ex_style: u32,
-    control_id: u16,
-    instance: *mut c_void,
+/// File > Select Server... while signed out: the sign-in form, with the
+/// Server field filled from `/server <server>`.
+unsafe fn create_login_dialog(
+    owner: HWND,
+    server: &str,
+    result: Arc<Mutex<Option<LoginForm>>>,
 ) -> Result<HWND, String> {
-    create_child_window(
-        parent,
-        class_name,
-        title,
-        style,
-        ex_style,
-        control_id,
-        instance,
-        null_mut(),
+    let mut state = window_data::CreateParam::new(LoginDialogState { result });
+    create_modal_dialog(
+        owner,
+        LOGIN_DIALOG_CLASS_NAME,
+        "Select Server",
+        state.as_param(),
+        |dialog| {
+            let mut column = DialogColumn::new(dialog, LOGIN_DIALOG_WIDTH);
+            column.label(
+                "Server (matrix.org, or leave empty for a full user ID)",
+                0,
+                0,
+            )?;
+            column.edit(LOGIN_DIALOG_HOME_SERVER_ID, server, 0)?;
+            column.label("User (alice or @alice:matrix.org)", 0, 0)?;
+            column.edit(LOGIN_DIALOG_USERNAME_ID, "", 0)?;
+            column.label("Password", 0, 0)?;
+            column.edit(LOGIN_DIALOG_PASSWORD_ID, "", ES_PASSWORD as u32)?;
+            column.label("Device name", 0, 0)?;
+            column.edit(LOGIN_DIALOG_DEVICE_ID, DEFAULT_DEVICE_DISPLAY_NAME, 0)?;
+            column.buttons(&[
+                (LOGIN_DIALOG_OK_ID, "OK"),
+                (LOGIN_DIALOG_CANCEL_ID, "Cancel"),
+            ])
+        },
     )
-}
-
-unsafe fn layout_login_dialog(hwnd: HWND) {
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
-    let label_x = 16;
-    let input_x = 16;
-    let input_width = (width - 32).max(0);
-    let label_width = input_width;
-    let label_height = 18;
-    let input_height = 24;
-    let spacing = 8;
-    let block_height = label_height + spacing + input_height + 12;
-    let button_width = 96;
-    let button_height = 28;
-
-    let Some(state) = login_dialog_state(hwnd) else {
-        return;
-    };
-    let labels = [
-        state.server_label,
-        state.username_label,
-        state.password_label,
-        state.device_display_name_label,
-    ];
-    for (index, hwnd_control) in labels.iter().enumerate() {
-        let y = 16 + (index as i32 * block_height);
-        MoveWindow(*hwnd_control, label_x, y, label_width, label_height, 1);
-    }
-    MoveWindow(
-        state.server_edit,
-        input_x,
-        16 + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-    MoveWindow(
-        state.username_edit,
-        input_x,
-        16 + block_height + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-    MoveWindow(
-        state.password_edit,
-        input_x,
-        16 + (block_height * 2) + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-    MoveWindow(
-        state.device_display_name_edit,
-        input_x,
-        16 + (block_height * 3) + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-
-    let button_y = 16 + (block_height * 4);
-    let cancel_x = width - 16 - button_width;
-    let ok_x = cancel_x - 12 - button_width;
-    MoveWindow(
-        state.ok_button,
-        ok_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-    MoveWindow(
-        state.cancel_button,
-        cancel_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
 }
 
 pub(super) unsafe fn show_login_dialog(
     owner: HWND,
     server: &str,
 ) -> Result<Option<LoginForm>, String> {
-    let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let mut dialog_state = window_data::CreateParam::new(LoginDialogState {
-        initial_server: server.to_owned(),
-        result: Arc::clone(&result),
-        server_label: null_mut(),
-        server_edit: null_mut(),
-        username_label: null_mut(),
-        username_edit: null_mut(),
-        password_label: null_mut(),
-        password_edit: null_mut(),
-        device_display_name_label: null_mut(),
-        device_display_name_edit: null_mut(),
-        ok_button: null_mut(),
-        cancel_button: null_mut(),
-    });
-    let class_name = wide_null(LOGIN_DIALOG_CLASS_NAME);
-    let title = wide_null("Select Server");
-    let dialog = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        title.as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        420,
-        320,
-        owner,
-        null_mut(),
-        instance,
-        dialog_state.as_param(),
-    );
-    if dialog.is_null() {
-        return Err(last_os_error("CreateWindowExW login dialog"));
-    }
-
+    let dialog = create_login_dialog(owner, server, Arc::clone(&result))?;
     run_modal_dialog(owner, dialog, |_| false);
     Ok(result
         .lock()
@@ -1134,241 +761,33 @@ pub(super) unsafe fn show_login_dialog(
         .clone())
 }
 
-unsafe fn layout_recover_e2ee_dialog(hwnd: HWND) {
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
-    let label_x = 16;
-    let input_x = 16;
-    let input_width = (width - 32).max(0);
-    let label_width = input_width;
-    let label_height = 18;
-    let input_height = 24;
-    let spacing = 8;
-    let block_height = label_height + spacing + input_height + 12;
-    let button_width = 96;
-    let button_height = 28;
-
-    let Some(state) = recover_e2ee_dialog_state(hwnd) else {
-        return;
-    };
-
-    MoveWindow(
-        state.recovery_secret_label,
-        label_x,
-        16,
-        label_width,
-        label_height,
-        1,
-    );
-    MoveWindow(
-        state.recovery_secret_edit,
-        input_x,
-        16 + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-
-    let button_y = 16 + block_height;
-    let cancel_x = width - 16 - button_width;
-    let ok_x = cancel_x - 12 - button_width;
-    MoveWindow(
-        state.ok_button,
-        ok_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-    MoveWindow(
-        state.cancel_button,
-        cancel_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-}
-
-unsafe fn layout_setup_e2ee_dialog(hwnd: HWND) {
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
-    let input_width = (width - 32).max(0);
-    let label_height = 18;
-    let input_height = 24;
-    let checkbox_height = 24;
-    let spacing = 8;
-    let button_width = 96;
-    let button_height = 28;
-
-    let Some(state) = setup_e2ee_dialog_state(hwnd) else {
-        return;
-    };
-
-    MoveWindow(state.passphrase_label, 16, 16, input_width, label_height, 1);
-    MoveWindow(
-        state.passphrase_edit,
-        16,
-        16 + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-    MoveWindow(
-        state.wait_for_backups_to_upload_checkbox,
-        16,
-        16 + label_height + spacing + input_height + spacing,
-        input_width,
-        checkbox_height,
-        1,
-    );
-
-    let button_y = 16 + label_height + spacing + input_height + spacing + checkbox_height + 12;
-    let cancel_x = width - 16 - button_width;
-    let ok_x = cancel_x - 12 - button_width;
-    MoveWindow(
-        state.ok_button,
-        ok_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-    MoveWindow(
-        state.cancel_button,
-        cancel_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-}
-
-unsafe fn layout_find_dialog(hwnd: HWND) {
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
-    let label_x = 16;
-    let input_x = 16;
-    let input_width = (width - 32).max(0);
-    let label_width = input_width;
-    let label_height = 18;
-    let input_height = 24;
-    let spacing = 8;
-    let block_height = label_height + spacing + input_height + 12;
-    let button_width = 96;
-    let button_height = 28;
-
-    let Some(state) = find_dialog_state(hwnd) else {
-        return;
-    };
-
-    MoveWindow(state.query_label, label_x, 16, label_width, label_height, 1);
-    MoveWindow(
-        state.query_edit,
-        input_x,
-        16 + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-
-    let button_y = 16 + block_height;
-    let cancel_x = width - 16 - button_width;
-    let ok_x = cancel_x - 12 - button_width;
-    MoveWindow(
-        state.ok_button,
-        ok_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-    MoveWindow(
-        state.cancel_button,
-        cancel_x,
-        button_y,
-        button_width,
-        button_height,
-        1,
-    );
-}
-
-unsafe fn layout_recovery_key_handoff_dialog(hwnd: HWND) {
-    let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
-    let width = rect.right - rect.left;
-    let input_width = (width - 32).max(0);
-    let label_height = 18;
-    let input_height = 72;
-    let spacing = 8;
-    let button_width = 96;
-    let button_height = 28;
-
-    let Some(state) = recovery_key_handoff_dialog_state(hwnd) else {
-        return;
-    };
-
-    MoveWindow(
-        state.instruction_label,
-        16,
-        16,
-        input_width,
-        label_height,
-        1,
-    );
-    MoveWindow(
-        state.recovery_key_edit,
-        16,
-        16 + label_height + spacing,
-        input_width,
-        input_height,
-        1,
-    );
-    MoveWindow(
-        state.acknowledge_button,
-        width - 16 - button_width,
-        16 + label_height + spacing + input_height + 12,
-        button_width,
-        button_height,
-        1,
-    );
+unsafe fn create_recover_e2ee_dialog(
+    owner: HWND,
+    result: Arc<Mutex<Option<RecoverE2eeForm>>>,
+) -> Result<HWND, String> {
+    let mut state = window_data::CreateParam::new(RecoverE2eeDialogState { result });
+    create_modal_dialog(
+        owner,
+        RECOVER_E2EE_DIALOG_CLASS_NAME,
+        "Recover E2EE",
+        state.as_param(),
+        |dialog| {
+            let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
+            column.label("Recovery key or passphrase", 0, 0)?;
+            column.edit(RECOVER_E2EE_DIALOG_SECRET_ID, "", ES_PASSWORD as u32)?;
+            column.buttons(&[
+                (RECOVER_E2EE_DIALOG_OK_ID, "OK"),
+                (RECOVER_E2EE_DIALOG_CANCEL_ID, "Cancel"),
+            ])
+        },
+    )
 }
 
 pub(super) unsafe fn show_recover_e2ee_dialog(
     owner: HWND,
 ) -> Result<Option<RecoverE2eeForm>, String> {
-    let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let mut dialog_state = window_data::CreateParam::new(RecoverE2eeDialogState {
-        result: Arc::clone(&result),
-        recovery_secret_label: null_mut(),
-        recovery_secret_edit: null_mut(),
-        ok_button: null_mut(),
-        cancel_button: null_mut(),
-    });
-    let class_name = wide_null(RECOVER_E2EE_DIALOG_CLASS_NAME);
-    let title = wide_null("Recover E2EE");
-    let dialog = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        title.as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        420,
-        170,
-        owner,
-        null_mut(),
-        instance,
-        dialog_state.as_param(),
-    );
-    if dialog.is_null() {
-        return Err(last_os_error("CreateWindowExW recover e2ee dialog"));
-    }
-
+    let dialog = create_recover_e2ee_dialog(owner, Arc::clone(&result))?;
     run_modal_dialog(owner, dialog, |_| false);
     Ok(result
         .lock()
@@ -1376,44 +795,63 @@ pub(super) unsafe fn show_recover_e2ee_dialog(
         .clone())
 }
 
+unsafe fn create_setup_e2ee_dialog(
+    owner: HWND,
+    result: Arc<Mutex<Option<SetupE2eeRecoveryForm>>>,
+) -> Result<HWND, String> {
+    let mut state = window_data::CreateParam::new(SetupE2eeRecoveryDialogState { result });
+    create_modal_dialog(
+        owner,
+        SETUP_E2EE_DIALOG_CLASS_NAME,
+        "Set Up E2EE Recovery",
+        state.as_param(),
+        |dialog| {
+            let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
+            column.label("Passphrase (optional)", 0, 0)?;
+            column.edit(SETUP_E2EE_DIALOG_PASSPHRASE_ID, "", ES_PASSWORD as u32)?;
+            column.checkbox(SETUP_E2EE_DIALOG_WAIT_ID, "Wait for backups to upload")?;
+            column.buttons(&[
+                (SETUP_E2EE_DIALOG_OK_ID, "OK"),
+                (SETUP_E2EE_DIALOG_CANCEL_ID, "Cancel"),
+            ])
+        },
+    )
+}
+
 pub(super) unsafe fn show_setup_e2ee_dialog(
     owner: HWND,
 ) -> Result<Option<SetupE2eeRecoveryForm>, String> {
-    let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let mut dialog_state = window_data::CreateParam::new(SetupE2eeRecoveryDialogState {
-        result: Arc::clone(&result),
-        passphrase_label: null_mut(),
-        passphrase_edit: null_mut(),
-        wait_for_backups_to_upload_checkbox: null_mut(),
-        ok_button: null_mut(),
-        cancel_button: null_mut(),
-    });
-    let class_name = wide_null(SETUP_E2EE_DIALOG_CLASS_NAME);
-    let title = wide_null("Set Up E2EE Recovery");
-    let dialog = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        title.as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        420,
-        210,
-        owner,
-        null_mut(),
-        instance,
-        dialog_state.as_param(),
-    );
-    if dialog.is_null() {
-        return Err(last_os_error("CreateWindowExW setup e2ee dialog"));
-    }
-
+    let dialog = create_setup_e2ee_dialog(owner, Arc::clone(&result))?;
     run_modal_dialog(owner, dialog, |_| false);
     Ok(result
         .lock()
         .expect("setup e2ee dialog result mutex poisoned")
         .clone())
+}
+
+/// One labelled field with OK and Cancel: the Commands menu's prompts and
+/// Find.
+unsafe fn create_single_field_dialog(
+    owner: HWND,
+    title: &str,
+    label: &str,
+    initial_text: &str,
+    result: Arc<Mutex<Option<String>>>,
+) -> Result<HWND, String> {
+    let mut state = window_data::CreateParam::new(FindDialogState { result });
+    create_modal_dialog(
+        owner,
+        FIND_DIALOG_CLASS_NAME,
+        title,
+        state.as_param(),
+        |dialog| {
+            let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
+            column.label(label, 0, 0)?;
+            column.edit(FIND_DIALOG_QUERY_ID, initial_text, 0)?;
+            column.buttons(&[(FIND_DIALOG_OK_ID, "OK"), (FIND_DIALOG_CANCEL_ID, "Cancel")])
+        },
+    )
 }
 
 pub(super) unsafe fn show_single_field_dialog(
@@ -1422,42 +860,13 @@ pub(super) unsafe fn show_single_field_dialog(
     label: &str,
     initial_text: &str,
 ) -> Result<Option<String>, String> {
-    let instance = GetModuleHandleW(null());
     let result = Arc::new(Mutex::new(None));
-    let mut dialog_state = window_data::CreateParam::new(FindDialogState {
-        result: Arc::clone(&result),
-        label: label.to_owned(),
-        query_label: null_mut(),
-        query_edit: null_mut(),
-        ok_button: null_mut(),
-        cancel_button: null_mut(),
-    });
-    let class_name = wide_null(FIND_DIALOG_CLASS_NAME);
-    let title = wide_null(title);
-    let dialog = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        title.as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        420,
-        170,
-        owner,
-        null_mut(),
-        instance,
-        dialog_state.as_param(),
-    );
-    if dialog.is_null() {
-        return Err(last_os_error("CreateWindowExW single field dialog"));
-    }
-
-    if let Some(state) = find_dialog_state(dialog) {
-        set_window_text(state.query_edit, initial_text);
-        let len = initial_text.encode_utf16().count();
-        SendMessageW(state.query_edit, EM_SETSEL, len, len as LPARAM);
-        SetFocus(state.query_edit);
-    }
+    let dialog =
+        create_single_field_dialog(owner, title, label, initial_text, Arc::clone(&result))?;
+    let edit = GetDlgItem(dialog, FIND_DIALOG_QUERY_ID.into());
+    let len = initial_text.encode_utf16().count();
+    SendMessageW(edit, EM_SETSEL, len, len as LPARAM);
+    SetFocus(edit);
 
     run_modal_dialog(owner, dialog, |message| {
         find_dialog_handles_key(dialog, message)
@@ -1466,6 +875,77 @@ pub(super) unsafe fn show_single_field_dialog(
         .lock()
         .expect("find dialog result mutex poisoned")
         .clone())
+}
+
+/// The recovery key that setting up recovery made, shown once.
+unsafe fn create_recovery_key_handoff_dialog(
+    owner: HWND,
+    recovery_key: &str,
+) -> Result<HWND, String> {
+    create_modal_dialog(
+        owner,
+        RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME,
+        "E2EE Recovery Key",
+        null(),
+        |dialog| {
+            let mut column = DialogColumn::new(dialog, RECOVERY_KEY_HANDOFF_DIALOG_WIDTH);
+            column.label(
+                "Save this recovery key now. It will not be shown again.",
+                0,
+                0,
+            )?;
+            // A single-line edit's height, plus the key's further lines
+            // wrapped with room to spare for the edit's edges and margins.
+            let wrap_width = RECOVERY_KEY_HANDOFF_DIALOG_WIDTH - 2 * DIALOG_MARGIN;
+            let (_, line_height) = dialog_text_size("X", wrap_width);
+            let (_, key_height) = dialog_text_size(recovery_key, wrap_width);
+            column.add(
+                (
+                    EDIT_CLASS_NAME,
+                    recovery_key,
+                    WS_TABSTOP | ES_MULTILINE as u32 | ES_READONLY as u32 | ES_AUTOVSCROLL as u32,
+                    DIALOG_EDIT_EX_STYLE,
+                    RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID,
+                ),
+                (
+                    DIALOG_MARGIN,
+                    RECOVERY_KEY_HANDOFF_DIALOG_WIDTH,
+                    DIALOG_EDIT_HEIGHT + key_height - line_height,
+                ),
+                DIALOG_GAP,
+            )?;
+            column.buttons(&[(RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID, "I Saved It")])
+        },
+    )
+}
+
+pub(super) unsafe fn show_e2ee_recovery_key(owner: HWND, recovery_key: &str) -> Result<(), String> {
+    let dialog = create_recovery_key_handoff_dialog(owner, recovery_key)?;
+    run_modal_dialog(owner, dialog, |_| false);
+    Ok(())
+}
+
+/// Help > About mirx: the lines centred over a centred OK, like mIRC's
+/// About box.
+pub(super) unsafe fn create_about_dialog(owner: HWND) -> Result<HWND, String> {
+    create_modal_dialog(
+        owner,
+        ABOUT_DIALOG_CLASS_NAME,
+        "About mirx",
+        null(),
+        |dialog| {
+            let width = ABOUT_DIALOG_LINES
+                .iter()
+                .map(|(_, text)| dialog_text_size(text, i32::MAX).0)
+                .max()
+                .expect("the About box has lines");
+            let mut column = DialogColumn::new(dialog, width);
+            for (id, text) in ABOUT_DIALOG_LINES {
+                column.label(text, id, SS_CENTER)?;
+            }
+            column.centred_button(ABOUT_DIALOG_OK_ID, "OK")
+        },
+    )
 }
 
 /// Tools > Options... (Alt+O): saves what OK saves in one write, then
@@ -1526,26 +1006,7 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
 
 /// Help > About mirx: modal over `owner`; OK, Enter and Esc close it.
 pub(super) unsafe fn show_about_dialog(owner: HWND) -> Result<(), String> {
-    let class_name = wide_null(ABOUT_DIALOG_CLASS_NAME);
-    let title = wide_null("About mirx");
-    let dialog = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        title.as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        380,
-        230,
-        owner,
-        null_mut(),
-        GetModuleHandleW(null()),
-        null(),
-    );
-    if dialog.is_null() {
-        return Err(last_os_error("CreateWindowExW about dialog"));
-    }
-
+    let dialog = create_about_dialog(owner)?;
     SetFocus(GetDlgItem(dialog, ABOUT_DIALOG_OK_ID as i32));
     run_modal_dialog(owner, dialog, |message| {
         let closes = message.message == WM_KEYDOWN
@@ -1587,56 +1048,27 @@ pub(super) unsafe fn run_modal_dialog(
     EnableWindow(owner, 1);
 }
 
-unsafe fn login_dialog_state(hwnd: HWND) -> Option<&'static LoginDialogState> {
-    window_data::get(hwnd).map(|state| &*state)
+unsafe fn login_dialog_state(hwnd: HWND) -> &'static LoginDialogState {
+    window_data::get(hwnd).expect("the login dialog has its state")
 }
 
-unsafe fn login_dialog_state_mut(hwnd: HWND) -> Option<&'static mut LoginDialogState> {
-    window_data::get(hwnd)
+unsafe fn recover_e2ee_dialog_state(hwnd: HWND) -> &'static RecoverE2eeDialogState {
+    window_data::get(hwnd).expect("the recover e2ee dialog has its state")
 }
 
-unsafe fn recover_e2ee_dialog_state(hwnd: HWND) -> Option<&'static RecoverE2eeDialogState> {
-    window_data::get(hwnd).map(|state| &*state)
+unsafe fn setup_e2ee_dialog_state(hwnd: HWND) -> &'static SetupE2eeRecoveryDialogState {
+    window_data::get(hwnd).expect("the setup e2ee dialog has its state")
 }
 
-unsafe fn recover_e2ee_dialog_state_mut(hwnd: HWND) -> Option<&'static mut RecoverE2eeDialogState> {
-    window_data::get(hwnd)
-}
-
-unsafe fn setup_e2ee_dialog_state(hwnd: HWND) -> Option<&'static SetupE2eeRecoveryDialogState> {
-    window_data::get(hwnd).map(|state| &*state)
-}
-
-unsafe fn setup_e2ee_dialog_state_mut(
-    hwnd: HWND,
-) -> Option<&'static mut SetupE2eeRecoveryDialogState> {
-    window_data::get(hwnd)
-}
-
-unsafe fn recovery_key_handoff_dialog_state(
-    hwnd: HWND,
-) -> Option<&'static RecoveryKeyHandoffDialogState> {
-    window_data::get(hwnd).map(|state| &*state)
-}
-
-unsafe fn recovery_key_handoff_dialog_state_mut(
-    hwnd: HWND,
-) -> Option<&'static mut RecoveryKeyHandoffDialogState> {
-    window_data::get(hwnd)
+unsafe fn find_dialog_state(hwnd: HWND) -> &'static FindDialogState {
+    window_data::get(hwnd).expect("the single-field dialog has its state")
 }
 
 unsafe fn clear_recovery_key_handoff_dialog_key(hwnd: HWND) {
-    if let Some(state) = recovery_key_handoff_dialog_state(hwnd) {
-        set_window_text(state.recovery_key_edit, "");
-    }
-}
-
-unsafe fn find_dialog_state(hwnd: HWND) -> Option<&'static FindDialogState> {
-    window_data::get(hwnd).map(|state| &*state)
-}
-
-unsafe fn find_dialog_state_mut(hwnd: HWND) -> Option<&'static mut FindDialogState> {
-    window_data::get(hwnd)
+    set_window_text(
+        GetDlgItem(hwnd, RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID.into()),
+        "",
+    );
 }
 
 unsafe fn find_dialog_handles_key(dialog: HWND, message: &MSG) -> bool {
@@ -1660,55 +1092,21 @@ unsafe fn find_dialog_handles_key(dialog: HWND, message: &MSG) -> bool {
 }
 
 unsafe fn clear_recover_e2ee_dialog_secret(hwnd: HWND) {
-    if let Some(state) = recover_e2ee_dialog_state(hwnd) {
-        set_window_text(state.recovery_secret_edit, "");
-    }
+    set_window_text(GetDlgItem(hwnd, RECOVER_E2EE_DIALOG_SECRET_ID.into()), "");
 }
 
 unsafe fn clear_setup_e2ee_dialog_passphrase(hwnd: HWND) {
-    if let Some(state) = setup_e2ee_dialog_state(hwnd) {
-        set_window_text(state.passphrase_edit, "");
-    }
-}
-
-pub(super) unsafe fn show_e2ee_recovery_key(owner: HWND, recovery_key: &str) -> Result<(), String> {
-    let instance = GetModuleHandleW(null());
-    let mut dialog_state = window_data::CreateParam::new(RecoveryKeyHandoffDialogState {
-        recovery_key: recovery_key.to_owned(),
-        instruction_label: null_mut(),
-        recovery_key_edit: null_mut(),
-        acknowledge_button: null_mut(),
-    });
-    let class_name = wide_null(RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME);
-    let title = wide_null("E2EE Recovery Key");
-    let dialog = CreateWindowExW(
-        0,
-        class_name.as_ptr(),
-        title.as_ptr(),
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        460,
-        210,
-        owner,
-        null_mut(),
-        instance,
-        dialog_state.as_param(),
-    );
-    if dialog.is_null() {
-        return Err(last_os_error("CreateWindowExW recovery key handoff dialog"));
-    }
-
-    run_modal_dialog(owner, dialog, |_| false);
-    Ok(())
+    set_window_text(GetDlgItem(hwnd, SETUP_E2EE_DIALOG_PASSPHRASE_ID.into()), "");
 }
 
 #[cfg(test)]
 mod tests {
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GW_OWNER, GetWindow};
-    use windows_sys::core::BOOL;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, GCLP_HBRBACKGROUND, GW_OWNER, GetClassLongPtrW, GetDlgCtrlID, GetWindow,
+        IsWindowVisible, WM_GETFONT,
+    };
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -1731,15 +1129,14 @@ mod tests {
             1
         }
         KillTimer(frame, timer);
-        let mut found = (frame, null_mut());
+        let mut found: (HWND, HWND) = (frame, null_mut());
         EnumThreadWindows(
             GetCurrentThreadId(),
             Some(find_owned_dialog),
             &mut found as *mut (HWND, HWND) as LPARAM,
         );
-        let edit = find_dialog_state(found.1)
-            .expect("the single-field dialog is open")
-            .query_edit;
+        assert!(!found.1.is_null(), "the single-field dialog is open");
+        let edit = GetDlgItem(found.1, FIND_DIALOG_QUERY_ID.into());
         PostMessageW(edit, WM_CHAR, 'c' as WPARAM, 0);
         PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
     }
@@ -1748,13 +1145,109 @@ mod tests {
     fn a_single_field_dialog_takes_the_keys_typed_into_its_edit() {
         unsafe {
             with_test_frame(600, 400, |hwnd| {
-                register_find_dialog_class(GetModuleHandleW(null())).unwrap();
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
                 SetTimer(hwnd, 1, 0, Some(type_into_single_field_dialog));
                 assert_eq!(
                     show_single_field_dialog(hwnd, "Find", "Find", "ab").unwrap(),
                     Some("abc".to_owned())
                 );
                 assert_ne!(IsWindowEnabled(hwnd), 0, "closing it enables the frame");
+            });
+        }
+    }
+
+    #[test]
+    fn a_dialog_centres_on_its_owner() {
+        let owner = RECT {
+            left: 100,
+            top: 50,
+            right: 901,
+            bottom: 651,
+        };
+        assert_eq!(centered_origin(&owner, 301, 200), (350, 250));
+        // Larger than its owner, it overhangs both sides alike.
+        assert_eq!(centered_origin(&owner, 1001, 601), (0, 50));
+    }
+
+    unsafe fn children(dialog: HWND) -> Vec<HWND> {
+        unsafe extern "system" fn collect(child: HWND, children: LPARAM) -> BOOL {
+            (*(children as *mut Vec<HWND>)).push(child);
+            1
+        }
+        let mut children = Vec::new();
+        EnumChildWindows(
+            dialog,
+            Some(collect),
+            &mut children as *mut Vec<HWND> as LPARAM,
+        );
+        children
+    }
+
+    /// What every dialog shows: the button face, the dialog font in every
+    /// control, its controls fitted with the margin on every side, and the
+    /// whole centred on `owner`.
+    unsafe fn assert_dialog_chrome(owner: HWND, dialog: HWND) {
+        let name = read_window_text(dialog);
+        assert_ne!(IsWindowVisible(dialog), 0, "{name} is shown");
+        assert_eq!(
+            GetClassLongPtrW(dialog, GCLP_HBRBACKGROUND),
+            COLOR_BTNFACE as usize + 1,
+            "{name} is on the button face"
+        );
+        let font = GetStockObject(DEFAULT_GUI_FONT) as LRESULT;
+        let controls = children(dialog);
+        assert!(!controls.is_empty(), "{name} has controls");
+        for control in controls {
+            assert_eq!(
+                SendMessageW(control, WM_GETFONT, 0, 0),
+                font,
+                "{name}'s control {} has the dialog font",
+                GetDlgCtrlID(control)
+            );
+        }
+        let mut client = RECT::default();
+        GetClientRect(dialog, &mut client);
+        assert_eq!(
+            controls_extent(dialog),
+            (client.right - DIALOG_MARGIN, client.bottom - DIALOG_MARGIN),
+            "{name} fits its controls"
+        );
+        let (mut dialog_rect, mut owner_rect) = (RECT::default(), RECT::default());
+        GetWindowRect(dialog, &mut dialog_rect);
+        GetWindowRect(owner, &mut owner_rect);
+        let centre = |rect: &RECT| (rect.left + rect.right, rect.top + rect.bottom);
+        let (dialog_centre, owner_centre) = (centre(&dialog_rect), centre(&owner_rect));
+        assert!(
+            (dialog_centre.0 - owner_centre.0).abs() <= 2
+                && (dialog_centre.1 - owner_centre.1).abs() <= 2,
+            "{name} centred at {dialog_centre:?}, not on {owner_centre:?}"
+        );
+    }
+
+    #[test]
+    fn every_dialog_is_centred_on_its_owner_in_the_dialog_font() {
+        unsafe {
+            with_test_frame(800, 600, |frame| {
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                let options = options_dialog::OptionsDialog::open(
+                    frame,
+                    state_ref(frame).settings.settings(),
+                    None,
+                )
+                .unwrap();
+                let dialogs = [
+                    create_login_dialog(frame, "matrix.org", Arc::default()).unwrap(),
+                    create_recover_e2ee_dialog(frame, Arc::default()).unwrap(),
+                    create_setup_e2ee_dialog(frame, Arc::default()).unwrap(),
+                    create_single_field_dialog(frame, "Find", "Find", "", Arc::default()).unwrap(),
+                    create_recovery_key_handoff_dialog(frame, "EsTc abcd efgh").unwrap(),
+                    create_about_dialog(frame).unwrap(),
+                    options.hwnd(),
+                ];
+                for dialog in dialogs {
+                    assert_dialog_chrome(frame, dialog);
+                    DestroyWindow(dialog);
+                }
             });
         }
     }

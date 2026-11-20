@@ -277,15 +277,11 @@ use core_events::{
     resolve_timeline_room_id,
 };
 #[cfg(test)]
+use dialogs::{ABOUT_DIALOG_OK_ID, FIND_DIALOG_CLASS_NAME, FindDialogState, create_about_dialog};
 use dialogs::{
-    ABOUT_DIALOG_CLASS_NAME, ABOUT_DIALOG_OK_ID, FIND_DIALOG_CLASS_NAME, FindDialogState,
-};
-use dialogs::{
-    SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_about_dialog_class,
-    register_find_dialog_class, register_login_dialog_class, register_recover_e2ee_dialog_class,
-    register_recovery_key_handoff_dialog_class, register_setup_e2ee_dialog_class, run_modal_dialog,
-    run_options_dialog, show_about_dialog, show_e2ee_recovery_key, show_login_dialog,
-    show_recover_e2ee_dialog, show_setup_e2ee_dialog, show_single_field_dialog,
+    SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
+    run_modal_dialog, run_options_dialog, show_about_dialog, show_e2ee_recovery_key,
+    show_login_dialog, show_recover_e2ee_dialog, show_setup_e2ee_dialog, show_single_field_dialog,
 };
 use echo::{EchoLine, EchoLog};
 use errors::{ErrorDestination, error_destination};
@@ -760,13 +756,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     register_mdi_child_class(instance)?;
     register_room_content_class(instance)?;
     register_timeline_class(instance)?;
-    register_login_dialog_class(instance)?;
-    register_recover_e2ee_dialog_class(instance)?;
-    register_setup_e2ee_dialog_class(instance)?;
-    register_recovery_key_handoff_dialog_class(instance)?;
-    register_find_dialog_class(instance)?;
-    register_about_dialog_class(instance)?;
-    options_dialog::register_class(instance)?;
+    register_dialog_classes(instance)?;
 
     let exit_code = Arc::new(AtomicI32::new(0));
     let event_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -1228,14 +1218,9 @@ mod tests {
     #[should_panic(expected = "holds another kind of state")]
     fn a_window_does_not_give_its_state_as_another_kind() {
         unsafe {
-            register_find_dialog_class(GetModuleHandleW(null())).unwrap();
+            register_dialog_classes(GetModuleHandleW(null())).unwrap();
             let mut dialog_state = window_data::CreateParam::new(FindDialogState {
                 result: Arc::new(Mutex::new(None)),
-                label: "Find".to_owned(),
-                query_label: null_mut(),
-                query_edit: null_mut(),
-                ok_button: null_mut(),
-                cancel_button: null_mut(),
             });
             let dialog = CreateWindowExW(
                 0,

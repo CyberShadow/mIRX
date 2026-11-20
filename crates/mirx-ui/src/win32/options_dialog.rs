@@ -6,13 +6,9 @@
 //! `IsDialogMessageW` gives a dialog's keys: Tab between fields, Enter for
 //! OK (Add in the Highlight page's word box) and Esc for Cancel.
 
-use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{
-    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM,
-};
-use windows_sys::Win32::Graphics::Gdi::{COLOR_BTNFACE, HBRUSH};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, EM_SETSEL, NMHDR, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT,
@@ -23,18 +19,21 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CreateWindowExW,
-    DefWindowProcW, DestroyWindow, ES_AUTOHSCROLL, ES_NUMBER, GWL_STYLE, GetClientRect,
-    GetDlgCtrlID, GetWindowLongPtrW, GetWindowRect, IDC_ARROW, IDCANCEL, IDOK, IsDialogMessageW,
-    LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
-    LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, LoadCursorW, MB_ICONERROR, MB_OK, MessageBoxW,
-    MoveWindow, RegisterClassExW, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND,
-    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD,
-    WS_EX_CLIENTEDGE, WS_OVERLAPPED, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DefWindowProcW,
+    DestroyWindow, ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK,
+    IsDialogMessageW, LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN,
+    LB_RESETCONTENT, LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK,
+    MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use mirx_core::HighlightWord;
 
+use super::dialogs::{
+    DIALOG_BUTTON_HEIGHT, DIALOG_BUTTON_WIDTH, DIALOG_CHECKBOX_HEIGHT, DIALOG_EDIT_EX_STYLE,
+    DIALOG_EDIT_HEIGHT, DIALOG_EDIT_STYLE, DIALOG_GAP, DIALOG_LABEL_GAP, DIALOG_MARGIN,
+    controls_extent, create_modal_dialog, dialog_text_size,
+};
 use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
     OptionsPage, page_tree_index, tree_index, tree_paths,
@@ -44,8 +43,8 @@ use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
 use super::{
     BUTTON_CLASS_NAME, EDIT_CLASS_NAME, STATIC_CLASS_NAME, TREE_CLASS_NAME, create_child_window,
-    expand_tree_item, insert_tree_item, last_os_error, read_tree_item_text, read_window_text,
-    run_modal_dialog, selected_tree_item, set_window_text, wide_null,
+    expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text, run_modal_dialog,
+    selected_tree_item, set_window_text, wide_null,
 };
 use crate::automation::UiOptionsDialog;
 
@@ -67,34 +66,14 @@ const HIGHLIGHT_NOTE: &str = "Words are matched as whole words; * and ? are wild
 Highlight words are kept on your Matrix server and shared with your other clients.";
 const HIGHLIGHT_SIGNED_OUT_NOTE: &str = "Connect to edit highlight words.";
 
-const DIALOG_WIDTH: i32 = 520;
-const DIALOG_HEIGHT: i32 = 380;
-const MARGIN: i32 = 8;
 const TREE_WIDTH: i32 = 150;
-const PAGE_X: i32 = MARGIN + TREE_WIDTH + 12;
-const BUTTON_WIDTH: i32 = 80;
-const BUTTON_HEIGHT: i32 = 26;
-const LABEL_HEIGHT: i32 = 16;
-
-pub(super) fn register_class(instance: *mut std::ffi::c_void) -> Result<(), String> {
-    let class_name = wide_null(OPTIONS_DIALOG_CLASS_NAME);
-    let window_class = WNDCLASSEXW {
-        cbSize: size_of::<WNDCLASSEXW>() as u32,
-        lpfnWndProc: Some(window_proc),
-        hInstance: instance,
-        hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_BTNFACE as isize + 1) as HBRUSH,
-        lpszClassName: class_name.as_ptr(),
-        ..unsafe { zeroed() }
-    };
-    // A second registration, as each unit test makes, finds it registered.
-    if unsafe { RegisterClassExW(&window_class) } == 0
-        && unsafe { GetLastError() } != ERROR_CLASS_ALREADY_EXISTS
-    {
-        return Err(last_os_error("RegisterClassExW options dialog"));
-    }
-    Ok(())
-}
+const TREE_HEIGHT: i32 = 260;
+const PAGE_X: i32 = DIALOG_MARGIN + TREE_WIDTH + DIALOG_MARGIN;
+const PAGE_WIDTH: i32 = 320;
+const TIMESTAMP_FORMAT_WIDTH: i32 = 120;
+/// Three digits.
+const SWITCHBAR_BUTTONS_WIDTH: i32 = 40;
+const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
 
 /// The form's controls.
 struct Fields {
@@ -191,31 +170,13 @@ impl OptionsDialog {
             },
             saved: None,
         }));
-        let mut owner_rect = RECT::default();
-        GetWindowRect(owner, &mut owner_rect);
-        let class_name = wide_null(OPTIONS_DIALOG_CLASS_NAME);
-        let title = wide_null(OPTIONS_DIALOG_TITLE);
-        let hwnd = CreateWindowExW(
-            0,
-            class_name.as_ptr(),
-            title.as_ptr(),
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-            owner_rect.left + (owner_rect.right - owner_rect.left - DIALOG_WIDTH) / 2,
-            owner_rect.top + (owner_rect.bottom - owner_rect.top - DIALOG_HEIGHT) / 2,
-            DIALOG_WIDTH,
-            DIALOG_HEIGHT,
+        let hwnd = create_modal_dialog(
             owner,
-            null_mut(),
-            GetModuleHandleW(null()),
+            OPTIONS_DIALOG_CLASS_NAME,
+            OPTIONS_DIALOG_TITLE,
             (&mut *state as *mut WindowData<DialogState>).cast(),
-        );
-        if hwnd.is_null() {
-            return Err(last_os_error("CreateWindowExW options dialog"));
-        }
-        if let Err(error) = create_controls(hwnd) {
-            DestroyWindow(hwnd);
-            return Err(error);
-        }
+            |hwnd| create_controls(hwnd),
+        )?;
         Ok(Self { hwnd, owner, state })
     }
 
@@ -231,7 +192,6 @@ impl OptionsDialog {
             owner,
             mut state,
         } = self;
-        ShowWindow(hwnd, SW_SHOW);
         SetFocus(state.tree);
         run_modal_dialog(owner, hwnd, |message| IsDialogMessageW(hwnd, message) != 0);
         state.saved.take()
@@ -244,8 +204,6 @@ unsafe fn dialog_state(hwnd: HWND) -> &'static mut DialogState {
 
 unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let instance = GetModuleHandleW(null());
-    let mut client = RECT::default();
-    GetClientRect(hwnd, &mut client);
     let control = |class: &str, text: &str, style: u32, ex_style: u32, id: u16| {
         create_child_window(
             hwnd,
@@ -262,38 +220,48 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         MoveWindow(control, x, y, width, height, 0);
         control
     };
-    let buttons_y = client.bottom - MARGIN - BUTTON_HEIGHT;
-    let page_width = client.right - PAGE_X - MARGIN;
+    // A label as large as its text wrapped to the page.
+    let label = |text: &str, id: u16, style: u32, x: i32, y: i32| {
+        let (width, height) = dialog_text_size(text, PAGE_WIDTH);
+        let label = place(
+            control(STATIC_CLASS_NAME, text, style, 0, id)?,
+            x,
+            y,
+            width,
+            height,
+        );
+        Ok::<_, String>((label, (width, height)))
+    };
+    // A label left of the field on the row at `row_y`, centred on it.
+    let label_beside_field = |text: &str, x: i32, row_y: i32| {
+        let (_, height) = dialog_text_size(text, PAGE_WIDTH);
+        let (label, (width, _)) = label(text, 0, 0, x, row_y + (DIALOG_EDIT_HEIGHT - height) / 2)?;
+        Ok::<_, String>((label, width))
+    };
     let state = dialog_state(hwnd);
 
     // mIRC labels its tree, which names the shown page; there is no
     // page heading.
-    place(
-        control(STATIC_CLASS_NAME, "Category:", WS_VISIBLE, 0, 0)?,
-        MARGIN,
-        MARGIN,
-        TREE_WIDTH,
-        LABEL_HEIGHT,
-    );
-    let tree_top = MARGIN + LABEL_HEIGHT + 2;
+    let (_, (_, category_height)) =
+        label("Category:", 0, WS_VISIBLE, DIALOG_MARGIN, DIALOG_MARGIN)?;
+    let tree_top = DIALOG_MARGIN + category_height + DIALOG_LABEL_GAP;
     state.tree = place(
         control(
             TREE_CLASS_NAME,
             "",
             WS_VISIBLE
-                | WS_BORDER
                 | WS_TABSTOP
                 | TVS_HASLINES
                 | TVS_HASBUTTONS
                 | TVS_LINESATROOT
                 | TVS_SHOWSELALWAYS,
-            0,
+            WS_EX_CLIENTEDGE,
             OPTIONS_TREE_ID,
         )?,
-        MARGIN,
+        DIALOG_MARGIN,
         tree_top,
         TREE_WIDTH,
-        buttons_y - MARGIN - tree_top,
+        TREE_HEIGHT,
     );
     let mut category = 0;
     for (label, depth, _) in OPTIONS_TREE {
@@ -318,7 +286,6 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
 
     let checkbox = WS_TABSTOP | BS_AUTOCHECKBOX as u32;
-    let edit = WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL as u32;
     let page_top = tree_top;
 
     state.fields.connect_on_startup = place(
@@ -331,8 +298,8 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         PAGE_X,
         page_top,
-        page_width,
-        20,
+        PAGE_WIDTH,
+        DIALOG_CHECKBOX_HEIGHT,
     );
     state
         .page_controls
@@ -348,42 +315,31 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         PAGE_X,
         page_top,
-        page_width,
-        20,
+        PAGE_WIDTH,
+        DIALOG_CHECKBOX_HEIGHT,
     );
-    let format_label = place(
-        control(STATIC_CLASS_NAME, "Format:", 0, 0, 0)?,
-        PAGE_X,
-        page_top + 32,
-        64,
-        20,
-    );
+    let format_y = page_top + DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
+    let (format_label, format_label_width) = label_beside_field("Format:", PAGE_X, format_y)?;
     state.fields.timestamp_format = place(
         control(
             EDIT_CLASS_NAME,
             "",
-            edit,
-            WS_EX_CLIENTEDGE,
+            DIALOG_EDIT_STYLE,
+            DIALOG_EDIT_EX_STYLE,
             OPTIONS_TIMESTAMP_FORMAT_ID,
         )?,
-        PAGE_X + 68,
-        page_top + 30,
-        160,
-        24,
+        PAGE_X + format_label_width + DIALOG_GAP,
+        format_y,
+        TIMESTAMP_FORMAT_WIDTH,
+        DIALOG_EDIT_HEIGHT,
     );
-    let tokens = place(
-        control(
-            STATIC_CLASS_NAME,
-            &format!("Tokens: {}", format_tokens()),
-            0,
-            0,
-            OPTIONS_TIMESTAMP_TOKENS_ID,
-        )?,
+    let (tokens, _) = label(
+        &format!("Tokens: {}", format_tokens()),
+        OPTIONS_TIMESTAMP_TOKENS_ID,
+        0,
         PAGE_X,
-        page_top + 64,
-        page_width,
-        40,
-    );
+        format_y + DIALOG_EDIT_HEIGHT + DIALOG_GAP,
+    )?;
     for control in [
         state.fields.timestamp_show,
         format_label,
@@ -395,67 +351,55 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             .push((OptionsPage::IrcMessages, control));
     }
 
-    let buttons_label = place(
-        control(STATIC_CLASS_NAME, "Switchbar buttons:", 0, 0, 0)?,
-        PAGE_X,
-        page_top + 2,
-        140,
-        20,
-    );
+    let (buttons_label, buttons_label_width) =
+        label_beside_field("Switchbar buttons:", PAGE_X, page_top)?;
+    let buttons_x = PAGE_X + buttons_label_width + DIALOG_GAP;
     state.fields.switchbar_buttons = place(
         control(
             EDIT_CLASS_NAME,
             "",
-            edit | ES_NUMBER as u32,
-            WS_EX_CLIENTEDGE,
+            DIALOG_EDIT_STYLE | ES_NUMBER as u32,
+            DIALOG_EDIT_EX_STYLE,
             OPTIONS_SWITCHBAR_BUTTONS_ID,
         )?,
-        PAGE_X + 144,
+        buttons_x,
         page_top,
-        56,
-        24,
+        SWITCHBAR_BUTTONS_WIDTH,
+        DIALOG_EDIT_HEIGHT,
     );
-    let pixels_label = place(
-        control(STATIC_CLASS_NAME, "pixels wide (40-400)", 0, 0, 0)?,
-        PAGE_X + 208,
-        page_top + 2,
-        page_width - 208,
-        20,
-    );
+    let (pixels_label, _) = label_beside_field(
+        "pixels wide (40-400)",
+        buttons_x + SWITCHBAR_BUTTONS_WIDTH + DIALOG_GAP,
+        page_top,
+    )?;
     for control in [buttons_label, state.fields.switchbar_buttons, pixels_label] {
         state.page_controls.push((OptionsPage::Display, control));
     }
 
-    let list_width = page_width - BUTTON_WIDTH - MARGIN;
-    let list_top = page_top + 24;
-    let list_height = 150;
-    let word_top = list_top + list_height + MARGIN;
-    let highlight_label = place(
-        control(
-            STATIC_CLASS_NAME,
-            "Highlight messages that contain these words:",
-            0,
-            0,
-            0,
-        )?,
+    let (highlight_label, (_, highlight_label_height)) = label(
+        "Highlight messages that contain these words:",
+        0,
+        0,
         PAGE_X,
-        page_top + 2,
-        page_width,
-        20,
-    );
+        page_top,
+    )?;
+    let list_width = PAGE_WIDTH - DIALOG_BUTTON_WIDTH - DIALOG_GAP;
+    let side_x = PAGE_X + list_width + DIALOG_GAP;
+    let list_top = page_top + highlight_label_height + DIALOG_LABEL_GAP;
+    let word_top = list_top + HIGHLIGHT_LIST_HEIGHT + DIALOG_GAP;
     let controls = &mut state.highlight_controls;
     controls.list = place(
         control(
             LISTBOX_CLASS_NAME,
             "",
-            WS_BORDER | WS_TABSTOP | WS_VSCROLL | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32,
-            0,
+            WS_TABSTOP | WS_VSCROLL | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32,
+            WS_EX_CLIENTEDGE,
             OPTIONS_HIGHLIGHT_LIST_ID,
         )?,
         PAGE_X,
         list_top,
         list_width,
-        list_height,
+        HIGHLIGHT_LIST_HEIGHT,
     );
     controls.delete = place(
         control(
@@ -465,23 +409,23 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             OPTIONS_HIGHLIGHT_DELETE_ID,
         )?,
-        PAGE_X + list_width + MARGIN,
+        side_x,
         list_top,
-        BUTTON_WIDTH,
-        BUTTON_HEIGHT,
+        DIALOG_BUTTON_WIDTH,
+        DIALOG_BUTTON_HEIGHT,
     );
     controls.word = place(
         control(
             EDIT_CLASS_NAME,
             "",
-            edit,
-            WS_EX_CLIENTEDGE,
+            DIALOG_EDIT_STYLE,
+            DIALOG_EDIT_EX_STYLE,
             OPTIONS_HIGHLIGHT_WORD_ID,
         )?,
         PAGE_X,
         word_top,
         list_width,
-        24,
+        DIALOG_EDIT_HEIGHT,
     );
     controls.add = place(
         control(
@@ -491,27 +435,21 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             OPTIONS_HIGHLIGHT_ADD_ID,
         )?,
-        PAGE_X + list_width + MARGIN,
-        word_top - 1,
-        BUTTON_WIDTH,
-        BUTTON_HEIGHT,
+        side_x,
+        word_top + (DIALOG_EDIT_HEIGHT - DIALOG_BUTTON_HEIGHT) / 2,
+        DIALOG_BUTTON_WIDTH,
+        DIALOG_BUTTON_HEIGHT,
     );
-    let highlight_note = place(
-        control(
-            STATIC_CLASS_NAME,
-            match state.highlight {
-                Some(_) => HIGHLIGHT_NOTE,
-                None => HIGHLIGHT_SIGNED_OUT_NOTE,
-            },
-            0,
-            0,
-            OPTIONS_HIGHLIGHT_NOTE_ID,
-        )?,
+    let (highlight_note, _) = label(
+        match state.highlight {
+            Some(_) => HIGHLIGHT_NOTE,
+            None => HIGHLIGHT_SIGNED_OUT_NOTE,
+        },
+        OPTIONS_HIGHLIGHT_NOTE_ID,
+        0,
         PAGE_X,
-        word_top + 32,
-        page_width,
-        48,
-    );
+        word_top + DIALOG_EDIT_HEIGHT + DIALOG_GAP,
+    )?;
     let controls = &state.highlight_controls;
     for control in [
         highlight_label,
@@ -531,7 +469,11 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     refill_highlight_list(state);
 
     // OK is `IDOK` and Cancel `IDCANCEL`: what `IsDialogMessageW` sends
-    // for Enter and Esc.
+    // for Enter and Esc. They sit a margin under the tree and every page,
+    // right-aligned with the pages.
+    let (_, pages_bottom) = controls_extent(hwnd);
+    let buttons_y = pages_bottom + DIALOG_MARGIN;
+    let cancel_x = PAGE_X + PAGE_WIDTH - DIALOG_BUTTON_WIDTH;
     place(
         control(
             BUTTON_CLASS_NAME,
@@ -540,10 +482,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             IDOK as u16,
         )?,
-        client.right - MARGIN - 2 * BUTTON_WIDTH - MARGIN,
+        cancel_x - DIALOG_GAP - DIALOG_BUTTON_WIDTH,
         buttons_y,
-        BUTTON_WIDTH,
-        BUTTON_HEIGHT,
+        DIALOG_BUTTON_WIDTH,
+        DIALOG_BUTTON_HEIGHT,
     );
     place(
         control(
@@ -553,10 +495,10 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
             0,
             IDCANCEL as u16,
         )?,
-        client.right - MARGIN - BUTTON_WIDTH,
+        cancel_x,
         buttons_y,
-        BUTTON_WIDTH,
-        BUTTON_HEIGHT,
+        DIALOG_BUTTON_WIDTH,
+        DIALOG_BUTTON_HEIGHT,
     );
 
     let form = OptionsForm::from_settings(&state.current);
@@ -718,7 +660,7 @@ unsafe fn handle_highlight_delete(hwnd: HWND) {
     refill_highlight_list(state);
 }
 
-unsafe extern "system" fn window_proc(
+pub(super) unsafe extern "system" fn window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,

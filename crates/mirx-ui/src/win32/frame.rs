@@ -687,22 +687,8 @@ mod tests {
                 assert_eq!(message_frame(&message_to(hwnd)), Some(hwnd));
                 assert_eq!(message_frame(&message_to(null_mut())), None);
 
-                register_about_dialog_class(GetModuleHandleW(null())).unwrap();
-                let dialog = CreateWindowExW(
-                    0,
-                    wide_null(ABOUT_DIALOG_CLASS_NAME).as_ptr(),
-                    wide_null("About mirx").as_ptr(),
-                    WS_OVERLAPPED,
-                    0,
-                    0,
-                    380,
-                    230,
-                    hwnd,
-                    null_mut(),
-                    GetModuleHandleW(null()),
-                    null(),
-                );
-                assert!(!dialog.is_null());
+                register_dialog_classes(GetModuleHandleW(null())).unwrap();
+                let dialog = create_about_dialog(hwnd).unwrap();
                 let ok = GetDlgItem(dialog, ABOUT_DIALOG_OK_ID as i32);
                 assert!(!ok.is_null());
                 assert_eq!(message_frame(&message_to(ok)), None);
