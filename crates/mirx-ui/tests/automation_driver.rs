@@ -57,23 +57,22 @@ use windows_sys::Win32::System::DataExchange::{
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
-use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL,
-    VK_DOWN, VK_ESCAPE, VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB,
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_DOWN,
+    VK_ESCAPE, VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE, GW_OWNER,
-    GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem,
-    GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsWindow, IsWindowVisible, LB_GETCOUNT,
-    LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM,
-    SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO, SIF_ALL, SMTO_NORMAL, SWP_NOMOVE,
-    SWP_NOZORDER, SendMessageTimeoutW, SendMessageW, SetForegroundWindow, SetWindowPos,
-    SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_PASTE,
-    WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE,
+    GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetClientRect,
+    GetDlgCtrlID, GetDlgItem, GetGUIThreadInfo, GetLastActivePopup, GetScrollInfo, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
+    IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
+    LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
+    SIF_ALL, SMTO_NORMAL, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW,
+    SetForegroundWindow, SetWindowPos, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT,
+    WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE,
+    WM_MDIGETACTIVE, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2481,27 +2480,24 @@ unsafe fn compose_edit_hwnd(app: &MirxApp) -> HWND {
     edit
 }
 
+/// The window with the focus in the app's UI thread. Read with
+/// `GetGUIThreadInfo`, not by attaching to the thread's input: Wine's
+/// `AttachThreadInput` clears the shared key state, which drops a Shift
+/// still held for keys the app has not read yet.
 unsafe fn focused_hwnd(app: &MirxApp) -> HWND {
     let frame = app.automation_frame_hwnd() as HWND;
     let ui_thread = unsafe { GetWindowThreadProcessId(frame, null_mut()) };
     assert_ne!(ui_thread, 0, "UI thread ID must exist");
-    let current_thread = unsafe { GetCurrentThreadId() };
-    if current_thread != ui_thread {
-        assert_ne!(
-            unsafe { AttachThreadInput(current_thread, ui_thread, 1) },
-            0,
-            "AttachThreadInput must succeed"
-        );
-    }
-    let focused = unsafe { GetFocus() };
-    if current_thread != ui_thread {
-        assert_ne!(
-            unsafe { AttachThreadInput(current_thread, ui_thread, 0) },
-            0,
-            "AttachThreadInput detach must succeed"
-        );
-    }
-    focused
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    assert_ne!(
+        unsafe { GetGUIThreadInfo(ui_thread, &mut info) },
+        0,
+        "GetGUIThreadInfo must succeed"
+    );
+    info.hwndFocus
 }
 
 fn assert_compose_has_focus(app: &MirxApp) {
