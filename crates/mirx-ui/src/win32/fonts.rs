@@ -107,6 +107,7 @@ pub(super) unsafe fn set_timeline_font(hwnd: HWND, font: HFONT) {
         let state = timeline_state_mut(hwnd);
         state.font = font;
         state.line_height = font_line_height(font);
+        state.wrap_cache.clear();
     }
     relayout_timeline(hwnd);
 }

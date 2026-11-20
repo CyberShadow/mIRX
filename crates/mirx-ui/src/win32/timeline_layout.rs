@@ -1,7 +1,9 @@
 //! Timeline layout and paint: rows become wrapped paint lines, and paint
 //! lines are drawn in the frame's text font.
 
+use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 
 use mirx_core::{TextStyle, TextStyleSpan};
 use windows_sys::Win32::Graphics::Gdi::{HDC, InvertRect};
@@ -201,6 +203,67 @@ where
     lines
 }
 
+/// A log row's paint lines, as ranges of its text with their indents.
+type LogWrap = Rc<[(Range<usize>, i32)]>;
+
+/// The wraps of a timeline's log rows at one text width, by row text, so
+/// that new rows wrap only texts not wrapped already. It holds only the
+/// texts of the rows last laid out. Wraps are in the timeline's font: a new
+/// font must `clear` it (an `HFONT` is no key, as handles are reused).
+#[derive(Default)]
+pub(super) struct WrapCache {
+    /// The text width the wraps are for.
+    width: i32,
+    by_text: HashMap<String, LogWrap>,
+}
+
+impl WrapCache {
+    pub(super) fn clear(&mut self) {
+        self.by_text.clear();
+    }
+
+    /// The wrap of each of `rows` at `width`, `None` for a row that is not
+    /// a log row, and how many texts had to be wrapped (measured). Texts
+    /// not in `rows` are dropped.
+    fn rewrap<Measure>(
+        &mut self,
+        rows: &[TimelineRow],
+        width: i32,
+        measure: &Measure,
+    ) -> (Vec<Option<LogWrap>>, usize)
+    where
+        Measure: Fn(&str) -> i32,
+    {
+        let mut previous = std::mem::take(&mut self.by_text);
+        if width != self.width {
+            previous.clear();
+            self.width = width;
+        }
+        let mut wrapped = 0;
+        let wraps = rows
+            .iter()
+            .map(|row| {
+                (row.layout == TimelineRowLayout::Log).then(|| {
+                    let text = &row.logical_text;
+                    if let Some(wrap) = self.by_text.get(text) {
+                        return Rc::clone(wrap);
+                    }
+                    let (text, wrap) = previous.remove_entry(text).unwrap_or_else(|| {
+                        wrapped += 1;
+                        (
+                            text.clone(),
+                            timeline_log_paint_ranges(text, width, measure).into(),
+                        )
+                    });
+                    self.by_text.insert(text, Rc::clone(&wrap));
+                    wrap
+                })
+            })
+            .collect();
+        (wraps, wrapped)
+    }
+}
+
 /// The parts of `styles` inside `segment`, at their offsets in it.
 pub(super) fn clip_styles(styles: &[TextStyleSpan], segment: &Range<usize>) -> Vec<TextStyleSpan> {
     styles
@@ -217,24 +280,27 @@ pub(super) fn clip_styles(styles: &[TextStyleSpan], segment: &Range<usize>) -> V
         .collect()
 }
 
+/// The paint lines of `rows` in a client `client_width` wide, with log rows
+/// wrapped through `cache`, and how many log rows had to be wrapped.
 fn timeline_row_paint_lines_with_measure<Measure>(
     rows: &[TimelineRow],
     client_width: i32,
     line_height: i32,
+    cache: &mut WrapCache,
     measure: &Measure,
-) -> Vec<TimelinePaintLine>
+) -> (Vec<TimelinePaintLine>, usize)
 where
     Measure: Fn(&str) -> i32,
 {
-    let width = timeline_text_width(client_width);
+    let (wraps, wrapped) = cache.rewrap(rows, timeline_text_width(client_width), measure);
     let mut paint_lines = Vec::new();
-    for (source_row_index, row) in rows.iter().enumerate() {
-        let segments = match row.layout {
-            TimelineRowLayout::FullWidth => rendered_line_ranges(&row.logical_text)
+    for (source_row_index, (row, wrap)) in rows.iter().zip(wraps).enumerate() {
+        let segments = match wrap {
+            None => rendered_line_ranges(&row.logical_text)
                 .into_iter()
                 .map(|line| (line, 0))
                 .collect(),
-            TimelineRowLayout::Log => timeline_log_paint_ranges(&row.logical_text, width, measure),
+            Some(wrap) => wrap.to_vec(),
         };
         for (segment, indent) in segments {
             paint_lines.push(TimelinePaintLine {
@@ -262,15 +328,17 @@ where
             }
         }
     }
-    paint_lines
+    (paint_lines, wrapped)
 }
 
+/// Lays `rows` out in the timeline, wrapping only the log rows its wrap
+/// cache has not wrapped at this width.
 pub(super) unsafe fn timeline_row_paint_lines(
     hwnd: HWND,
     rows: &[TimelineRow],
     client_width: i32,
 ) -> Vec<TimelinePaintLine> {
-    let state = timeline_state_ref(hwnd);
+    let state = timeline_state_mut(hwnd);
     let glyphs = &state_ref(frame_window_for(hwnd)).text_font.glyphs;
     assert_eq!(
         state.font,
@@ -282,17 +350,14 @@ pub(super) unsafe fn timeline_row_paint_lines(
         !hdc.is_null(),
         "GetDC must succeed for timeline measurement"
     );
-    let paint_lines = timeline_row_paint_lines_with_measure(
+    let (paint_lines, wrapped) = timeline_row_paint_lines_with_measure(
         rows,
         client_width,
         state.line_height,
+        &mut state.wrap_cache,
         &|text| unsafe { glyphs.measure(hdc, text) },
     );
     ReleaseDC(hwnd, hdc);
-    let wrapped = rows
-        .iter()
-        .filter(|row| row.layout == TimelineRowLayout::Log)
-        .count();
     state_mut(frame_window_for(hwnd))
         .refresh_counters
         .count_rows_wrapped(wrapped);
@@ -723,6 +788,23 @@ mod tests {
         text.chars().count() as i32
     }
 
+    /// The paint lines of `rows` laid out with an empty wrap cache.
+    fn fresh_paint_lines(
+        rows: &[TimelineRow],
+        client_width: i32,
+        line_height: i32,
+        measure: &dyn Fn(&str) -> i32,
+    ) -> Vec<TimelinePaintLine> {
+        timeline_row_paint_lines_with_measure(
+            rows,
+            client_width,
+            line_height,
+            &mut WrapCache::default(),
+            &measure,
+        )
+        .0
+    }
+
     #[test]
     fn continuation_lines_are_indented_two_spaces_whatever_the_timestamp() {
         let indent_of = |setting: &TimestampSetting| {
@@ -732,7 +814,7 @@ mod tests {
                 TimelineRowKind::Info,
                 format!("{prefix}alpha beta gamma"),
             )];
-            timeline_row_paint_lines_with_measure(
+            fresh_paint_lines(
                 &rows,
                 client_width_for_text(prefix.len() as i32 + 10),
                 20,
@@ -804,8 +886,7 @@ mod tests {
         ];
 
         let logical_lines = project_timeline_rows(&rows);
-        let paint_lines =
-            timeline_row_paint_lines_with_measure(&rows, 360, 20, &measure_ascii_width);
+        let paint_lines = fresh_paint_lines(&rows, 360, 20, &measure_ascii_width);
 
         assert_eq!(
             logical_lines,
@@ -860,7 +941,7 @@ mod tests {
             },
             text.to_owned(),
         )];
-        timeline_row_paint_lines_with_measure(&rows, client_width, 20, &measure_ascii_width)
+        fresh_paint_lines(&rows, client_width, 20, &measure_ascii_width)
             .into_iter()
             .map(|line| match line.visual {
                 TimelinePaintLineVisual::Text {
@@ -1033,18 +1114,13 @@ mod tests {
             style_span(36, 41, italic()),
             style_span(47, 52, italic()),
         ]);
-        let lines = timeline_row_paint_lines_with_measure(
-            &[row],
-            client_width_for_text(30),
-            20,
-            &measure_ascii_width,
-        )
-        .into_iter()
-        .map(|line| match line.visual {
-            TimelinePaintLineVisual::Text { text, styles, .. } => (text, styles),
-            TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
-        })
-        .collect::<Vec<_>>();
+        let lines = fresh_paint_lines(&[row], client_width_for_text(30), 20, &measure_ascii_width)
+            .into_iter()
+            .map(|line| match line.visual {
+                TimelinePaintLineVisual::Text { text, styles, .. } => (text, styles),
+                TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
             lines,
             vec![
@@ -1215,6 +1291,77 @@ mod tests {
         }
     }
 
+    fn numbered_rows(numbers: impl Iterator<Item = usize>) -> Vec<TimelineRow> {
+        numbers
+            .map(|number| TimelineRow::log(TimelineRowKind::Info, format!("* row {number}")))
+            .collect()
+    }
+
+    /// How many rows `cache` wraps to lay `rows` out in a text area
+    /// `text_width` wide.
+    fn wraps(cache: &mut WrapCache, rows: &[TimelineRow], text_width: i32) -> usize {
+        timeline_row_paint_lines_with_measure(
+            rows,
+            client_width_for_text(text_width),
+            20,
+            cache,
+            &measure_ascii_width,
+        )
+        .1
+    }
+
+    #[test]
+    fn wrap_cache_wraps_only_new_texts() {
+        let mut cache = WrapCache::default();
+        assert_eq!(wraps(&mut cache, &numbered_rows(1..=50), 40), 50);
+        assert_eq!(wraps(&mut cache, &numbered_rows(1..=51), 40), 1);
+        assert_eq!(wraps(&mut cache, &numbered_rows(1..=51), 40), 0);
+        // Rows that are not log rows are never wrapped.
+        let typing = TimelineRow::full_width(TimelineRowKind::Typing, "* bob is typing".to_owned());
+        let mut rows = numbered_rows(1..=51);
+        rows.push(typing);
+        assert_eq!(wraps(&mut cache, &rows, 40), 0);
+    }
+
+    #[test]
+    fn wrap_cache_rewraps_everything_at_a_new_width() {
+        let mut cache = WrapCache::default();
+        let rows = numbered_rows(1..=10);
+        assert_eq!(wraps(&mut cache, &rows, 40), 10);
+        assert_eq!(wraps(&mut cache, &rows, 41), 10);
+        assert_eq!(wraps(&mut cache, &rows, 41), 0);
+        cache.clear();
+        assert_eq!(wraps(&mut cache, &rows, 41), 10);
+    }
+
+    #[test]
+    fn wrap_cache_keeps_only_the_current_rows() {
+        let mut cache = WrapCache::default();
+        assert_eq!(wraps(&mut cache, &numbered_rows(1..=51), 40), 51);
+        assert_eq!(wraps(&mut cache, &numbered_rows(2..=51), 40), 0);
+        assert_eq!(wraps(&mut cache, &numbered_rows(1..=1), 40), 1);
+    }
+
+    #[test]
+    fn duplicate_texts_wrap_once() {
+        let mut cache = WrapCache::default();
+        let rows = numbered_rows([1, 2, 1, 1, 2].into_iter());
+        assert_eq!(wraps(&mut cache, &rows, 40), 2);
+        // The cached wraps lay out as fresh ones do.
+        let lines = timeline_row_paint_lines_with_measure(
+            &rows,
+            client_width_for_text(4),
+            20,
+            &mut cache,
+            &measure_ascii_width,
+        )
+        .0;
+        assert_eq!(
+            lines,
+            fresh_paint_lines(&rows, client_width_for_text(4), 20, &measure_ascii_width)
+        );
+    }
+
     #[test]
     fn timeline_row_paint_lines_preserve_image_slots_after_wrapped_caption_lines() {
         let mut row = TimelineRow::log(
@@ -1223,12 +1370,8 @@ mod tests {
         );
         row.image_state = Some(TimelineImageState::Pending);
 
-        let paint_lines = timeline_row_paint_lines_with_measure(
-            &[row],
-            client_width_for_text(30),
-            20,
-            &measure_ascii_width,
-        );
+        let paint_lines =
+            fresh_paint_lines(&[row], client_width_for_text(30), 20, &measure_ascii_width);
         let caption_lines = paint_lines
             .iter()
             .take_while(|line| line.image_slot_index.is_none())
@@ -1265,12 +1408,8 @@ mod tests {
                 format!(" {}", "b".repeat(22)).repeat(3)
             ),
         )];
-        let paint_lines = timeline_row_paint_lines_with_measure(
-            &rows,
-            client_width_for_text(30),
-            20,
-            &measure_ascii_width,
-        );
+        let paint_lines =
+            fresh_paint_lines(&rows, client_width_for_text(30), 20, &measure_ascii_width);
 
         assert_eq!(paint_lines.len(), 4);
         assert_eq!(clamped_timeline_top_line(8, paint_lines.len(), 3), 1);

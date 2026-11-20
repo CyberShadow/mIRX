@@ -429,7 +429,7 @@ use self_test::run_self_test;
 use settings::{Bar, FontSetting, SETTINGS_FILE_NAME, SettingsStore};
 use status_log::{StatusLineKind, StatusLog};
 use timeline_layout::{
-    TimelinePaintLine, TimelinePaintLineVisual, activity_level_color, paint_timeline,
+    TimelinePaintLine, TimelinePaintLineVisual, WrapCache, activity_level_color, paint_timeline,
     plain_timeline_paint_lines, rendered_line_ranges, timeline_row_paint_lines,
 };
 use timeline_rows::{

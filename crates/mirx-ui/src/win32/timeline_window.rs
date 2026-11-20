@@ -35,6 +35,8 @@ pub(super) struct TimelineState {
     /// The height of a line in `font`.
     pub(super) line_height: i32,
     pub(super) vertical_padding: i32,
+    /// The wraps of `source_rows`' log rows, at the current width and font.
+    pub(super) wrap_cache: WrapCache,
     /// The wheel's turn since its last whole notch, for wheels that report
     /// finer steps than `WHEEL_DELTA`.
     wheel_remainder: i32,
@@ -58,6 +60,7 @@ impl TimelineState {
             font: null_mut(),
             line_height,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
+            wrap_cache: WrapCache::default(),
             wheel_remainder: 0,
             laid_out_visible_rows: 1,
             drag: None,
@@ -502,36 +505,29 @@ pub(super) fn validate_selected_timeline_event(
     }
 }
 
-unsafe fn timeline_source_row_paint_line_count(hwnd: HWND, row: &TimelineRow) -> usize {
-    timeline_row_paint_lines(hwnd, std::slice::from_ref(row), timeline_client_width(hwnd)).len()
-}
-
+/// The source row of the line `top_line`; the last row past the last line.
 pub(super) unsafe fn timeline_source_row_index_for_top_line(
     hwnd: HWND,
-    rows: &[TimelineRow],
     top_line: usize,
 ) -> Option<usize> {
-    let mut next_top_line = 0usize;
-    for (index, row) in rows.iter().enumerate() {
-        let line_count = timeline_source_row_paint_line_count(hwnd, row);
-        if top_line < next_top_line + line_count {
-            return Some(index);
-        }
-        next_top_line += line_count;
+    let state = timeline_state_ref(hwnd);
+    match state.paint_lines.get(top_line) {
+        Some(line) => line.source_row_index,
+        None => state.source_rows.len().checked_sub(1),
     }
-
-    (!rows.is_empty()).then_some(rows.len() - 1)
 }
 
+/// The first line of the source row `source_row_index`. A row without
+/// lines (empty text) starts where the next row does.
 pub(super) unsafe fn timeline_top_line_for_source_row_index(
     hwnd: HWND,
-    rows: &[TimelineRow],
     source_row_index: usize,
 ) -> usize {
-    rows.iter()
-        .take(source_row_index)
-        .map(|row| timeline_source_row_paint_line_count(hwnd, row))
-        .sum()
+    let paint_lines = &timeline_state_ref(hwnd).paint_lines;
+    paint_lines
+        .iter()
+        .position(|line| line.source_row_index >= Some(source_row_index))
+        .unwrap_or(paint_lines.len())
 }
 
 unsafe fn timeline_text_len(hwnd: HWND) -> LRESULT {
@@ -668,11 +664,8 @@ pub(super) unsafe fn capture_room_history_backfill_anchor(
     let view = state.views.get(&state.active_view)?;
     let timeline = room_content_timeline(view.content);
     let timeline_state = timeline_state_ref(timeline);
-    let visible_source_row_index = timeline_source_row_index_for_top_line(
-        timeline,
-        &timeline_state.source_rows,
-        timeline_state.top_line,
-    )?;
+    let visible_source_row_index =
+        timeline_source_row_index_for_top_line(timeline, timeline_state.top_line)?;
     let source_row_index = timeline_history_backfill_anchor_row_index(
         &timeline_state.source_rows,
         visible_source_row_index,
@@ -738,11 +731,7 @@ pub(super) unsafe fn restore_room_history_backfill_anchor(
                 )
                 .min(timeline_state.source_rows.len().saturating_sub(1))
         });
-    let top_line = timeline_top_line_for_source_row_index(
-        timeline,
-        &timeline_state.source_rows,
-        source_row_index,
-    );
+    let top_line = timeline_top_line_for_source_row_index(timeline, source_row_index);
     let visible_rows = timeline_visible_rows(timeline);
     let max_top_line = timeline_max_top_line(timeline_state.paint_lines.len(), visible_rows);
     timeline_state_mut(timeline).top_line = top_line.min(max_top_line);
@@ -1775,6 +1764,107 @@ mod tests {
                 resize(timeline, 400, 200);
                 assert_eq!(timeline_state_ref(timeline).top_line, top_line);
                 assert!(!at_its_end(timeline));
+            });
+        }
+    }
+
+    fn info_row(text: &str) -> TimelineRow {
+        TimelineRow::log(TimelineRowKind::Info, text.to_owned())
+    }
+
+    #[test]
+    fn top_line_helpers_follow_paint_lines() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                resize(timeline, 120, 200);
+                let mut image = info_row("* an image with a caption long enough to wrap");
+                image.image_state = Some(TimelineImageState::Pending);
+                set_timeline_rows(
+                    timeline,
+                    &[
+                        info_row("* a line long enough to wrap in a narrow window"),
+                        image,
+                        info_row(""),
+                        info_row("* last"),
+                    ],
+                );
+                let lines = timeline_state_ref(timeline)
+                    .paint_lines
+                    .iter()
+                    .map(|line| line.source_row_index.unwrap())
+                    .collect::<Vec<_>>();
+                assert!(
+                    lines.iter().filter(|row| **row == 0).count() > 1,
+                    "{lines:?}"
+                );
+                // The empty row has no line: it starts where the next does.
+                assert!(!lines.contains(&2));
+                for row in [0, 1, 3] {
+                    let top_line = timeline_top_line_for_source_row_index(timeline, row);
+                    assert_eq!(
+                        top_line,
+                        lines.iter().position(|line| *line == row).unwrap()
+                    );
+                    assert_eq!(
+                        timeline_source_row_index_for_top_line(timeline, top_line),
+                        Some(row)
+                    );
+                }
+                assert_eq!(
+                    timeline_top_line_for_source_row_index(timeline, 2),
+                    timeline_top_line_for_source_row_index(timeline, 3)
+                );
+                for (line, row) in lines.iter().enumerate() {
+                    assert_eq!(
+                        timeline_source_row_index_for_top_line(timeline, line),
+                        Some(*row)
+                    );
+                }
+                // Past the last line is the last row.
+                assert_eq!(
+                    timeline_source_row_index_for_top_line(timeline, lines.len()),
+                    Some(3)
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn a_timeline_wraps_a_row_again_only_for_a_new_width_or_font() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                let wrapped = || state_ref(hwnd).refresh_counters.rows_wrapped();
+                let rows = timeline_state_ref(timeline).source_rows.clone();
+                let log_rows = rows
+                    .iter()
+                    .filter(|row| row.layout == TimelineRowLayout::Log)
+                    .count() as u64;
+
+                let before = wrapped();
+                set_timeline_rows(timeline, &rows);
+                assert_eq!(wrapped(), before, "the same rows wrap nothing");
+                let mut more = rows.clone();
+                more.push(info_row("* one more"));
+                set_timeline_rows(timeline, &more);
+                assert_eq!(wrapped(), before + 1, "one new row wraps one");
+
+                // Only a new width rewraps: not a new height.
+                let mut rect = RECT::default();
+                GetClientRect(timeline, &mut rect);
+                let before = wrapped();
+                resize(timeline, rect.right + 7, rect.bottom - 20);
+                assert!(wrapped() > before + log_rows);
+                let before = wrapped();
+                resize(timeline, rect.right + 7, rect.bottom - 40);
+                assert_eq!(wrapped(), before);
+
+                // A new font rewraps everything.
+                let before = wrapped();
+                let font = timeline_state_ref(timeline).font;
+                SendMessageW(timeline, WM_SETFONT, font as WPARAM, 0);
+                assert_eq!(wrapped(), before + log_rows + 1);
             });
         }
     }

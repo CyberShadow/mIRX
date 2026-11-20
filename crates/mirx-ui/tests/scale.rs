@@ -13,9 +13,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use mirx_core::{
     Event, RoomActivity, RoomActivityKind, RoomMemberRank, RoomMemberSummary, RoomMembers,
     RoomMembership, RoomMessageActivity, RoomMessagePresentationKind, RoomMessageSendState,
-    RoomNotificationMode, RoomSummary, RoomUserProfile,
+    RoomNotificationMode, RoomSummary, RoomTyping, RoomUserProfile,
 };
-use mirx_testkit::{LaunchOptions, MirxApp, UiRefreshCounters, UiState};
+use mirx_testkit::{
+    LaunchOptions, MdiWindowState, MirxApp, NavigationNode, UiRefreshCounters, UiRoomState,
+    UiState, ViewActivityLevel, ViewIdentity,
+};
 
 const ROOMS: usize = 200;
 const MESSAGES_PER_ROOM: usize = 50;
@@ -224,22 +227,75 @@ fn delta(before: &UiState, after: &UiState) -> UiRefreshCounters {
     }
 }
 
+fn room_view(index: usize) -> ViewIdentity {
+    ViewIdentity::Room {
+        room_id: room_id(index),
+    }
+}
+
+fn find_navigation<'a>(
+    node: &'a NavigationNode,
+    view: &ViewIdentity,
+) -> Option<&'a NavigationNode> {
+    if node.view.as_ref() == Some(view) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_navigation(child, view))
+}
+
+fn room_state(state: &UiState, index: usize) -> &UiRoomState {
+    let room_id = room_id(index);
+    state
+        .rooms
+        .iter()
+        .find(|room| room.room_id == room_id)
+        .expect("every room is in the dump")
+}
+
+fn view_lines(state: &UiState, view: &ViewIdentity) -> Vec<String> {
+    state
+        .mdi
+        .views
+        .iter()
+        .find(|mdi_view| mdi_view.identity == *view)
+        .expect("every room has a window")
+        .lines
+        .clone()
+}
+
 mod with_two_hundred_rooms {
     use super::*;
 
     #[test]
     fn the_rooms_load_and_dump() -> Result<(), Box<dyn std::error::Error>> {
         let app = launch_with_two_hundred_rooms()?;
-        let before = app.dump_ui_state()?;
-        assert_eq!(before.rooms.len(), ROOMS);
+        let state = app.dump_ui_state()?;
+        assert_eq!(state.rooms.len(), ROOMS);
         // The dump (about 1 MB) must stay well inside the 4 MiB response
         // mapping.
-        let size = serde_json::to_vec(&before)?.len();
+        let size = serde_json::to_vec(&state)?.len();
         eprintln!("a 200-room UI state dump is {size} bytes");
         assert!(size < 2 * 1024 * 1024, "{size} bytes");
+        Ok(())
+    }
 
-        let idle = app.dump_ui_state()?;
-        eprintln!("an idle dump: {:?}", delta(&before, &idle));
+    #[test]
+    fn an_idle_dump_rebuilds_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let app = launch_with_two_hundred_rooms()?;
+        let before = app.dump_ui_state()?;
+        let counts = delta(&before, &app.dump_ui_state()?);
+        eprintln!("an idle dump: {counts:?}");
+        assert_eq!(counts.rows_wrapped, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_message_in_a_background_room_rebuilds_that_window_only()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let app = launch_with_two_hundred_rooms()?;
+        let before = app.dump_ui_state()?;
         append(
             &app,
             &[text_event(
@@ -247,10 +303,114 @@ mod with_two_hundred_rooms {
                 "$r117new:example",
                 MEMBERS[1],
                 BASE_TIMESTAMP_MS + 3_600_000,
-                "hello",
+                "hello from the background",
             )],
         )?;
-        eprintln!("one message: {:?}", delta(&idle, &app.dump_ui_state()?));
+        let after = app.dump_ui_state()?;
+        let counts = delta(&before, &after);
+        eprintln!("a message in a background room: {counts:?}");
+        assert_eq!(counts.rows_wrapped, 1);
+        assert!(
+            room_state(&after, 117).timeline_row_builds
+                > room_state(&before, 117).timeline_row_builds
+        );
+        assert_eq!(
+            find_navigation(&after.navigation, &room_view(117))
+                .expect("the room is in the treebar")
+                .activity,
+            Some(ViewActivityLevel::Message)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn typing_rebuilds_one_window_and_wraps_nothing() -> Result<(), Box<dyn std::error::Error>> {
+        let app = launch_with_two_hundred_rooms()?;
+        let before = app.dump_ui_state()?;
+        append(
+            &app,
+            &[Event::RoomTyping(RoomTyping {
+                room_id: room_id(42),
+                user_ids: vec![MEMBERS[2].to_owned()],
+            })],
+        )?;
+        let counts = delta(&before, &app.dump_ui_state()?);
+        eprintln!("typing: {counts:?}");
+        // The typing line is not a log line: it is clipped, not wrapped.
+        assert_eq!(counts.rows_wrapped, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn renaming_a_room_rebuilds_the_chrome_once() -> Result<(), Box<dyn std::error::Error>> {
+        let app = launch_with_two_hundred_rooms()?;
+        let before = app.dump_ui_state()?;
+        append(&app, &[synced_rooms(Some((42, "Renamed")))])?;
+        let renamed = app.dump_ui_state()?;
+        let counts = delta(&before, &renamed);
+        eprintln!("a rename: {counts:?}");
+        // Its "Now talking in" line names it.
+        assert_eq!(counts.rows_wrapped, 1);
+        assert!(
+            find_navigation(&renamed.navigation, &room_view(42))
+                .is_some_and(|node| node.text == "Renamed")
+        );
+
+        append(&app, &[synced_rooms(Some((42, "Renamed")))])?;
+        let counts = delta(&renamed, &app.dump_ui_state()?);
+        eprintln!("the same room list again: {counts:?}");
+        assert_eq!(counts.rows_wrapped, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_message_in_the_active_window_wraps_one_row() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let app = launch_with_two_hundred_rooms()?;
+        app.select_view(room_view(0))?;
+        let before = app.dump_ui_state()?;
+        append(
+            &app,
+            &[text_event(
+                0,
+                "$r000new:example",
+                MEMBERS[1],
+                BASE_TIMESTAMP_MS + 3_600_000,
+                "the newest line",
+            )],
+        )?;
+        let after = app.dump_ui_state()?;
+        let counts = delta(&before, &after);
+        eprintln!("a message in the active window: {counts:?}");
+        assert_eq!(counts.rows_wrapped, 1);
+        // The window followed its newest line.
+        let last_line = after
+            .active_timeline
+            .expect("a room window has a timeline")
+            .visible_lines
+            .last()
+            .expect("the window shows lines")
+            .text
+            .clone();
+        assert!(last_line.ends_with("the newest line"), "{last_line}");
+        Ok(())
+    }
+
+    #[test]
+    fn resizing_one_window_rewraps_only_it() -> Result<(), Box<dyn std::error::Error>> {
+        let app = launch_with_two_hundred_rooms()?;
+        app.select_view(room_view(0))?;
+        let before = app.dump_ui_state()?;
+        app.set_view_window_state(room_view(0), MdiWindowState::Normal)?;
+        app.wait_idle(Duration::from_secs(30))?;
+        let after = app.dump_ui_state()?;
+        let counts = delta(&before, &after);
+        eprintln!("restoring the active window: {counts:?}");
+        // Every row of the window is a log row: each wraps once more.
+        assert_eq!(
+            counts.rows_wrapped,
+            view_lines(&after, &room_view(0)).len() as u64
+        );
         Ok(())
     }
 }

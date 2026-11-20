@@ -395,10 +395,7 @@ pub(super) unsafe fn apply_find_to_active_view(hwnd: HWND, view_id: &ViewId) -> 
 }
 
 pub(super) unsafe fn scroll_timeline_to_source_row_index(hwnd: HWND, source_row_index: usize) {
-    let top_line = {
-        let timeline_state = timeline_state_ref(hwnd);
-        timeline_top_line_for_source_row_index(hwnd, &timeline_state.source_rows, source_row_index)
-    };
+    let top_line = timeline_top_line_for_source_row_index(hwnd, source_row_index);
     let visible_rows = timeline_visible_rows(hwnd);
     let max_top_line =
         timeline_max_top_line(timeline_state_ref(hwnd).paint_lines.len(), visible_rows);
@@ -484,12 +481,8 @@ pub(super) unsafe fn execute_active_view_find(
             .ok_or_else(|| "view state was not tracked".to_owned())?;
         let timeline = view_timeline(&active_view, view.content);
         let timeline_state = timeline_state_ref(timeline);
-        let start_source_row_index = timeline_source_row_index_for_top_line(
-            timeline,
-            &timeline_state.source_rows,
-            timeline_state.top_line,
-        )
-        .unwrap_or(0);
+        let start_source_row_index =
+            timeline_source_row_index_for_top_line(timeline, timeline_state.top_line).unwrap_or(0);
         let matches = compute_timeline_find_matches(&timeline_state.source_rows, &folded_query);
         let selected_match_index = choose_find_match(
             &matches,
