@@ -298,6 +298,7 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         instance,
         null_mut(),
     )?;
+    set_treebar_colors(state.controls.tree, &state.settings.settings().colors);
 
     let mut mdi_client: CLIENTCREATESTRUCT = zeroed();
     // No MDI window list in the Window menu: the switchbar is the window
@@ -334,6 +335,24 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// The treebar in the scheme's Treebar colours. Its selected item keeps
+/// the system highlight, and activity colours its items' text over these.
+pub(super) unsafe fn set_treebar_colors(tree: HWND, colors: &ColorScheme) {
+    use windows_sys::Win32::UI::Controls::{TVM_SETBKCOLOR, TVM_SETTEXTCOLOR};
+    SendMessageW(
+        tree,
+        TVM_SETBKCOLOR,
+        0,
+        colors.colorref(ColorItem::Treebar) as LPARAM,
+    );
+    SendMessageW(
+        tree,
+        TVM_SETTEXTCOLOR,
+        0,
+        colors.colorref(ColorItem::TreebarText) as LPARAM,
+    );
 }
 
 /// Gives every switchbar button `width` pixels, whatever its label.

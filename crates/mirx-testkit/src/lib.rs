@@ -1235,6 +1235,8 @@ pub struct UiState {
     pub rooms: Vec<UiRoomState>,
     pub text_font: UiTextFont,
     pub timestamp: UiTimestamp,
+    /// Tools > Colors and the switchbar's activity colours.
+    pub colors: UiColors,
     /// The labels of the active window's window menu, separators omitted.
     pub active_system_menu_items: Vec<String>,
     /// The frame's menubar as opening each menu would show it: MDI's
@@ -1269,6 +1271,9 @@ pub struct UiTimelineLine {
     /// Empty for an image preview's lines.
     pub text: String,
     pub kind: UiTimelineLineKind,
+    /// The line's colour where its styles set none, `#rrggbb`: its colour
+    /// item's.
+    pub color: String,
     /// How `text` is formatted, at offsets in it: a message's own styles.
     pub styles: Vec<mirx_core::TextStyleSpan>,
     /// The event the line belongs to; clicking it selects that event.
@@ -1442,6 +1447,35 @@ pub struct UiTextFont {
 pub struct UiTimestamp {
     pub show: bool,
     pub format: String,
+}
+
+/// The colour scheme, as `mirx.ini [colors]` and `[switchbar]` hold it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiColors {
+    /// Every item of the Colors dialog, in its order.
+    pub items: Vec<UiColorItem>,
+    pub switchbar: UiActivityColors,
+}
+
+/// A Colors dialog item's palette index and the colour that is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiColorItem {
+    /// Its `mirx.ini` key: `background`, `join`, `editbox_text`, ...
+    pub item: String,
+    pub index: u8,
+    /// `#rrggbb`.
+    pub color: String,
+}
+
+/// Options > Display's Event, Message and Highlight palette indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiActivityColors {
+    pub event: u8,
+    pub message: u8,
+    pub highlight: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

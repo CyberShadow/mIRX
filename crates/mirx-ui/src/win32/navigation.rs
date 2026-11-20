@@ -154,7 +154,8 @@ pub(super) fn switchbar_custom_draw(state: &WindowState, draw: &mut NMTBCUSTOMDR
     let command_id = draw.nmcd.dwItemSpec;
     activity_custom_draw(draw.nmcd.dwDrawStage, &mut draw.clrText, || {
         let view_id = &state.switchbar_views[command_id - SWITCHBAR_COMMAND_FIRST];
-        view_activity(state, view_id).map(activity_level_color)
+        view_activity(state, view_id)
+            .map(|level| activity_level_color(level, &state.settings.settings().switchbar.activity))
     })
 }
 
@@ -167,7 +168,7 @@ pub(super) fn tree_custom_draw(state: &WindowState, draw: &mut NMTVCUSTOMDRAW) -
         tree_item_activity(state, tree_item, || unsafe {
             tree_item_expanded(tree, tree_item)
         })
-        .map(activity_level_color)
+        .map(|level| activity_level_color(level, &state.settings.settings().switchbar.activity))
     })
 }
 
@@ -1257,7 +1258,7 @@ pub(super) fn select_room(state: &mut WindowState, room_id: &str) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use super::super::timeline_layout::{MIRC_BLUE, MIRC_MAROON, MIRC_RED, rgb};
+    use super::super::colors::{PaletteIndex, rgb};
 
     use super::super::test_fixtures::*;
     use super::*;
@@ -2016,7 +2017,8 @@ mod tests {
         );
         assert_eq!(prepaint.clrText, rgb(1, 2, 3));
 
-        for (index, expected) in [rgb(1, 2, 3), MIRC_MAROON, MIRC_RED, MIRC_BLUE]
+        let color = |index| PaletteIndex::new(index).unwrap().colorref();
+        for (index, expected) in [rgb(1, 2, 3), color(5), color(4), color(12)]
             .into_iter()
             .enumerate()
         {
@@ -2024,6 +2026,17 @@ mod tests {
             assert_eq!(switchbar_custom_draw(&state, &mut draw), CDRF_DEFAULT);
             assert_eq!(draw.clrText, expected, "button {index}");
         }
+
+        // Options > Display's Message colour.
+        state
+            .settings
+            .update(|settings| {
+                settings.switchbar.activity.message = PaletteIndex::new(9).unwrap();
+            })
+            .unwrap();
+        let mut draw = switchbar_draw(CDDS_ITEMPREPAINT, SWITCHBAR_COMMAND_FIRST + 2);
+        switchbar_custom_draw(&state, &mut draw);
+        assert_eq!(draw.clrText, color(9));
     }
 
     #[test]
@@ -2083,7 +2096,10 @@ mod tests {
         );
         assert_eq!(draw(CDDS_ITEMPREPAINT, 10), (CDRF_DEFAULT, rgb(1, 2, 3)));
         assert_eq!(draw(CDDS_ITEMPREPAINT, 11), (CDRF_DEFAULT, rgb(1, 2, 3)));
-        assert_eq!(draw(CDDS_ITEMPREPAINT, 12), (CDRF_DEFAULT, MIRC_BLUE));
+        assert_eq!(
+            draw(CDDS_ITEMPREPAINT, 12),
+            (CDRF_DEFAULT, PaletteIndex::new(12).unwrap().colorref())
+        );
     }
 
     #[test]

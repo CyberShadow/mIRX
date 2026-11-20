@@ -1,5 +1,10 @@
 //! The MDI view windows: creating, refreshing, activating and closing them.
 
+use windows_sys::Win32::Graphics::Gdi::{HDC, SetBkColor};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_ERASEBKGND,
+};
+
 use super::*;
 
 const MDI_CHILD_CLASS_NAME: &str = "mirxWin32MdiChild";
@@ -69,7 +74,8 @@ pub(super) fn register_room_content_class(instance: *mut c_void) -> Result<(), S
         hInstance: instance,
         hIcon: null_mut(),
         hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        // None: `WM_ERASEBKGND` paints the scheme's Background.
+        hbrBackground: null_mut(),
         lpszMenuName: null(),
         lpszClassName: class_name.as_ptr(),
         hIconSm: null_mut(),
@@ -112,6 +118,19 @@ unsafe extern "system" fn mdi_child_window_proc(
             let result = DefMDIChildProcW(hwnd, message, wparam, lparam);
             SetFocus(mdi_child_focus(hwnd));
             result
+        }
+        // Its one editbox, in the scheme's Editbox colours.
+        WM_CTLCOLOREDIT => {
+            assert_eq!(
+                lparam as HWND,
+                mdi_child_edit(hwnd),
+                "an MDI child's only edit control is its editbox"
+            );
+            let state = state_ref(frame_window_for(hwnd));
+            let colors = &state.settings.settings().colors;
+            SetTextColor(wparam as HDC, colors.colorref(ColorItem::EditboxText));
+            SetBkColor(wparam as HDC, colors.colorref(ColorItem::Editbox));
+            state.scheme_brushes.editbox as LRESULT
         }
         WM_MDIACTIVATE => {
             if lparam as HWND == hwnd
@@ -324,6 +343,31 @@ unsafe extern "system" fn room_content_window_proc(
         WM_SIZE => {
             layout_room_content(hwnd);
             0
+        }
+        // Only the gap between the text area and the nick list shows: the
+        // text area's Background.
+        WM_ERASEBKGND => {
+            let mut rect = RECT::default();
+            GetClientRect(hwnd, &mut rect);
+            FillRect(
+                wparam as HDC,
+                &rect,
+                state_ref(frame_window_for(hwnd)).scheme_brushes.background,
+            );
+            1
+        }
+        // The nick list below its last nick; the nicks draw themselves.
+        WM_CTLCOLORLISTBOX => {
+            let state = state_ref(frame_window_for(hwnd));
+            SetBkColor(
+                wparam as HDC,
+                state
+                    .settings
+                    .settings()
+                    .colors
+                    .colorref(ColorItem::Listbox),
+            );
+            state.scheme_brushes.listbox as LRESULT
         }
         // From the owner-drawn nick list. The first arrives while the list
         // is created, before this window's state exists: the height comes

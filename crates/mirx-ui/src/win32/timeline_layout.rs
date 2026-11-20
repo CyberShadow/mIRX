@@ -3,10 +3,11 @@
 
 use std::ops::Range;
 
-use mirx_core::{TextColor, TextStyle, TextStyleSpan};
+use mirx_core::{TextStyle, TextStyleSpan};
 use windows_sys::Win32::Graphics::Gdi::{HDC, InvertRect};
 
-use super::mirc_format::MIRC_PALETTE;
+use super::colors::{ColorScheme, ERROR_COLOR, colorref, rgb};
+use super::settings::ActivityColors;
 use super::text_selection::line_selection;
 use super::*;
 
@@ -303,11 +304,13 @@ fn style_pieces<'a>(text: &'a str, styles: &[TextStyleSpan]) -> Vec<(&'a str, Op
 pub(super) unsafe fn paint_timeline(hwnd: HWND) {
     let mut paint = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut paint);
-    FillRect(hdc, &paint.rcPaint, (COLOR_WINDOW as isize + 1) as HBRUSH);
+    let frame_state = state_ref(frame_window_for(hwnd));
+    let scheme = &frame_state.settings.settings().colors;
+    // The class has no background brush: this fills every pixel.
+    FillRect(hdc, &paint.rcPaint, frame_state.scheme_brushes.background);
     SetBkMode(hdc, TRANSPARENT as i32);
     let mut client_rect = RECT::default();
     GetClientRect(hwnd, &mut client_rect);
-    let frame_state = state_ref(frame_window_for(hwnd));
     let glyphs = &frame_state.text_font.glyphs;
     let state = timeline_state_ref(hwnd);
     assert_eq!(
@@ -383,7 +386,7 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                     &rect,
                     text,
                     styles,
-                    timeline_row_color(&line.kind),
+                    timeline_row_color(&line.kind, scheme),
                 );
                 // mIRC shows marked text in inverse video, which keeps
                 // every style's colours readable.
@@ -486,43 +489,10 @@ unsafe fn fill_clipped(hdc: HDC, clip: &RECT, x: i32, y: i32, width: i32, height
     DeleteObject(brush);
 }
 
-/// A style colour as GDI takes it.
-const fn colorref(color: TextColor) -> u32 {
-    rgb(color.red, color.green, color.blue)
-}
-
-pub(super) const fn rgb(r: u8, g: u8, b: u8) -> u32 {
-    r as u32 | ((g as u32) << 8) | ((b as u32) << 16)
-}
-
-// The colours of mIRC's own text, by their colour code index.
-pub(super) const MIRC_MAROON: u32 = colorref(MIRC_PALETTE[5]);
-pub(super) const MIRC_RED: u32 = colorref(MIRC_PALETTE[4]);
-pub(super) const MIRC_BLUE: u32 = colorref(MIRC_PALETTE[12]);
-const MIRC_PURPLE: u32 = colorref(MIRC_PALETTE[6]);
-const MIRC_GREEN: u32 = colorref(MIRC_PALETTE[3]);
-const MIRC_NAVY: u32 = colorref(MIRC_PALETTE[2]);
-
-// mIRC's switchbar/treebar activity colours (Options > Display > Event,
-// Message, Highlight): an inactive window's button text takes the colour of
-// what happened in it. Message red is mIRC's well-known default; event
-// maroon and highlight blue are best recollection of mIRC 7's defaults and
-// are pending a check against a real install. Highlighted timeline lines use
-// the highlight colour too.
-const ACTIVITY_EVENT_COLOR: u32 = MIRC_MAROON;
-const ACTIVITY_MESSAGE_COLOR: u32 = MIRC_RED;
-const ACTIVITY_HIGHLIGHT_COLOR: u32 = MIRC_BLUE;
-
-pub(super) fn activity_level_color(level: ViewActivityLevel) -> u32 {
-    match level {
-        ViewActivityLevel::Event => ACTIVITY_EVENT_COLOR,
-        ViewActivityLevel::Message => ACTIVITY_MESSAGE_COLOR,
-        ViewActivityLevel::Highlight => ACTIVITY_HIGHLIGHT_COLOR,
-    }
-}
-
-fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
-    match kind {
+/// A row's colour where its styles set none: its scheme item's, mIRC's
+/// line colours.
+pub(super) fn timeline_row_color(kind: &TimelineRowKind, scheme: &ColorScheme) -> u32 {
+    let item = match kind {
         // mIRC draws a highlighted line wholly in the highlight colour.
         TimelineRowKind::Message {
             highlight: true, ..
@@ -532,43 +502,72 @@ fn timeline_row_color(kind: &TimelineRowKind) -> u32 {
         | TimelineRowKind::Audio { highlight: true }
         | TimelineRowKind::Video { highlight: true }
         | TimelineRowKind::Unsupported { highlight: true }
-        | TimelineRowKind::StateNotice { highlight: true } => ACTIVITY_HIGHLIGHT_COLOR,
-        TimelineRowKind::Plain => rgb(0x00, 0x00, 0x00),
-        TimelineRowKind::Event => MIRC_GREEN,
-        TimelineRowKind::Info => MIRC_NAVY,
-        TimelineRowKind::Error => MIRC_RED,
-        TimelineRowKind::Typing => rgb(0x68, 0x68, 0x68),
-        // Dim annotations around a message.
-        TimelineRowKind::ReactionSummary | TimelineRowKind::ReplyQuote => rgb(0x6B, 0x6B, 0x6B),
-        TimelineRowKind::Message {
-            send_state: TimelineMessageSendState::Pending,
-            ..
-        } => rgb(0x4E, 0x5D, 0x69),
-        TimelineRowKind::Message {
+        | TimelineRowKind::StateNotice {
+            highlight: true, ..
+        } => ColorItem::Highlight,
+        TimelineRowKind::Error
+        | TimelineRowKind::Message {
             send_state: TimelineMessageSendState::Failed,
             ..
-        } => rgb(0x86, 0x22, 0x22),
-        // mIRC's default palette: notices maroon, actions purple, and
-        // joins/parts/kicks/nick and topic changes green.
+        } => return ERROR_COLOR.colorref(),
+        TimelineRowKind::Plain => ColorItem::Normal,
+        TimelineRowKind::Event { item } | TimelineRowKind::StateNotice { item, .. } => {
+            item.color_item()
+        }
+        TimelineRowKind::Info => ColorItem::Info,
+        // Dim lines: annotations around a message, sends on their way and
+        // what is left of a redaction.
+        TimelineRowKind::Typing
+        | TimelineRowKind::ReactionSummary
+        | TimelineRowKind::ReplyQuote
+        | TimelineRowKind::Redacted
+        | TimelineRowKind::Message {
+            send_state: TimelineMessageSendState::Pending,
+            ..
+        } => ColorItem::Gray,
         TimelineRowKind::Message {
             presentation: RoomMessagePresentationKind::Notice,
             send_state: TimelineMessageSendState::Sent,
             ..
-        } => MIRC_MAROON,
+        } => ColorItem::Notice,
         TimelineRowKind::Message {
             presentation: RoomMessagePresentationKind::Emote,
             send_state: TimelineMessageSendState::Sent,
             ..
-        } => MIRC_PURPLE,
-        TimelineRowKind::Message { .. } => rgb(0x00, 0x00, 0x00),
-        TimelineRowKind::Image { .. }
-        | TimelineRowKind::File { .. }
-        | TimelineRowKind::Audio { .. }
-        | TimelineRowKind::Video { .. } => MIRC_PURPLE,
-        TimelineRowKind::Unsupported { .. } => rgb(0x7A, 0x46, 0x16),
-        TimelineRowKind::UnableToDecrypt => rgb(0x8A, 0x5A, 0x18),
-        TimelineRowKind::StateNotice { .. } => MIRC_GREEN,
+        } => ColorItem::Action,
+        TimelineRowKind::Message {
+            presentation: RoomMessagePresentationKind::Text,
+            send_state: TimelineMessageSendState::Sent,
+            own: true,
+            ..
+        } => ColorItem::Own,
+        TimelineRowKind::Message {
+            presentation: RoomMessagePresentationKind::Text,
+            send_state: TimelineMessageSendState::Sent,
+            own: false,
+            ..
+        } => ColorItem::Normal,
+        // Everything that is not text a user wrote.
+        TimelineRowKind::Image { highlight: false }
+        | TimelineRowKind::File { highlight: false }
+        | TimelineRowKind::Audio { highlight: false }
+        | TimelineRowKind::Video { highlight: false }
+        | TimelineRowKind::Unsupported { highlight: false }
+        | TimelineRowKind::UnableToDecrypt => ColorItem::Other,
+    };
+    scheme.colorref(item)
+}
+
+/// mIRC's switchbar/treebar activity colours (Options > Display > Event,
+/// Message, Highlight): an inactive window's button text takes the colour
+/// of what happened in it.
+pub(super) fn activity_level_color(level: ViewActivityLevel, colors: &ActivityColors) -> u32 {
+    match level {
+        ViewActivityLevel::Event => colors.event,
+        ViewActivityLevel::Message => colors.message,
+        ViewActivityLevel::Highlight => colors.highlight,
     }
+    .colorref()
 }
 
 /// How many lines an image's slot takes: enough for the thumbnail and its
@@ -700,6 +699,7 @@ fn scaled_thumbnail_dimensions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::win32::colors::PaletteIndex;
 
     fn measure_ascii_width(text: &str) -> i32 {
         text.chars().count() as i32
@@ -806,6 +806,7 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
                 highlight: false,
+                own: false,
             },
             text.to_owned(),
         )];
@@ -979,6 +980,7 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
                 highlight: false,
+                own: false,
             },
             text.to_owned(),
         )
@@ -1080,6 +1082,7 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 send_state: TimelineMessageSendState::Sent,
                 highlight: false,
+                own: false,
             },
             // Three continuation-width words after a full first line.
             format!(
@@ -1099,42 +1102,142 @@ mod tests {
         assert_eq!(clamped_timeline_top_line(8, paint_lines.len(), 3), 1);
     }
 
-    #[test]
-    fn activity_levels_use_mirc_switchbar_colors() {
-        assert_eq!(activity_level_color(ViewActivityLevel::Event), MIRC_MAROON);
-        assert_eq!(activity_level_color(ViewActivityLevel::Message), MIRC_RED);
-        assert_eq!(
-            activity_level_color(ViewActivityLevel::Highlight),
-            MIRC_BLUE
-        );
+    fn index(index: u8) -> PaletteIndex {
+        PaletteIndex::new(index).unwrap()
     }
 
     #[test]
-    fn highlighted_rows_use_the_highlight_color_whatever_their_presentation() {
-        for presentation in [
-            RoomMessagePresentationKind::Text,
-            RoomMessagePresentationKind::Emote,
-            RoomMessagePresentationKind::Notice,
-        ] {
-            let row = |highlight| TimelineRowKind::Message {
-                presentation,
-                send_state: TimelineMessageSendState::Sent,
-                highlight,
-            };
-            assert_eq!(timeline_row_color(&row(true)), MIRC_BLUE);
-            assert_ne!(timeline_row_color(&row(false)), MIRC_BLUE);
+    fn activity_levels_use_the_switchbar_colours() {
+        let defaults = ActivityColors::default();
+        let color = |level| activity_level_color(level, &defaults);
+        assert_eq!(color(ViewActivityLevel::Event), index(5).colorref());
+        assert_eq!(color(ViewActivityLevel::Message), index(4).colorref());
+        assert_eq!(color(ViewActivityLevel::Highlight), index(12).colorref());
+        let custom = ActivityColors {
+            message: index(9),
+            ..defaults
+        };
+        assert_eq!(
+            activity_level_color(ViewActivityLevel::Message, &custom),
+            index(9).colorref()
+        );
+        assert_eq!(
+            activity_level_color(ViewActivityLevel::Event, &custom),
+            index(5).colorref()
+        );
+    }
+
+    fn message(
+        presentation: RoomMessagePresentationKind,
+        send_state: TimelineMessageSendState,
+        highlight: bool,
+        own: bool,
+    ) -> TimelineRowKind {
+        TimelineRowKind::Message {
+            presentation,
+            send_state,
+            highlight,
+            own,
         }
+    }
+
+    /// Every kind of row, with the item it takes under any scheme; `None`
+    /// for the fixed error red.
+    fn rows_and_items() -> Vec<(TimelineRowKind, Option<ColorItem>)> {
+        use RoomMessagePresentationKind::{Emote, Notice, Text};
+        use TimelineMessageSendState::{Failed, Pending, Sent};
+        let event = |item| TimelineRowKind::Event { item };
+        let notice = |item| TimelineRowKind::StateNotice {
+            highlight: false,
+            item,
+        };
+        vec![
+            (event(EventItem::Join), Some(ColorItem::Join)),
+            (event(EventItem::Topic), Some(ColorItem::Topic)),
+            (event(EventItem::Invite), Some(ColorItem::Invite)),
+            (notice(EventItem::Part), Some(ColorItem::Part)),
+            (notice(EventItem::Kick), Some(ColorItem::Kick)),
+            (notice(EventItem::Mode), Some(ColorItem::Mode)),
+            (notice(EventItem::Nick), Some(ColorItem::Nick)),
+            (TimelineRowKind::Info, Some(ColorItem::Info)),
+            (TimelineRowKind::Error, None),
+            (TimelineRowKind::Typing, Some(ColorItem::Gray)),
+            (TimelineRowKind::ReactionSummary, Some(ColorItem::Gray)),
+            (TimelineRowKind::ReplyQuote, Some(ColorItem::Gray)),
+            (TimelineRowKind::Redacted, Some(ColorItem::Gray)),
+            (TimelineRowKind::Plain, Some(ColorItem::Normal)),
+            (message(Text, Sent, false, false), Some(ColorItem::Normal)),
+            (message(Text, Sent, false, true), Some(ColorItem::Own)),
+            (message(Notice, Sent, false, false), Some(ColorItem::Notice)),
+            (message(Emote, Sent, false, true), Some(ColorItem::Action)),
+            (message(Text, Pending, false, true), Some(ColorItem::Gray)),
+            (message(Text, Failed, false, true), None),
+            (
+                message(Notice, Sent, true, false),
+                Some(ColorItem::Highlight),
+            ),
+            (
+                TimelineRowKind::Image { highlight: false },
+                Some(ColorItem::Other),
+            ),
+            (
+                TimelineRowKind::Audio { highlight: true },
+                Some(ColorItem::Highlight),
+            ),
+            (
+                TimelineRowKind::Unsupported { highlight: false },
+                Some(ColorItem::Other),
+            ),
+            (TimelineRowKind::UnableToDecrypt, Some(ColorItem::Other)),
+            (
+                TimelineRowKind::StateNotice {
+                    highlight: true,
+                    item: EventItem::Join,
+                },
+                Some(ColorItem::Highlight),
+            ),
+        ]
+    }
+
+    #[test]
+    fn rows_take_their_items_colour_and_errors_stay_red() {
+        let classic = ColorScheme::default();
+        for (kind, item) in rows_and_items() {
+            let expected = item.map_or(rgb(0xff, 0, 0), |item| classic.colorref(item));
+            assert_eq!(timeline_row_color(&kind, &classic), expected, "{kind:?}");
+        }
+        // mIRC Classic's line colours.
+        let color = |kind| timeline_row_color(&kind, &classic);
         assert_eq!(
-            timeline_row_color(&TimelineRowKind::Image { highlight: true }),
-            MIRC_BLUE
+            color(TimelineRowKind::Event {
+                item: EventItem::Join
+            }),
+            rgb(0, 0x93, 0)
         );
         assert_eq!(
-            timeline_row_color(&TimelineRowKind::StateNotice { highlight: true }),
-            MIRC_BLUE
+            color(message(
+                RoomMessagePresentationKind::Text,
+                TimelineMessageSendState::Sent,
+                true,
+                false
+            )),
+            rgb(0x7f, 0, 0)
         );
-        assert_eq!(
-            timeline_row_color(&TimelineRowKind::StateNotice { highlight: false }),
-            MIRC_GREEN
-        );
+        assert_eq!(color(TimelineRowKind::Typing), rgb(0x7f, 0x7f, 0x7f));
+    }
+
+    #[test]
+    fn changing_an_item_moves_only_its_rows() {
+        let classic = ColorScheme::default();
+        for changed in ColorItem::ALL {
+            let mut scheme = classic.clone();
+            // A colour no default uses.
+            scheme.set(changed, index(13));
+            for (kind, item) in rows_and_items() {
+                let moved =
+                    timeline_row_color(&kind, &scheme) != timeline_row_color(&kind, &classic);
+                assert_eq!(moved, item == Some(changed), "{changed:?} {kind:?}");
+            }
+        }
     }
 }

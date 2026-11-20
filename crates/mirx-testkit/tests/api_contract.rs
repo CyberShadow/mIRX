@@ -38,10 +38,10 @@ use mirx_testkit::{
     SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
-    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState,
-    UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
-    UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
-    UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind, UiError,
+    UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog,
+    UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState,
+    UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
     UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
     VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
@@ -930,6 +930,18 @@ fn data_models_round_trip_through_json() {
             show: true,
             format: "[HH:nn]".to_owned(),
         },
+        colors: UiColors {
+            items: vec![UiColorItem {
+                item: "background".to_owned(),
+                index: 0,
+                color: "#ffffff".to_owned(),
+            }],
+            switchbar: UiActivityColors {
+                event: 5,
+                message: 4,
+                highlight: 12,
+            },
+        },
         active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
         menu_bar: vec![UiMenu {
             label: "&File".to_owned(),
@@ -964,6 +976,7 @@ fn data_models_round_trip_through_json() {
             visible_lines: vec![UiTimelineLine {
                 text: "[22:13] <Alice> hello".to_owned(),
                 kind: UiTimelineLineKind::Message,
+                color: "#000000".to_owned(),
                 styles: vec![mirx_core::TextStyleSpan {
                     start: 16,
                     end: 21,
@@ -1256,6 +1269,7 @@ fn data_models_round_trip_through_json() {
                 "visible_lines": [{
                     "text": "[22:13] <Alice> hello",
                     "kind": "message",
+                    "color": "#000000",
                     "styles": [{
                         "start": 16,
                         "end": 21,
@@ -1316,6 +1330,10 @@ fn data_models_round_trip_through_json() {
                 "fallback_faces": ["Tahoma", "Noto Emoji"],
             },
             "timestamp": {"show": true, "format": "[HH:nn]"},
+            "colors": {
+                "items": [{"item": "background", "index": 0, "color": "#ffffff"}],
+                "switchbar": {"event": 5, "message": 4, "highlight": 12},
+            },
             "active_system_menu_items": ["&Restore", "&Font..."],
             "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false, "checked": false}]}],
             "compose_target": {"kind": "edit", "event_id": "$mine:example"},
@@ -6755,6 +6773,18 @@ fn switchbar_helpers_find_items_and_active_item() {
         timestamp: UiTimestamp {
             show: true,
             format: "[HH:nn]".to_owned(),
+        },
+        colors: UiColors {
+            items: vec![UiColorItem {
+                item: "background".to_owned(),
+                index: 0,
+                color: "#ffffff".to_owned(),
+            }],
+            switchbar: UiActivityColors {
+                event: 5,
+                message: 4,
+                highlight: 12,
+            },
         },
         active_system_menu_items: vec![],
         menu_bar: vec![],

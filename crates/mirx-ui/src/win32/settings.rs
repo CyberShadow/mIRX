@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::colors::{ColorItem, ColorScheme, PaletteIndex};
 use super::timestamp::{TimestampFormat, TimestampSetting};
 
 pub(super) const SETTINGS_FILE_NAME: &str = "mirx.ini";
@@ -89,6 +90,8 @@ pub(super) struct Settings {
     pub(super) connect: ConnectSetting,
     pub(super) switchbar: SwitchbarSetting,
     pub(super) treebar: TreebarSetting,
+    /// mIRC's Tools > Colors.
+    pub(super) colors: ColorScheme,
 }
 
 /// mIRC's Options > Connect > Options.
@@ -150,6 +153,10 @@ impl Bar {
 pub(super) struct SwitchbarSetting {
     pub(super) show: bool,
     pub(super) buttons: ButtonWidth,
+    /// mIRC's Options > Display Event, Message and Highlight: the colour
+    /// an inactive window's switchbar button and treebar item take for
+    /// what happened in it.
+    pub(super) activity: ActivityColors,
 }
 
 impl Default for SwitchbarSetting {
@@ -157,6 +164,28 @@ impl Default for SwitchbarSetting {
         Self {
             show: true,
             buttons: ButtonWidth::new(120).expect("the default button width must be valid"),
+            activity: ActivityColors::default(),
+        }
+    }
+}
+
+/// The switchbar's activity colours, by level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ActivityColors {
+    pub(super) event: PaletteIndex,
+    pub(super) message: PaletteIndex,
+    pub(super) highlight: PaletteIndex,
+}
+
+impl Default for ActivityColors {
+    /// Maroon, red and blue. Message red is mIRC's well-known default;
+    /// event maroon and highlight blue are best recollection of mIRC 7's.
+    fn default() -> Self {
+        let index = |index| PaletteIndex::new(index).expect("the defaults are palette indices");
+        Self {
+            event: index(5),
+            message: index(4),
+            highlight: index(12),
         }
     }
 }
@@ -216,6 +245,7 @@ enum Section {
     Connect,
     Switchbar,
     Treebar,
+    Colors,
 }
 
 /// Parses `mirx.ini`. Missing keys keep their defaults.
@@ -239,6 +269,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "connect" => Section::Connect,
                 "switchbar" => Section::Switchbar,
                 "treebar" => Section::Treebar,
+                "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
             continue;
@@ -274,8 +305,23 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Switchbar, "buttons") => {
                 settings.switchbar.buttons = parse_button_width(value.trim_end()).map_err(error)?;
             }
+            (Section::Switchbar, "event") => {
+                settings.switchbar.activity.event = parse_palette_index(value).map_err(error)?;
+            }
+            (Section::Switchbar, "message") => {
+                settings.switchbar.activity.message = parse_palette_index(value).map_err(error)?;
+            }
+            (Section::Switchbar, "highlight") => {
+                settings.switchbar.activity.highlight =
+                    parse_palette_index(value).map_err(error)?;
+            }
             (Section::Treebar, "show") => {
                 settings.treebar.show = parse_on_off(value, "show").map_err(error)?;
+            }
+            (Section::Colors, key) if let Some(item) = ColorItem::from_ini_key(key) => {
+                settings
+                    .colors
+                    .set(item, parse_palette_index(value).map_err(error)?);
             }
             _ => return Err(error(format!("unknown key {key}"))),
         }
@@ -293,6 +339,16 @@ fn parse_on_off(value: &str, key: &str) -> Result<bool, String> {
     }
 }
 
+/// A palette index, `0`-`15`.
+pub(super) fn parse_palette_index(value: &str) -> Result<PaletteIndex, String> {
+    value
+        .trim_end()
+        .parse::<u8>()
+        .map_err(|_| "colors must be 0-15")
+        .and_then(PaletteIndex::new)
+        .map_err(str::to_owned)
+}
+
 /// `<face>,<points>[,bold]`.
 fn parse_font_value(value: &str) -> Result<FontSetting, String> {
     let fields = value.split(',').map(str::trim).collect::<Vec<_>>();
@@ -308,12 +364,19 @@ fn parse_font_value(value: &str) -> Result<FontSetting, String> {
 pub(super) fn to_ini(settings: &Settings) -> String {
     let font = &settings.text_font;
     let bold = if font.bold { ",bold" } else { "" };
+    let activity = &settings.switchbar.activity;
+    let colors = ColorItem::ALL
+        .into_iter()
+        .map(|item| format!("{}={}\r\n", item.ini_key(), settings.colors.get(item).get()))
+        .collect::<String>();
     format!(
         "[fonts]\r\ntext={},{}{bold}\r\n\
          [timestamp]\r\nshow={}\r\nformat={}\r\n\
          [connect]\r\nstartup={}\r\n\
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
-         [treebar]\r\nshow={}\r\n",
+         event={}\r\nmessage={}\r\nhighlight={}\r\n\
+         [treebar]\r\nshow={}\r\n\
+         [colors]\r\n{colors}",
         font.face,
         font.points,
         on_off(settings.timestamp.show),
@@ -321,6 +384,9 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(settings.connect.on_startup),
         on_off(settings.switchbar.show),
         settings.switchbar.buttons,
+        activity.event.get(),
+        activity.message.get(),
+        activity.highlight.get(),
         on_off(settings.treebar.show),
     )
 }
@@ -397,8 +463,12 @@ mod tests {
     const DEFAULT_INI: &str = "[fonts]\r\ntext=Fixedsys,9\r\n\
         [timestamp]\r\nshow=on\r\nformat=[HH:nn]\r\n\
         [connect]\r\nstartup=on\r\n\
-        [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
-        [treebar]\r\nshow=on\r\n";
+        [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
+        [treebar]\r\nshow=on\r\n\
+        [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
+        join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
+        part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
+        gray=14\r\ntreebar=0\r\ntreebar_text=1\r\n";
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -440,15 +510,44 @@ mod tests {
             switchbar: SwitchbarSetting {
                 show: false,
                 buttons: ButtonWidth::new(90).unwrap(),
+                activity: ActivityColors {
+                    event: PaletteIndex::new(7).unwrap(),
+                    message: PaletteIndex::new(9).unwrap(),
+                    highlight: PaletteIndex::new(0).unwrap(),
+                },
             },
             treebar: TreebarSetting { show: false },
             ..Settings::default()
         };
         let text = to_ini(&settings);
         assert!(text.contains("[connect]\r\nstartup=off\r\n"));
-        assert!(text.contains("[switchbar]\r\nshow=off\r\nbuttons=90\r\n"));
+        assert!(text.contains(
+            "[switchbar]\r\nshow=off\r\nbuttons=90\r\nevent=7\r\nmessage=9\r\nhighlight=0\r\n"
+        ));
         assert!(text.contains("[treebar]\r\nshow=off\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
+    }
+
+    #[test]
+    fn colors_round_trip_and_files_without_them_keep_the_defaults() {
+        let mut colors = ColorScheme::default();
+        colors.set(ColorItem::Background, PaletteIndex::new(1).unwrap());
+        colors.set(ColorItem::TreebarText, PaletteIndex::new(15).unwrap());
+        let settings = Settings {
+            colors,
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains("[colors]\r\nbackground=1\r\naction=6\r\n"));
+        assert!(text.ends_with("treebar=0\r\ntreebar_text=15\r\n"));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        // Only some items: the rest keep mIRC's.
+        let mut join = ColorScheme::default();
+        join.set(ColorItem::Join, PaletteIndex::new(9).unwrap());
+        assert_eq!(
+            parse_ini("[colors]\njoin=9\n").map(|settings| settings.colors),
+            Ok(join)
+        );
     }
 
     #[test]
@@ -526,6 +625,13 @@ mod tests {
                 "line 3: duplicate key buttons",
             ),
             ("[timestamp]\nformat=", "line 2: format cannot be empty"),
+            ("[colors]\njoin=16", "line 2: colors must be 0-15"),
+            ("[colors]\njoin=-1", "line 2: colors must be 0-15"),
+            ("[colors]\njoin=red", "line 2: colors must be 0-15"),
+            ("[colors]\nctcp=4", "line 2: unknown key ctcp"),
+            ("[colors]\njoin=3\njoin=4", "line 3: duplicate key join"),
+            ("[switchbar]\nmessage=99", "line 2: colors must be 0-15"),
+            ("[treebar]\nevent=5", "line 2: unknown key event"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text:?}");
         }

@@ -1,5 +1,7 @@
 //! Building a view's timeline rows from the model.
 
+use mirx_core::RoomMemberChange;
+
 use super::hotlinks::RowUserLink;
 use super::timeline_text::MessageLine;
 use super::*;
@@ -177,9 +179,12 @@ impl TimelineRow {
 /// Rows for lines other users wrote carry `highlight`: the user's push
 /// rules highlighted the line, so it is drawn in the highlight colour.
 pub(super) enum TimelineRowKind {
-    /// mIRC's green event lines, such as `* Now talking in` and `* Topic is`.
-    Event,
-    /// mIRC's navy info lines.
+    /// mIRC's event lines, such as `* Now talking in` and `* Topic is`, in
+    /// their item's colour.
+    Event {
+        item: EventItem,
+    },
+    /// mIRC's info lines.
     Info,
     Error,
     Typing,
@@ -190,6 +195,8 @@ pub(super) enum TimelineRowKind {
         presentation: RoomMessagePresentationKind,
         send_state: TimelineMessageSendState,
         highlight: bool,
+        /// The signed-in user sent it: mIRC's Own text.
+        own: bool,
     },
     Image {
         highlight: bool,
@@ -209,7 +216,10 @@ pub(super) enum TimelineRowKind {
     UnableToDecrypt,
     StateNotice {
         highlight: bool,
+        item: EventItem,
     },
+    /// What is left of a redacted event.
+    Redacted,
     Plain,
 }
 
@@ -251,14 +261,17 @@ fn room_context_row(
 }
 
 fn build_invite_timeline_rows(room: &RoomSummary) -> Vec<TimelineRow> {
+    let invite = TimelineRowKind::Event {
+        item: EventItem::Invite,
+    };
     vec![
         room_context_row(
-            TimelineRowKind::Info,
+            invite.clone(),
             TimelineSyntheticRowLabel::Invite,
             &invited_text(&room.display_name),
         ),
         room_context_row(
-            TimelineRowKind::Info,
+            invite,
             TimelineSyntheticRowLabel::Invite,
             INVITE_RESPONSE_TEXT,
         ),
@@ -272,13 +285,17 @@ fn push_room_context_rows(
     room_view: Option<&RoomViewModel>,
 ) {
     rows.push(room_context_row(
-        TimelineRowKind::Event,
+        TimelineRowKind::Event {
+            item: EventItem::Join,
+        },
         TimelineSyntheticRowLabel::NowTalking,
         &now_talking_text(&room.display_name, &room.room_id),
     ));
     if let Some(topic) = room_view.and_then(|view| view.topic.as_deref()) {
         rows.push(room_context_row(
-            TimelineRowKind::Event,
+            TimelineRowKind::Event {
+                item: EventItem::Topic,
+            },
             TimelineSyntheticRowLabel::Topic,
             &topic_is_text(topic),
         ));
@@ -337,8 +354,9 @@ fn push_room_activity_row(
     room_view: &RoomViewModel,
     activity: &RoomActivity,
     timestamps: TimestampStyle,
+    own_user_id: Option<&str>,
 ) {
-    push_reply_quote_row(rows, room_view, activity);
+    push_reply_quote_row(rows, room_view, activity, own_user_id);
     let ActivityLine {
         kind,
         text,
@@ -349,6 +367,7 @@ fn push_room_activity_row(
         room_view,
         activity,
         &timestamps.prefix(activity.timestamp_ms),
+        own_user_id,
     );
     let mut row = TimelineRow::log(kind, text)
         .with_styles(styles)
@@ -386,6 +405,7 @@ fn push_reply_quote_row(
     rows: &mut Vec<TimelineRow>,
     room_view: &RoomViewModel,
     activity: &RoomActivity,
+    own_user_id: Option<&str>,
 ) {
     let Some(target_event_id) = activity
         .relation
@@ -399,7 +419,7 @@ fn push_reply_quote_row(
             kind: RoomActivityKind::Redacted(_),
             ..
         }) => replies::QUOTE_REDACTED_TEXT.to_owned(),
-        ReplyTarget::Known(target) => quoted_line(room_view, target),
+        ReplyTarget::Known(target) => quoted_line(room_view, target, own_user_id),
         ReplyTarget::Loading => replies::QUOTE_LOADING_TEXT.to_owned(),
         ReplyTarget::Unavailable => replies::QUOTE_UNAVAILABLE_TEXT.to_owned(),
     };
@@ -413,8 +433,12 @@ fn push_reply_quote_row(
 }
 
 /// A message as a quote or the compose indicator shows it.
-fn quoted_line(room_view: &RoomViewModel, activity: &RoomActivity) -> String {
-    replies::quote_excerpt(&activity_line_text(room_view, activity, "").text)
+fn quoted_line(
+    room_view: &RoomViewModel,
+    activity: &RoomActivity,
+    own_user_id: Option<&str>,
+) -> String {
+    replies::quote_excerpt(&activity_line_text(room_view, activity, "", own_user_id).text)
 }
 
 /// The bottom line of a window whose editbox is armed with `target`. It
@@ -434,7 +458,11 @@ pub(super) fn compose_target_row(
         TimelineSyntheticRowLabel::ComposeTarget,
         &replies::compose_target_indicator(
             target,
-            &quoted_line(&model.room_views[room_id], activity),
+            &quoted_line(
+                &model.room_views[room_id],
+                activity,
+                model.own_user_id.as_deref(),
+            ),
         ),
     )
 }
@@ -468,10 +496,33 @@ fn action_line_with_link(
     (line.text, vec![link])
 }
 
+/// The colour item of a membership change's line.
+fn member_change_item(change: &RoomMemberChange) -> EventItem {
+    match change {
+        RoomMemberChange::Joined | RoomMemberChange::InvitationAccepted => EventItem::Join,
+        RoomMemberChange::Left
+        | RoomMemberChange::InvitationRejected
+        | RoomMemberChange::KnockRetracted => EventItem::Part,
+        RoomMemberChange::Kicked | RoomMemberChange::KickedAndBanned => EventItem::Kick,
+        // IRC's +b and -b.
+        RoomMemberChange::Banned | RoomMemberChange::Unbanned => EventItem::Mode,
+        RoomMemberChange::Invited
+        | RoomMemberChange::InvitationRevoked
+        | RoomMemberChange::Knocked
+        | RoomMemberChange::KnockAccepted
+        | RoomMemberChange::KnockDenied => EventItem::Invite,
+        RoomMemberChange::DisplayNameChanged { .. } | RoomMemberChange::AvatarChanged => {
+            EventItem::Nick
+        }
+    }
+}
+
+/// `own_user_id` is the signed-in user's, `None` while signed out.
 fn activity_line_text(
     room_view: &RoomViewModel,
     activity: &RoomActivity,
     timestamp: &str,
+    own_user_id: Option<&str>,
 ) -> ActivityLine {
     let (kind, (text, user_links), image_state) = match &activity.kind {
         RoomActivityKind::Message(message) => {
@@ -518,6 +569,7 @@ fn activity_line_text(
                     presentation: message.presentation,
                     send_state: timeline_message_send_state(&message.send_state),
                     highlight: activity.highlight,
+                    own: own_user_id == Some(message.sender.user_id.as_str()),
                 },
                 text,
                 styles,
@@ -616,27 +668,36 @@ fn activity_line_text(
             None,
         ),
         RoomActivityKind::StateNotice(notice) => {
-            let body = match &notice.content {
-                RoomStateNoticeContent::Topic { topic } => topic_change_text(&notice.sender, topic),
+            let (item, body) = match &notice.content {
+                RoomStateNoticeContent::Topic { topic } => {
+                    (EventItem::Topic, topic_change_text(&notice.sender, topic))
+                }
                 RoomStateNoticeContent::Member {
                     change,
                     target,
                     reason,
-                } => member_change_text(&notice.sender, change, target, reason.as_deref()),
+                } => (
+                    member_change_item(change),
+                    member_change_text(&notice.sender, change, target, reason.as_deref()),
+                ),
                 RoomStateNoticeContent::PowerLevels {
                     changes,
                     users_default,
                     other_permissions_changed,
-                } => power_levels_change_text(
-                    &notice.sender,
-                    changes,
-                    users_default.as_ref(),
-                    *other_permissions_changed,
+                } => (
+                    EventItem::Mode,
+                    power_levels_change_text(
+                        &notice.sender,
+                        changes,
+                        users_default.as_ref(),
+                        *other_permissions_changed,
+                    ),
                 ),
             };
             (
                 TimelineRowKind::StateNotice {
                     highlight: activity.highlight,
+                    item,
                 },
                 (event_line(timestamp, &body), Vec::new()),
                 None,
@@ -644,7 +705,7 @@ fn activity_line_text(
         }
         // The redacted line no longer says what made it a highlight.
         RoomActivityKind::Redacted(_) => (
-            TimelineRowKind::StateNotice { highlight: false },
+            TimelineRowKind::Redacted,
             (event_line(timestamp, "message redacted"), Vec::new()),
             None,
         ),
@@ -688,6 +749,7 @@ pub(super) fn build_room_timeline_rows(
             room_view.activities.iter(),
             None,
             timestamps,
+            model.own_user_id.as_deref(),
         );
         push_room_typing_row(&mut rows, room_view);
     }
@@ -704,13 +766,14 @@ fn push_activity_rows_with_echo<'a>(
     activities: impl Iterator<Item = &'a RoomActivity>,
     thread_root: Option<&str>,
     timestamps: TimestampStyle,
+    own_user_id: Option<&str>,
 ) {
     let mut echo = room_view.echo.lines_for(thread_root).peekable();
     for activity in activities {
         while let Some(line) = echo.next_if(|line| line.timestamp_ms < activity.timestamp_ms) {
             rows.push(echo_row(line, timestamps));
         }
-        push_room_activity_row(rows, room_view, activity, timestamps);
+        push_room_activity_row(rows, room_view, activity, timestamps, own_user_id);
     }
     rows.extend(echo.map(|line| echo_row(line, timestamps)));
 }
@@ -746,6 +809,7 @@ pub(super) fn build_thread_timeline_rows(
             .filter(|activity| room_activity_belongs_to_thread(activity, thread_root_event_id)),
         Some(thread_root_event_id),
         timestamps,
+        model.own_user_id.as_deref(),
     );
     push_room_typing_row(&mut rows, room_view);
     rows
@@ -1266,11 +1330,14 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Event,
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::ReactionSummary,
             ]
@@ -1627,8 +1694,10 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Event,
-                TimelineRowKind::StateNotice { highlight: false }
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
+                TimelineRowKind::Redacted
             ]
         );
         assert_eq!(
@@ -1695,17 +1764,21 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Event,
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::ReactionSummary,
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::ReactionSummary,
             ]
@@ -2071,41 +2144,59 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Event,
-                TimelineRowKind::Event,
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
+                TimelineRowKind::Event {
+                    item: EventItem::Topic,
+                },
                 TimelineRowKind::Info,
-                TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::StateNotice {
+                    highlight: false,
+                    item: EventItem::Topic,
+                },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Notice,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Emote,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Pending,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Failed,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Image { highlight: false },
                 TimelineRowKind::File { highlight: false },
                 TimelineRowKind::Audio { highlight: false },
                 TimelineRowKind::Unsupported { highlight: false },
-                TimelineRowKind::StateNotice { highlight: false },
-                TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::StateNotice {
+                    highlight: false,
+                    item: EventItem::Join,
+                },
+                TimelineRowKind::StateNotice {
+                    highlight: false,
+                    item: EventItem::Part,
+                },
                 TimelineRowKind::Typing,
             ]
         );
@@ -2316,14 +2407,22 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Event,
-                TimelineRowKind::Event,
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
+                TimelineRowKind::Event {
+                    item: EventItem::Topic,
+                },
                 TimelineRowKind::Plain,
-                TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::StateNotice {
+                    highlight: false,
+                    item: EventItem::Topic,
+                },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Typing,
             ]
@@ -2404,13 +2503,21 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
             vec![
-                TimelineRowKind::Event,
-                TimelineRowKind::Event,
-                TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
+                TimelineRowKind::Event {
+                    item: EventItem::Topic,
+                },
+                TimelineRowKind::StateNotice {
+                    highlight: false,
+                    item: EventItem::Topic,
+                },
                 TimelineRowKind::Message {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 TimelineRowKind::Typing,
             ]
@@ -2461,7 +2568,12 @@ mod tests {
         let rows = build_room_timeline_rows(&state.model, "!direct:example", state.timestamps());
         assert_eq!(
             rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
-            vec![TimelineRowKind::Event, TimelineRowKind::Info]
+            vec![
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
+                TimelineRowKind::Info,
+            ]
         );
         assert_eq!(
             project_timeline_rows(&rows),
@@ -3298,6 +3410,7 @@ mod tests {
             &RoomViewModel::default(),
             &mention,
             utc_timestamps(),
+            None,
         );
         let redacted = RoomActivity {
             kind: RoomActivityKind::Redacted(RoomRedactedActivity {
@@ -3310,6 +3423,7 @@ mod tests {
             &RoomViewModel::default(),
             &redacted,
             utc_timestamps(),
+            None,
         );
 
         assert_eq!(
@@ -3319,8 +3433,77 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: true,
+                    own: false,
                 },
-                TimelineRowKind::StateNotice { highlight: false },
+                TimelineRowKind::Redacted,
+            ]
+        );
+    }
+
+    #[test]
+    fn member_changes_take_mircs_event_items() {
+        use RoomMemberChange::*;
+        for (change, item) in [
+            (Joined, EventItem::Join),
+            (InvitationAccepted, EventItem::Join),
+            (Left, EventItem::Part),
+            (InvitationRejected, EventItem::Part),
+            (KnockRetracted, EventItem::Part),
+            (Kicked, EventItem::Kick),
+            (KickedAndBanned, EventItem::Kick),
+            (Banned, EventItem::Mode),
+            (Unbanned, EventItem::Mode),
+            (Invited, EventItem::Invite),
+            (InvitationRevoked, EventItem::Invite),
+            (Knocked, EventItem::Invite),
+            (KnockAccepted, EventItem::Invite),
+            (KnockDenied, EventItem::Invite),
+            (
+                DisplayNameChanged {
+                    old: None,
+                    new: Some("Caz".to_owned()),
+                },
+                EventItem::Nick,
+            ),
+            (AvatarChanged, EventItem::Nick),
+        ] {
+            assert_eq!(member_change_item(&change), item, "{change:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_signed_in_users_messages_are_own() {
+        let mut rows = Vec::new();
+        let message = sent_message_activity("!room:example", "$m", None, "hi", 1);
+        for own_user_id in [Some("@alice:example"), Some("@bob:example"), None] {
+            push_room_activity_row(
+                &mut rows,
+                &RoomViewModel::default(),
+                &message,
+                utc_timestamps(),
+                own_user_id,
+            );
+        }
+        let own = rows
+            .iter()
+            .map(|row| match row.kind {
+                TimelineRowKind::Message { own, .. } => own,
+                ref kind => panic!("a message row, not {kind:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(own, [true, false, false]);
+    }
+
+    #[test]
+    fn an_invites_lines_take_invite_text() {
+        let rows = build_invite_timeline_rows(&invited_room("!inv:example", "Invited"));
+        assert_eq!(
+            rows.iter().map(|row| row.kind.clone()).collect::<Vec<_>>(),
+            vec![
+                TimelineRowKind::Event {
+                    item: EventItem::Invite
+                };
+                2
             ]
         );
     }

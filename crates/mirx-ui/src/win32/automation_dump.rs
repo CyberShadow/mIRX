@@ -4,8 +4,12 @@ use std::ops::Range;
 
 use mirx_core::MatrixLink;
 
+use super::colors::colorref_hex;
 use super::hotlinks::LinkKind;
+use super::settings::Settings;
+use super::timeline_layout::timeline_row_color;
 use super::*;
+use crate::automation::{UiActivityColors, UiColorItem, UiColors};
 
 pub(super) unsafe fn dump_member_menu_state(hwnd: HWND) -> Result<DumpMemberMenuState, String> {
     let menu = state_ref(hwnd).controls.member_menu;
@@ -400,7 +404,7 @@ unsafe fn menu_item_count(menu: HMENU) -> Result<u32, String> {
 
 /// The lines `timeline` shows now, with the click point of each: the
 /// arithmetic `timeline_source_row_index_at_client_y` inverts.
-unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
+unsafe fn dump_active_timeline(timeline: HWND, scheme: &ColorScheme) -> UiActiveTimeline {
     let state = timeline_state_ref(timeline);
     let visible_rows = timeline_visible_rows(timeline);
     let visible_lines = state
@@ -430,6 +434,7 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
                 text,
                 styles,
                 kind: ui_timeline_line_kind(&line.kind),
+                color: colorref_hex(timeline_row_color(&line.kind, scheme)),
                 // Text set as a whole (WM_SETTEXT) has no rows.
                 event_id: line
                     .source_row_index
@@ -473,7 +478,7 @@ fn dump_line_links(row: &TimelineRow, range: &Range<usize>) -> Vec<UiTimelineLin
 
 fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
     match kind {
-        TimelineRowKind::Event => UiTimelineLineKind::Event,
+        TimelineRowKind::Event { .. } => UiTimelineLineKind::Event,
         TimelineRowKind::Info => UiTimelineLineKind::Info,
         TimelineRowKind::Error => UiTimelineLineKind::Error,
         TimelineRowKind::Typing => UiTimelineLineKind::Typing,
@@ -486,9 +491,36 @@ fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
         TimelineRowKind::Video { .. } => UiTimelineLineKind::Video,
         TimelineRowKind::Unsupported { .. } => UiTimelineLineKind::Unsupported,
         TimelineRowKind::UnableToDecrypt => UiTimelineLineKind::UnableToDecrypt,
-        TimelineRowKind::StateNotice { .. } => UiTimelineLineKind::StateNotice,
+        // A redacted line was a message or a notice; the dump has always
+        // shown it with the notices.
+        TimelineRowKind::StateNotice { .. } | TimelineRowKind::Redacted => {
+            UiTimelineLineKind::StateNotice
+        }
         TimelineRowKind::Plain => UiTimelineLineKind::Plain,
     }
+}
+
+fn dump_colors(settings: &Settings) -> UiColors {
+    let activity = &settings.switchbar.activity;
+    UiColors {
+        items: dump_color_items(&settings.colors),
+        switchbar: UiActivityColors {
+            event: activity.event.get(),
+            message: activity.message.get(),
+            highlight: activity.highlight.get(),
+        },
+    }
+}
+
+pub(super) fn dump_color_items(scheme: &ColorScheme) -> Vec<UiColorItem> {
+    ColorItem::ALL
+        .into_iter()
+        .map(|item| UiColorItem {
+            item: item.ini_key().to_owned(),
+            index: scheme.get(item).get(),
+            color: colorref_hex(scheme.colorref(item)),
+        })
+        .collect()
 }
 
 pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
@@ -517,6 +549,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             show: timestamp.show,
             format: timestamp.format.to_string(),
         },
+        colors: dump_colors(state.settings.settings()),
         active_system_menu_items: system_menu_labels(active_view.child),
         menu_bar: dump_menu_bar(hwnd)?,
         compose_target: active_view
@@ -541,10 +574,10 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         ignored_users: state.model.ignored_users.clone(),
         active_timeline: match &state.active_view {
             ViewId::RoomList => None,
-            view_id => Some(dump_active_timeline(view_timeline(
-                view_id,
-                active_view.content,
-            ))),
+            view_id => Some(dump_active_timeline(
+                view_timeline(view_id, active_view.content),
+                &state.settings.settings().colors,
+            )),
         },
         navigation,
         mdi,

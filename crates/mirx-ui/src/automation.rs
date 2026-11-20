@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 49;
+pub(crate) const PROTOCOL_VERSION: u32 = 50;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1013,6 +1013,8 @@ pub(crate) struct UiState {
     pub(crate) rooms: Vec<UiRoomState>,
     pub(crate) text_font: UiTextFont,
     pub(crate) timestamp: UiTimestamp,
+    /// Tools > Colors and the switchbar's activity colours.
+    pub(crate) colors: UiColors,
     /// The labels of the active window's window menu, separators omitted.
     pub(crate) active_system_menu_items: Vec<String>,
     /// The frame's menubar as opening each menu would show it: MDI's
@@ -1047,6 +1049,9 @@ pub(crate) struct UiTimelineLine {
     /// Empty for an image preview's lines.
     pub(crate) text: String,
     pub(crate) kind: UiTimelineLineKind,
+    /// The line's colour where its styles set none, `#rrggbb`: its colour
+    /// item's.
+    pub(crate) color: String,
     /// How `text` is formatted, at offsets in it: a message's own styles.
     pub(crate) styles: Vec<mirx_core::TextStyleSpan>,
     /// The event the line belongs to; clicking it selects that event.
@@ -1210,6 +1215,35 @@ pub(crate) struct UiTextFont {
 pub(crate) struct UiTimestamp {
     pub(crate) show: bool,
     pub(crate) format: String,
+}
+
+/// The colour scheme, as `mirx.ini [colors]` and `[switchbar]` hold it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiColors {
+    /// Every item of the Colors dialog, in its order.
+    pub(crate) items: Vec<UiColorItem>,
+    pub(crate) switchbar: UiActivityColors,
+}
+
+/// A Colors dialog item's palette index and the colour that is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiColorItem {
+    /// Its `mirx.ini` key: `background`, `join`, `editbox_text`, ...
+    pub(crate) item: String,
+    pub(crate) index: u8,
+    /// `#rrggbb`.
+    pub(crate) color: String,
+}
+
+/// Options > Display's Event, Message and Highlight palette indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiActivityColors {
+    pub(crate) event: u8,
+    pub(crate) message: u8,
+    pub(crate) highlight: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3253,8 +3287,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_49() {
-        assert_eq!(PROTOCOL_VERSION, 49);
+    fn protocol_version_is_50() {
+        assert_eq!(PROTOCOL_VERSION, 50);
     }
 
     #[test]
@@ -4259,6 +4293,7 @@ mod tests {
             "rooms":[],
             "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"average_char_width":8,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
+            "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
             "menu_bar":[]
         }))
@@ -4283,6 +4318,7 @@ mod tests {
             "rooms":[],
             "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"average_char_width":8,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
+            "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
             "menu_bar":[]
         }))
@@ -5206,7 +5242,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":49,
+                    "protocol_version":50,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5801,6 +5837,18 @@ mod tests {
                         show: true,
                         format: "[HH:nn]".to_owned(),
                     },
+                    colors: super::UiColors {
+                        items: vec![super::UiColorItem {
+                            item: "join".to_owned(),
+                            index: 3,
+                            color: "#009300".to_owned(),
+                        }],
+                        switchbar: super::UiActivityColors {
+                            event: 5,
+                            message: 4,
+                            highlight: 12,
+                        },
+                    },
                     active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
                     menu_bar: vec![super::UiMenu {
                         label: "&Help".to_owned(),
@@ -5835,6 +5883,7 @@ mod tests {
                         visible_lines: vec![super::UiTimelineLine {
                             text: "    > <Alice> are we deploying?".to_owned(),
                             kind: super::UiTimelineLineKind::ReplyQuote,
+                            color: "#7f7f7f".to_owned(),
                             styles: Vec::new(),
                             event_id: Some("$answer".to_owned()),
                             click_point: super::UiPoint { x: 8, y: 9 },
@@ -5987,6 +6036,10 @@ mod tests {
                         "fallback_faces":["Tahoma","Noto Emoji"]
                     },
                     "timestamp":{"show":true,"format":"[HH:nn]"},
+                    "colors":{
+                        "items":[{"item":"join","index":3,"color":"#009300"}],
+                        "switchbar":{"event":5,"message":4,"highlight":12}
+                    },
                     "active_system_menu_items":["&Restore","&Font..."],
                     "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true,"checked":false}]}],
                     "compose_target":{"kind":"reply","event_id":"$question"},
@@ -6011,6 +6064,7 @@ mod tests {
                         "visible_lines":[{
                             "text":"    > <Alice> are we deploying?",
                             "kind":"reply_quote",
+                            "color":"#7f7f7f",
                             "styles":[],
                             "event_id":"$answer",
                             "click_point":{"x":8,"y":9},

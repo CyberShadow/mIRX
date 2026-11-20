@@ -46,13 +46,12 @@ use windows_sys::Win32::Foundation::{
     LRESULT, POINT, RECT, SYSTEMTIME, WPARAM,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
-    ClientToScreen, CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER,
-    DT_END_ELLIPSIS, DT_SINGLELINE, DeleteObject, DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL,
-    FillRect, FrameRect, GetDC, GetDeviceCaps, GetSysColor, GetSysColorBrush, GetTextFaceW,
-    GetTextMetricsW, HBRUSH, HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints,
-    PAINTSTRUCT, ReleaseDC, ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW,
-    TRANSPARENT, TextOutW,
+    BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, ClientToScreen,
+    CreateFontIndirectW, CreateSolidBrush, DEFAULT_CHARSET, DT_CENTER, DT_END_ELLIPSIS,
+    DT_SINGLELINE, DeleteObject, DrawFocusRect, EndPaint, FW_BOLD, FW_NORMAL, FillRect, FrameRect,
+    GetDC, GetDeviceCaps, GetSysColor, GetSysColorBrush, GetTextFaceW, GetTextMetricsW, HBRUSH,
+    HFONT, InvalidateRect, LOGFONTW, LOGPIXELSY, MapWindowPoints, PAINTSTRUCT, ReleaseDC,
+    ScreenToClient, SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows_sys::Win32::Graphics::GdiPlus::{
     GdipCreateFromHDC, GdipDeleteGraphics, GdipDisposeImage, GdipDrawImageRectI,
@@ -180,6 +179,7 @@ mod automation_dump;
 mod automation_host;
 mod clipboard;
 mod cmap;
+mod colors;
 mod command_runner;
 mod commands;
 mod compose;
@@ -254,6 +254,7 @@ use automation_host::{
     AutomationState, destroy_automation_state, enable_automation, handle_copydata,
     send_automation_request,
 };
+use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
@@ -627,6 +628,9 @@ struct WindowState {
     /// The time zone timestamps are shown in.
     local_time: LocalTimeFn,
     text_font: TextFont,
+    /// The brushes of `settings`' colour scheme; `apply_color_scheme`
+    /// changes both.
+    scheme_brushes: SchemeBrushes,
     exit_code: Arc<AtomicI32>,
     event_generation: u64,
     last_idle_probe_generation: Option<u64>,
@@ -796,6 +800,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
     let settings = load_settings(render_state_mode)
         .inspect_err(|message| show_error_message(null_mut(), FRAME_TITLE, message))?;
     let text_font = unsafe { TextFont::create(&settings.settings().text_font)? };
+    let scheme_brushes = unsafe { SchemeBrushes::create(&settings.settings().colors) };
 
     let state = Box::new(WindowState {
         controls: Controls::default(),
@@ -812,6 +817,7 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         settings,
         local_time: system_local_time,
         text_font,
+        scheme_brushes,
         exit_code: Arc::clone(&exit_code),
         event_generation: 0,
         last_idle_probe_generation: None,

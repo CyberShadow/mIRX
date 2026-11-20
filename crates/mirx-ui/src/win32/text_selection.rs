@@ -257,7 +257,7 @@ mod tests {
     use mirx_core::{TextColor, TextStyle, TextStyleSpan};
 
     use super::super::timeline_layout::TimelinePaintLineVisual;
-    use super::super::{TimelineRowIdentity, TimelineRowKind};
+    use super::super::{EventItem, TimelineRowIdentity, TimelineRowKind};
     use super::*;
 
     /// A monospace font: 10 pixels a character, whatever its bytes.
@@ -266,8 +266,13 @@ mod tests {
     }
 
     fn row(text: &str, activity_id: &str) -> TimelineRow {
-        TimelineRow::log(TimelineRowKind::Event, text.to_owned())
-            .with_identity(TimelineRowIdentity::activity_primary(activity_id))
+        TimelineRow::log(
+            TimelineRowKind::Event {
+                item: EventItem::Join,
+            },
+            text.to_owned(),
+        )
+        .with_identity(TimelineRowIdentity::activity_primary(activity_id))
     }
 
     fn text_line(
@@ -277,7 +282,9 @@ mod tests {
         indent: i32,
     ) -> TimelinePaintLine {
         TimelinePaintLine {
-            kind: TimelineRowKind::Event,
+            kind: TimelineRowKind::Event {
+                item: EventItem::Join,
+            },
             visual: TimelinePaintLineVisual::Text {
                 text: rows[row].logical_text[range.clone()].to_owned(),
                 indent,

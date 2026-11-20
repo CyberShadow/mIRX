@@ -89,7 +89,9 @@ pub(super) fn register_timeline_class(instance: *mut c_void) -> Result<(), Strin
         hInstance: instance,
         hIcon: null_mut(),
         hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
-        hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
+        // None: `paint_timeline` fills every pixel in the scheme's
+        // Background, and an erase in another colour first would flash.
+        hbrBackground: null_mut(),
         lpszMenuName: null(),
         lpszClassName: class_name.as_ptr(),
         hIconSm: null_mut(),
@@ -701,7 +703,7 @@ fn timeline_history_backfill_anchor_row_index(
 fn timeline_row_is_fixed_room_context(row: &TimelineRow) -> bool {
     matches!(
         &row.kind,
-        TimelineRowKind::Event | TimelineRowKind::Info | TimelineRowKind::Typing
+        TimelineRowKind::Event { .. } | TimelineRowKind::Info | TimelineRowKind::Typing
     )
 }
 
@@ -1263,10 +1265,17 @@ mod tests {
     fn history_backfill_anchor_skips_only_fixed_room_context() {
         let rows = vec![
             TimelineRow::log(
-                TimelineRowKind::Event,
+                TimelineRowKind::Event {
+                    item: EventItem::Join,
+                },
                 "* Now talking in Beta (!beta:example)".to_owned(),
             ),
-            TimelineRow::log(TimelineRowKind::Event, "* Topic is 'incident'".to_owned()),
+            TimelineRow::log(
+                TimelineRowKind::Event {
+                    item: EventItem::Topic,
+                },
+                "* Topic is 'incident'".to_owned(),
+            ),
             TimelineRow::log(
                 TimelineRowKind::ReactionSummary,
                 "    reactions: 👍 Alice".to_owned(),
@@ -1276,6 +1285,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 "[22:13] <@bob:example> current row".to_owned(),
             )

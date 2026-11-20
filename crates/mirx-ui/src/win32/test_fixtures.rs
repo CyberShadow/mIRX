@@ -841,6 +841,7 @@ pub(super) fn test_state() -> WindowState {
         settings: SettingsStore::in_memory(),
         local_time: timestamp::utc_local_time,
         text_font: unsafe { TextFont::create(&FontSetting::default()).unwrap() },
+        scheme_brushes: unsafe { SchemeBrushes::create(&Default::default()) },
         exit_code: Arc::new(AtomicI32::new(0)),
         event_generation: 0,
         last_idle_probe_generation: None,

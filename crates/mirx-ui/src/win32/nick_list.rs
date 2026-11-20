@@ -46,13 +46,25 @@ pub(super) unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
         }
         return;
     }
+    let frame_state = state_ref(frame_window_for(hwnd));
+    // The selected nick in the system's highlight, as the stock listbox.
     let (background, text_color) = if item.itemState & ODS_SELECTED != 0 {
-        (COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT)
+        (
+            GetSysColorBrush(COLOR_HIGHLIGHT),
+            GetSysColor(COLOR_HIGHLIGHTTEXT),
+        )
     } else {
-        (COLOR_WINDOW, COLOR_WINDOWTEXT)
+        (
+            frame_state.scheme_brushes.listbox,
+            frame_state
+                .settings
+                .settings()
+                .colors
+                .colorref(ColorItem::ListboxText),
+        )
     };
-    FillRect(hdc, &item.rcItem, GetSysColorBrush(background));
-    let previous_color = SetTextColor(hdc, GetSysColor(text_color));
+    FillRect(hdc, &item.rcItem, background);
+    let previous_color = SetTextColor(hdc, text_color);
     let previous_mode = SetBkMode(hdc, TRANSPARENT as i32);
 
     let length = SendMessageW(item.hwndItem, LB_GETTEXTLEN, item.itemID as WPARAM, 0);
@@ -65,7 +77,7 @@ pub(super) unsafe fn draw_nick_list_item(hwnd: HWND, item: &DRAWITEMSTRUCT) {
         text.as_mut_ptr() as LPARAM,
     );
     let text = String::from_utf16(&text[..length]).expect("nick list items are UTF-16 text");
-    let glyphs = &state_ref(frame_window_for(hwnd)).text_font.glyphs;
+    let glyphs = &frame_state.text_font.glyphs;
     glyphs.draw(
         hdc,
         item.rcItem.left + 1,

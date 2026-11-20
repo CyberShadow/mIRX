@@ -911,6 +911,7 @@ mod tests {
                     presentation: RoomMessagePresentationKind::Text,
                     send_state: TimelineMessageSendState::Sent,
                     highlight: false,
+                    own: false,
                 },
                 "[00:00] @alice: message".to_owned(),
             )
