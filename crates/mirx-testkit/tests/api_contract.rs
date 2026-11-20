@@ -38,13 +38,14 @@ use mirx_testkit::{
     SubmittedReactionCommand, SubmittedRedactionCommand, SubmittedReplyCommand,
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
-    UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind, UiError,
-    UiFindHistorySearchState, UiFindState, UiFrameLayout, UiLoggingOptions, UiMenu, UiMenuItem,
-    UiOptionsDialog, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
-    UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
-    UiTimestamp, UiTipsOptions, UiTray, UiTrayMenuItem, UiTrayOptions,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind,
+    UiConnectOptions, UiError, UiFindHistorySearchState, UiFindState, UiFrameLayout,
+    UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRect,
+    UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState, UiTextFont,
+    UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp, UiTipsOptions, UiTray,
+    UiTrayMenuItem, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -975,6 +976,14 @@ fn data_models_round_trip_through_json() {
         options_dialog: Some(UiOptionsDialog {
             tree: vec!["Display".to_owned()],
             selected: "Display".to_owned(),
+            connect: UiConnectOptions {
+                startup: false,
+                reconnect: true,
+                retry: false,
+                retry_times: "3".to_owned(),
+                retry_delay: "30".to_owned(),
+                retry_fields_enabled: false,
+            },
             visible_controls: vec![6301],
             highlight_items: vec!["build (notify only)".to_owned()],
             highlight_controls_enabled: true,
@@ -1301,6 +1310,14 @@ fn data_models_round_trip_through_json() {
             "options_dialog": {
                 "tree": ["Display"],
                 "selected": "Display",
+                "connect": {
+                    "startup": false,
+                    "reconnect": true,
+                    "retry": false,
+                    "retry_times": "3",
+                    "retry_delay": "30",
+                    "retry_fields_enabled": false
+                },
                 "visible_controls": [6301],
                 "highlight_items": ["build (notify only)"],
                 "highlight_controls_enabled": true,

@@ -47,11 +47,12 @@ use mirx_testkit::{
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
     UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
-    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState,
-    UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
-    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiComposeTarget, UiComposeTargetKind, UiConnectOptions, UiError, UiFindHistorySearchState,
+    UiFindState, UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint,
+    UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity,
+    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
+    ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -69,9 +70,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_RIGHT, VK_SHIFT, VK_TAB, VK_X,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows, FindWindowExW,
-    FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
-    GetClientRect, GetDlgCtrlID, GetDlgItem, GetForegroundWindow, GetGUIThreadInfo,
+    BM_CLICK, BM_SETCHECK, CB_SETCURSEL, CBN_SELCHANGE, CS_DBLCLKS, EnumThreadWindows,
+    FindWindowExW, FindWindowW, GCL_STYLE, GUITHREADINFO, GW_OWNER, GWL_STYLE, GetClassLongPtrW,
+    GetClassNameW, GetClientRect, GetDlgCtrlID, GetDlgItem, GetForegroundWindow, GetGUIThreadInfo,
     GetLastActivePopup, GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect,
     GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES, IsIconic, IsWindow, IsWindowVisible,
     LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN, LBS_OWNERDRAWFIXED, PostMessageW,
@@ -14659,6 +14660,10 @@ fn view_menu_hides_and_shows_the_bars_and_persists_them() -> Result<(), Box<dyn 
 
 const MENU_ID_TOOLS_OPTIONS: usize = 40038;
 const OPTIONS_CONNECT_ON_STARTUP_ID: i32 = 6101;
+const OPTIONS_RECONNECT_ID: i32 = 6102;
+const OPTIONS_RETRY_ID: i32 = 6103;
+const OPTIONS_RETRY_TIMES_ID: i32 = 6104;
+const OPTIONS_RETRY_DELAY_ID: i32 = 6105;
 const OPTIONS_TIMESTAMP_SHOW_ID: i32 = 6201;
 const OPTIONS_TIMESTAMP_FORMAT_ID: i32 = 6202;
 const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
@@ -14753,7 +14758,13 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
     assert_eq!(options.selected, "Connect/Options");
     assert_eq!(
         options.visible_controls,
-        [OPTIONS_CONNECT_ON_STARTUP_ID as u16]
+        [
+            OPTIONS_CONNECT_ON_STARTUP_ID as u16,
+            OPTIONS_RECONNECT_ID as u16,
+            OPTIONS_RETRY_ID as u16,
+            OPTIONS_RETRY_TIMES_ID as u16,
+            OPTIONS_RETRY_DELAY_ID as u16,
+        ]
     );
 
     // Down from Connect/Options is the IRC category, which shows its page.
@@ -15148,6 +15159,96 @@ fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
     assert_eq!(after.timestamp, before.timestamp);
     assert_eq!(after.switchbar, before.switchbar);
     assert!(!settings_file_path(&local_app_data).exists());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The Connect page's reconnect and retry controls save to `[connect]`;
+/// Retry and Delay grey with Enable connect retry, and a wrong one
+/// brings its page back with the error.
+#[test]
+fn options_connect_page_saves_reconnect_and_retry() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    let connect_options =
+        |app: &GuiTestApp| -> Result<UiConnectOptions, Box<dyn std::error::Error>> {
+            Ok(app
+                .dump_ui_state()?
+                .options_dialog
+                .ok_or("the dialog is open")?
+                .connect)
+        };
+    assert_eq!(
+        connect_options(&app)?,
+        UiConnectOptions {
+            startup: true,
+            reconnect: true,
+            retry: true,
+            retry_times: "99".to_owned(),
+            retry_delay: "10".to_owned(),
+            retry_fields_enabled: true,
+        }
+    );
+
+    // Clicking Enable connect retry greys Retry and Delay, and again
+    // ungreys them.
+    let retry = unsafe { GetDlgItem(dialog, OPTIONS_RETRY_ID) };
+    unsafe { SendMessageW(retry, BM_CLICK, 0, 0) };
+    let options = connect_options(&app)?;
+    assert!(
+        !options.retry && !options.retry_fields_enabled,
+        "{options:?}"
+    );
+    unsafe { SendMessageW(retry, BM_CLICK, 0, 0) };
+    let options = connect_options(&app)?;
+    assert!(options.retry && options.retry_fields_enabled, "{options:?}");
+
+    unsafe {
+        set_options_check(dialog, OPTIONS_RECONNECT_ID, false);
+        set_options_text(dialog, OPTIONS_RETRY_TIMES_ID, "5");
+        set_options_text(dialog, OPTIONS_RETRY_DELAY_ID, "0");
+    }
+    app.select_options_page("IRC/Messages")?;
+    post_options_command(dialog, IDOK)?;
+    let (message_box, text) = wait_for_owned_message_box(dialog);
+    assert_eq!(text, "Connect retry_delay must be 1-3600");
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog stays open");
+    assert_eq!(options.selected, "Connect/Options");
+    answer_message_box(&app, message_box, IDOK)?;
+    assert!(!settings_file_path(&local_app_data).exists());
+
+    unsafe { set_options_text(dialog, OPTIONS_RETRY_DELAY_ID, "30") };
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    let connect = "[connect]\r\nstartup=on\r\nreconnect=off\r\nretry=on\r\nretry_times=5\r\nretry_delay=30\r\n";
+    assert!(ini.contains(connect), "{connect:?} in {ini:?}");
+
+    // The dialog opens with what was saved.
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    assert_eq!(
+        connect_options(&app)?,
+        UiConnectOptions {
+            startup: true,
+            reconnect: false,
+            retry: true,
+            retry_times: "5".to_owned(),
+            retry_delay: "30".to_owned(),
+            retry_fields_enabled: true,
+        }
+    );
+    post_options_command(dialog, IDCANCEL)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

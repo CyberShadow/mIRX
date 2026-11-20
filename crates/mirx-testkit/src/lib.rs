@@ -1371,6 +1371,8 @@ pub struct UiOptionsDialog {
     pub tree: Vec<String>,
     /// The selected item's path.
     pub selected: String,
+    /// The Connect page's controls.
+    pub connect: UiConnectOptions,
     /// The ids of the shown page's controls.
     pub visible_controls: Vec<u16>,
     /// The Highlight page's list, top to bottom.
@@ -1388,6 +1390,19 @@ pub struct UiOptionsDialog {
     pub tray: UiTrayOptions,
     /// The Tips page's checkboxes.
     pub tips: UiTipsOptions,
+}
+
+/// Options > Connect > Options: its checkboxes, the Retry and Delay
+/// fields as typed, and whether those are enabled (retry on).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiConnectOptions {
+    pub startup: bool,
+    pub reconnect: bool,
+    pub retry: bool,
+    pub retry_times: String,
+    pub retry_delay: String,
+    pub retry_fields_enabled: bool,
 }
 
 /// Options > Display > Tray's checkboxes.

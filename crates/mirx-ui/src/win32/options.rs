@@ -8,6 +8,7 @@ use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::settings::{
     ActivityColors, LoggingSetting, Settings, TipsSetting, TraySetting, parse_button_width,
+    parse_retry_delay, parse_retry_times,
 };
 use super::timestamp::TimestampFormat;
 
@@ -76,6 +77,8 @@ pub(super) fn tree_index(path: &str) -> Option<usize> {
 /// The fields of the form, for pointing at the one that is wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OptionsField {
+    RetryTimes,
+    RetryDelay,
     TimestampFormat,
     SwitchbarButtons,
 }
@@ -83,6 +86,7 @@ pub(super) enum OptionsField {
 impl OptionsField {
     pub(super) fn page(self) -> OptionsPage {
         match self {
+            Self::RetryTimes | Self::RetryDelay => ConnectOptions,
             Self::TimestampFormat => IrcMessages,
             Self::SwitchbarButtons => Display,
         }
@@ -99,6 +103,10 @@ pub(super) struct OptionsError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct OptionsForm {
     pub(super) connect_on_startup: bool,
+    pub(super) reconnect: bool,
+    pub(super) retry: bool,
+    pub(super) retry_times: String,
+    pub(super) retry_delay: String,
     pub(super) timestamp_show: bool,
     pub(super) timestamp_format: String,
     pub(super) switchbar_buttons: String,
@@ -116,6 +124,10 @@ impl OptionsForm {
     pub(super) fn from_settings(settings: &Settings) -> Self {
         Self {
             connect_on_startup: settings.connect.on_startup,
+            reconnect: settings.connect.reconnect,
+            retry: settings.connect.retry,
+            retry_times: settings.connect.retry_times.to_string(),
+            retry_delay: settings.connect.retry_delay.to_string(),
             timestamp_show: settings.timestamp.show,
             timestamp_format: settings.timestamp.format.to_string(),
             switchbar_buttons: settings.switchbar.buttons.to_string(),
@@ -133,6 +145,10 @@ impl OptionsForm {
             field,
             message: reason,
         };
+        let retry_times = parse_retry_times(&self.retry_times)
+            .map_err(|reason| error(OptionsField::RetryTimes, format!("Connect {reason}")))?;
+        let retry_delay = parse_retry_delay(&self.retry_delay)
+            .map_err(|reason| error(OptionsField::RetryDelay, format!("Connect {reason}")))?;
         let format = TimestampFormat::parse(&self.timestamp_format).map_err(|reason| {
             error(OptionsField::TimestampFormat, format!("Timestamp {reason}"))
         })?;
@@ -144,6 +160,10 @@ impl OptionsForm {
         })?;
         let mut settings = current.clone();
         settings.connect.on_startup = self.connect_on_startup;
+        settings.connect.reconnect = self.reconnect;
+        settings.connect.retry = self.retry;
+        settings.connect.retry_times = retry_times;
+        settings.connect.retry_delay = retry_delay;
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
         settings.switchbar.buttons = buttons;
@@ -262,7 +282,7 @@ impl HighlightList {
 #[cfg(test)]
 mod tests {
     use super::super::colors::PaletteIndex;
-    use super::super::settings::{ButtonWidth, FontSetting};
+    use super::super::settings::{ButtonWidth, FontSetting, RetryDelay, RetryTimes};
     use super::*;
 
     fn custom_settings() -> Settings {
@@ -310,6 +330,8 @@ mod tests {
         }
         assert_eq!(FIRST_PAGE, ConnectOptions);
         for field in [
+            OptionsField::RetryTimes,
+            OptionsField::RetryDelay,
             OptionsField::TimestampFormat,
             OptionsField::SwitchbarButtons,
         ] {
@@ -343,6 +365,25 @@ mod tests {
         let mut expected = current.clone();
         expected.connect.on_startup = false;
         assert_eq!(applied(|form| form.connect_on_startup = false), expected);
+
+        let mut expected = current.clone();
+        expected.connect.reconnect = false;
+        assert_eq!(applied(|form| form.reconnect = false), expected);
+
+        let mut expected = current.clone();
+        expected.connect.retry = false;
+        assert_eq!(applied(|form| form.retry = false), expected);
+
+        let mut expected = current.clone();
+        expected.connect.retry_times = RetryTimes::new(5).unwrap();
+        assert_eq!(applied(|form| form.retry_times = "5".to_owned()), expected);
+
+        let mut expected = current.clone();
+        expected.connect.retry_delay = RetryDelay::new(3600).unwrap();
+        assert_eq!(
+            applied(|form| form.retry_delay = "3600".to_owned()),
+            expected
+        );
 
         let mut expected = current.clone();
         expected.timestamp.show = false;
@@ -425,6 +466,49 @@ mod tests {
             form.apply(&current).unwrap_err().field,
             OptionsField::TimestampFormat
         );
+        form.retry_delay = "0".to_owned();
+        assert_eq!(
+            form.apply(&current).unwrap_err().field,
+            OptionsField::RetryDelay
+        );
+        form.retry_times = "1000".to_owned();
+        assert_eq!(
+            form.apply(&current).unwrap_err().field,
+            OptionsField::RetryTimes
+        );
+    }
+
+    #[test]
+    fn wrong_retry_fields_are_reported_on_the_connect_page() {
+        let current = Settings::default();
+        // Greyed (retry off), they are still checked: OK saves them.
+        let mut form = OptionsForm::from_settings(&current);
+        form.retry = false;
+        for times in ["0", "1000", ""] {
+            form.retry_times = times.to_owned();
+            assert_eq!(
+                form.apply(&current),
+                Err(OptionsError {
+                    field: OptionsField::RetryTimes,
+                    message: "Connect retry_times must be 1-999".to_owned(),
+                }),
+                "{times:?}"
+            );
+        }
+        let mut form = OptionsForm::from_settings(&current);
+        for delay in ["0", "3601", ""] {
+            form.retry_delay = delay.to_owned();
+            assert_eq!(
+                form.apply(&current),
+                Err(OptionsError {
+                    field: OptionsField::RetryDelay,
+                    message: "Connect retry_delay must be 1-3600".to_owned(),
+                }),
+                "{delay:?}"
+            );
+        }
+        assert_eq!(OptionsField::RetryTimes.page(), ConnectOptions);
+        assert_eq!(OptionsField::RetryDelay.page(), ConnectOptions);
     }
 
     fn word(word: &str, highlights: bool) -> HighlightWord {

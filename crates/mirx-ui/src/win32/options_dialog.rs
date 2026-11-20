@@ -24,13 +24,13 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CB_ADDSTRING,
-    CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, DefWindowProcW, ES_NUMBER,
-    GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK, LB_ADDSTRING, LB_ERR, LB_GETCOUNT,
-    LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT,
-    LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow, SW_HIDE, SW_SHOW, SendMessageW,
-    ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-    WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
+    CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, DefWindowProcW,
+    ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK, LB_ADDSTRING, LB_ERR,
+    LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT, LBN_SELCHANGE,
+    LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow, SW_HIDE,
+    SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM, WM_NCCREATE,
+    WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
 use mirx_core::HighlightWord;
@@ -55,12 +55,18 @@ use super::{
     create_child_window, expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text,
     run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
-use crate::automation::{UiLoggingOptions, UiOptionsDialog, UiTipsOptions, UiTrayOptions};
+use crate::automation::{
+    UiConnectOptions, UiLoggingOptions, UiOptionsDialog, UiTipsOptions, UiTrayOptions,
+};
 
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
 const OPTIONS_DIALOG_TITLE: &str = "mirx Options";
 pub(super) const OPTIONS_TREE_ID: u16 = 6001;
 pub(super) const OPTIONS_CONNECT_ON_STARTUP_ID: u16 = 6101;
+pub(super) const OPTIONS_RECONNECT_ID: u16 = 6102;
+pub(super) const OPTIONS_RETRY_ID: u16 = 6103;
+pub(super) const OPTIONS_RETRY_TIMES_ID: u16 = 6104;
+pub(super) const OPTIONS_RETRY_DELAY_ID: u16 = 6105;
 pub(super) const OPTIONS_TIMESTAMP_SHOW_ID: u16 = 6201;
 pub(super) const OPTIONS_TIMESTAMP_FORMAT_ID: u16 = 6202;
 pub(super) const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
@@ -97,8 +103,8 @@ const TREE_HEIGHT: i32 = 260;
 const PAGE_X: i32 = DIALOG_MARGIN + TREE_WIDTH + DIALOG_MARGIN;
 const PAGE_WIDTH: i32 = 320;
 const TIMESTAMP_FORMAT_WIDTH: i32 = 120;
-/// Three digits.
-const SWITCHBAR_BUTTONS_WIDTH: i32 = 40;
+/// A number field: up to four digits.
+const NUMBER_FIELD_WIDTH: i32 = 40;
 const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
 /// A colour drop-down's item: a numbered palette box, as tall as the
 /// closed drop-down is with an edit field's height.
@@ -110,6 +116,12 @@ const ACTIVITY_COLOR_DROPPED_ITEMS: i32 = 8;
 /// The form's controls.
 struct Fields {
     connect_on_startup: HWND,
+    reconnect: HWND,
+    retry: HWND,
+    retry_times: HWND,
+    retry_delay: HWND,
+    /// The Retry and Delay rows, greyed while retry is off.
+    retry_rows: Vec<HWND>,
     timestamp_show: HWND,
     timestamp_format: HWND,
     switchbar_buttons: HWND,
@@ -133,6 +145,10 @@ impl Fields {
         let checked = |button| SendMessageW(button, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT;
         OptionsForm {
             connect_on_startup: checked(self.connect_on_startup),
+            reconnect: checked(self.reconnect),
+            retry: checked(self.retry),
+            retry_times: read_window_text(self.retry_times),
+            retry_delay: read_window_text(self.retry_delay),
             timestamp_show: checked(self.timestamp_show),
             timestamp_format: read_window_text(self.timestamp_format),
             switchbar_buttons: read_window_text(self.switchbar_buttons),
@@ -171,6 +187,8 @@ impl Fields {
 
     fn field(&self, field: OptionsField) -> HWND {
         match field {
+            OptionsField::RetryTimes => self.retry_times,
+            OptionsField::RetryDelay => self.retry_delay,
             OptionsField::TimestampFormat => self.timestamp_format,
             OptionsField::SwitchbarButtons => self.switchbar_buttons,
         }
@@ -239,6 +257,11 @@ impl OptionsDialog {
             page_controls: Vec::new(),
             fields: Fields {
                 connect_on_startup: null_mut(),
+                reconnect: null_mut(),
+                retry: null_mut(),
+                retry_times: null_mut(),
+                retry_delay: null_mut(),
+                retry_rows: Vec::new(),
                 timestamp_show: null_mut(),
                 timestamp_format: null_mut(),
                 switchbar_buttons: null_mut(),
@@ -375,22 +398,77 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     let checkbox = WS_TABSTOP | BS_AUTOCHECKBOX as u32;
     let page_top = tree_top;
 
-    state.fields.connect_on_startup = place(
-        control(
-            BUTTON_CLASS_NAME,
+    // mIRC's Connect > Options, with its Retry... dialog's two fields on
+    // the page: OK checks them with the rest.
+    let mut row_y = page_top;
+    for (field, text, id) in [
+        (
+            &mut state.fields.connect_on_startup,
             "Connect on startup",
-            checkbox,
-            0,
             OPTIONS_CONNECT_ON_STARTUP_ID,
-        )?,
-        PAGE_X,
-        page_top,
-        PAGE_WIDTH,
-        DIALOG_CHECKBOX_HEIGHT,
-    );
-    state
-        .page_controls
-        .push((OptionsPage::ConnectOptions, state.fields.connect_on_startup));
+        ),
+        (
+            &mut state.fields.reconnect,
+            "Reconnect on disconnection",
+            OPTIONS_RECONNECT_ID,
+        ),
+        (
+            &mut state.fields.retry,
+            "Enable connect retry",
+            OPTIONS_RETRY_ID,
+        ),
+    ] {
+        *field = place(
+            control(BUTTON_CLASS_NAME, text, checkbox, 0, id)?,
+            PAGE_X,
+            row_y,
+            PAGE_WIDTH,
+            DIALOG_CHECKBOX_HEIGHT,
+        );
+        state
+            .page_controls
+            .push((OptionsPage::ConnectOptions, *field));
+        row_y += DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
+    }
+    // The Retry and Delay rows sit under Enable connect retry, their
+    // fields lined up.
+    let retry_x = PAGE_X + DIALOG_MARGIN;
+    let retry_labels = ["Retry:", "Delay:"];
+    let retry_field_x = retry_x
+        + retry_labels
+            .iter()
+            .map(|text| dialog_text_size(text, PAGE_WIDTH).0)
+            .max()
+            .expect("there are two labels")
+        + DIALOG_GAP;
+    for ((text, unit), (field, id)) in retry_labels.into_iter().zip(["times", "seconds"]).zip([
+        (&mut state.fields.retry_times, OPTIONS_RETRY_TIMES_ID),
+        (&mut state.fields.retry_delay, OPTIONS_RETRY_DELAY_ID),
+    ]) {
+        let (row_label, _) = label_beside_field(text, retry_x, row_y)?;
+        *field = place(
+            control(
+                EDIT_CLASS_NAME,
+                "",
+                DIALOG_EDIT_STYLE | ES_NUMBER as u32,
+                DIALOG_EDIT_EX_STYLE,
+                id,
+            )?,
+            retry_field_x,
+            row_y,
+            NUMBER_FIELD_WIDTH,
+            DIALOG_EDIT_HEIGHT,
+        );
+        let (unit_label, _) =
+            label_beside_field(unit, retry_field_x + NUMBER_FIELD_WIDTH + DIALOG_GAP, row_y)?;
+        for control in [row_label, *field, unit_label] {
+            state
+                .page_controls
+                .push((OptionsPage::ConnectOptions, control));
+            state.fields.retry_rows.push(control);
+        }
+        row_y += DIALOG_EDIT_HEIGHT + DIALOG_GAP;
+    }
 
     state.fields.timestamp_show = place(
         control(
@@ -451,12 +529,12 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         )?,
         buttons_x,
         page_top,
-        SWITCHBAR_BUTTONS_WIDTH,
+        NUMBER_FIELD_WIDTH,
         DIALOG_EDIT_HEIGHT,
     );
     let (pixels_label, _) = label_beside_field(
         "pixels wide (40-400)",
-        buttons_x + SWITCHBAR_BUTTONS_WIDTH + DIALOG_GAP,
+        buttons_x + NUMBER_FIELD_WIDTH + DIALOG_GAP,
         page_top,
     )?;
     for control in [buttons_label, state.fields.switchbar_buttons, pixels_label] {
@@ -755,19 +833,11 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
 
     let form = OptionsForm::from_settings(&state.current);
     let check = |checked: bool| (if checked { BST_CHECKED } else { BST_UNCHECKED }) as WPARAM;
-    SendMessageW(
-        state.fields.connect_on_startup,
-        BM_SETCHECK,
-        check(form.connect_on_startup),
-        0,
-    );
-    SendMessageW(
-        state.fields.timestamp_show,
-        BM_SETCHECK,
-        check(form.timestamp_show),
-        0,
-    );
     for (check_box, checked) in [
+        (state.fields.connect_on_startup, form.connect_on_startup),
+        (state.fields.reconnect, form.reconnect),
+        (state.fields.retry, form.retry),
+        (state.fields.timestamp_show, form.timestamp_show),
         (state.fields.log_channels, form.logging.channels),
         (state.fields.log_queries, form.logging.queries),
         (state.fields.log_strip_codes, form.logging.strip_codes),
@@ -782,6 +852,9 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     ] {
         SendMessageW(check_box, BM_SETCHECK, check(checked), 0);
     }
+    set_window_text(state.fields.retry_times, &form.retry_times);
+    set_window_text(state.fields.retry_delay, &form.retry_delay);
+    grey_retry_rows(&state.fields);
     set_window_text(state.fields.timestamp_format, &form.timestamp_format);
     set_window_text(state.fields.switchbar_buttons, &form.switchbar_buttons);
     let ActivityColors {
@@ -801,6 +874,14 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     // Selecting the page's item shows it, through TVN_SELCHANGEDW.
     select_page(hwnd, FIRST_PAGE);
     Ok(())
+}
+
+/// The Retry and Delay rows are greyed while Enable connect retry is off.
+unsafe fn grey_retry_rows(fields: &Fields) {
+    let retry = SendMessageW(fields.retry, BM_GETCHECK, 0, 0) == BST_CHECKED as LRESULT;
+    for control in &fields.retry_rows {
+        EnableWindow(*control, retry.into());
+    }
 }
 
 unsafe fn select_page(hwnd: HWND, page: OptionsPage) {
@@ -1018,6 +1099,13 @@ pub(super) unsafe extern "system" fn window_proc(
             );
             0
         }
+        WM_COMMAND
+            if wparam & 0xffff == usize::from(OPTIONS_RETRY_ID)
+                && (wparam >> 16) as u32 == BN_CLICKED =>
+        {
+            grey_retry_rows(&dialog_state(hwnd).fields);
+            0
+        }
         WM_COMMAND if wparam & 0xffff == IDCANCEL as usize => {
             end_modal_dialog(hwnd);
             0
@@ -1108,8 +1196,28 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
             String::from_utf16_lossy(&text[..length])
         })
         .collect();
+    let retry_rows_enabled: Vec<bool> = state
+        .fields
+        .retry_rows
+        .iter()
+        .map(|control| IsWindowEnabled(*control) != 0)
+        .collect();
+    let retry_fields_enabled = retry_rows_enabled[0];
+    if retry_rows_enabled.contains(&!retry_fields_enabled) {
+        return Err(format!(
+            "the Retry and Delay rows are half greyed: {retry_rows_enabled:?}"
+        ));
+    }
     let form = state.fields.read();
     Ok(UiOptionsDialog {
+        connect: UiConnectOptions {
+            startup: form.connect_on_startup,
+            reconnect: form.reconnect,
+            retry: form.retry,
+            retry_times: form.retry_times.clone(),
+            retry_delay: form.retry_delay.clone(),
+            retry_fields_enabled,
+        },
         tree: paths,
         selected: selected.ok_or_else(|| "the options tree has no selection".to_owned())?,
         visible_controls,

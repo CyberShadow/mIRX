@@ -1149,6 +1149,8 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) tree: Vec<String>,
     /// The selected item's path.
     pub(crate) selected: String,
+    /// The Connect page's controls.
+    pub(crate) connect: UiConnectOptions,
     /// The ids of the shown page's controls.
     pub(crate) visible_controls: Vec<u16>,
     /// The Highlight page's list, top to bottom.
@@ -1166,6 +1168,19 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) tray: UiTrayOptions,
     /// The Tips page's checkboxes.
     pub(crate) tips: UiTipsOptions,
+}
+
+/// Options > Connect > Options: its checkboxes, the Retry and Delay
+/// fields as typed, and whether those are enabled (retry on).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiConnectOptions {
+    pub(crate) startup: bool,
+    pub(crate) reconnect: bool,
+    pub(crate) retry: bool,
+    pub(crate) retry_times: String,
+    pub(crate) retry_delay: String,
+    pub(crate) retry_fields_enabled: bool,
 }
 
 /// Options > Display > Tray's checkboxes.
@@ -6070,6 +6085,14 @@ mod tests {
                     options_dialog: Some(super::UiOptionsDialog {
                         tree: vec!["Connect".to_owned(), "Connect/Options".to_owned()],
                         selected: "Connect/Options".to_owned(),
+                        connect: super::UiConnectOptions {
+                            startup: true,
+                            reconnect: false,
+                            retry: true,
+                            retry_times: "99".to_owned(),
+                            retry_delay: "".to_owned(),
+                            retry_fields_enabled: true,
+                        },
                         visible_controls: vec![6101],
                         highlight_items: vec!["deploy".to_owned()],
                         highlight_controls_enabled: true,
@@ -6318,6 +6341,14 @@ mod tests {
                     "options_dialog":{
                         "tree":["Connect","Connect/Options"],
                         "selected":"Connect/Options",
+                        "connect":{
+                            "startup":true,
+                            "reconnect":false,
+                            "retry":true,
+                            "retry_times":"99",
+                            "retry_delay":"",
+                            "retry_fields_enabled":true
+                        },
                         "visible_controls":[6101],
                         "highlight_items":["deploy"],
                         "highlight_controls_enabled":true,
