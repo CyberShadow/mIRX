@@ -5,6 +5,7 @@ use super::*;
 
 pub(super) const PROFILE_SUBDIR: &str = "mirx\\ui-shell";
 pub(super) const SESSION_FILE_NAME: &str = "session.json";
+pub(super) const CRASH_LOG_FILE_NAME: &str = "crash.log";
 pub(super) const SAVED_SESSION_VERSION: u32 = 2;
 const PROTECTED_SESSION_MAGIC: &[u8] = b"mirx-ui-session:v1\0";
 const SESSION_DPAPI_ENTROPY: &[u8] = b"mirx-ui/session/v1";

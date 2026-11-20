@@ -479,6 +479,9 @@ unsafe fn execute_command(hwnd: HWND, command: ParsedCommand) -> Result<Value, F
                 .map_err(|(code, message)| failure_response(Some(id.clone()), code, message))?;
             serialize_success_json(&id, AcceptedResponse { accepted: true })
         }
+        ParsedCommand::Crash { args, .. } => {
+            panic!("{}", args.message);
+        }
         ParsedCommand::ChooseTrayMenuItem { id, args } => {
             unsafe { choose_tray_menu_item(hwnd, &args.label) }.map_err(|message| {
                 failure_response(Some(id.clone()), "unknown_tray_menu_item", message)
@@ -804,6 +807,7 @@ fn command_request_id(command: &ParsedCommand) -> &str {
         | ParsedCommand::OpenDialog { id, .. }
         | ParsedCommand::SelectOptionsPage { id, .. }
         | ParsedCommand::ChooseTrayMenuItem { id, .. }
+        | ParsedCommand::Crash { id, .. }
         | ParsedCommand::FindActiveView { id, .. }
         | ParsedCommand::AppendSyntheticEvents { id, .. }
         | ParsedCommand::RecoverE2ee { id, .. }

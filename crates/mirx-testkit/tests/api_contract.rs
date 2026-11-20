@@ -7454,6 +7454,12 @@ fn non_windows_new_methods_report_unsupported_driver() {
         "mirx-testkit requires the Windows target"
     );
 
+    let error = app.crash("boom").expect_err("crash must fail off Windows");
+    assert_eq!(
+        error.to_string(),
+        "mirx-testkit requires the Windows target"
+    );
+
     let error = app
         .selected_navigation_path()
         .expect_err("selected_navigation_path must fail off Windows");

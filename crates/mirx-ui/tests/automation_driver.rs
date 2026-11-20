@@ -203,6 +203,11 @@ impl GuiTestApp {
     fn close(self, timeout: Duration) -> Result<std::process::ExitStatus, TestkitError> {
         self.app.close(timeout)
     }
+
+    /// Waits for mirx to exit on its own, still holding the GUI lock.
+    fn wait_for_exit(self, timeout: Duration) -> Result<std::process::ExitStatus, TestkitError> {
+        self.app.wait_for_exit(timeout)
+    }
 }
 
 fn gui_test_lock() -> &'static Mutex<()> {
@@ -3032,7 +3037,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 58);
+    assert_eq!(version.protocol_version, 59);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -21589,6 +21594,42 @@ fn editbox_format_keys_insert_mirc_codes() -> Result<(), Box<dyn std::error::Err
     assert_eq!(app.compose_text()?, "\x02hi\x02 \x034,1red");
 
     drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+// Crash reports.
+
+/// A panic on the UI thread writes crash.log in the profile and ends the
+/// process. An automation run never shows the box: the exit within the
+/// timeout proves it, as a box would block the abort. The test's stderr
+/// shows the default hook's panic message and Wine's line for the abort;
+/// both are expected.
+#[test]
+fn crash_writes_crash_log_and_ends_the_process() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+
+    assert!(app.crash("automation-requested crash").is_err());
+    let status = app.wait_for_exit(Duration::from_secs(20))?;
+    assert!(!status.success(), "{status:?}");
+
+    let log = fs::read_to_string(
+        local_app_data
+            .join("mirx")
+            .join("ui-shell")
+            .join("crash.log"),
+    )?;
+    for expected in [
+        format!("mirx {} crashed: ", env!("CARGO_PKG_VERSION")),
+        "\r\nThread: main\r\n".to_owned(),
+        "\r\nPanic: automation-requested crash\r\n".to_owned(),
+        "\r\nAt: crates".to_owned(),
+        "\r\nModule base: 0x".to_owned(),
+    ] {
+        assert!(log.contains(&expected), "{expected:?} in {log}");
+    }
+
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }

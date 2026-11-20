@@ -193,6 +193,7 @@ mod commands;
 mod compose;
 mod connection;
 mod core_events;
+mod crash;
 mod dialogs;
 mod echo;
 mod errors;
@@ -242,8 +243,8 @@ mod views;
 mod window_data;
 
 use account::{
-    PROFILE_SUBDIR, delete_saved_session, load_or_create_store_passphrase, profile_dir,
-    save_session, session_path, submit_login, submit_logout, submit_recover_e2ee,
+    CRASH_LOG_FILE_NAME, PROFILE_SUBDIR, delete_saved_session, load_or_create_store_passphrase,
+    profile_dir, save_session, session_path, submit_login, submit_logout, submit_recover_e2ee,
     submit_restore_saved_session, submit_restore_session, submit_setup_e2ee_recovery,
     submit_start_sync,
 };
@@ -840,6 +841,11 @@ fn run_inner(command: AppCommand) -> Result<ExitCode, String> {
         cli_text(CliStream::Stdout, HELP);
         return Ok(ExitCode::SUCCESS);
     }
+    // First, so a panic during startup is reported too.
+    crash::install(
+        crash::crash_presentation(&command),
+        profile_dir()?.join(CRASH_LOG_FILE_NAME),
+    );
 
     let render_state_events = match &command {
         AppCommand::Run(options) => load_render_state(options)?,

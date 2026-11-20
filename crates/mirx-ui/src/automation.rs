@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 58;
+pub(crate) const PROTOCOL_VERSION: u32 = 59;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -76,6 +76,7 @@ pub(crate) const COMMAND_ID_OPEN_DIALOG: u32 = 58;
 pub(crate) const COMMAND_ID_SELECT_OPTIONS_PAGE: u32 = 59;
 pub(crate) const COMMAND_ID_SET_NAVIGATION_EXPANDED: u32 = 60;
 pub(crate) const COMMAND_ID_CHOOSE_TRAY_MENU_ITEM: u32 = 61;
+pub(crate) const COMMAND_ID_CRASH: u32 = 62;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandKind {
@@ -138,6 +139,7 @@ pub(crate) enum CommandKind {
     SelectOptionsPage,
     SetNavigationExpanded,
     ChooseTrayMenuItem,
+    Crash,
 }
 
 impl CommandKind {
@@ -212,6 +214,7 @@ impl CommandKind {
             COMMAND_ID_SELECT_OPTIONS_PAGE => Some(Self::SelectOptionsPage),
             COMMAND_ID_SET_NAVIGATION_EXPANDED => Some(Self::SetNavigationExpanded),
             COMMAND_ID_CHOOSE_TRAY_MENU_ITEM => Some(Self::ChooseTrayMenuItem),
+            COMMAND_ID_CRASH => Some(Self::Crash),
             _ => None,
         }
     }
@@ -440,6 +443,12 @@ pub(crate) enum ParsedCommand {
         id: String,
         args: ChooseTrayMenuItemArgs,
     },
+    /// Panics on the UI thread with the given message: the crash reporter's
+    /// test hook.
+    Crash {
+        id: String,
+        args: CrashArgs,
+    },
 }
 
 impl ParsedCommand {
@@ -514,6 +523,7 @@ impl ParsedCommand {
             Self::SelectOptionsPage { .. } => CommandKind::SelectOptionsPage,
             Self::SetNavigationExpanded { .. } => CommandKind::SetNavigationExpanded,
             Self::ChooseTrayMenuItem { .. } => CommandKind::ChooseTrayMenuItem,
+            Self::Crash { .. } => CommandKind::Crash,
         }
     }
 }
@@ -706,6 +716,12 @@ pub(crate) struct OpenDialogArgs {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChooseTrayMenuItemArgs {
     pub(crate) label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CrashArgs {
+    pub(crate) message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2983,6 +2999,10 @@ pub(crate) fn parse_command_request(
             id: envelope.id.clone(),
             args: parse_args_required::<ChooseTrayMenuItemArgs>(&envelope.id, envelope.args)?,
         }),
+        CommandKind::Crash => Ok(ParsedCommand::Crash {
+            id: envelope.id.clone(),
+            args: parse_args_required::<CrashArgs>(&envelope.id, envelope.args)?,
+        }),
         CommandKind::Login => Ok(ParsedCommand::Login {
             id: envelope.id.clone(),
             args: parse_args_required::<LoginArgs>(&envelope.id, envelope.args)?,
@@ -3236,7 +3256,7 @@ mod tests {
         COMMAND_ID_ACCEPT_INVITE_VIA_ROOM_MENU, COMMAND_ID_ACCEPT_VERIFICATION,
         COMMAND_ID_APPEND_SYNTHETIC_EVENTS, COMMAND_ID_ARRANGE_WINDOWS_VIA_WINDOW_MENU,
         COMMAND_ID_CANCEL_VERIFICATION, COMMAND_ID_CHOOSE_TRAY_MENU_ITEM,
-        COMMAND_ID_CONFIRM_VERIFICATION_SAS, COMMAND_ID_DUMP_COMPOSE_TEXT,
+        COMMAND_ID_CONFIRM_VERIFICATION_SAS, COMMAND_ID_CRASH, COMMAND_ID_DUMP_COMPOSE_TEXT,
         COMMAND_ID_DUMP_MEMBER_MENU_STATE, COMMAND_ID_DUMP_MESSAGE_MENU_STATE,
         COMMAND_ID_DUMP_MODEL, COMMAND_ID_DUMP_ROOM_ACTIVITY, COMMAND_ID_DUMP_ROOM_MENU_STATE,
         COMMAND_ID_DUMP_SELECTED_NAVIGATION_PATH, COMMAND_ID_DUMP_UI_STATE,
@@ -3261,7 +3281,7 @@ mod tests {
         COMMAND_ID_SET_NAVIGATION_EXPANDED, COMMAND_ID_SET_VIEW_WINDOW_STATE,
         COMMAND_ID_SETUP_E2EE_RECOVERY, COMMAND_ID_START_SYNC, COMMAND_ID_WAIT_IDLE,
         ChooseTrayMenuItemArgs, CommandKind, ComposeKey, ComposeTextResponse, ConnectionState,
-        ContextMenuCommand, DumpE2eeRecoverySetupResult, DumpMemberModerationAction,
+        ContextMenuCommand, CrashArgs, DumpE2eeRecoverySetupResult, DumpMemberModerationAction,
         DumpMemberPowerRole, DumpModel, DumpRoomActivity, DumpRoomActivityArgs,
         DumpRoomActivityKind, DumpRoomActivityRelation, DumpRoomActivityResponse,
         DumpRoomAudioActivity, DumpRoomAudioInfo, DumpRoomEncryptedFileHashes,
@@ -3455,8 +3475,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_58() {
-        assert_eq!(PROTOCOL_VERSION, 58);
+    fn protocol_version_is_59() {
+        assert_eq!(PROTOCOL_VERSION, 59);
     }
 
     #[test]
@@ -3682,9 +3702,10 @@ mod tests {
             Some(CommandKind::ChooseTrayMenuItem)
         );
         assert_eq!(
-            CommandKind::from_id(COMMAND_ID_CHOOSE_TRAY_MENU_ITEM + 1),
-            None
+            CommandKind::from_id(COMMAND_ID_CRASH),
+            Some(CommandKind::Crash)
         );
+        assert_eq!(CommandKind::from_id(COMMAND_ID_CRASH + 1), None);
     }
 
     #[test]
@@ -4911,6 +4932,32 @@ mod tests {
     }
 
     #[test]
+    fn crash_parses_a_message_and_rejects_other_shapes() {
+        assert_eq!(
+            parse_command_request(
+                COMMAND_ID_CRASH,
+                br#"{"id":"crash","args":{"message":"boom"}}"#,
+            )
+            .unwrap(),
+            ParsedCommand::Crash {
+                id: "crash".to_owned(),
+                args: CrashArgs {
+                    message: "boom".to_owned(),
+                },
+            }
+        );
+        for request in [
+            br#"{"id":"crash","args":{}}"#.as_slice(),
+            br#"{"id":"crash"}"#.as_slice(),
+            br#"{"id":"crash","args":{"message":1}}"#.as_slice(),
+            br#"{"id":"crash","args":{"message":"boom","now":true}}"#.as_slice(),
+        ] {
+            let error = parse_command_request(COMMAND_ID_CRASH, request).unwrap_err();
+            assert_eq!(error.err.code, "invalid_args", "unexpected error {error:?}");
+        }
+    }
+
+    #[test]
     fn set_navigation_expanded_names_a_view_or_a_space() {
         assert_eq!(
             parse_command_request(
@@ -5448,7 +5495,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":58,
+                    "protocol_version":59,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })

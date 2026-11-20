@@ -135,6 +135,8 @@ const COMMAND_ID_SET_NAVIGATION_EXPANDED: u32 = 60;
 #[cfg(windows)]
 const COMMAND_ID_CHOOSE_TRAY_MENU_ITEM: u32 = 61;
 #[cfg(windows)]
+const COMMAND_ID_CRASH: u32 = 62;
+#[cfg(windows)]
 const RESPONSE_MAPPING_CAPACITY: usize = 4 * 1024 * 1024;
 #[cfg(windows)]
 const RESPONSE_JSON_CAPACITY: usize = RESPONSE_MAPPING_CAPACITY - std::mem::size_of::<u32>();
@@ -2214,6 +2216,15 @@ impl MirxApp {
         self.inner.close(timeout)
     }
 
+    /// Waits until a launched mirx has exited on its own (after `crash`, for
+    /// one), killing it at the timeout.
+    pub fn wait_for_exit(
+        self,
+        timeout: Duration,
+    ) -> Result<std::process::ExitStatus, TestkitError> {
+        self.inner.wait_for_exit(timeout)
+    }
+
     pub fn dump_model(&self) -> Result<Model, TestkitError> {
         self.inner.dump_model()
     }
@@ -2425,6 +2436,13 @@ impl MirxApp {
     /// the tray with that window active.
     pub fn choose_tray_menu_item(&self, label: &str) -> Result<(), TestkitError> {
         self.inner.choose_tray_menu_item(label)
+    }
+
+    /// Makes mirx panic on its UI thread with `message`, to exercise its
+    /// crash reporter. mirx ends while handling it, so the request fails;
+    /// the result is whatever the transport saw.
+    pub fn crash(&self, message: &str) -> Result<(), TestkitError> {
+        self.inner.crash(message)
     }
 
     pub fn selected_navigation_path(&self) -> Result<Vec<NavigationPathSegment>, TestkitError> {
@@ -2890,6 +2908,13 @@ struct ChooseTrayMenuItemArgs<'a> {
 }
 
 #[cfg(windows)]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct CrashArgs<'a> {
+    message: &'a str,
+}
+
+#[cfg(windows)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FindActiveViewRequestArgs<'a> {
@@ -3059,6 +3084,15 @@ mod imp {
         }
 
         pub(crate) fn close(
+            self,
+            _timeout: Duration,
+        ) -> Result<std::process::ExitStatus, TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn wait_for_exit(
             self,
             _timeout: Duration,
         ) -> Result<std::process::ExitStatus, TestkitError> {
@@ -3313,6 +3347,12 @@ mod imp {
         }
 
         pub(crate) fn choose_tray_menu_item(&self, _label: &str) -> Result<(), TestkitError> {
+            Err(TestkitError::UnsupportedPlatform(
+                "mirx-testkit requires the Windows target",
+            ))
+        }
+
+        pub(crate) fn crash(&self, _message: &str) -> Result<(), TestkitError> {
             Err(TestkitError::UnsupportedPlatform(
                 "mirx-testkit requires the Windows target",
             ))
@@ -3691,15 +3731,27 @@ mod imp {
         }
 
         pub(crate) fn close(
+            self,
+            timeout: Duration,
+        ) -> Result<std::process::ExitStatus, TestkitError> {
+            if self.owned_child.is_none() {
+                return Err(TestkitError::Launch(
+                    "only a launched mirx-ui can be closed".to_owned(),
+                ));
+            }
+            if unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
+                return Err(TestkitError::Io(std::io::Error::last_os_error()));
+            }
+            self.wait_for_exit(timeout)
+        }
+
+        pub(crate) fn wait_for_exit(
             mut self,
             timeout: Duration,
         ) -> Result<std::process::ExitStatus, TestkitError> {
             let mut child = self.owned_child.take().ok_or_else(|| {
-                TestkitError::Launch("only a launched mirx-ui can be closed".to_owned())
+                TestkitError::Launch("only a launched mirx-ui can be waited for".to_owned())
             })?;
-            if unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) } == 0 {
-                return Err(TestkitError::Io(std::io::Error::last_os_error()));
-            }
             let deadline = Instant::now() + timeout;
             loop {
                 if let Some(status) = child.try_wait()? {
@@ -3709,7 +3761,7 @@ mod imp {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(TestkitError::Timeout(
-                        "timed out waiting for mirx-ui to exit after WM_CLOSE".to_owned(),
+                        "timed out waiting for mirx-ui to exit".to_owned(),
                     ));
                 }
                 thread::sleep(DEFAULT_POLL_INTERVAL);
@@ -4118,6 +4170,10 @@ mod imp {
                 ChooseTrayMenuItemArgs { label },
                 "CHOOSE_TRAY_MENU_ITEM",
             )
+        }
+
+        pub(crate) fn crash(&self, message: &str) -> Result<(), TestkitError> {
+            self.send_accepted_command(COMMAND_ID_CRASH, CrashArgs { message }, "CRASH")
         }
 
         pub(crate) fn selected_navigation_path(
