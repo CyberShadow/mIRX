@@ -66,6 +66,8 @@ impl LoopbackListener {
                     let (stream, _) = accepted?;
                     requests.push(read_request_head(stream));
                 }
+                // Answers to stray requests are a courtesy: a failure to
+                // send one is no failure of the sign-in.
                 Some((mut stream, head)) = requests.next() => {
                     let Some(target) = head.as_deref().and_then(request_target) else {
                         let _ = respond(&mut stream, "400 Bad Request", "").await;
@@ -73,7 +75,6 @@ impl LoopbackListener {
                     };
                     let (path, query) = target.split_once('?').unwrap_or((target, ""));
                     if path != self.redirect_uri.path() {
-                        // A stray request's answer is a courtesy.
                         let _ = respond(&mut stream, "404 Not Found", "").await;
                         continue;
                     }
@@ -93,7 +94,8 @@ async fn read_request_head(mut stream: TcpStream) -> (TcpStream, Option<String>)
     let head = tokio::time::timeout(REQUEST_TIMEOUT, async {
         let mut head = Vec::new();
         let mut buffer = [0; 1024];
-        while !head.ends_with(b"\r\n\r\n") {
+        // Anything after the blank line (a browser sends none) is ignored.
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
             let read = stream.read(&mut buffer).await.ok()?;
             if read == 0 || head.len() + read > MAX_REQUEST_HEAD {
                 return None;
