@@ -25,6 +25,9 @@ const SYSMENU_FIND_LABEL: &str = "Find &Text...\tCtrl+F";
 /// A room window's window-menu Send File..., mIRC's DCC Send dialog.
 const SYSMENU_ID_SEND_FILE: usize = 0x0130;
 const SYSMENU_SEND_FILE_LABEL: &str = "Send &File...";
+/// The window menu's checkable Logging, mIRC's: whether the window logs.
+const SYSMENU_ID_LOGGING: usize = 0x0140;
+const SYSMENU_LOGGING_LABEL: &str = "&Logging";
 
 struct MdiChildCreateState {
     view_id: ViewId,
@@ -163,6 +166,13 @@ unsafe extern "system" fn mdi_child_window_proc(
             });
             if let Err(message) = sent {
                 show_error_message(frame, "Send File", &message);
+            }
+            0
+        }
+        WM_SYSCOMMAND if wparam & 0xFFF0 == SYSMENU_ID_LOGGING => {
+            let frame = frame_window_for(hwnd);
+            if let Err(message) = toggle_window_logging(frame, hwnd) {
+                show_error_message(frame, "Logging", &message);
             }
             0
         }
@@ -729,11 +739,17 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
             return Err(last_os_error("EnableMenuItem Status SC_CLOSE"));
         }
     }
-    // mIRC's window menu has Find Text and the font too. The Rooms List
-    // has no text of its own to find. Only a room takes files: a thread
-    // cannot hold an attachment yet.
+    // mIRC's window menu has Find Text, Logging and the font too. The
+    // Rooms List has no text of its own to find or log. Only a room takes
+    // files: a thread cannot hold an attachment yet.
     let find_label = wide_null(SYSMENU_FIND_LABEL);
     let send_file_label = wide_null(SYSMENU_SEND_FILE_LABEL);
+    let logging_label = wide_null(SYSMENU_LOGGING_LABEL);
+    let logging_flags = if logging_item_checked(state_ref(frame), view_id) {
+        MF_STRING | MF_CHECKED
+    } else {
+        MF_STRING
+    };
     let font_label = wide_null(SYSMENU_FONT_LABEL);
     if AppendMenuW(system_menu, MF_SEPARATOR, 0, null()) == 0
         || (view_has_editbox(view_id)
@@ -745,15 +761,45 @@ unsafe fn create_mdi_child_controls(child: HWND, view_id: &ViewId) -> Result<(),
                 SYSMENU_ID_SEND_FILE,
                 send_file_label.as_ptr(),
             ) == 0)
+        || (view_has_editbox(view_id)
+            && AppendMenuW(
+                system_menu,
+                logging_flags,
+                SYSMENU_ID_LOGGING,
+                logging_label.as_ptr(),
+            ) == 0)
         || AppendMenuW(system_menu, MF_STRING, SYSMENU_ID_FONT, font_label.as_ptr()) == 0
     {
         return Err(last_os_error(
-            "AppendMenuW window menu Find Text..., Send File... and Font...",
+            "AppendMenuW window menu Find Text..., Send File..., Logging and Font...",
         ));
     }
 
     layout_mdi_child(child);
     Ok(())
+}
+
+/// The window menu's Logging: turns the log of the window that owns the
+/// menu on or off. That window need not be the active one.
+unsafe fn toggle_window_logging(frame: HWND, child: HWND) -> Result<(), String> {
+    let view_id = log_view(&state_ref(frame).hwnd_views[&(child as isize)])?;
+    let on = view_log_path(state_ref(frame), &view_id).is_none();
+    let line = set_view_logging(state_mut(frame), &view_id, on)?;
+    echo_in_active_view(frame, [line])
+}
+
+/// Checks or clears a window menu's Logging item.
+pub(super) unsafe fn check_window_menu_logging(child: HWND, check: u32) {
+    let previous = CheckMenuItem(
+        GetSystemMenu(child, 0),
+        SYSMENU_ID_LOGGING as u32,
+        MF_BYCOMMAND | check,
+    );
+    assert_ne!(
+        previous,
+        u32::MAX,
+        "every window with text has a Logging item"
+    );
 }
 
 pub(super) unsafe fn layout_mdi_child(child: HWND) {
@@ -895,6 +941,7 @@ pub(super) unsafe fn ensure_view(hwnd: HWND, view_id: ViewId) -> Result<HWND, St
             history: ComposeHistory::default(),
             target: None,
         }),
+        log: ViewLog::for_new_view(&view_id),
     };
 
     let state = state_mut(hwnd);
@@ -971,7 +1018,10 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
     disarm_vanished_compose_target(state_mut(hwnd), view_id);
     match view_id {
         ViewId::RoomList => unreachable!("the Rooms List returned above"),
+        // Each branch logs first: a log that fails prints why in the
+        // window, which the rows built next then show.
         ViewId::Status => {
+            write_view_log(state_mut(hwnd), view_id);
             let (rows, indent_sample) = {
                 let state = state_ref(hwnd);
                 let timestamps = state.timestamps();
@@ -986,6 +1036,8 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
             InvalidateRect(content, null(), 1);
         }
         ViewId::Room(room_id) => {
+            decide_auto_log(state_mut(hwnd), view_id);
+            write_view_log(state_mut(hwnd), view_id);
             let (rows, indent_sample, member_rows, image_requests, reply_target_requests) = {
                 let state = state_ref(hwnd);
                 let room = room_by_id(&state.model.rooms, room_id)

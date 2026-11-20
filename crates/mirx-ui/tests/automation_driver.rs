@@ -2987,7 +2987,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 53);
+    assert_eq!(version.protocol_version, 54);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5370,6 +5370,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
          event=5\r\nmessage=4\r\nhighlight=12\r\n\
          [treebar]\r\nshow=on\r\n\
+         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
          notice=5\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
@@ -5380,6 +5381,478 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
 
     let app = launch()?;
     assert!(hello_line(&app)?.starts_with("[22:13:20] <"));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The window menu's Logging id.
+const SYSMENU_ID_LOGGING: WPARAM = 0x0140;
+
+fn log_file_path(local_app_data: &Path, stem: &str) -> PathBuf {
+    local_app_data
+        .join("mirx")
+        .join("ui-shell")
+        .join("logs")
+        .join(format!("{stem}.log"))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the clock is past the epoch")
+        .as_millis() as u64
+}
+
+/// `[HH:nn]` at `ms`, in UTC: the harness's time zone.
+fn utc_hh_nn(ms: u64) -> String {
+    let minutes = ms / 60_000 % (24 * 60);
+    format!("[{:02}:{:02}]", minutes / 60, minutes % 60)
+}
+
+/// A log's lines, each session's start and close time checked to be
+/// asctime's and replaced by `*`.
+fn read_log(path: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let text = fs::read_to_string(path)?;
+    let text = text
+        .strip_suffix("\r\n")
+        .ok_or_else(|| format!("{} must end with a line break: {text:?}", path.display()))?;
+    Ok(text
+        .split("\r\n")
+        .map(|line| {
+            for prefix in ["Session Start: ", "Session Close: "] {
+                if let Some(time) = line.strip_prefix(prefix) {
+                    // `Fri Nov 20 14:03:12 2026`
+                    let fields = time.split(' ').collect::<Vec<_>>();
+                    assert!(
+                        fields.len() == 5
+                            && fields[0].len() == 3
+                            && fields[1].len() == 3
+                            && fields[2].len() == 2
+                            && fields[3].len() == 8
+                            && fields[4].len() == 4,
+                        "{line:?}"
+                    );
+                    return format!("{prefix}*");
+                }
+            }
+            line.to_owned()
+        })
+        .collect())
+}
+
+/// A logged line without its `[HH:nn] ` timestamp, for lines whose time is
+/// the clock's.
+fn untimed(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    assert!(
+        bytes.len() > 8
+            && bytes[0] == b'['
+            && bytes[3] == b':'
+            && bytes[6] == b']'
+            && bytes[7] == b' ',
+        "{line:?}"
+    );
+    &line[8..]
+}
+
+fn write_logging_settings(
+    local_app_data: &Path,
+    logging: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let path = settings_file_path(local_app_data);
+    fs::create_dir_all(path.parent().expect("mirx.ini is in the profile"))?;
+    fs::write(path, format!("[logging]\r\n{logging}"))?;
+    Ok(())
+}
+
+fn view_log(
+    app: &MirxApp,
+    identity: &ViewIdentity,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    Ok(find_view(&app.dump_ui_state()?, identity).log.clone())
+}
+
+#[test]
+fn log_command_logs_a_windows_new_lines_until_turned_off() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    let last_line = |app: &MirxApp| -> Result<String, Box<dyn std::error::Error>> {
+        let ui_state = app.dump_ui_state()?;
+        Ok(untimed(find_view(&ui_state, &beta).lines.last().expect("a line")).to_owned())
+    };
+
+    type_commands(&app, &["/log"])?;
+    assert_eq!(last_line(&app)?, "* Logging is off");
+    assert_eq!(view_log(&app, &beta)?, None);
+
+    type_commands(&app, &["/log on"])?;
+    let path = view_log(&app, &beta)?.expect("Beta logs");
+    assert!(path.ends_with(r"\logs\!beta.example.log"), "{path}");
+    assert_eq!(last_line(&app)?, format!("* Logging on: {path}"));
+    type_commands(&app, &["/log on"])?;
+    assert_eq!(last_line(&app)?, format!("* Logging is already on: {path}"));
+
+    let said_at = now_ms();
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        text_event("!beta:example", "@bob:example", said_at, "logged hello"),
+        // From before the log: history, not news.
+        text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_000_030_000,
+            "older line",
+        ),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    type_commands(&app, &["/log"])?;
+    assert_eq!(last_line(&app)?, format!("* Logging is on: {path}"));
+    type_commands(&app, &["/log off"])?;
+    assert_eq!(last_line(&app)?, format!("* Logging off: {path}"));
+    assert_eq!(view_log(&app, &beta)?, None);
+    type_commands(&app, &["/log off"])?;
+    assert_eq!(last_line(&app)?, "* Logging is already off");
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!beta:example",
+        "@bob:example",
+        now_ms(),
+        "after the log",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let log = read_log(&log_file_path(&local_app_data, "!beta.example"))?;
+    assert_eq!(
+        log[..2],
+        [
+            "Session Start: *".to_owned(),
+            "Session Ident: Beta (!beta:example)".to_owned()
+        ]
+    );
+    assert_eq!(log.last().map(String::as_str), Some("Session Close: *"));
+    let lines = &log[2..log.len() - 1];
+    assert_eq!(
+        lines.iter().map(|line| untimed(line)).collect::<Vec<_>>(),
+        [
+            format!("* Logging on: {path}").as_str(),
+            format!("* Logging is already on: {path}").as_str(),
+            "<@bob:example> logged hello",
+            format!("* Logging is on: {path}").as_str(),
+        ]
+    );
+    assert!(lines[2].starts_with(&utc_hh_nn(said_at)), "{lines:?}");
+
+    // Turned on again, the log goes on after a blank line.
+    type_commands(&app, &["/log on"])?;
+    let log = read_log(&log_file_path(&local_app_data, "!beta.example"))?;
+    assert_eq!(
+        log[log.len() - 4..log.len() - 1],
+        [
+            String::new(),
+            "Session Start: *".to_owned(),
+            "Session Ident: Beta (!beta:example)".to_owned()
+        ]
+    );
+    assert_eq!(
+        untimed(log.last().expect("a line")),
+        format!("* Logging on: {path}")
+    );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn log_command_errors_name_what_cannot_log() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    close_view_without_prompt(&app, &room_identity("!alpha:example"))?;
+    app.select_view(room_identity("!beta:example"))?;
+    for (input, error) in [
+        (
+            "/log on #nowhere:example",
+            "* /log: unknown room: #nowhere:example",
+        ),
+        (
+            "/log off !alpha:example",
+            "* /log: !alpha:example has no open window",
+        ),
+        ("/log maybe", "* /log: usage: /log [on|off] [#room]"),
+    ] {
+        type_commands(&app, &[input])?;
+        assert_eq!(app.dump_ui_state()?.status_bar.text, error, "{input}");
+    }
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn log_command_turns_another_rooms_log_on_and_the_status_log()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let alpha = room_identity("!alpha:example");
+    app.select_view(room_identity("!beta:example"))?;
+    type_commands(&app, &["/log on !alpha:example"])?;
+    let path = view_log(&app, &alpha)?.expect("Alpha logs");
+    assert!(path.ends_with(r"\logs\@alice.example.log"), "{path}");
+    assert_eq!(view_log(&app, &room_identity("!beta:example"))?, None);
+
+    app.select_status_view()?;
+    type_commands(&app, &["/log on", "/log"])?;
+    let status_path = view_log(&app, &ViewIdentity::Status)?.expect("Status logs");
+    assert!(status_path.ends_with(r"\logs\status.log"), "{status_path}");
+    let log = read_log(&log_file_path(&local_app_data, "status"))?;
+    assert_eq!(
+        log.iter()
+            .map(|line| untimed_or_session(line))
+            .collect::<Vec<_>>(),
+        [
+            "Session Start: *",
+            "Session Ident: Status",
+            format!("* Logging on: {status_path}").as_str(),
+            format!("* Logging is on: {status_path}").as_str(),
+        ]
+    );
+    let log = read_log(&log_file_path(&local_app_data, "@alice.example"))?;
+    assert_eq!(log[1], "Session Ident: Alpha (@alice:example)");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+fn untimed_or_session(line: &str) -> &str {
+    if line.starts_with("Session ") {
+        line
+    } else {
+        untimed(line)
+    }
+}
+
+#[test]
+fn rooms_log_automatically_as_the_options_say_and_exit_closes_the_logs()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_logging_settings(&local_app_data, "channels=on\r\nqueries=off\r\n")?;
+    let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
+    let beta = room_identity("!beta:example");
+    let alpha = room_identity("!alpha:example");
+    let lobby = room_identity("!invite:example");
+    let beta_path = view_log(&app, &beta)?.expect("a channel logs");
+    assert!(
+        beta_path.ends_with(r"\logs\!beta.example.log"),
+        "{beta_path}"
+    );
+    assert_eq!(view_log(&app, &alpha)?, None, "a query does not");
+    assert_eq!(view_log(&app, &lobby)?, None, "an invite does not, yet");
+    app.select_view(beta.clone())?;
+    assert_eq!(
+        app.dump_ui_state()?.active_system_menu_checked,
+        ["&Logging"]
+    );
+    app.select_view(alpha.clone())?;
+    assert!(app.dump_ui_state()?.active_system_menu_checked.is_empty());
+
+    // Joined, the invite is a channel, and logs.
+    let mut rooms = close_lifecycle_rooms();
+    rooms[2].membership = RoomMembership::Join;
+    rooms[2].notification_mode = Some(RoomNotificationMode::AllMessages);
+    let said_at = now_ms();
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        Event::SyncedRooms(rooms),
+        text_event("!beta:example", "@bob:example", said_at, "beta news"),
+        text_event("!alpha:example", "@alice:example", said_at, "alpha news"),
+    ])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(
+        view_log(&app, &lobby)?
+            .expect("the joined room logs")
+            .ends_with(r"\logs\!invite.example.log")
+    );
+
+    app.select_status_view()?;
+    type_commands(&app, &["/log on"])?;
+
+    let status = app.close(Duration::from_secs(30))?;
+    assert!(status.success(), "mirx exited with {status}");
+    assert_eq!(
+        read_log(&log_file_path(&local_app_data, "status"))?.last(),
+        Some(&"Session Close: *".to_owned())
+    );
+    assert_eq!(
+        read_log(&log_file_path(&local_app_data, "!beta.example"))?,
+        [
+            "Session Start: *".to_owned(),
+            "Session Ident: Beta (!beta:example)".to_owned(),
+            format!("{} <@bob:example> beta news", utc_hh_nn(said_at)),
+            "Session Close: *".to_owned(),
+        ]
+    );
+    assert_eq!(
+        read_log(&log_file_path(&local_app_data, "!invite.example"))?,
+        [
+            "Session Start: *",
+            "Session Ident: Lobby (!invite:example)",
+            "Session Close: *",
+        ]
+    );
+    assert!(!log_file_path(&local_app_data, "@alice.example").exists());
+
+    // Queries only, the next time.
+    write_logging_settings(&local_app_data, "channels=off\r\nqueries=on\r\n")?;
+    let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
+    assert_eq!(view_log(&app, &beta)?, None);
+    assert!(view_log(&app, &alpha)?.is_some());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn logging_options_strip_codes_and_drop_timestamps() -> Result<(), Box<dyn std::error::Error>> {
+    let styled_event = || {
+        let mut event = text_event("!beta:example", "@bob:example", now_ms(), "bold plain");
+        let Event::RoomActivity(activity) = &mut event else {
+            unreachable!()
+        };
+        let CoreRoomActivityKind::Message(message) = &mut activity.kind else {
+            unreachable!()
+        };
+        message.styles = vec![mirx_core::TextStyleSpan {
+            start: 0,
+            end: 4,
+            style: mirx_core::TextStyle {
+                bold: true,
+                ..mirx_core::TextStyle::default()
+            },
+        }];
+        event
+    };
+    let mut logs = Vec::new();
+    for logging in ["", "strip=on\r\ntimestamp=off\r\n"] {
+        let local_app_data = unique_local_app_data_path();
+        write_logging_settings(&local_app_data, logging)?;
+        let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
+        app.select_view(room_identity("!beta:example"))?;
+        type_commands(&app, &["/log on"])?;
+        app.append_synthetic_events(&serde_json::to_string(&vec![styled_event()])?)?;
+        app.wait_idle(Duration::from_secs(5))?;
+        logs.push(read_log(&log_file_path(&local_app_data, "!beta.example"))?);
+        drop(app);
+        let _ = fs::remove_dir_all(&local_app_data);
+    }
+    assert_eq!(untimed(&logs[0][3]), "<@bob:example> \x02bold\x0f plain");
+    assert_eq!(logs[1][3], "<@bob:example> bold plain");
+    Ok(())
+}
+
+#[test]
+fn window_menu_logging_toggles_the_log_and_its_check() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let beta = room_identity("!beta:example");
+    app.select_view(beta.clone())?;
+    let child = view_child_hwnd(&app, &beta)?;
+    let toggle = || -> Result<(), Box<dyn std::error::Error>> {
+        assert_ne!(
+            unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_LOGGING, 0) },
+            0
+        );
+        app.wait_idle(Duration::from_secs(5))?;
+        Ok(())
+    };
+    toggle()?;
+    let ui_state = app.dump_ui_state()?;
+    let path = find_view(&ui_state, &beta).log.clone().expect("Beta logs");
+    assert_eq!(ui_state.active_system_menu_checked, ["&Logging"]);
+    assert_eq!(
+        untimed(find_view(&ui_state, &beta).lines.last().expect("a line")),
+        format!("* Logging on: {path}")
+    );
+    toggle()?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(find_view(&ui_state, &beta).log, None);
+    assert!(ui_state.active_system_menu_checked.is_empty());
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn a_thread_windows_logging_is_its_rooms() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+    app.load_events(&fs::read_to_string(fixture_state_path(
+        "message-edits.json",
+    ))?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ops = room_identity("!ops:example");
+    let thread = thread_identity("!ops:example", "$thread-root");
+    app.select_view(thread.clone())?;
+    let child = view_child_hwnd(&app, &thread)?;
+    assert_ne!(
+        unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_LOGGING, 0) },
+        0
+    );
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    let path = find_view(&ui_state, &ops)
+        .log
+        .clone()
+        .expect("the room logs");
+    assert_eq!(find_view(&ui_state, &thread).log.as_ref(), Some(&path));
+    assert_eq!(ui_state.active_system_menu_checked, ["&Logging"]);
+    app.select_view(ops.clone())?;
+    assert_eq!(
+        app.dump_ui_state()?.active_system_menu_checked,
+        ["&Logging"]
+    );
+    // The room's `/log off` clears the thread window's check too.
+    type_commands(&app, &["/log off"])?;
+    app.select_view(thread.clone())?;
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(find_view(&ui_state, &thread).log, None);
+    assert!(ui_state.active_system_menu_checked.is_empty());
+    // A new thread window of a logging room starts checked.
+    type_commands(&app, &["/log on"])?;
+    let child = close_view_without_prompt(&app, &thread)?;
+    assert_eq!(unsafe { IsWindow(child) }, 0);
+    app.select_view(thread.clone())?;
+    assert_eq!(
+        app.dump_ui_state()?.active_system_menu_checked,
+        ["&Logging"]
+    );
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn backfilled_history_is_not_logged() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.select_view(room_identity("!beta:example"))?;
+    type_commands(&app, &["/log on"])?;
+    app.append_synthetic_events(&serde_json::to_string(&vec![room_history_backfill_event(
+        "!beta:example",
+        "start",
+        Some("next"),
+        vec![history_backfill_event_from_event(text_event_with_event_id(
+            "!beta:example",
+            "$older",
+            "@bob:example",
+            1_699_999_000_000,
+            "scrolled back to",
+        ))],
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ui_state = app.dump_ui_state()?;
+    assert!(view_contains(
+        find_view(&ui_state, &room_identity("!beta:example")),
+        "scrolled back to"
+    ));
+    let log = read_log(&log_file_path(&local_app_data, "!beta.example"))?;
+    assert_eq!(log.len(), 3, "{log:?}");
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
@@ -9156,7 +9629,12 @@ fn send_file_dialog_from_the_window_menu_sends_the_chosen_file()
         .expect("room window menu has Find Text...");
     assert_eq!(
         items[find..],
-        ["Find &Text...\tCtrl+F", "Send &File...", "&Font..."]
+        [
+            "Find &Text...\tCtrl+F",
+            "Send &File...",
+            "&Logging",
+            "&Font..."
+        ]
     );
     let child = view_child_hwnd(&app, &ops)?;
     let status_before = app.dump_model()?.status;

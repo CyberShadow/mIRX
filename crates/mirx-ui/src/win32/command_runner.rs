@@ -429,6 +429,20 @@ pub(super) unsafe fn run_slash_command(
             echo_in_active_view(hwnd, commands::help_lines(topic.as_deref())?)?;
             Ok(None)
         }
+        SlashCommand::Log(command) => {
+            let (target, on) = match command {
+                LogCommand::Show => (None, None),
+                LogCommand::On { target } => (target, Some(true)),
+                LogCommand::Off { target } => (target, Some(false)),
+            };
+            let view_id = log_command_view(state_ref(hwnd), target.as_deref())?;
+            let line = match on {
+                None => logging_is_line(state_ref(hwnd), &view_id),
+                Some(on) => set_view_logging(state_mut(hwnd), &view_id, on)?,
+            };
+            echo_in_active_view(hwnd, [line])?;
+            Ok(None)
+        }
         SlashCommand::Font(FontCommand::Dialog) => run_font_dialog(hwnd),
         SlashCommand::Font(FontCommand::Set(setting)) => {
             apply_font_setting(hwnd, setting).map(Some)
@@ -487,6 +501,23 @@ pub(super) unsafe fn run_slash_command(
     }
 }
 
+/// The window `/log` acts on: the active one (a thread window's room), or
+/// the room `target` names, whose window must be open.
+fn log_command_view(state: &WindowState, target: Option<&str>) -> Result<ViewId, String> {
+    let Some(target) = target else {
+        return log_view(&state.active_view);
+    };
+    let view_id = match resolve_room(&state.model.rooms, is_navigable_room, target) {
+        Ok(room) => ViewId::Room(room.room_id.clone()),
+        Err(RoomTargetError::Unknown) => return Err(format!("unknown room: {target}")),
+        Err(RoomTargetError::Ambiguous) => return Err(format!("ambiguous room: {target}")),
+    };
+    if !state.views.contains_key(&view_id) {
+        return Err(format!("{target} has no open window"));
+    }
+    Ok(view_id)
+}
+
 /// Saves a timestamp change and restamps every window's lines, which keep
 /// their times rather than stamped text.
 unsafe fn change_timestamp_setting(
@@ -539,9 +570,19 @@ pub(super) fn echo_lines_in_active_view(
     lines: impl IntoIterator<Item = String>,
 ) {
     let view = echo_view(&state.active_view);
+    echo_lines_in_view(state, &view, lines);
+}
+
+/// Prints lines in a window with text: Status, a room or a thread window.
+/// They raise no activity. The caller refreshes the window.
+pub(super) fn echo_lines_in_view(
+    state: &mut WindowState,
+    view: &ViewId,
+    lines: impl IntoIterator<Item = String>,
+) {
     let now = state.clock.now_ms();
     for text in lines {
-        match &view {
+        match view {
             ViewId::Status => state.model.status_log.push(now, StatusLineKind::Info, text),
             ViewId::RoomList => unreachable!("Rooms List output goes to Status"),
             ViewId::Room(room_id) => state
@@ -566,7 +607,7 @@ pub(super) fn echo_lines_in_active_view(
 }
 
 /// Prints a command's lines in the active window, and shows them.
-unsafe fn echo_in_active_view(
+pub(super) unsafe fn echo_in_active_view(
     hwnd: HWND,
     lines: impl IntoIterator<Item = String>,
 ) -> Result<(), String> {

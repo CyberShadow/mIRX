@@ -944,6 +944,7 @@ pub(super) unsafe fn with_test_compose_window<T>(
                 history: ComposeHistory::default(),
                 target: None,
             }),
+            log: ViewLog::Off,
         },
     );
 
@@ -1021,6 +1022,7 @@ pub(super) fn tracked_view(hwnd_value: isize) -> MdiViewState {
             history: ComposeHistory::default(),
             target: None,
         }),
+        log: ViewLog::Off,
     }
 }
 

@@ -90,6 +90,7 @@ pub(super) struct Settings {
     pub(super) connect: ConnectSetting,
     pub(super) switchbar: SwitchbarSetting,
     pub(super) treebar: TreebarSetting,
+    pub(super) logging: LoggingSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
 }
@@ -238,6 +239,31 @@ impl Default for TreebarSetting {
     }
 }
 
+/// mIRC's Options > IRC > Logging.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LoggingSetting {
+    /// Automatically log channels: every channel window logs from when it
+    /// opens. Off by default, as in mIRC.
+    pub(super) channels: bool,
+    /// ... and queries.
+    pub(super) queries: bool,
+    /// Logs the plain text, without bold, colour and other control codes.
+    pub(super) strip_codes: bool,
+    /// Stamps each logged line with the window's timestamp format.
+    pub(super) timestamp: bool,
+}
+
+impl Default for LoggingSetting {
+    fn default() -> Self {
+        Self {
+            channels: false,
+            queries: false,
+            strip_codes: false,
+            timestamp: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Fonts,
@@ -245,6 +271,7 @@ enum Section {
     Connect,
     Switchbar,
     Treebar,
+    Logging,
     Colors,
 }
 
@@ -269,6 +296,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "connect" => Section::Connect,
                 "switchbar" => Section::Switchbar,
                 "treebar" => Section::Treebar,
+                "logging" => Section::Logging,
                 "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
@@ -318,6 +346,18 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Treebar, "show") => {
                 settings.treebar.show = parse_on_off(value, "show").map_err(error)?;
             }
+            (Section::Logging, "channels") => {
+                settings.logging.channels = parse_on_off(value, "channels").map_err(error)?;
+            }
+            (Section::Logging, "queries") => {
+                settings.logging.queries = parse_on_off(value, "queries").map_err(error)?;
+            }
+            (Section::Logging, "strip") => {
+                settings.logging.strip_codes = parse_on_off(value, "strip").map_err(error)?;
+            }
+            (Section::Logging, "timestamp") => {
+                settings.logging.timestamp = parse_on_off(value, "timestamp").map_err(error)?;
+            }
             (Section::Colors, key) if let Some(item) = ColorItem::from_ini_key(key) => {
                 settings
                     .colors
@@ -365,6 +405,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     let font = &settings.text_font;
     let bold = if font.bold { ",bold" } else { "" };
     let activity = &settings.switchbar.activity;
+    let logging = &settings.logging;
     let colors = ColorItem::ALL
         .into_iter()
         .map(|item| format!("{}={}\r\n", item.ini_key(), settings.colors.get(item).get()))
@@ -376,6 +417,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [switchbar]\r\nshow={}\r\nbuttons={}\r\n\
          event={}\r\nmessage={}\r\nhighlight={}\r\n\
          [treebar]\r\nshow={}\r\n\
+         [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
          [colors]\r\n{colors}",
         font.face,
         font.points,
@@ -388,6 +430,10 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         activity.message.get(),
         activity.highlight.get(),
         on_off(settings.treebar.show),
+        on_off(logging.channels),
+        on_off(logging.queries),
+        on_off(logging.strip_codes),
+        on_off(logging.timestamp),
     )
 }
 
@@ -465,6 +511,7 @@ mod tests {
         [connect]\r\nstartup=on\r\n\
         [switchbar]\r\nshow=on\r\nbuttons=120\r\nevent=5\r\nmessage=4\r\nhighlight=12\r\n\
         [treebar]\r\nshow=on\r\n\
+        [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
@@ -526,6 +573,51 @@ mod tests {
         ));
         assert!(text.contains("[treebar]\r\nshow=off\r\n"));
         assert_eq!(parse_ini(&text), Ok(settings));
+    }
+
+    #[test]
+    fn logging_settings_round_trip() {
+        let settings = Settings {
+            logging: LoggingSetting {
+                channels: true,
+                queries: false,
+                strip_codes: true,
+                timestamp: false,
+            },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains(
+            "[treebar]\r\nshow=on\r\n\
+             [logging]\r\nchannels=on\r\nqueries=off\r\nstrip=on\r\ntimestamp=off\r\n[colors]"
+        ));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[logging]\nQueries=ON\nchannels=off").map(|settings| settings.logging),
+            Ok(LoggingSetting {
+                queries: true,
+                ..LoggingSetting::default()
+            })
+        );
+        for (text, error) in [
+            (
+                "[logging]\nchannels=yes",
+                "line 2: channels must be on or off",
+            ),
+            ("[logging]\nqueries=1", "line 2: queries must be on or off"),
+            ("[logging]\nstrip=", "line 2: strip must be on or off"),
+            (
+                "[logging]\ntimestamp=no",
+                "line 2: timestamp must be on or off",
+            ),
+            (
+                "[logging]\nstrip=on\nstrip=off",
+                "line 3: duplicate key strip",
+            ),
+            ("[logging]\nfolder=logs", "line 2: unknown key folder"),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
+        }
     }
 
     #[test]

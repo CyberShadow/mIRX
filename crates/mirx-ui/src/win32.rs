@@ -199,6 +199,7 @@ mod glyph_runs;
 mod hotlinks;
 mod ignore;
 mod images;
+mod logging;
 mod mdi;
 mod menus;
 mod mirc_format;
@@ -261,16 +262,16 @@ use colors::{ColorItem, ColorScheme, EventItem, SchemeBrushes};
 #[cfg(test)]
 use command_runner::run_slash_command;
 use command_runner::{
-    echo_lines_in_active_view, enqueue_command, known_nick, open_room_link, own_server,
-    report_command_error, report_error_line, resolve_invite_command_room_id,
-    resolve_joined_room_target, run_local_command, send_edit, send_reply, set_local_command_status,
-    submit_accept_slash_command, submit_join_room, submit_part_slash_command,
-    submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
-    submit_room_notification_mode, whois_lines,
+    echo_in_active_view, echo_lines_in_active_view, echo_lines_in_view, enqueue_command,
+    known_nick, open_room_link, own_server, report_command_error, report_error_line,
+    resolve_invite_command_room_id, resolve_joined_room_target, run_local_command, send_edit,
+    send_reply, set_local_command_status, submit_accept_slash_command, submit_join_room,
+    submit_part_slash_command, submit_query_slash_command, submit_redact_slash_command,
+    submit_reject_slash_command, submit_room_notification_mode, whois_lines,
 };
 use commands::{
     BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,
-    SlashCommand, TimestampCommand, VerificationAction, local_command_history_entry,
+    LogCommand, SlashCommand, TimestampCommand, VerificationAction, local_command_history_entry,
     parse_compose_submission,
 };
 #[cfg(test)]
@@ -345,6 +346,10 @@ use images::{
     GdiplusImage, GdiplusSession, apply_room_media_event, collect_lazy_room_preview_media_requests,
     dispatch_lazy_room_preview_media_requests, initialize_gdiplus_state, prune_decoded_images,
     timeline_thumbnail_format, timeline_video_preview_source,
+};
+use logging::{
+    ViewLog, decide_auto_log, log_view, logging_is_line, logging_item_checked, set_view_logging,
+    view_log_path, write_view_log,
 };
 use menus::{
     ACCEL_ID_NEXT_CHANNEL, ACCEL_ID_NEXT_QUERY, ACCEL_ID_TOGGLE_MAXIMIZE, ACCEL_ID_TREEBAR_FOCUS,
@@ -444,9 +449,7 @@ use timeline_window::{
     timeline_top_line_for_source_row_index, timeline_visible_rows, update_timeline_scrollbar,
     validate_selected_timeline_event,
 };
-#[cfg(test)]
-use timestamp::TimestampSetting;
-use timestamp::{LocalTime, LocalTimeFn, TimestampStyle};
+use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 use verification::{
     apply_verification_event, e2ee_backup_health_summary, e2ee_cross_signing_label,
     e2ee_local_backup_label, e2ee_recovery_state_label, e2ee_server_backup_label,
@@ -456,12 +459,12 @@ use verification::{
     verification_state_event_from_request, verification_state_label,
 };
 use views::{
-    CloseAction, activate_view, cached_view_is_alive, close_action, destroy_stale_room_views,
-    ensure_room_view, ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content,
-    mdi_child_edit, mdi_window_placement, refresh_every_view_content, refresh_view_content,
-    register_mdi_child_class, register_room_content_class, resolve_active_view,
-    room_content_member_list, room_content_timeline, set_view_window_state, show_view,
-    view_timeline,
+    CloseAction, activate_view, cached_view_is_alive, check_window_menu_logging, close_action,
+    destroy_stale_room_views, ensure_room_view, ensure_status_view, ensure_view, layout_mdi_child,
+    mdi_child_content, mdi_child_edit, mdi_window_placement, refresh_every_view_content,
+    refresh_view_content, register_mdi_child_class, register_room_content_class,
+    resolve_active_view, room_content_member_list, room_content_timeline, set_view_window_state,
+    show_view, view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};
@@ -567,6 +570,8 @@ struct MdiViewState {
     /// `None` only for the Rooms List, which has no editbox, as mIRC's
     /// Channels List has none.
     compose: Option<ViewCompose>,
+    /// The window's log; dropping the view closes it.
+    log: ViewLog,
 }
 
 /// A window's editbox and what it remembers.

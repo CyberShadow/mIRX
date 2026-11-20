@@ -769,6 +769,7 @@ fn data_models_round_trip_through_json() {
                     },
                     lines: vec!["status: synced".to_owned()],
                     members: Vec::new(),
+                    log: None,
                 },
                 MdiView {
                     identity: ViewIdentity::Room {
@@ -792,6 +793,7 @@ fn data_models_round_trip_through_json() {
                         can_kick: true,
                         can_ban: false,
                     }],
+                    log: None,
                 },
                 MdiView {
                     identity: ViewIdentity::Thread {
@@ -809,6 +811,7 @@ fn data_models_round_trip_through_json() {
                     },
                     lines: vec!["reply".to_owned()],
                     members: Vec::new(),
+                    log: None,
                 },
             ],
         },
@@ -943,6 +946,7 @@ fn data_models_round_trip_through_json() {
             },
         },
         active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
+        active_system_menu_checked: vec![],
         menu_bar: vec![UiMenu {
             label: "&File".to_owned(),
             items: vec![UiMenuItem {
@@ -1165,6 +1169,7 @@ fn data_models_round_trip_through_json() {
                         "placement": {"state": "minimized", "x": 0, "y": 0, "width": 320, "height": 200},
                         "lines": ["status: synced"],
                         "members": [],
+                        "log": null,
                     },
                     {
                         "identity": {
@@ -1185,6 +1190,7 @@ fn data_models_round_trip_through_json() {
                                 "can_ban": false,
                             }
                         ],
+                        "log": null,
                     },
                     {
                         "identity": {
@@ -1197,6 +1203,7 @@ fn data_models_round_trip_through_json() {
                         "placement": {"state": "normal", "x": 0, "y": 0, "width": 320, "height": 200},
                         "lines": ["reply"],
                         "members": [],
+                        "log": null,
                     }
                 ],
             },
@@ -1345,6 +1352,7 @@ fn data_models_round_trip_through_json() {
                 "switchbar": {"event": 5, "message": 4, "highlight": 12},
             },
             "active_system_menu_items": ["&Restore", "&Font..."],
+            "active_system_menu_checked": [],
             "menu_bar": [{"label": "&File", "items": [{"label": "&Disconnect", "enabled": false, "checked": false}]}],
             "compose_target": {"kind": "edit", "event_id": "$mine:example"},
         })
@@ -6797,6 +6805,7 @@ fn switchbar_helpers_find_items_and_active_item() {
             },
         },
         active_system_menu_items: vec![],
+        active_system_menu_checked: vec![],
         menu_bar: vec![],
         compose_target: None,
         room_list: None,

@@ -217,6 +217,7 @@ unsafe fn dump_mdi_state(hwnd: HWND) -> Result<MdiState, String> {
                             .unwrap_or_default(),
                     ),
                 },
+                log: view_log_path(state_ref(hwnd), &view_id),
                 identity,
             })
         })
@@ -332,7 +333,9 @@ unsafe fn dump_text_font(state: &WindowState, view_id: &ViewId, view: &MdiViewSt
     }
 }
 
-unsafe fn system_menu_labels(child: HWND) -> Vec<String> {
+/// The active window's window menu items: each label, separators
+/// omitted, and whether it is checked.
+unsafe fn system_menu_items(child: HWND) -> Vec<(String, bool)> {
     let menu = GetSystemMenu(child, 0);
     let count = GetMenuItemCount(menu);
     assert!(count >= 0, "GetMenuItemCount must read the window menu");
@@ -346,8 +349,9 @@ unsafe fn system_menu_labels(child: HWND) -> Vec<String> {
                 label.len() as i32,
                 MF_BYPOSITION,
             );
+            let checked = GetMenuState(menu, position, MF_BYPOSITION) & MF_CHECKED != 0;
             // Separators have no label.
-            (len > 0).then(|| String::from_utf16_lossy(&label[..len as usize]))
+            (len > 0).then(|| (String::from_utf16_lossy(&label[..len as usize]), checked))
         })
         .collect()
 }
@@ -538,6 +542,7 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
         .get(&state.active_view)
         .expect("the active view has a window");
     let timestamp = &state.settings.settings().timestamp;
+    let system_menu = system_menu_items(active_view.child);
 
     // The text font is the frame's, the same in every window; the Rooms
     // List has no timeline or editbox to measure it by, Status always does.
@@ -553,7 +558,12 @@ pub(super) unsafe fn dump_ui_state(hwnd: HWND) -> Result<UiState, String> {
             format: timestamp.format.to_string(),
         },
         colors: dump_colors(state.settings.settings()),
-        active_system_menu_items: system_menu_labels(active_view.child),
+        active_system_menu_items: system_menu.iter().map(|(label, _)| label.clone()).collect(),
+        active_system_menu_checked: system_menu
+            .iter()
+            .filter(|(_, checked)| *checked)
+            .map(|(label, _)| label.clone())
+            .collect(),
         menu_bar: dump_menu_bar(hwnd)?,
         compose_target: active_view
             .compose

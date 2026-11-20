@@ -1239,6 +1239,8 @@ pub struct UiState {
     pub colors: UiColors,
     /// The labels of the active window's window menu, separators omitted.
     pub active_system_menu_items: Vec<String>,
+    /// The labels of the active window's checked window menu items.
+    pub active_system_menu_checked: Vec<String>,
     /// The frame's menubar as opening each menu would show it: MDI's
     /// maximized-child buttons and separators omitted.
     pub menu_bar: Vec<UiMenu>,
@@ -1931,6 +1933,9 @@ pub struct MdiView {
     pub placement: MdiWindowPlacement,
     pub lines: Vec<String>,
     pub members: Vec<RoomMemberView>,
+    /// The log file the window writes to while it logs (a thread window's
+    /// is its room's), as Windows names it.
+    pub log: Option<String>,
 }
 
 /// An MDI window's state and its rectangle in MDI client coordinates.

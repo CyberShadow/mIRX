@@ -150,6 +150,7 @@ pub(super) enum SlashCommand {
         topic: Option<String>,
     },
     Timestamp(TimestampCommand),
+    Log(LogCommand),
     Font(FontCommand),
     /// `/switchbar` and `/treebar`.
     Bar {
@@ -173,6 +174,15 @@ pub(super) enum BarCommand {
 pub(super) enum FontCommand {
     Dialog,
     Set(FontSetting),
+}
+
+/// `/log [on|off] [#room]`: show whether a window logs, or turn its log on
+/// or off. No room means the active window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LogCommand {
+    Show,
+    On { target: Option<String> },
+    Off { target: Option<String> },
 }
 
 /// `/timestamp [on|off|-f format]`.
@@ -261,6 +271,7 @@ impl SlashCommand {
             Self::Verify { .. } => "verify",
             Self::Help { .. } => "help",
             Self::Timestamp(_) => "timestamp",
+            Self::Log(_) => "log",
             Self::Font(_) => "font",
             Self::Bar { bar, .. } => bar.name(),
         }
@@ -396,6 +407,11 @@ pub(super) const COMMANDS: &[CommandSpec] = &[
         name: "list",
         usage: "[-s server] [match text]",
         summary: "list the rooms in a server's room directory",
+    },
+    CommandSpec {
+        name: "log",
+        usage: "[on|off] [#room]",
+        summary: "logs a window's lines to a file",
     },
     CommandSpec {
         name: "me",
@@ -756,6 +772,7 @@ pub(super) fn parse(input: &str) -> Result<SlashCommand, CommandError> {
             topic: optional(argument),
         }),
         "timestamp" => parse_timestamp(argument).map(SlashCommand::Timestamp),
+        "log" => parse_log(argument).map(SlashCommand::Log),
         "font" => parse_font(argument).map(SlashCommand::Font),
         "switchbar" => parse_bar(Bar::Switchbar, argument),
         "treebar" => parse_bar(Bar::Treebar, argument),
@@ -948,6 +965,18 @@ fn parse_timestamp(argument: &str) -> Result<TimestampCommand, CommandError> {
             "timestamp",
             "usage: /timestamp [on|off|-f format]",
         )),
+    }
+}
+
+fn parse_log(argument: &str) -> Result<LogCommand, CommandError> {
+    let (word, rest) = split_word(argument);
+    let (target, extra) = split_word(rest);
+    let target = (!target.is_empty()).then(|| target.to_owned());
+    match word.to_ascii_lowercase().as_str() {
+        "" => Ok(LogCommand::Show),
+        "on" if extra.is_empty() => Ok(LogCommand::On { target }),
+        "off" if extra.is_empty() => Ok(LogCommand::Off { target }),
+        _ => Err(CommandError::new("log", "usage: /log [on|off] [#room]")),
     }
 }
 
@@ -1821,6 +1850,39 @@ mod tests {
                 )])
             );
         }
+    }
+
+    #[test]
+    fn log_shows_or_turns_a_windows_log_on_or_off() {
+        let log = |command| Ok(SlashCommand::Log(command));
+        assert_eq!(parse("/log"), log(LogCommand::Show));
+        assert_eq!(parse("/log on"), log(LogCommand::On { target: None }));
+        assert_eq!(parse("/LOG OFF"), log(LogCommand::Off { target: None }));
+        assert_eq!(
+            parse("/log on #r"),
+            log(LogCommand::On {
+                target: Some("#r".to_owned())
+            })
+        );
+        assert_eq!(
+            parse("/log off !x:y"),
+            log(LogCommand::Off {
+                target: Some("!x:y".to_owned())
+            })
+        );
+        for input in ["/log maybe", "/log on a b", "/log #r", "/log off #r now"] {
+            assert_eq!(
+                parse(input),
+                error("log", "usage: /log [on|off] [#room]"),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            help_lines(Some("log")),
+            Ok(vec![
+                "* /log [on|off] [#room] - logs a window's lines to a file".to_owned()
+            ])
+        );
     }
 
     #[test]

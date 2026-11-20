@@ -18,6 +18,38 @@ pub(super) struct LocalTime {
     pub(super) second: u8,
 }
 
+impl LocalTime {
+    /// The day of the week, 0 for Sunday (Sakamoto's method).
+    pub(super) fn weekday(self) -> u8 {
+        const MONTH_OFFSETS: [u16; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        let year = self.year - u16::from(self.month < 3);
+        let day = year + year / 4 - year / 100
+            + year / 400
+            + MONTH_OFFSETS[usize::from(self.month - 1)]
+            + u16::from(self.day);
+        (day % 7) as u8
+    }
+
+    /// `Fri Nov 20 14:03:12 2026`: mIRC's `$asctime` default
+    /// (`ddd mmm dd HH:nn:ss yyyy`), as its log files' session lines use.
+    pub(super) fn asctime(self) -> String {
+        const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const MONTHS: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        format!(
+            "{} {} {:02} {:02}:{:02}:{:02} {:04}",
+            WEEKDAYS[usize::from(self.weekday())],
+            MONTHS[usize::from(self.month - 1)],
+            self.day,
+            self.hour,
+            self.minute,
+            self.second,
+            self.year
+        )
+    }
+}
+
 /// Converts Unix milliseconds to the local time.
 pub(super) type LocalTimeFn = fn(u64) -> LocalTime;
 
@@ -433,6 +465,48 @@ mod tests {
         let style = TimestampStyle::new(&setting, utc_local_time);
         assert_eq!(style.prefix(1_700_000_000_000), "");
         assert_eq!(style.indent_sample(), "");
+    }
+
+    fn date(year: u16, month: u8, day: u8) -> LocalTime {
+        LocalTime {
+            year,
+            month,
+            day,
+            ..TIME
+        }
+    }
+
+    #[test]
+    fn weekday_counts_from_sunday() {
+        assert_eq!(date(2026, 11, 20).weekday(), 5);
+        assert_eq!(date(2024, 2, 29).weekday(), 4);
+        assert_eq!(date(2000, 3, 1).weekday(), 3);
+        assert_eq!(date(1970, 1, 4).weekday(), 0);
+        assert_eq!(date(1970, 1, 1).weekday(), 4);
+        assert_eq!(date(2023, 12, 31).weekday(), 0);
+    }
+
+    #[test]
+    fn asctime_is_mircs_default_format() {
+        let time = LocalTime {
+            year: 2026,
+            month: 11,
+            day: 20,
+            hour: 14,
+            minute: 3,
+            second: 12,
+        };
+        assert_eq!(time.asctime(), "Fri Nov 20 14:03:12 2026");
+        let time = LocalTime {
+            year: 2024,
+            month: 2,
+            day: 2,
+            hour: 7,
+            minute: 0,
+            second: 9,
+        };
+        assert_eq!(time.asctime(), "Fri Feb 02 07:00:09 2024");
+        assert_eq!(utc_local_time(0).asctime(), "Thu Jan 01 00:00:00 1970");
     }
 
     #[test]

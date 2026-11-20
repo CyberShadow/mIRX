@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 53;
+pub(crate) const PROTOCOL_VERSION: u32 = 54;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1019,6 +1019,8 @@ pub(crate) struct UiState {
     pub(crate) colors: UiColors,
     /// The labels of the active window's window menu, separators omitted.
     pub(crate) active_system_menu_items: Vec<String>,
+    /// The labels of the active window's checked window menu items.
+    pub(crate) active_system_menu_checked: Vec<String>,
     /// The frame's menubar as opening each menu would show it: MDI's
     /// maximized-child buttons and separators omitted.
     pub(crate) menu_bar: Vec<UiMenu>,
@@ -1583,6 +1585,9 @@ pub(crate) struct MdiView {
     pub(crate) placement: MdiWindowPlacement,
     pub(crate) lines: Vec<String>,
     pub(crate) members: Vec<RoomMemberView>,
+    /// The log file the window writes to while it logs (a thread window's
+    /// is its room's), as Windows names it.
+    pub(crate) log: Option<String>,
 }
 
 /// An MDI window's state and its rectangle in MDI client coordinates.
@@ -3337,8 +3342,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_51() {
-        assert_eq!(PROTOCOL_VERSION, 53);
+    fn protocol_version_is_54() {
+        assert_eq!(PROTOCOL_VERSION, 54);
     }
 
     #[test]
@@ -4345,6 +4350,7 @@ mod tests {
             "timestamp":{"show":true,"format":"[HH:nn]"},
             "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
+            "active_system_menu_checked":[],
             "menu_bar":[]
         }))
         .unwrap();
@@ -4370,6 +4376,7 @@ mod tests {
             "timestamp":{"show":true,"format":"[HH:nn]"},
             "colors":{"items":[{"item":"background","index":0,"color":"#ffffff"}],"switchbar":{"event":5,"message":4,"highlight":12}},
             "active_system_menu_items":[],
+            "active_system_menu_checked":[],
             "menu_bar":[]
         }))
         .unwrap();
@@ -5090,6 +5097,7 @@ mod tests {
             },
             lines: vec!["reply".to_owned()],
             members: Vec::new(),
+            log: None,
         };
         let mdi_view_json = json!({
             "identity": {
@@ -5102,6 +5110,7 @@ mod tests {
             "placement": {"state": "normal", "x": 0, "y": 0, "width": 320, "height": 200},
             "lines": ["reply"],
             "members": [],
+            "log": null,
         });
         assert_eq!(
             serde_json::from_value::<MdiView>(mdi_view_json.clone())
@@ -5293,7 +5302,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":53,
+                    "protocol_version":54,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5732,6 +5741,7 @@ mod tests {
                                 },
                                 lines: vec!["status: synced".to_owned()],
                                 members: Vec::new(),
+                                log: None,
                             },
                             MdiView {
                                 identity: ViewIdentity::Room {
@@ -5755,6 +5765,7 @@ mod tests {
                                     can_kick: true,
                                     can_ban: false,
                                 }],
+                                log: None,
                             },
                             MdiView {
                                 identity: ViewIdentity::Thread {
@@ -5772,6 +5783,7 @@ mod tests {
                                 },
                                 lines: vec!["reply".to_owned()],
                                 members: Vec::new(),
+                                log: None,
                             },
                         ],
                     },
@@ -5901,6 +5913,7 @@ mod tests {
                         },
                     },
                     active_system_menu_items: vec!["&Restore".to_owned(), "&Font...".to_owned()],
+                    active_system_menu_checked: vec![],
                     menu_bar: vec![super::UiMenu {
                         label: "&Help".to_owned(),
                         items: vec![super::UiMenuItem {
@@ -6014,7 +6027,8 @@ mod tests {
                                 "active":false,
                                 "placement":{"state":"minimized","x":0,"y":0,"width":320,"height":200},
                                 "lines":["status: synced"],
-                                "members":[]
+                                "members":[],
+                                "log":null
                             },
                             {
                                 "identity":{"kind":"room","room_id":"!room:example"},
@@ -6031,7 +6045,8 @@ mod tests {
                                         "can_kick":true,
                                         "can_ban":false
                                     }
-                                ]
+                                ],
+                                "log":null
                             },
                             {
                                 "identity":{"kind":"thread","room_id":"!room:example","thread_root_event_id":"$thread-root:example"},
@@ -6039,7 +6054,8 @@ mod tests {
                                 "active":false,
                                 "placement":{"state":"normal","x":0,"y":0,"width":320,"height":200},
                                 "lines":["reply"],
-                                "members":[]
+                                "members":[],
+                                "log":null
                             }
                         ]
                     },
@@ -6130,6 +6146,7 @@ mod tests {
                         "switchbar":{"event":5,"message":4,"highlight":12}
                     },
                     "active_system_menu_items":["&Restore","&Font..."],
+                    "active_system_menu_checked":[],
                     "menu_bar":[{"label":"&Help","items":[{"label":"&Help Topics","enabled":true,"checked":false}]}],
                     "compose_target":{"kind":"reply","event_id":"$question"},
                     "room_list":{

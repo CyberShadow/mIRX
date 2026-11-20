@@ -101,6 +101,9 @@ pub(super) struct TimelineRow {
     pub(super) user_links: Vec<RowUserLink>,
     pub(super) layout: TimelineRowLayout,
     pub(super) image_state: Option<TimelineImageState>,
+    /// When the line happened, in Unix milliseconds: an activity's server
+    /// time, an echo or Status line's arrival. `None` for context rows.
+    pub(super) timestamp_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +126,7 @@ impl TimelineRow {
             user_links: Vec::new(),
             layout: TimelineRowLayout::FullWidth,
             image_state: None,
+            timestamp_ms: None,
         }
     }
 
@@ -136,11 +140,17 @@ impl TimelineRow {
             user_links: Vec::new(),
             layout: TimelineRowLayout::Log,
             image_state: None,
+            timestamp_ms: None,
         }
     }
 
     pub(super) fn with_identity(mut self, identity: TimelineRowIdentity) -> Self {
         self.identity = identity;
+        self
+    }
+
+    pub(super) fn at(mut self, timestamp_ms: u64) -> Self {
+        self.timestamp_ms = Some(timestamp_ms);
         self
     }
 
@@ -373,7 +383,8 @@ fn push_room_activity_row(
         .with_styles(styles)
         .with_user_links(user_links)
         .with_identity(TimelineRowIdentity::activity_primary(&activity.activity_id))
-        .with_event_id(room_activity_event_id(activity));
+        .with_event_id(room_activity_event_id(activity))
+        .at(activity.timestamp_ms);
     row.image_state = image_state;
     rows.push(row);
 
@@ -780,11 +791,11 @@ fn push_activity_rows_with_echo<'a>(
 
 fn echo_row(line: &EchoLine, timestamps: TimestampStyle) -> TimelineRow {
     let prefix = timestamps.prefix(line.timestamp_ms);
-    TimelineRow::log(TimelineRowKind::Info, format!("{prefix}{}", line.text)).with_identity(
-        TimelineRowIdentity::EchoLine {
+    TimelineRow::log(TimelineRowKind::Info, format!("{prefix}{}", line.text))
+        .with_identity(TimelineRowIdentity::EchoLine {
             sequence: line.sequence,
-        },
-    )
+        })
+        .at(line.timestamp_ms)
 }
 
 pub(super) fn build_thread_timeline_rows(
@@ -935,6 +946,7 @@ pub(super) fn build_status_timeline_rows(
             let prefix = timestamps.prefix(line.timestamp_ms);
             TimelineRow::log(kind, format!("{prefix}{}", line.text))
                 .with_identity(TimelineRowIdentity::status_line(line.sequence))
+                .at(line.timestamp_ms)
         })
         .collect()
 }
