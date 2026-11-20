@@ -296,6 +296,14 @@ configure_case_expectations() {
           ordered_actions=(dialog:options:Display)
           expect_dialog_title='mirx Options'
           ;;
+        dialog-options-tray)
+          ordered_actions=(dialog:options:Display/Tray)
+          expect_dialog_title='mirx Options'
+          ;;
+        dialog-options-tips)
+          ordered_actions=(dialog:options:Display/Tips)
+          expect_dialog_title='mirx Options'
+          ;;
         dialog-colors)
           ordered_actions=(dialog:colors)
           expect_dialog_title='mirx Colors'

@@ -7,7 +7,8 @@
 use mirx_core::{HighlightWord, validate_highlight_word};
 
 use super::settings::{
-    ActivityColors, ConnectSetting, LoggingSetting, Settings, parse_button_width,
+    ActivityColors, ConnectSetting, LoggingSetting, Settings, TipsSetting, TraySetting,
+    parse_button_width,
 };
 use super::timestamp::TimestampFormat;
 
@@ -18,9 +19,13 @@ pub(super) enum OptionsPage {
     IrcHighlight,
     IrcLogging,
     Display,
+    DisplayTray,
+    DisplayTips,
 }
 
-use OptionsPage::{ConnectOptions, Display, IrcHighlight, IrcLogging, IrcMessages};
+use OptionsPage::{
+    ConnectOptions, Display, DisplayTips, DisplayTray, IrcHighlight, IrcLogging, IrcMessages,
+};
 
 /// The tree, in order: (label, depth, page). A category without a page of
 /// its own shows its first child's.
@@ -32,6 +37,8 @@ pub(super) const OPTIONS_TREE: &[(&str, u8, OptionsPage)] = &[
     ("Highlight", 1, IrcHighlight),
     ("Logging", 1, IrcLogging),
     ("Display", 0, Display),
+    ("Tray", 1, DisplayTray),
+    ("Tips", 1, DisplayTips),
 ];
 
 /// The page the dialog opens on.
@@ -100,6 +107,10 @@ pub(super) struct OptionsForm {
     pub(super) activity_colors: ActivityColors,
     /// Checkboxes, so never wrong.
     pub(super) logging: LoggingSetting,
+    /// Checkboxes, so never wrong.
+    pub(super) tray: TraySetting,
+    /// Checkboxes, so never wrong.
+    pub(super) tips: TipsSetting,
 }
 
 impl OptionsForm {
@@ -111,6 +122,8 @@ impl OptionsForm {
             switchbar_buttons: settings.switchbar.buttons.to_string(),
             activity_colors: settings.switchbar.activity,
             logging: settings.logging,
+            tray: settings.tray,
+            tips: settings.tips,
         }
     }
 
@@ -139,6 +152,8 @@ impl OptionsForm {
         settings.switchbar.buttons = buttons;
         settings.switchbar.activity = self.activity_colors;
         settings.logging = self.logging;
+        settings.tray = self.tray;
+        settings.tips = self.tips;
         Ok(settings)
     }
 }
@@ -274,18 +289,25 @@ mod tests {
                 "IRC/Messages",
                 "IRC/Highlight",
                 "IRC/Logging",
-                "Display"
+                "Display",
+                "Display/Tray",
+                "Display/Tips"
             ]
         );
         assert_eq!(page_tree_index(ConnectOptions), 1);
         assert_eq!(page_tree_index(IrcMessages), 3);
         assert_eq!(page_tree_index(IrcHighlight), 4);
         assert_eq!(page_tree_index(IrcLogging), 5);
+        // Display has a page of its own, above its children's.
         assert_eq!(page_tree_index(Display), 6);
+        assert_eq!(page_tree_index(DisplayTray), 7);
+        assert_eq!(page_tree_index(DisplayTips), 8);
         assert_eq!(tree_index("Connect"), Some(0));
         assert_eq!(tree_index("IRC/Messages"), Some(3));
         assert_eq!(tree_index("IRC/Logging"), Some(5));
         assert_eq!(tree_index("Display"), Some(6));
+        assert_eq!(tree_index("Display/Tray"), Some(7));
+        assert_eq!(tree_index("Display/Tips"), Some(8));
         for path in ["", "IRC/", "Messages", "irc/messages", "IRC > Messages"] {
             assert_eq!(tree_index(path), None, "{path:?}");
         }
@@ -355,11 +377,20 @@ mod tests {
             |form: &mut OptionsForm| form.logging.queries = true,
             |form: &mut OptionsForm| form.logging.strip_codes = true,
             |form: &mut OptionsForm| form.logging.timestamp = false,
+            |form: &mut OptionsForm| form.tray.always = true,
+            |form: &mut OptionsForm| form.tray.startup = true,
+            |form: &mut OptionsForm| form.tray.minimize = true,
+            |form: &mut OptionsForm| form.tray.single_click = true,
+            |form: &mut OptionsForm| form.tips.highlights = false,
+            |form: &mut OptionsForm| form.tips.queries = false,
+            |form: &mut OptionsForm| form.tips.channels = true,
         ] {
             let mut changed = form.clone();
             change(&mut changed);
             let mut expected = current.clone();
             expected.logging = changed.logging;
+            expected.tray = changed.tray;
+            expected.tips = changed.tips;
             assert_ne!(expected, current);
             assert_eq!(applied(change), expected);
         }

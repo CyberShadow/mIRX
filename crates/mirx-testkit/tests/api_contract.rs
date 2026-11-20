@@ -42,9 +42,9 @@ use mirx_testkit::{
     UiFindHistorySearchState, UiFindState, UiFrameLayout, UiLoggingOptions, UiMenu, UiMenuItem,
     UiOptionsDialog, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
     UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
-    UiTimestamp, UiTray, UiTrayMenuItem, UnsupportedRoomMessageActivity, UserCommandAction,
-    Verification, VerificationActionArgs, VerificationDecimals, VerificationEmoji,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    UiTimestamp, UiTipsOptions, UiTray, UiTrayMenuItem, UiTrayOptions,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
+    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -989,6 +989,17 @@ fn data_models_round_trip_through_json() {
                 strip_codes: true,
                 timestamp: false,
             },
+            tray: UiTrayOptions {
+                always: false,
+                startup: true,
+                minimize: false,
+                single_click: true,
+            },
+            tips: UiTipsOptions {
+                highlights: false,
+                queries: true,
+                channels: false,
+            },
         }),
         active_timeline: Some(UiActiveTimeline {
             top_line: 0,
@@ -1295,6 +1306,8 @@ fn data_models_round_trip_through_json() {
                 "highlight_delete_enabled": true,
                 "activity_colors": {"event": 5, "message": 9, "highlight": 12},
                 "logging": {"channels": false, "queries": true, "strip_codes": true, "timestamp": false},
+                "tray": {"always": false, "startup": true, "minimize": false, "single_click": true},
+                "tips": {"highlights": false, "queries": true, "channels": false},
             },
             "colors_dialog": null,
             "color_index": null,

@@ -48,10 +48,10 @@ use mirx_testkit::{
     SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
     UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
     UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState,
-    UiLoggingOptions, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState,
-    UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    UiLoggingOptions, UiMenu, UiMenuItem, UiOptionsDialog, UiPoint, UiRoomHistoryBackfillState,
+    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UiTipsOptions, UiTrayOptions, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -2987,7 +2987,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 56);
+    assert_eq!(version.protocol_version, 57);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -6008,6 +6008,15 @@ fn hold_shift(app: &MirxApp) -> Result<(), Box<dyn std::error::Error>> {
 fn tray_icon_and_hidden(app: &MirxApp) -> Result<(bool, bool), Box<dyn std::error::Error>> {
     let tray = app.dump_ui_state()?.tray;
     Ok((tray.icon, tray.hidden))
+}
+
+/// Waits for the icon to be added or removed: `Shell_NotifyIconW` sends
+/// to the shell, and the frame answers automation while it waits.
+fn wait_for_tray_icon(app: &MirxApp, icon: bool) -> Result<(), Box<dyn std::error::Error>> {
+    app.wait_for_ui_state("the tray icon", Duration::from_secs(5), |ui_state| {
+        ui_state.tray.icon == icon
+    })?;
+    Ok(())
 }
 
 fn launch_with_tray(tray: &str) -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
@@ -14281,6 +14290,14 @@ const OPTIONS_LOG_QUERIES_ID: i32 = 6502;
 const OPTIONS_LOG_STRIP_CODES_ID: i32 = 6503;
 const OPTIONS_LOG_TIMESTAMP_ID: i32 = 6504;
 const OPTIONS_LOG_FOLDER_ID: i32 = 6505;
+const OPTIONS_TRAY_ALWAYS_ID: i32 = 6601;
+const OPTIONS_TRAY_STARTUP_ID: i32 = 6602;
+const OPTIONS_TRAY_MINIMIZE_ID: i32 = 6603;
+const OPTIONS_TRAY_SINGLE_CLICK_ID: i32 = 6604;
+const OPTIONS_TIPS_HIGHLIGHTS_ID: i32 = 6701;
+const OPTIONS_TIPS_QUERIES_ID: i32 = 6702;
+const OPTIONS_TIPS_CHANNELS_ID: i32 = 6703;
+const OPTIONS_TIPS_NOTE_ID: i32 = 6704;
 
 /// Waits for the Options dialog to be open and shown, and returns it.
 fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
@@ -14343,7 +14360,9 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             "IRC/Messages",
             "IRC/Highlight",
             "IRC/Logging",
-            "Display"
+            "Display",
+            "Display/Tray",
+            "Display/Tips"
         ]
     );
     assert_eq!(options.selected, "Connect/Options");
@@ -14512,6 +14531,115 @@ fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn 
     // Without timestamps.
     let log = read_log(&log_file_path(&local_app_data, "@carol.example"))?;
     assert_eq!(log[2..], ["<@carol:example> carol news".to_owned()]);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn options_tray_and_tips_pages_save_and_apply() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (false, false));
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = wait_for_options_dialog(&app)?;
+    let options = |app: &MirxApp| -> Result<UiOptionsDialog, Box<dyn std::error::Error>> {
+        Ok(app
+            .dump_ui_state()?
+            .options_dialog
+            .expect("the dialog is open"))
+    };
+    app.select_options_page("Display/Tray")?;
+    let tray = options(&app)?;
+    assert_eq!(tray.selected, "Display/Tray");
+    assert_eq!(
+        tray.visible_controls,
+        [
+            OPTIONS_TRAY_ALWAYS_ID as u16,
+            OPTIONS_TRAY_STARTUP_ID as u16,
+            OPTIONS_TRAY_MINIMIZE_ID as u16,
+            OPTIONS_TRAY_SINGLE_CLICK_ID as u16,
+        ]
+    );
+    assert_eq!(
+        tray.tray,
+        UiTrayOptions {
+            always: false,
+            startup: false,
+            minimize: false,
+            single_click: false,
+        }
+    );
+    unsafe {
+        set_options_check(dialog, OPTIONS_TRAY_ALWAYS_ID, true);
+        set_options_check(dialog, OPTIONS_TRAY_SINGLE_CLICK_ID, true);
+    }
+
+    app.select_options_page("Display/Tips")?;
+    let tips = options(&app)?;
+    assert_eq!(
+        tips.visible_controls,
+        [
+            OPTIONS_TIPS_HIGHLIGHTS_ID as u16,
+            OPTIONS_TIPS_QUERIES_ID as u16,
+            OPTIONS_TIPS_CHANNELS_ID as u16,
+            OPTIONS_TIPS_NOTE_ID as u16,
+        ]
+    );
+    assert_eq!(
+        tips.tips,
+        UiTipsOptions {
+            highlights: true,
+            queries: true,
+            channels: false,
+        }
+    );
+    unsafe {
+        set_options_check(dialog, OPTIONS_TIPS_QUERIES_ID, false);
+        set_options_check(dialog, OPTIONS_TIPS_CHANNELS_ID, true);
+    }
+    let edited = options(&app)?;
+    assert_eq!(
+        (edited.tray, edited.tips),
+        (
+            UiTrayOptions {
+                always: true,
+                startup: false,
+                minimize: false,
+                single_click: true,
+            },
+            UiTipsOptions {
+                highlights: true,
+                queries: false,
+                channels: true,
+            }
+        )
+    );
+
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    // Always shows the icon at once, with mirx still on screen. Adding it
+    // sends to the shell, which answers our dumps meanwhile: wait for the
+    // icon, not for idle.
+    wait_for_tray_icon(&app, true)?;
+    assert!(!tray_icon_and_hidden(&app)?.1);
+    assert!(
+        fs::read_to_string(settings_file_path(&local_app_data))?.contains(
+            "[tray]\r\nalways=on\r\nstartup=off\r\nminimize=off\r\nsingle_click=on\r\n\
+             [tips]\r\nhighlights=on\r\nqueries=off\r\nchannels=on\r\n"
+        )
+    );
+
+    // And turning it off removes the icon again.
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = wait_for_options_dialog(&app)?;
+    app.select_options_page("Display/Tray")?;
+    assert!(options(&app)?.tray.always);
+    unsafe { set_options_check(dialog, OPTIONS_TRAY_ALWAYS_ID, false) };
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    wait_for_tray_icon(&app, false)?;
+    assert!(!status_view_contains(&app, "Tray icon unavailable")?);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

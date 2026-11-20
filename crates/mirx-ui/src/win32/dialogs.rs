@@ -1036,6 +1036,10 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
             InvalidateRect(bar, null(), 1);
         }
     }
+    if new.tray != old.tray {
+        // `always` may have changed whether the icon shows.
+        sync_tray_icon(hwnd)?;
+    }
     let commands = highlight_changes
         .add
         .into_iter()

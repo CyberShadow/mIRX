@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 56;
+pub(crate) const PROTOCOL_VERSION: u32 = 57;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1162,6 +1162,29 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) activity_colors: UiActivityColors,
     /// The Logging page's checkboxes.
     pub(crate) logging: UiLoggingOptions,
+    /// The Tray page's checkboxes.
+    pub(crate) tray: UiTrayOptions,
+    /// The Tips page's checkboxes.
+    pub(crate) tips: UiTipsOptions,
+}
+
+/// Options > Display > Tray's checkboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTrayOptions {
+    pub(crate) always: bool,
+    pub(crate) startup: bool,
+    pub(crate) minimize: bool,
+    pub(crate) single_click: bool,
+}
+
+/// Options > Display > Tips' checkboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiTipsOptions {
+    pub(crate) highlights: bool,
+    pub(crate) queries: bool,
+    pub(crate) channels: bool,
 }
 
 /// Options > IRC > Logging's checkboxes.
@@ -3411,8 +3434,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_56() {
-        assert_eq!(PROTOCOL_VERSION, 56);
+    fn protocol_version_is_57() {
+        assert_eq!(PROTOCOL_VERSION, 57);
     }
 
     #[test]
@@ -5404,7 +5427,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":56,
+                    "protocol_version":57,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -6055,6 +6078,17 @@ mod tests {
                             strip_codes: false,
                             timestamp: true,
                         },
+                        tray: super::UiTrayOptions {
+                            always: true,
+                            startup: false,
+                            minimize: true,
+                            single_click: false,
+                        },
+                        tips: super::UiTipsOptions {
+                            highlights: true,
+                            queries: false,
+                            channels: true,
+                        },
                     }),
                     colors_dialog: Some(super::UiColorsDialog {
                         selected: "normal".to_owned(),
@@ -6282,7 +6316,9 @@ mod tests {
                         "highlight_controls_enabled":true,
                         "highlight_delete_enabled":false,
                         "activity_colors":{"event":5,"message":4,"highlight":12},
-                        "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true}
+                        "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true},
+                        "tray":{"always":true,"startup":false,"minimize":true,"single_click":false},
+                        "tips":{"highlights":true,"queries":false,"channels":true}
                     },
                     "colors_dialog":{
                         "selected":"normal",

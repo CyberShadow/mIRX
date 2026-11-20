@@ -1380,6 +1380,29 @@ pub struct UiOptionsDialog {
     pub activity_colors: UiActivityColors,
     /// The Logging page's checkboxes.
     pub logging: UiLoggingOptions,
+    /// The Tray page's checkboxes.
+    pub tray: UiTrayOptions,
+    /// The Tips page's checkboxes.
+    pub tips: UiTipsOptions,
+}
+
+/// Options > Display > Tray's checkboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTrayOptions {
+    pub always: bool,
+    pub startup: bool,
+    pub minimize: bool,
+    pub single_click: bool,
+}
+
+/// Options > Display > Tips' checkboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiTipsOptions {
+    pub highlights: bool,
+    pub queries: bool,
+    pub channels: bool,
 }
 
 /// Options > IRC > Logging's checkboxes.

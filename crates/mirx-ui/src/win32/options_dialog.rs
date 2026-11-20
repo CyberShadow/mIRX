@@ -47,7 +47,7 @@ use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
     OptionsPage, page_tree_index, tree_index, tree_paths,
 };
-use super::settings::{ActivityColors, LoggingSetting, Settings};
+use super::settings::{ActivityColors, LoggingSetting, Settings, TipsSetting, TraySetting};
 use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
 use super::{
@@ -55,7 +55,7 @@ use super::{
     create_child_window, expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text,
     run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
-use crate::automation::{UiLoggingOptions, UiOptionsDialog};
+use crate::automation::{UiLoggingOptions, UiOptionsDialog, UiTipsOptions, UiTrayOptions};
 
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
 const OPTIONS_DIALOG_TITLE: &str = "mirx Options";
@@ -77,10 +77,20 @@ pub(super) const OPTIONS_LOG_QUERIES_ID: u16 = 6502;
 pub(super) const OPTIONS_LOG_STRIP_CODES_ID: u16 = 6503;
 pub(super) const OPTIONS_LOG_TIMESTAMP_ID: u16 = 6504;
 pub(super) const OPTIONS_LOG_FOLDER_ID: u16 = 6505;
+pub(super) const OPTIONS_TRAY_ALWAYS_ID: u16 = 6601;
+pub(super) const OPTIONS_TRAY_STARTUP_ID: u16 = 6602;
+pub(super) const OPTIONS_TRAY_MINIMIZE_ID: u16 = 6603;
+pub(super) const OPTIONS_TRAY_SINGLE_CLICK_ID: u16 = 6604;
+pub(super) const OPTIONS_TIPS_HIGHLIGHTS_ID: u16 = 6701;
+pub(super) const OPTIONS_TIPS_QUERIES_ID: u16 = 6702;
+pub(super) const OPTIONS_TIPS_CHANNELS_ID: u16 = 6703;
+pub(super) const OPTIONS_TIPS_NOTE_ID: u16 = 6704;
 const LISTBOX_CLASS_NAME: &str = "LISTBOX";
 const HIGHLIGHT_NOTE: &str = "Words are matched as whole words; * and ? are wildcards. \
 Highlight words are kept on your Matrix server and shared with your other clients.";
 const HIGHLIGHT_SIGNED_OUT_NOTE: &str = "Connect to edit highlight words.";
+const TIPS_NOTE: &str =
+    "Muted rooms never show tips; Mentions and keywords rooms only for highlights.";
 
 const TREE_WIDTH: i32 = 150;
 const TREE_HEIGHT: i32 = 260;
@@ -109,6 +119,13 @@ struct Fields {
     log_queries: HWND,
     log_strip_codes: HWND,
     log_timestamp: HWND,
+    tray_always: HWND,
+    tray_startup: HWND,
+    tray_minimize: HWND,
+    tray_single_click: HWND,
+    tips_highlights: HWND,
+    tips_queries: HWND,
+    tips_channels: HWND,
 }
 
 impl Fields {
@@ -125,6 +142,17 @@ impl Fields {
                 queries: checked(self.log_queries),
                 strip_codes: checked(self.log_strip_codes),
                 timestamp: checked(self.log_timestamp),
+            },
+            tray: TraySetting {
+                always: checked(self.tray_always),
+                startup: checked(self.tray_startup),
+                minimize: checked(self.tray_minimize),
+                single_click: checked(self.tray_single_click),
+            },
+            tips: TipsSetting {
+                highlights: checked(self.tips_highlights),
+                queries: checked(self.tips_queries),
+                channels: checked(self.tips_channels),
             },
         }
     }
@@ -219,6 +247,13 @@ impl OptionsDialog {
                 log_queries: null_mut(),
                 log_strip_codes: null_mut(),
                 log_timestamp: null_mut(),
+                tray_always: null_mut(),
+                tray_startup: null_mut(),
+                tray_minimize: null_mut(),
+                tray_single_click: null_mut(),
+                tips_highlights: null_mut(),
+                tips_queries: null_mut(),
+                tips_channels: null_mut(),
             },
             saved: None,
         }));
@@ -564,23 +599,32 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     state
         .page_controls
         .push((OptionsPage::IrcLogging, auto_label));
-    let mut row_y = page_top + auto_label_height + DIALOG_LABEL_GAP;
-    let mut log_check_box = |text: &str, id: u16, indent: i32| {
+    // A checkbox on the row at `row_y`, which moves to the next row.
+    let check_box_row = |text: &str, id: u16, indent: i32, row_y: &mut i32| {
         let check_box = place(
             control(BUTTON_CLASS_NAME, text, checkbox, 0, id)?,
             PAGE_X + indent,
-            row_y,
+            *row_y,
             PAGE_WIDTH - indent,
             DIALOG_CHECKBOX_HEIGHT,
         );
-        row_y += DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
+        *row_y += DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
         Ok::<_, String>(check_box)
     };
+    let mut row_y = page_top + auto_label_height + DIALOG_LABEL_GAP;
     // The kinds of window sit under "Automatically log:".
-    state.fields.log_channels = log_check_box("Channels", OPTIONS_LOG_CHANNELS_ID, DIALOG_MARGIN)?;
-    state.fields.log_queries = log_check_box("Queries", OPTIONS_LOG_QUERIES_ID, DIALOG_MARGIN)?;
-    state.fields.log_strip_codes = log_check_box("Strip codes", OPTIONS_LOG_STRIP_CODES_ID, 0)?;
-    state.fields.log_timestamp = log_check_box("Timestamp logs", OPTIONS_LOG_TIMESTAMP_ID, 0)?;
+    state.fields.log_channels = check_box_row(
+        "Channels",
+        OPTIONS_LOG_CHANNELS_ID,
+        DIALOG_MARGIN,
+        &mut row_y,
+    )?;
+    state.fields.log_queries =
+        check_box_row("Queries", OPTIONS_LOG_QUERIES_ID, DIALOG_MARGIN, &mut row_y)?;
+    state.fields.log_strip_codes =
+        check_box_row("Strip codes", OPTIONS_LOG_STRIP_CODES_ID, 0, &mut row_y)?;
+    state.fields.log_timestamp =
+        check_box_row("Timestamp logs", OPTIONS_LOG_TIMESTAMP_ID, 0, &mut row_y)?;
     for control in [
         state.fields.log_channels,
         state.fields.log_queries,
@@ -597,6 +641,84 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         row_y,
     )?;
     state.page_controls.push((OptionsPage::IrcLogging, folder));
+
+    // mIRC's Tray page: when the icon shows, and what opens mirx from it.
+    let mut row_y = page_top;
+    state.fields.tray_always = check_box_row(
+        "Always show mirx icon in tray",
+        OPTIONS_TRAY_ALWAYS_ID,
+        0,
+        &mut row_y,
+    )?;
+    state.fields.tray_startup = check_box_row(
+        "On startup minimize mirx to tray",
+        OPTIONS_TRAY_STARTUP_ID,
+        0,
+        &mut row_y,
+    )?;
+    state.fields.tray_minimize = check_box_row(
+        "Place mirx in tray when minimized",
+        OPTIONS_TRAY_MINIMIZE_ID,
+        0,
+        &mut row_y,
+    )?;
+    state.fields.tray_single_click = check_box_row(
+        "Single click on tray icon to open",
+        OPTIONS_TRAY_SINGLE_CLICK_ID,
+        0,
+        &mut row_y,
+    )?;
+    for control in [
+        state.fields.tray_always,
+        state.fields.tray_startup,
+        state.fields.tray_minimize,
+        state.fields.tray_single_click,
+    ] {
+        state
+            .page_controls
+            .push((OptionsPage::DisplayTray, control));
+    }
+
+    // mIRC's Tips page, without its queue size and display time: Windows
+    // keeps the notifications' queue and decides how long each shows.
+    let (tips_label, (_, tips_label_height)) = label(
+        "Show tips when mirx is not the active application for:",
+        0,
+        0,
+        PAGE_X,
+        page_top,
+    )?;
+    let mut row_y = page_top + tips_label_height + DIALOG_LABEL_GAP;
+    state.fields.tips_highlights = check_box_row(
+        "Highlights",
+        OPTIONS_TIPS_HIGHLIGHTS_ID,
+        DIALOG_MARGIN,
+        &mut row_y,
+    )?;
+    state.fields.tips_queries = check_box_row(
+        "Query messages",
+        OPTIONS_TIPS_QUERIES_ID,
+        DIALOG_MARGIN,
+        &mut row_y,
+    )?;
+    state.fields.tips_channels = check_box_row(
+        "Channel messages",
+        OPTIONS_TIPS_CHANNELS_ID,
+        DIALOG_MARGIN,
+        &mut row_y,
+    )?;
+    let (tips_note, _) = label(TIPS_NOTE, OPTIONS_TIPS_NOTE_ID, 0, PAGE_X, row_y)?;
+    for control in [
+        tips_label,
+        state.fields.tips_highlights,
+        state.fields.tips_queries,
+        state.fields.tips_channels,
+        tips_note,
+    ] {
+        state
+            .page_controls
+            .push((OptionsPage::DisplayTips, control));
+    }
 
     // OK is `IDOK` and Cancel `IDCANCEL`: what `IsDialogMessageW` sends
     // for Enter and Esc. They sit a margin under the tree and every page,
@@ -650,6 +772,13 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         (state.fields.log_queries, form.logging.queries),
         (state.fields.log_strip_codes, form.logging.strip_codes),
         (state.fields.log_timestamp, form.logging.timestamp),
+        (state.fields.tray_always, form.tray.always),
+        (state.fields.tray_startup, form.tray.startup),
+        (state.fields.tray_minimize, form.tray.minimize),
+        (state.fields.tray_single_click, form.tray.single_click),
+        (state.fields.tips_highlights, form.tips.highlights),
+        (state.fields.tips_queries, form.tips.queries),
+        (state.fields.tips_channels, form.tips.channels),
     ] {
         SendMessageW(check_box, BM_SETCHECK, check(checked), 0);
     }
@@ -979,6 +1108,7 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
             String::from_utf16_lossy(&text[..length])
         })
         .collect();
+    let form = state.fields.read();
     Ok(UiOptionsDialog {
         tree: paths,
         selected: selected.ok_or_else(|| "the options tree has no selection".to_owned())?,
@@ -986,8 +1116,19 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
         highlight_items,
         highlight_controls_enabled,
         highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
-        activity_colors: dump_activity_colors(&state.fields.read_activity_colors()),
-        logging: dump_logging_options(&state.fields.read().logging),
+        activity_colors: dump_activity_colors(&form.activity_colors),
+        logging: dump_logging_options(&form.logging),
+        tray: UiTrayOptions {
+            always: form.tray.always,
+            startup: form.tray.startup,
+            minimize: form.tray.minimize,
+            single_click: form.tray.single_click,
+        },
+        tips: UiTipsOptions {
+            highlights: form.tips.highlights,
+            queries: form.tips.queries,
+            channels: form.tips.channels,
+        },
     })
 }
 
