@@ -99,12 +99,12 @@ use windows_sys::Win32::UI::Controls::{
     TVM_SELECTITEM, TVN_ITEMEXPANDEDW, TVN_SELCHANGEDW, TVS_HASBUTTONS,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT,
+    EnableWindow, GetFocus, GetKeyState, SetFocus, VK_CONTROL, VK_MENU, VK_SHIFT, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ACCEL, CreateAcceleratorTableW, DestroyAcceleratorTable, FALT, FCONTROL, FVIRTKEY, GetMenu,
-    GetMenuItemInfoW, HACCEL, MENUITEMINFOW, MFS_CHECKED, MFS_DISABLED, MFT_BITMAP, MFT_SEPARATOR,
-    MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, TranslateAcceleratorW,
+    ACCEL, CreateAcceleratorTableW, DestroyAcceleratorTable, FALT, FCONTROL, FSHIFT, FVIRTKEY,
+    GetMenu, GetMenuItemInfoW, HACCEL, MENUITEMINFOW, MFS_CHECKED, MFS_DISABLED, MFT_BITMAP,
+    MFT_SEPARATOR, MIIM_FTYPE, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, TranslateAcceleratorW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, AppendMenuW, BM_GETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON,
@@ -116,8 +116,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetAncestor, GetClassNameW, GetClientRect, GetDlgItem, GetForegroundWindow, GetMenuItemCount,
     GetMenuState, GetMenuStringW, GetMessageW, GetParent, GetScrollInfo, GetSystemMenu,
     GetWindowLongPtrW, GetWindowRect, HMENU, HideCaret, IDC_ARROW, IDYES, IsIconic, IsWindow,
-    IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT, LB_GETTEXT,
-    LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
+    IsWindowVisible, IsZoomed, KillTimer, LB_ADDSTRING, LB_ERR, LB_GETCURSEL, LB_GETITEMRECT,
+    LB_GETTEXT, LB_GETTEXTLEN, LB_ITEMFROMPOINT, LB_RESETCONTENT, LB_SETCURSEL, LB_SETITEMHEIGHT,
     LBS_HASSTRINGS, LBS_NOINTEGRALHEIGHT, LBS_OWNERDRAWFIXED, LoadCursorW, MB_ICONERROR,
     MB_ICONQUESTION, MB_OK, MB_YESNO, MDICREATESTRUCTW, MDITILE_HORIZONTAL, MDITILE_VERTICAL,
     MF_BYCOMMAND, MF_BYPOSITION, MF_CHECKED, MF_ENABLED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
@@ -324,13 +324,14 @@ use frame_menus::{
     active_message_action_state_for_automation, active_room_action_state, connect,
     context_menu_command_id, context_menu_screen_point_for_lparam, create_frame_menu,
     default_context_point_for_window, disconnect, handle_menu_command, handle_switchbar_command,
-    invoke_menu_command_for_automation, invoke_navigation_context_menu_for_automation,
-    invoke_timeline_context_menu_for_automation, open_dialog_for_automation, refresh_menu_popup,
-    refresh_message_menu_state, refresh_room_menu_state, refresh_tools_menu_state,
-    select_timeline_event_for_automation, selected_message_quote_target,
-    selected_timeline_event_id, selected_timeline_event_id_for_automation,
-    selected_timeline_media_attachment, show_context_menu, show_recover_e2ee_menu_dialog,
-    show_timeline_message_context_menu, timeline_row_is_selected, window_menu_command_id,
+    handle_window_key_command, invoke_menu_command_for_automation,
+    invoke_navigation_context_menu_for_automation, invoke_timeline_context_menu_for_automation,
+    open_dialog_for_automation, refresh_menu_popup, refresh_message_menu_state,
+    refresh_room_menu_state, refresh_tools_menu_state, select_timeline_event_for_automation,
+    selected_message_quote_target, selected_timeline_event_id,
+    selected_timeline_event_id_for_automation, selected_timeline_media_attachment,
+    show_context_menu, show_recover_e2ee_menu_dialog, show_timeline_message_context_menu,
+    timeline_row_is_selected, window_menu_command_id,
 };
 #[cfg(test)]
 use images::room_preview_media_storage_key;
@@ -340,6 +341,8 @@ use images::{
     timeline_thumbnail_format, timeline_video_preview_source,
 };
 use menus::{
+    ACCEL_ID_NEXT_CHANNEL, ACCEL_ID_NEXT_QUERY, ACCEL_ID_TOGGLE_MAXIMIZE, ACCEL_ID_TREEBAR_FOCUS,
+    ACCEL_ID_WINDOW_FIRST, ACCEL_ID_WINDOW_LAST, ACCEL_ID_WINDOW_NEXT, ACCEL_ID_WINDOW_PREVIOUS,
     BarMenu, COMMANDS_MENU, FILE_MENU, HELP_MENU, MEMBER_CONTROL_MENU, MEMBER_MENU, MENU_BAR,
     MENU_ID_COMMANDS_FIRST, MENU_ID_COMMANDS_LIST, MENU_ID_FILE_CONNECT, MENU_ID_FILE_DISCONNECT,
     MENU_ID_FILE_EXIT, MENU_ID_FILE_SELECT_SERVER, MENU_ID_FIND, MENU_ID_HELP_ABOUT,
@@ -355,21 +358,23 @@ use menus::{
     MENU_ID_VERIFY_CONFIRM_SAS, MENU_ID_VERIFY_REJECT_SAS, MENU_ID_VIEW_SWITCHBAR,
     MENU_ID_VIEW_TREEBAR, MENU_ID_WINDOW_ARRANGE_ICONS, MENU_ID_WINDOW_CASCADE,
     MENU_ID_WINDOW_TILE_HORIZONTAL, MENU_ID_WINDOW_TILE_VERTICAL, MenuEntry,
-    ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, commands_menu_item,
+    ROOM_NOTIFICATIONS_MENU, TOOLS_MENU, VIEW_MENU, WINDOW_MENU, WindowKey, commands_menu_item,
     commands_menu_line, commands_menu_title, file_menu_state, member_menu_command,
     member_menu_item_enabled, member_menu_item_ids, notification_menu_id, notification_menu_mode,
     notification_mode_label, verification_menu_action_enabled, view_menu_bar, view_menu_checks,
+    window_key,
 };
 #[cfg(test)]
 use navigation::{NavItem, navigation_layout};
 use navigation::{
-    NavNode, ROOM_LIST_TITLE, TreeItem, dump_navigation_tree, dump_selected_navigation_path,
-    expand_tree_item, handle_tree_selection, insert_tree_item, ordered_view_ids,
-    read_tree_item_text, rebuild_switchbar, refresh_switchbar_state, refresh_tree_activity_colors,
-    select_navigation_path, select_navigation_view, select_room, select_tree_item,
-    selected_tree_item, set_navigation_expanded, show_navigation_room_context_menu,
-    switchbar_custom_draw, sync_views_and_tree, tree_custom_draw, tree_expansion_changed,
-    view_caption, view_id_from_identity, view_identity_from_view_id, view_short_title,
+    NavNode, ROOM_LIST_TITLE, TreeItem, cycled_window, dump_navigation_tree,
+    dump_selected_navigation_path, expand_tree_item, handle_tree_selection, insert_tree_item,
+    nth_window, ordered_view_ids, read_tree_item_text, rebuild_switchbar, refresh_switchbar_state,
+    refresh_tree_activity_colors, select_navigation_path, select_navigation_view, select_room,
+    select_tree_item, selected_tree_item, set_navigation_expanded,
+    show_navigation_room_context_menu, switchbar_custom_draw, sync_views_and_tree,
+    tree_custom_draw, tree_expansion_changed, view_caption, view_id_from_identity,
+    view_identity_from_view_id, view_short_title,
 };
 use nick_completion::{NickCompletion, member_mention_text};
 use nick_list::{
@@ -449,7 +454,8 @@ use views::{
     ensure_room_view, ensure_status_view, ensure_view, layout_mdi_child, mdi_child_content,
     mdi_child_edit, mdi_window_placement, refresh_every_view_content, refresh_view_content,
     register_mdi_child_class, register_room_content_class, resolve_active_view,
-    room_content_member_list, room_content_timeline, set_view_window_state, view_timeline,
+    room_content_member_list, room_content_timeline, set_view_window_state, show_view,
+    view_timeline,
 };
 #[cfg(test)]
 use views::{ROOM_CONTENT_CLASS_NAME, take_stale_room_views};

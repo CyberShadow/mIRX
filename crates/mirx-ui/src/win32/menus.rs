@@ -11,6 +11,7 @@ use mirx_core::{
 
 use super::commands::{RankChange, SlashCommand, VerificationAction, rank_change_role};
 use super::ignore::{check_ignore, check_unignore};
+use super::navigation::WindowCycle;
 use super::settings::{Bar, Settings};
 use crate::automation::ConnectionState;
 
@@ -60,6 +61,16 @@ pub(super) const MENU_ID_MEMBER_OP: usize = 40045;
 pub(super) const MENU_ID_MEMBER_DEOP: usize = 40046;
 pub(super) const MENU_ID_MEMBER_VOICE: usize = 40047;
 pub(super) const MENU_ID_MEMBER_DEVOICE: usize = 40048;
+/// The window keys' command ids: accelerators with no menu item, in the
+/// gap below the Commands menu's. Alt+n sends `ACCEL_ID_WINDOW_FIRST + n - 1`.
+pub(super) const ACCEL_ID_WINDOW_FIRST: usize = 40080;
+pub(super) const ACCEL_ID_WINDOW_LAST: usize = ACCEL_ID_WINDOW_FIRST + 8;
+pub(super) const ACCEL_ID_WINDOW_NEXT: usize = 40089;
+pub(super) const ACCEL_ID_WINDOW_PREVIOUS: usize = 40090;
+pub(super) const ACCEL_ID_NEXT_CHANNEL: usize = 40091;
+pub(super) const ACCEL_ID_NEXT_QUERY: usize = 40092;
+pub(super) const ACCEL_ID_TOGGLE_MAXIMIZE: usize = 40093;
+pub(super) const ACCEL_ID_TREEBAR_FOCUS: usize = 40094;
 /// `COMMANDS_MENU[i]` has the id `MENU_ID_COMMANDS_FIRST + i`. The range
 /// ends below the switchbar's (41001) and MDI's child ids (50000).
 pub(super) const MENU_ID_COMMANDS_FIRST: usize = 40100;
@@ -239,8 +250,38 @@ pub(super) const HELP_MENU: &[MenuEntry] = &[
     },
 ];
 
-/// The menubar's menus, left to right. No mnemonic is `E`, `L` or `O`:
-/// Alt+E is Select Server, Alt+L List rooms and Alt+O Options, as in mIRC.
+/// mIRC's window keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindowKey {
+    /// Alt+1..9: the nth switchbar button.
+    Nth(usize),
+    /// Ctrl+Tab and Ctrl+Shift+Tab, Ctrl+N and Ctrl+Q.
+    Cycle { cycle: WindowCycle, forward: bool },
+    /// Alt+X.
+    ToggleMaximize,
+    /// Ctrl+T: between the treebar and the active window.
+    TreebarFocus,
+}
+
+pub(super) fn window_key(command_id: usize) -> Option<WindowKey> {
+    let cycle = |cycle, forward| WindowKey::Cycle { cycle, forward };
+    Some(match command_id {
+        ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_WINDOW_LAST => {
+            WindowKey::Nth(command_id - ACCEL_ID_WINDOW_FIRST + 1)
+        }
+        ACCEL_ID_WINDOW_NEXT => cycle(WindowCycle::All, true),
+        ACCEL_ID_WINDOW_PREVIOUS => cycle(WindowCycle::All, false),
+        ACCEL_ID_NEXT_CHANNEL => cycle(WindowCycle::Channels, true),
+        ACCEL_ID_NEXT_QUERY => cycle(WindowCycle::Queries, true),
+        ACCEL_ID_TOGGLE_MAXIMIZE => WindowKey::ToggleMaximize,
+        ACCEL_ID_TREEBAR_FOCUS => WindowKey::TreebarFocus,
+        _ => return None,
+    })
+}
+
+/// The menubar's menus, left to right. No mnemonic is `E`, `L`, `O`, `X`
+/// or a digit: Alt+E is Select Server, Alt+L List rooms, Alt+O Options,
+/// Alt+X maximizes and Alt+1..9 switch windows, as in mIRC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BarMenu {
     File,
@@ -739,11 +780,36 @@ mod tests {
         })
         .chain((0..COMMANDS_MENU.len()).map(|index| MENU_ID_COMMANDS_FIRST + index))
         .chain(ROOM_NOTIFICATIONS_MENU.iter().map(|(_, id, _)| *id))
+        .chain(ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_TREEBAR_FOCUS)
         .collect::<Vec<_>>();
         let count = ids.len();
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), count);
+        // Clear of the switchbar's and MDI's child ids too.
+        assert!(
+            ids.last()
+                .is_some_and(|id| *id < super::super::SWITCHBAR_COMMAND_FIRST)
+        );
+    }
+
+    #[test]
+    fn window_keys_cover_their_id_range() {
+        assert_eq!(window_key(ACCEL_ID_WINDOW_FIRST), Some(WindowKey::Nth(1)));
+        assert_eq!(window_key(ACCEL_ID_WINDOW_LAST), Some(WindowKey::Nth(9)));
+        assert_eq!(
+            window_key(ACCEL_ID_WINDOW_PREVIOUS),
+            Some(WindowKey::Cycle {
+                cycle: WindowCycle::All,
+                forward: false
+            })
+        );
+        assert!(
+            (ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_TREEBAR_FOCUS).all(|id| window_key(id).is_some())
+        );
+        assert_eq!(window_key(ACCEL_ID_WINDOW_FIRST - 1), None);
+        assert_eq!(window_key(ACCEL_ID_TREEBAR_FOCUS + 1), None);
+        assert_eq!(window_key(MENU_ID_FIND), None);
     }
 
     fn member(user_id: &str, rank: RoomMemberRank) -> RoomMemberSummary {

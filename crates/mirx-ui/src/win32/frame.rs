@@ -118,7 +118,9 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_COMMAND => {
-            if handle_switchbar_command(hwnd, wparam) || handle_menu_command(hwnd, wparam).is_some()
+            if handle_switchbar_command(hwnd, wparam)
+                || handle_window_key_command(hwnd, wparam)
+                || handle_menu_command(hwnd, wparam).is_some()
             {
                 0
             } else {

@@ -212,7 +212,10 @@ pub(super) unsafe fn create_frame_menu(hwnd: HWND) -> Result<(), String> {
             key: u16::from(b'O'),
             cmd: MENU_ID_TOOLS_OPTIONS as u16,
         },
-    ];
+    ]
+    .into_iter()
+    .chain(window_key_accelerators())
+    .collect::<Vec<_>>();
     let accelerator_table =
         CreateAcceleratorTableW(accelerators.as_ptr(), accelerators.len() as i32);
     if accelerator_table.is_null() {
@@ -1051,6 +1054,85 @@ unsafe fn submit_room_menu_action(
             set_local_command_status(hwnd, message.clone())?;
             Err(message)
         }
+    }
+}
+
+/// mIRC's window keys. They run before `TranslateMDISysAccel`, so
+/// Ctrl+Tab follows the switchbar; MDI's own z-order cycling stays on
+/// Ctrl+F6.
+fn window_key_accelerators() -> impl Iterator<Item = ACCEL> {
+    let accel = |modifiers, key: u16, cmd: usize| ACCEL {
+        fVirt: modifiers,
+        key,
+        cmd: cmd as u16,
+    };
+    (b'1'..=b'9')
+        .zip(ACCEL_ID_WINDOW_FIRST..=ACCEL_ID_WINDOW_LAST)
+        .map(move |(digit, cmd)| accel(FALT | FVIRTKEY, u16::from(digit), cmd))
+        .chain([
+            accel(FCONTROL | FVIRTKEY, VK_TAB, ACCEL_ID_WINDOW_NEXT),
+            accel(
+                FCONTROL | FSHIFT | FVIRTKEY,
+                VK_TAB,
+                ACCEL_ID_WINDOW_PREVIOUS,
+            ),
+            accel(FCONTROL | FVIRTKEY, u16::from(b'N'), ACCEL_ID_NEXT_CHANNEL),
+            accel(FCONTROL | FVIRTKEY, u16::from(b'Q'), ACCEL_ID_NEXT_QUERY),
+            accel(FALT | FVIRTKEY, u16::from(b'X'), ACCEL_ID_TOGGLE_MAXIMIZE),
+            accel(FCONTROL | FVIRTKEY, u16::from(b'T'), ACCEL_ID_TREEBAR_FOCUS),
+        ])
+}
+
+pub(super) unsafe fn handle_window_key_command(hwnd: HWND, wparam: WPARAM) -> bool {
+    let Some(key) = window_key(wparam & 0xffff) else {
+        return false;
+    };
+    let state = state_ref(hwnd);
+    let target = match key {
+        WindowKey::Nth(n) => nth_window(&ordered_view_ids(state), n).cloned(),
+        WindowKey::Cycle { cycle, forward } => {
+            cycled_window(state, &ordered_view_ids(state), cycle, forward)
+        }
+        WindowKey::ToggleMaximize => {
+            toggle_active_window_maximized(hwnd);
+            None
+        }
+        WindowKey::TreebarFocus => {
+            toggle_treebar_focus(hwnd);
+            None
+        }
+    };
+    if let Some(view_id) = target
+        && let Err(message) = activate_view(hwnd, &view_id, None)
+    {
+        show_error_message(hwnd, "Window", &message);
+    }
+    true
+}
+
+/// Alt+X, mIRC's maximize toggle for the active window.
+unsafe fn toggle_active_window_maximized(hwnd: HWND) {
+    let mdi_client = state_ref(hwnd).controls.mdi_client;
+    let child = SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND;
+    assert!(!child.is_null(), "the Status window is always open");
+    let message = if IsZoomed(child) != 0 {
+        WM_MDIRESTORE
+    } else {
+        WM_MDIMAXIMIZE
+    };
+    SendMessageW(mdi_client, message, child as WPARAM, 0);
+}
+
+/// Ctrl+T: into the treebar, or back to the active window from it. With
+/// the treebar hidden it does nothing, as in mIRC.
+unsafe fn toggle_treebar_focus(hwnd: HWND) {
+    let tree = state_ref(hwnd).controls.tree;
+    if GetFocus() == tree {
+        let mdi_client = state_ref(hwnd).controls.mdi_client;
+        // The child hands the focus to its editbox.
+        SetFocus(SendMessageW(mdi_client, WM_MDIGETACTIVE, 0, 0) as HWND);
+    } else if IsWindowVisible(tree) != 0 {
+        SetFocus(tree);
     }
 }
 

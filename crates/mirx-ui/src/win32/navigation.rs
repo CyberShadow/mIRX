@@ -237,7 +237,8 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     refresh_every_view_content(hwnd)?;
 
     // Activation makes it the active view: one that changes here (its room
-    // went) unfolds its treebar folder, as any newly active window does.
+    // went) unfolds its treebar folder and takes the focus, as any newly
+    // active window does. The same one is only re-applied.
     let active_view = {
         let state = state_ref(hwnd);
         resolve_active_view(
@@ -250,7 +251,11 @@ pub(super) unsafe fn sync_views_and_tree(hwnd: HWND) -> Result<(), String> {
     refresh_tree(hwnd);
     rebuild_switchbar(hwnd)?;
     refresh_status_bar(hwnd)?;
-    activate_view(hwnd, &active_view, None)
+    if active_view == state_ref(hwnd).active_view {
+        show_view(hwnd, &active_view, None).map(drop)
+    } else {
+        activate_view(hwnd, &active_view, None)
+    }
 }
 
 unsafe fn refresh_tree(hwnd: HWND) {
@@ -270,12 +275,28 @@ unsafe fn refresh_tree(hwnd: HWND) {
         })
         .map(|(_, tree_item)| tree_item.node.clone())
         .collect::<BTreeSet<_>>();
+    // So is the caret, which the treebar keys move without activating: it
+    // goes back to the same occurrence of its node.
+    let caret = selected_tree_item(tree).map(|caret| {
+        let node = state.tree_items[&caret].node.clone();
+        let occurrence = tree_items_of(state, tree, &node)
+            .iter()
+            .position(|item| *item == caret)
+            .expect("the caret is one of its node's items");
+        (node, occurrence)
+    });
     SendMessageW(tree, TVM_DELETEITEM, 0, TVI_ROOT as LPARAM);
     state.tree_items.clear();
     state.primary_tree_items.clear();
 
     let layout = navigation_layout(&state.model);
     insert_nav_item(state, TVI_ROOT, &layout, &collapsed);
+    // A caret whose node went is set again by the activation that follows.
+    if let Some((node, occurrence)) = caret
+        && let Some(item) = tree_items_of(state, tree, &node).get(occurrence)
+    {
+        SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET as WPARAM, *item as LPARAM);
+    }
 }
 
 /// Inserts `item` and its subtree, mapping each item, and expands every
@@ -654,6 +675,59 @@ pub(super) fn ordered_view_ids(state: &WindowState) -> Vec<ViewId> {
     ordered
 }
 
+/// mIRC's Alt+1..9: the `n`th window (1-based) in switchbar order.
+pub(super) fn nth_window(order: &[ViewId], n: usize) -> Option<&ViewId> {
+    order.get(n - 1)
+}
+
+/// Which windows Ctrl+Tab (all), Ctrl+N (channels) and Ctrl+Q (queries)
+/// step through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WindowCycle {
+    All,
+    Channels,
+    Queries,
+}
+
+impl WindowCycle {
+    fn admits(self, state: &WindowState, view_id: &ViewId) -> bool {
+        let kind = match self {
+            WindowCycle::All => return true,
+            WindowCycle::Channels => RoomWindowKind::Channel,
+            WindowCycle::Queries => RoomWindowKind::Query,
+        };
+        let ViewId::Room(room_id) = view_id else {
+            return false;
+        };
+        // A window of a room that left is no channel or query any more.
+        navigable_room_by_id(&state.model.rooms, room_id)
+            .is_some_and(|room| room_window_kind(room) == kind)
+    }
+}
+
+/// The window after (or before) the active one in switchbar `order` that
+/// `cycle` admits, wrapping around; `None` when no other window qualifies.
+pub(super) fn cycled_window(
+    state: &WindowState,
+    order: &[ViewId],
+    cycle: WindowCycle,
+    forward: bool,
+) -> Option<ViewId> {
+    let position = order
+        .iter()
+        .position(|view_id| *view_id == state.active_view)
+        .expect("the active view is in the switchbar order");
+    let (before, from_active) = order.split_at(position);
+    let mut others = from_active[1..].iter().chain(before);
+    let admits = |view_id: &&ViewId| cycle.admits(state, view_id);
+    if forward {
+        others.find(admits)
+    } else {
+        others.rfind(admits)
+    }
+    .cloned()
+}
+
 pub(super) unsafe fn rebuild_switchbar(hwnd: HWND) -> Result<(), String> {
     let switchbar = state_ref(hwnd).controls.switchbar;
     if switchbar.is_null() {
@@ -995,8 +1069,8 @@ pub(super) unsafe fn set_navigation_expanded(
     expanded: bool,
 ) -> Result<(), String> {
     let tree = state_ref(hwnd).controls.tree;
-    let root = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
-    let item = first_tree_item_of(state_ref(hwnd), tree, root, node)
+    let item = *tree_items_of(state_ref(hwnd), tree, node)
+        .first()
         .ok_or_else(|| format!("unknown navigation node: {node:?}"))?;
     if state_ref(hwnd).tree_items[&item].descendant_views.is_none() {
         return Err(format!("navigation node has no children: {node:?}"));
@@ -1017,26 +1091,31 @@ pub(super) unsafe fn tree_expansion_changed(hwnd: HWND) -> Result<(), String> {
     refresh_tree_activity_colors(hwnd)
 }
 
-/// The first item of `node` in tree order at or under `item` and its later
-/// siblings.
-unsafe fn first_tree_item_of(
-    state: &WindowState,
-    tree: HWND,
-    mut item: isize,
-    node: &NavNode,
-) -> Option<isize> {
-    while item != 0 {
-        if state.tree_items[&item].node == *node {
-            return Some(item);
+/// Every treebar item, in tree order.
+unsafe fn tree_items_in_order(tree: HWND) -> Vec<isize> {
+    unsafe fn push_siblings(tree: HWND, mut item: isize, items: &mut Vec<isize>) {
+        while item != 0 {
+            items.push(item);
+            let child =
+                SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
+            push_siblings(tree, child, items);
+            item =
+                SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, item as LPARAM) as isize;
         }
-        let child =
-            SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD as WPARAM, item as LPARAM) as isize;
-        if let Some(found) = first_tree_item_of(state, tree, child, node) {
-            return Some(found);
-        }
-        item = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT as WPARAM, item as LPARAM) as isize;
     }
-    None
+    let mut items = Vec::new();
+    let root = SendMessageW(tree, TVM_GETNEXTITEM, TVGN_ROOT as WPARAM, 0) as isize;
+    push_siblings(tree, root, &mut items);
+    items
+}
+
+/// The items standing for `node`, in tree order: a room or space listed
+/// under two spaces has two.
+unsafe fn tree_items_of(state: &WindowState, tree: HWND, node: &NavNode) -> Vec<isize> {
+    tree_items_in_order(tree)
+        .into_iter()
+        .filter(|item| state.tree_items[item].node == *node)
+        .collect()
 }
 
 /// Selects a tree item like a click does, and activates its view. Activation
@@ -1154,10 +1233,16 @@ pub(super) unsafe fn handle_tree_selection(hwnd: HWND, change: &NMTREEVIEWW) {
         .node
         .view()
         .cloned();
-    if let Some(view_id) = view_id
-        && let Err(message) = activate_view(hwnd, &view_id, Some(selected_item))
-    {
+    let Some(view_id) = view_id else {
+        return;
+    };
+    if let Err(message) = activate_view(hwnd, &view_id, Some(selected_item)) {
         show_error_message(hwnd, "Treebar", &message);
+    }
+    // MDI activation focuses the window; arrowing through the treebar
+    // switches windows and keeps the keys in it.
+    if change.action == TVC_BYKEYBOARD {
+        SetFocus(change.hdr.hwndFrom);
     }
 }
 
@@ -1502,6 +1587,111 @@ mod tests {
                     )]
                 )]
             )
+        );
+    }
+
+    /// Status, two channels with a thread, a query, an invite and a room
+    /// that left, in switchbar order.
+    fn window_cycle_fixture() -> (WindowState, Vec<ViewId>) {
+        let mut state = test_state();
+        state.model.rooms = vec![
+            room("!ops:example", "Ops", false),
+            room("!dev:example", "Dev", false),
+            query("!alice:example", "Alice", "@alice:example"),
+            invited_room("!invite:example", "Lobby"),
+        ];
+        let order = vec![
+            ViewId::Status,
+            room_view_id("!ops:example"),
+            thread_view_id("!ops:example", "$root"),
+            room_view_id("!dev:example"),
+            room_view_id("!alice:example"),
+            room_view_id("!invite:example"),
+            room_view_id("!gone:example"),
+        ];
+        (state, order)
+    }
+
+    #[test]
+    fn nth_window_counts_switchbar_buttons_from_one() {
+        let (_, order) = window_cycle_fixture();
+        assert_eq!(nth_window(&order, 1), Some(&ViewId::Status));
+        assert_eq!(nth_window(&order, 2), Some(&room_view_id("!ops:example")));
+        assert_eq!(nth_window(&order, 7), Some(&room_view_id("!gone:example")));
+        assert_eq!(nth_window(&order, 8), None);
+    }
+
+    #[test]
+    fn ctrl_tab_steps_through_every_window_and_wraps() {
+        let (mut state, order) = window_cycle_fixture();
+        state.active_view = ViewId::Status;
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::All, true),
+            Some(room_view_id("!ops:example"))
+        );
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::All, false),
+            Some(room_view_id("!gone:example"))
+        );
+        state.active_view = room_view_id("!gone:example");
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::All, true),
+            Some(ViewId::Status)
+        );
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::All, false),
+            Some(room_view_id("!invite:example"))
+        );
+    }
+
+    #[test]
+    fn ctrl_n_steps_through_channels_only() {
+        let (mut state, order) = window_cycle_fixture();
+        // From a query, the next channel after it, wrapping.
+        state.active_view = room_view_id("!alice:example");
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::Channels, true),
+            Some(room_view_id("!ops:example"))
+        );
+        // Threads are skipped.
+        state.active_view = room_view_id("!ops:example");
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::Channels, true),
+            Some(room_view_id("!dev:example"))
+        );
+        state.active_view = thread_view_id("!ops:example", "$root");
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::Channels, false),
+            Some(room_view_id("!ops:example"))
+        );
+    }
+
+    #[test]
+    fn ctrl_q_stays_put_when_the_active_query_is_the_only_one() {
+        let (mut state, order) = window_cycle_fixture();
+        state.active_view = ViewId::Status;
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::Queries, true),
+            Some(room_view_id("!alice:example"))
+        );
+        state.active_view = room_view_id("!alice:example");
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::Queries, true),
+            None
+        );
+        assert_eq!(
+            cycled_window(&state, &order, WindowCycle::All, true).as_ref(),
+            Some(&room_view_id("!invite:example"))
+        );
+    }
+
+    #[test]
+    fn a_single_window_cycles_nowhere() {
+        let mut state = test_state();
+        state.active_view = ViewId::Status;
+        assert_eq!(
+            cycled_window(&state, &[ViewId::Status], WindowCycle::All, true),
+            None
         );
     }
 

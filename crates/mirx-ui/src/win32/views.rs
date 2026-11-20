@@ -1106,9 +1106,17 @@ unsafe fn apply_view_activation_state(
 
     refresh_tree_activity_colors(hwnd)?;
     refresh_view_content(hwnd, view_id)?;
-    // A newly active window unfolds its treebar folder; the active one,
-    // re-selected after a rebuild, leaves the folders as the user set them.
-    select_tree_item(hwnd, view_id, preferred_tree_item, newly_active);
+    // A newly active window takes the treebar caret and unfolds its folder.
+    // Re-applying the active one leaves a caret that the treebar keys put on
+    // a space folder, which activates nothing.
+    let caret_on_space = {
+        let state = state_ref(hwnd);
+        selected_tree_item(state.controls.tree)
+            .is_some_and(|item| matches!(state.tree_items[&item].node, NavNode::Space { .. }))
+    };
+    if newly_active || !caret_on_space {
+        select_tree_item(hwnd, view_id, preferred_tree_item, newly_active);
+    }
 
     Ok(AppliedActivation {
         child,
@@ -1127,7 +1135,6 @@ unsafe fn finish_view_activation_chrome(
         refresh_switchbar_state(hwnd)?;
     }
     refresh_status_bar(hwnd)?;
-    SetFocus(mdi_child_focus(applied.child));
     Ok(())
 }
 
@@ -1136,6 +1143,19 @@ pub(super) unsafe fn activate_view(
     view_id: &ViewId,
     preferred_tree_item: Option<isize>,
 ) -> Result<(), String> {
+    let child = show_view(hwnd, view_id, preferred_tree_item)?;
+    SetFocus(mdi_child_focus(child));
+    Ok(())
+}
+
+/// Activation without the focus, for re-applying the active window after
+/// a model change: the focus stays in the treebar, nick list or editbox
+/// the user left it in. Returns the view's MDI child.
+pub(super) unsafe fn show_view(
+    hwnd: HWND,
+    view_id: &ViewId,
+    preferred_tree_item: Option<isize>,
+) -> Result<HWND, String> {
     let applied = apply_view_activation_state(hwnd, view_id, preferred_tree_item)?;
 
     let mdi_client = state_ref(hwnd).controls.mdi_client;
@@ -1146,7 +1166,7 @@ pub(super) unsafe fn activate_view(
         SendMessageW(mdi_client, WM_MDIRESTORE, applied.child as WPARAM, 0);
     }
     finish_view_activation_chrome(hwnd, &applied)?;
-    Ok(())
+    Ok(applied.child)
 }
 
 unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> {
@@ -1160,7 +1180,9 @@ unsafe fn handle_native_mdi_child_activation(child: HWND) -> Result<(), String> 
     }
 
     let applied = apply_view_activation_state(frame, &view_id, None)?;
-    finish_view_activation_chrome(frame, &applied)
+    finish_view_activation_chrome(frame, &applied)?;
+    SetFocus(mdi_child_focus(applied.child));
+    Ok(())
 }
 
 #[cfg(test)]

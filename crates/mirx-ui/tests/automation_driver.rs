@@ -64,7 +64,8 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_DOWN,
-    VK_END, VK_ESCAPE, VK_HOME, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_SHIFT, VK_TAB,
+    VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SHIFT,
+    VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE,
@@ -8283,6 +8284,220 @@ fn a_collapsed_space_stays_collapsed_until_one_of_its_rooms_is_activated()
         Some(true)
     );
     assert_eq!(app.selected_navigation_view()?, Some(deploy));
+    Ok(())
+}
+
+const TREE_ID: i32 = 1001;
+
+unsafe fn tree_hwnd(app: &MirxApp) -> HWND {
+    let tree = unsafe { GetDlgItem(app.automation_frame_hwnd() as HWND, TREE_ID) };
+    assert!(!tree.is_null(), "the treebar control must exist");
+    tree
+}
+
+fn wait_for_focus(app: &MirxApp, window: HWND, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let focused = unsafe { focused_hwnd(app) };
+        if focused == window {
+            return;
+        }
+        if Instant::now() >= deadline {
+            assert_eq!(focused, window, "{what} must have the focus");
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Presses `keys` and waits until `expected` is the active window, in MDI
+/// and on the switchbar.
+fn press_keys_to_activate(
+    app: &MirxApp,
+    keys: &[u16],
+    expected: &ViewIdentity,
+) -> Result<(), Box<dyn std::error::Error>> {
+    press_keys(keys);
+    let ui_state = app.wait_for_ui_state(
+        &format!("{keys:?} to activate {expected:?}"),
+        Duration::from_secs(5),
+        |ui_state| ui_state.mdi.active == *expected,
+    )?;
+    assert_active_switchbar_item(&ui_state, expected);
+    Ok(())
+}
+
+#[test]
+fn window_keys_switch_windows() -> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let options = launch_options(Some(unique_local_app_data_path()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events_from_file(fixture_state_path("space-hierarchy.json"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let status = ViewIdentity::Status;
+    let ops = room_identity("!ops:example");
+    let shared = room_identity("!shared:example");
+    let random = room_identity("!random:example");
+    let direct = room_identity("!direct:example");
+    assert_eq!(
+        app.dump_ui_state()?
+            .switchbar
+            .items
+            .iter()
+            .map(|item| item.identity.clone())
+            .collect::<Vec<_>>(),
+        [&status, &ops, &shared, &random, &direct].map(Clone::clone),
+        "two channels and a query after Status"
+    );
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    app.select_navigation_view(&ops)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_compose_has_focus(&app);
+    let ops_edit = unsafe { compose_edit_hwnd(&app) };
+    let draft = wide_null("draft");
+    unsafe { SendMessageW(ops_edit, WM_SETTEXT, 0, draft.as_ptr() as isize) };
+
+    let alt = |key: u8| [VK_MENU, u16::from(key)];
+    let ctrl = |key: u16| [VK_CONTROL, key];
+    press_keys_to_activate(&app, &alt(b'1'), &status)?;
+    press_keys_to_activate(&app, &alt(b'2'), &ops)?;
+    // Alt+9 has no window: the next key steps from Ops still.
+    press_keys(&alt(b'9'));
+    press_keys_to_activate(&app, &ctrl(VK_TAB), &shared)?;
+    press_keys_to_activate(&app, &[VK_CONTROL, VK_SHIFT, VK_TAB], &ops)?;
+    press_keys_to_activate(&app, &alt(b'5'), &direct)?;
+    press_keys_to_activate(&app, &ctrl(VK_TAB), &status)?;
+    press_keys_to_activate(&app, &[VK_CONTROL, VK_SHIFT, VK_TAB], &direct)?;
+    // Ctrl+N steps through the channels only, from the query too.
+    for channel in [&ops, &shared, &random, &ops] {
+        press_keys_to_activate(&app, &ctrl(u16::from(b'N')), channel)?;
+    }
+    press_keys_to_activate(&app, &ctrl(u16::from(b'Q')), &direct)?;
+    // The only query stays put: the next Ctrl+N steps from it.
+    press_keys(&ctrl(u16::from(b'Q')));
+    press_keys_to_activate(&app, &ctrl(u16::from(b'N')), &ops)?;
+
+    let placement = |ui_state: &UiState| find_view(ui_state, &ops).placement.state;
+    let before = placement(&app.dump_ui_state()?);
+    let toggled = match before {
+        MdiWindowState::Maximized => MdiWindowState::Normal,
+        MdiWindowState::Normal => MdiWindowState::Maximized,
+        MdiWindowState::Minimized => panic!("the active window is not minimized"),
+    };
+    press_keys(&alt(b'X'));
+    app.wait_for_ui_state("Alt+X to toggle", Duration::from_secs(5), |ui_state| {
+        placement(ui_state) == toggled
+    })?;
+    press_keys(&alt(b'X'));
+    app.wait_for_ui_state("Alt+X to toggle back", Duration::from_secs(5), |ui_state| {
+        placement(ui_state) == before
+    })?;
+
+    assert_eq!(unsafe { compose_edit_hwnd(&app) }, ops_edit);
+    assert_eq!(unsafe { read_window_text(ops_edit) }, "draft");
+    assert_compose_has_focus(&app);
+
+    // A modal dialog's keys are its own.
+    press_keys(&alt(b'O'));
+    let dialog = wait_for_options_dialog(&app)?;
+    press_keys(&alt(b'1'));
+    close_dialog(&app, dialog)?;
+    assert_eq!(app.dump_ui_state()?.mdi.active, ops);
+    Ok(())
+}
+
+#[test]
+fn ctrl_t_and_the_arrow_keys_fold_a_space_from_the_treebar()
+-> Result<(), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let options = launch_options(Some(unique_local_app_data_path()));
+    let args = [OsString::from("--automation")];
+    let app = launch_app_with_options(&exe_path, &args, options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.load_events_from_file(fixture_state_path("treebar-collapsed-space.json"))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let ops = room_identity("!ops:example");
+    let deploy = room_identity("!deploy:example");
+    let work = NavigationNodeKey::Space("!work:example".to_owned());
+    let tree = unsafe { tree_hwnd(&app) };
+    let ctrl_t = [VK_CONTROL, u16::from(b'T')];
+    unsafe { SetForegroundWindow(app.automation_frame_hwnd() as HWND) };
+    app.select_navigation_view(&ops)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_compose_has_focus(&app);
+
+    press_keys(&ctrl_t);
+    wait_for_focus(&app, tree, "the treebar");
+    // Left from a room goes to its folder and activates nothing.
+    press_keys(&[VK_LEFT]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.selected_navigation_path()? != nav_path(&["Status", "Work"]) {
+        assert!(Instant::now() < deadline, "the caret must reach Work");
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert_eq!(app.dump_ui_state()?.mdi.active, ops);
+    // New messages rebuild the treebar under the keys: the caret and the
+    // focus stay.
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!random:example",
+        "@dave:example",
+        1_700_000_240_000,
+        "more chatter",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert_eq!(
+        app.selected_navigation_path()?,
+        nav_path(&["Status", "Work"])
+    );
+    assert_eq!(unsafe { focused_hwnd(&app) }, tree);
+    // Left on an unfolded folder folds it.
+    press_keys(&[VK_LEFT]);
+    let folded = app.wait_for_ui_state("Work to fold", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .navigation
+            .find(&work)
+            .expect("the Work space")
+            .expanded
+            == Some(false)
+    })?;
+    assert_eq!(folded.mdi.active, ops);
+    assert_eq!(
+        folded
+            .navigation
+            .find(&work)
+            .expect("the Work space")
+            .activity,
+        Some(ViewActivityLevel::Highlight)
+    );
+    wait_for_focus(&app, tree, "the treebar");
+
+    // Right unfolds it; Down passes Ops and the Team folder and lands on
+    // Deploy, which activates while the keys stay in the treebar.
+    press_keys(&[VK_RIGHT]);
+    app.wait_for_ui_state("Work to unfold", Duration::from_secs(5), |ui_state| {
+        ui_state
+            .navigation
+            .find(&work)
+            .expect("the Work space")
+            .expanded
+            == Some(true)
+    })?;
+    press_keys(&[VK_DOWN]);
+    press_keys(&[VK_DOWN]);
+    press_keys(&[VK_DOWN]);
+    app.wait_for_ui_state("Deploy to activate", Duration::from_secs(5), |ui_state| {
+        ui_state.mdi.active == deploy
+    })?;
+    wait_for_focus(&app, tree, "the treebar");
+
+    press_keys(&ctrl_t);
+    assert_compose_has_focus(&app);
+    press_keys(&ctrl_t);
+    wait_for_focus(&app, tree, "the treebar");
     Ok(())
 }
 
