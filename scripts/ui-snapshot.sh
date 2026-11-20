@@ -145,6 +145,20 @@ cleanup() {
   fi
 }
 
+# Snapshots show what a user sees, so this prefix (and only this one: the
+# automation tests' geometry must not change) differs from the default:
+# - Decorated=N: Xvfb runs no window manager, and Wine leaves the title bars
+#   of managed windows to one; undecorated, Wine draws captions itself.
+# - CursorBlinkRate=-1: Wine reads it with wcstoul, so the caret's timer is
+#   ~25 days long and a focused edit's caret is drawn once and never blinks,
+#   which would make dialog snapshots pixel-flaky.
+configure_snapshot_prefix() {
+  wine reg add 'HKCU\Software\Wine\X11 Driver' /v Decorated /d N /f >/dev/null 2>&1 \
+    || die "failed to set Wine's Decorated=N"
+  wine reg add 'HKCU\Control Panel\Desktop' /v CursorBlinkRate /d -1 /f >/dev/null 2>&1 \
+    || die "failed to set CursorBlinkRate=-1"
+}
+
 # Cargo builds are incremental, so this rebuilds exactly the stale binaries.
 ensure_binaries() {
   cargo build --target x86_64-pc-windows-gnu -p mirx-ui
@@ -2985,6 +2999,7 @@ main() {
   ensure_xvfb
   resolve_binaries
   ensure_wineprefix "$tmpdir/wineprefix"
+  configure_snapshot_prefix
   ensure_binaries
 
   shopt -s nullglob
