@@ -1,0 +1,1915 @@
+//! The per-room model and the facts derived from room activity.
+
+use super::*;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RoomHistoryBackfillStatus {
+    Idle,
+    Loading {
+        from: Option<String>,
+    },
+    Exhausted,
+    Failed {
+        from: Option<String>,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RoomHistoryBackfillState {
+    pub(super) next_token: Option<String>,
+    pub(super) status: RoomHistoryBackfillStatus,
+}
+
+impl Default for RoomHistoryBackfillState {
+    fn default() -> Self {
+        Self {
+            next_token: None,
+            status: RoomHistoryBackfillStatus::Idle,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub(super) struct RoomViewModel {
+    pub(super) topic: Option<String>,
+    pub(super) activities: Vec<RoomActivity>,
+    pub(super) reactions_by_target: BTreeMap<String, BTreeMap<String, RoomReactionEntry>>,
+    pub(super) threads: BTreeMap<String, ThreadViewModel>,
+    pub(super) preview_media: BTreeMap<String, RoomPreviewMediaState>,
+    /// Messages replies answer that are not among `activities`, by event ID.
+    pub(super) reply_targets: BTreeMap<String, ReplyTargetState>,
+    /// The messages among `activities` that were edited, shown `(edited)`.
+    pub(super) edited_event_ids: BTreeSet<String>,
+    pub(super) typing_user_ids: Vec<String>,
+    pub(super) members: Vec<RoomMemberSummary>,
+    pub(super) history: RoomHistoryBackfillState,
+    pub(super) echo: EchoLog,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ThreadViewModel {
+    pub(super) label: String,
+}
+
+/// A replied-to message fetched from the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ReplyTargetState {
+    Pending,
+    Loaded(Box<RoomActivity>),
+    Failed,
+}
+
+/// What a reply answers, as far as the window knows.
+pub(super) enum ReplyTarget<'a> {
+    Known(&'a RoomActivity),
+    Loading,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RoomPreviewMediaState {
+    Pending {
+        event_id: String,
+        format: RoomMediaFormat,
+    },
+    Loaded {
+        event_id: String,
+        format: RoomMediaFormat,
+        image_key: String,
+        width: u32,
+        height: u32,
+    },
+    Failed {
+        event_id: String,
+        format: RoomMediaFormat,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct LastMessageActivity {
+    pub(super) room_id: String,
+    pub(super) event_id: Option<String>,
+    pub(super) transaction_id: Option<String>,
+    pub(super) sender: String,
+    pub(super) timestamp_ms: u64,
+    pub(super) presentation: RoomMessagePresentationKind,
+    pub(super) body: String,
+    pub(super) send_state: RoomMessageSendState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MessageReplacementFields {
+    pub(super) presentation: RoomMessagePresentationKind,
+    pub(super) body: String,
+    pub(super) styles: Vec<TextStyleSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RoomReactionEntry {
+    reaction_event_id: String,
+    sender: String,
+    timestamp_ms: u64,
+    key: String,
+}
+
+impl RoomViewModel {
+    pub(super) fn clear_visible_entries(&mut self) {
+        self.activities.retain(|activity| {
+            matches!(
+                &activity.kind,
+                RoomActivityKind::Message(RoomMessageActivity {
+                    send_state: RoomMessageSendState::Pending,
+                    ..
+                })
+            )
+        });
+        self.reactions_by_target.clear();
+        // Only pending messages stay, and they have no event to be edited.
+        self.edited_event_ids.clear();
+        self.echo.clear_room_window();
+        self.retain_preview_media_for_visible_activities();
+        self.rebuild_threads();
+    }
+
+    pub(super) fn apply_activity(&mut self, activity: RoomActivity) {
+        match &activity.kind {
+            RoomActivityKind::Message(message) => {
+                let transaction_id = message.transaction_id.clone();
+                let event_id = message.event_id.clone();
+                match &message.send_state {
+                    RoomMessageSendState::Pending => {
+                        let transaction_id = transaction_id
+                            .as_deref()
+                            .expect("pending room activity requires a transaction id");
+                        self.upsert_message_activity(activity, Some(transaction_id), None);
+                    }
+                    RoomMessageSendState::Sent => {
+                        let event_id = event_id
+                            .as_deref()
+                            .expect("sent room activity requires an event id");
+                        self.upsert_message_activity(
+                            activity,
+                            transaction_id.as_deref(),
+                            Some(event_id),
+                        );
+                    }
+                    RoomMessageSendState::Failed { .. } => {
+                        self.upsert_message_activity(
+                            activity,
+                            transaction_id.as_deref(),
+                            event_id.as_deref(),
+                        );
+                    }
+                }
+            }
+            RoomActivityKind::Image(_)
+            | RoomActivityKind::File(_)
+            | RoomActivityKind::Audio(_)
+            | RoomActivityKind::Video(_)
+            | RoomActivityKind::UnsupportedMessage(_)
+            | RoomActivityKind::UnableToDecrypt(_) => self.activities.push(activity),
+            RoomActivityKind::StateNotice(notice) => {
+                if let RoomStateNoticeContent::Topic { topic } = &notice.content {
+                    self.topic = Some(topic.clone());
+                }
+                self.activities.push(activity);
+            }
+            RoomActivityKind::Redacted(redacted) => {
+                self.remove_reactions_for_target(&redacted.event_id);
+                self.activities.push(activity);
+            }
+        }
+        self.rebuild_threads();
+    }
+
+    pub(super) fn apply_history_backfill(&mut self, room_id: &str, backfill: RoomHistoryBackfill) {
+        assert_eq!(
+            backfill.room_id, room_id,
+            "room history backfill must target the mutated room view"
+        );
+
+        let mut prepended_count = 0usize;
+        let mut changed = false;
+        for event in backfill.events {
+            match event {
+                RoomHistoryBackfillEvent::Activity(activity) => {
+                    assert_eq!(
+                        activity.room_id, room_id,
+                        "room history activity must target the mutated room view"
+                    );
+                    if room_activity_event_id(&activity).is_some_and(|event_id| {
+                        self.find_activity_index_by_event_id(event_id).is_some()
+                    }) {
+                        continue;
+                    }
+
+                    self.activities.insert(prepended_count, *activity);
+                    prepended_count += 1;
+                    changed = true;
+                }
+                RoomHistoryBackfillEvent::ActivityUpdate(update) => {
+                    assert_eq!(
+                        update.room_id, room_id,
+                        "room history activity update must target the mutated room view"
+                    );
+                    if self.validate_update(&update).is_err() {
+                        continue;
+                    }
+
+                    let applied = match (&update.target, &update.kind) {
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::MessageReplaced {
+                                presentation,
+                                body,
+                                styles,
+                                ..
+                            },
+                        ) => self.replace_message(
+                            event_id,
+                            MessageReplacementFields {
+                                presentation: *presentation,
+                                body: body.clone(),
+                                styles: styles.clone(),
+                            },
+                        ),
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::ActivityRedacted { .. },
+                        ) => self.redact_activity(event_id),
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::ReactionAdded {
+                                reaction_event_id,
+                                sender,
+                                timestamp_ms,
+                                key,
+                            },
+                        ) => self.add_reaction(
+                            event_id,
+                            reaction_event_id,
+                            sender,
+                            *timestamp_ms,
+                            key,
+                        ),
+                        (
+                            RoomActivityUpdateTarget::Event { event_id },
+                            RoomActivityUpdateKind::ReactionRemoved {
+                                reaction_event_id,
+                                key,
+                                ..
+                            },
+                        ) => self.remove_reaction(event_id, reaction_event_id, key),
+                        _ => false,
+                    };
+                    changed |= applied;
+                }
+            }
+        }
+
+        if changed {
+            self.rebuild_threads();
+            self.retain_preview_media_for_visible_activities();
+        }
+    }
+
+    pub(super) fn replace_typing(&mut self, typing: RoomTyping) {
+        self.typing_user_ids = typing.user_ids;
+    }
+
+    pub(super) fn replace_members(&mut self, members: RoomMembers) {
+        self.members = members.members;
+    }
+
+    /// A user's nick from the joined-member snapshot; users outside it, such
+    /// as typing notifications racing a membership change, show by user ID.
+    pub(super) fn member_nick(&self, user_id: &str) -> String {
+        self.members
+            .iter()
+            .find(|member| member.user_id == user_id)
+            .map_or_else(|| user_id.to_owned(), room_member_nick)
+    }
+
+    pub(super) fn projected_preview_state(
+        &self,
+        activity_id: &str,
+        event_id: &str,
+        format: &RoomMediaFormat,
+    ) -> TimelineImageState {
+        match self.preview_media.get(activity_id) {
+            Some(RoomPreviewMediaState::Pending {
+                event_id: stored_event_id,
+                format: stored_format,
+            }) if stored_event_id == event_id && stored_format == format => {
+                TimelineImageState::Pending
+            }
+            Some(RoomPreviewMediaState::Loaded {
+                event_id: stored_event_id,
+                format: stored_format,
+                image_key,
+                width,
+                height,
+            }) if stored_event_id == event_id && stored_format == format => {
+                TimelineImageState::Loaded {
+                    key: image_key.clone(),
+                    width: *width,
+                    height: *height,
+                }
+            }
+            Some(RoomPreviewMediaState::Failed {
+                event_id: stored_event_id,
+                format: stored_format,
+                message,
+            }) if stored_event_id == event_id && stored_format == format => {
+                TimelineImageState::Failed {
+                    message: message.clone(),
+                }
+            }
+            _ => TimelineImageState::Pending,
+        }
+    }
+
+    pub(super) fn should_request_preview_media(
+        &self,
+        activity_id: &str,
+        event_id: &str,
+        format: &RoomMediaFormat,
+    ) -> bool {
+        match self.preview_media.get(activity_id) {
+            Some(RoomPreviewMediaState::Pending {
+                event_id: stored_event_id,
+                format: stored_format,
+            })
+            | Some(RoomPreviewMediaState::Loaded {
+                event_id: stored_event_id,
+                format: stored_format,
+                ..
+            })
+            | Some(RoomPreviewMediaState::Failed {
+                event_id: stored_event_id,
+                format: stored_format,
+                ..
+            }) => stored_event_id != event_id || stored_format != format,
+            None => true,
+        }
+    }
+
+    pub(super) fn mark_preview_media_pending(
+        &mut self,
+        activity_id: String,
+        event_id: String,
+        format: RoomMediaFormat,
+    ) -> Option<RoomPreviewMediaState> {
+        self.preview_media.insert(
+            activity_id,
+            RoomPreviewMediaState::Pending { event_id, format },
+        )
+    }
+
+    pub(super) fn remove_preview_media(
+        &mut self,
+        activity_id: &str,
+    ) -> Option<RoomPreviewMediaState> {
+        self.preview_media.remove(activity_id)
+    }
+
+    pub(super) fn insert_preview_media(
+        &mut self,
+        activity_id: String,
+        preview_media: RoomPreviewMediaState,
+    ) -> Option<RoomPreviewMediaState> {
+        self.preview_media.insert(activity_id, preview_media)
+    }
+
+    fn upsert_message_activity(
+        &mut self,
+        activity: RoomActivity,
+        transaction_id: Option<&str>,
+        event_id: Option<&str>,
+    ) {
+        if let Some(index) = self.find_message_activity_index(transaction_id, event_id) {
+            self.activities[index] = activity;
+        } else {
+            self.activities.push(activity);
+        }
+    }
+
+    pub(super) fn mark_message_sent(&mut self, update: RoomActivityUpdate) {
+        let RoomActivityUpdate { target, kind, .. } = update;
+        let RoomActivityUpdateTarget::Transaction { transaction_id } = target else {
+            panic!("message sent update requires a transaction target");
+        };
+        let RoomActivityUpdateKind::MessageSent { event_id } = kind else {
+            panic!("message sent update requires a sent activity update");
+        };
+        let transaction_index = self
+            .find_pending_message_activity_index(transaction_id.as_str())
+            .expect("outgoing sent requires an existing queued timeline row");
+        let duplicate_event_index = self
+            .find_message_activity_index(None, Some(event_id.as_str()))
+            .filter(|event_index| *event_index != transaction_index);
+        let duplicate_event =
+            duplicate_event_index.map(|event_index| self.activities[event_index].clone());
+        let duplicate_event = duplicate_event.and_then(|activity| {
+            let RoomActivityKind::Message(message) = activity.kind else {
+                return None;
+            };
+            Some((
+                activity.activity_id,
+                activity.timestamp_ms,
+                activity.relation,
+                message.sender,
+                message.presentation,
+                message.body,
+            ))
+        });
+        let new_activity_id = duplicate_event
+            .as_ref()
+            .map(|(activity_id, _, _, _, _, _)| activity_id.clone())
+            .unwrap_or_else(|| format!("event:{event_id}"));
+        let synced_timestamp_ms = duplicate_event
+            .as_ref()
+            .map(|(_, timestamp_ms, _, _, _, _)| *timestamp_ms);
+        let synced_relation = duplicate_event
+            .as_ref()
+            .and_then(|(_, _, relation, _, _, _)| relation.clone());
+        let synced_sender = duplicate_event
+            .as_ref()
+            .map(|(_, _, _, sender, _, _)| sender.clone());
+        let synced_presentation = duplicate_event
+            .as_ref()
+            .map(|(_, _, _, _, presentation, _)| *presentation);
+        let synced_body = duplicate_event
+            .as_ref()
+            .map(|(_, _, _, _, _, body)| body.clone());
+
+        let activity = self
+            .activities
+            .get_mut(transaction_index)
+            .expect("transaction row index must resolve");
+        activity.activity_id = new_activity_id;
+        if let Some(synced_timestamp_ms) = synced_timestamp_ms {
+            activity.timestamp_ms = synced_timestamp_ms;
+        }
+        if let Some(synced_relation) = synced_relation {
+            activity.relation = Some(synced_relation);
+        }
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            panic!("outgoing sent requires a message room activity");
+        };
+
+        message.event_id = Some(event_id.clone());
+        if let Some(synced_sender) = synced_sender {
+            message.sender = synced_sender;
+        }
+        if let Some(synced_presentation) = synced_presentation {
+            message.presentation = synced_presentation;
+        }
+        if let Some(synced_body) = synced_body {
+            message.body = synced_body;
+        }
+        message.send_state = RoomMessageSendState::Sent;
+
+        if let Some(duplicate_event_index) = duplicate_event_index {
+            self.activities.remove(duplicate_event_index);
+        }
+        self.rebuild_threads();
+    }
+
+    pub(super) fn mark_message_failed(&mut self, update: RoomActivityUpdate) {
+        let RoomActivityUpdate { target, kind, .. } = update;
+        let RoomActivityUpdateTarget::Transaction { transaction_id } = target else {
+            panic!("message failed update requires a transaction target");
+        };
+        let RoomActivityUpdateKind::MessageFailed {
+            message,
+            recoverable,
+        } = kind
+        else {
+            panic!("message failed update requires a failed activity update");
+        };
+        let activity = self
+            .find_pending_message_activity_mut(transaction_id.as_str())
+            .expect("outgoing failed requires an existing queued timeline row");
+        let RoomActivityKind::Message(room_message) = &mut activity.kind else {
+            panic!("outgoing failed requires a message room activity");
+        };
+
+        room_message.send_state = RoomMessageSendState::Failed {
+            message,
+            recoverable,
+        };
+        self.rebuild_threads();
+    }
+
+    pub(super) fn replace_message(
+        &mut self,
+        target_event_id: &str,
+        replacement: MessageReplacementFields,
+    ) -> bool {
+        let Some(activity) = self.activities.iter_mut().find(|activity| {
+            matches!(
+                &activity.kind,
+                RoomActivityKind::Message(RoomMessageActivity {
+                    event_id: Some(event_id),
+                    ..
+                }) if event_id == target_event_id
+            )
+        }) else {
+            return false;
+        };
+        let RoomActivityKind::Message(message) = &mut activity.kind else {
+            panic!("message replacement requires a message room activity");
+        };
+        message.presentation = replacement.presentation;
+        message.body = replacement.body;
+        message.styles = replacement.styles;
+        self.edited_event_ids.insert(target_event_id.to_owned());
+        self.rebuild_threads();
+        true
+    }
+
+    pub(super) fn redact_activity(&mut self, target_event_id: &str) -> bool {
+        let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
+            return false;
+        };
+        let activity_id = self.activities[index].activity_id.clone();
+        self.remove_reactions_for_target(target_event_id);
+        // A redacted line says only that; what it was, edited or not, is gone.
+        self.edited_event_ids.remove(target_event_id);
+        self.activities[index].kind = RoomActivityKind::Redacted(RoomRedactedActivity {
+            event_id: target_event_id.to_owned(),
+        });
+        self.remove_preview_media(&activity_id);
+        self.rebuild_threads();
+        true
+    }
+
+    pub(super) fn add_reaction(
+        &mut self,
+        target_event_id: &str,
+        reaction_event_id: &str,
+        sender: &str,
+        timestamp_ms: u64,
+        key: &str,
+    ) -> bool {
+        let Some(index) = self.find_activity_index_by_event_id(target_event_id) else {
+            return false;
+        };
+        if matches!(self.activities[index].kind, RoomActivityKind::Redacted(_)) {
+            return false;
+        }
+        self.reactions_by_target
+            .entry(target_event_id.to_owned())
+            .or_default()
+            .insert(
+                reaction_event_id.to_owned(),
+                RoomReactionEntry {
+                    reaction_event_id: reaction_event_id.to_owned(),
+                    sender: sender.to_owned(),
+                    timestamp_ms,
+                    key: key.to_owned(),
+                },
+            );
+        true
+    }
+
+    pub(super) fn remove_reaction(
+        &mut self,
+        target_event_id: &str,
+        reaction_event_id: &str,
+        key: &str,
+    ) -> bool {
+        let Some(reactions) = self.reactions_by_target.get_mut(target_event_id) else {
+            return false;
+        };
+        let matches_key = reactions
+            .get(reaction_event_id)
+            .is_some_and(|entry| entry.key == key);
+        if !matches_key {
+            return false;
+        }
+        reactions.remove(reaction_event_id);
+        if reactions.is_empty() {
+            self.reactions_by_target.remove(target_event_id);
+        }
+        true
+    }
+
+    fn remove_reactions_for_target(&mut self, target_event_id: &str) {
+        self.reactions_by_target.remove(target_event_id);
+    }
+
+    pub(super) fn reaction_summaries_for_event(
+        &self,
+        target_event_id: &str,
+    ) -> Vec<DumpRoomReactionSummary> {
+        let Some(reactions) = self.reactions_by_target.get(target_event_id) else {
+            return Vec::new();
+        };
+
+        // In reaction time, so the first reaction stays first as more
+        // arrive: reactors within a group, and groups by their first.
+        let mut entries = reactions.values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            (left.timestamp_ms, &left.reaction_event_id)
+                .cmp(&(right.timestamp_ms, &right.reaction_event_id))
+        });
+        let mut grouped = Vec::<(String, Vec<&RoomReactionEntry>)>::new();
+        for entry in entries {
+            match grouped.iter_mut().find(|(key, _)| *key == entry.key) {
+                Some((_, group)) => group.push(entry),
+                None => grouped.push((entry.key.clone(), vec![entry])),
+            }
+        }
+
+        grouped
+            .into_iter()
+            .map(|(key, entries)| DumpRoomReactionSummary {
+                key,
+                count: entries.len() as u64,
+                senders: entries.iter().map(|entry| entry.sender.clone()).collect(),
+                reaction_event_ids: entries
+                    .iter()
+                    .map(|entry| entry.reaction_event_id.clone())
+                    .collect(),
+            })
+            .collect()
+    }
+
+    pub(super) fn find_message_activity_index(
+        &self,
+        transaction_id: Option<&str>,
+        event_id: Option<&str>,
+    ) -> Option<usize> {
+        if let Some(transaction_id) = transaction_id
+            && let Some(index) = self.activities.iter().position(|activity| {
+                matches!(
+                    &activity.kind,
+                    RoomActivityKind::Message(RoomMessageActivity {
+                        transaction_id: Some(existing_transaction_id),
+                        ..
+                    }) if existing_transaction_id == transaction_id
+                )
+            })
+        {
+            return Some(index);
+        }
+
+        if let Some(event_id) = event_id
+            && let Some(index) = self.activities.iter().position(|activity| {
+                matches!(
+                    &activity.kind,
+                    RoomActivityKind::Message(RoomMessageActivity {
+                        event_id: Some(existing_event_id),
+                        ..
+                    }) if existing_event_id == event_id
+                )
+            })
+        {
+            return Some(index);
+        }
+
+        None
+    }
+
+    /// A loaded message wins over a fetched one: it is live, with its
+    /// edits and redaction.
+    pub(super) fn reply_target(&self, event_id: &str) -> ReplyTarget<'_> {
+        if let Some(index) = self.find_activity_index_by_event_id(event_id) {
+            return ReplyTarget::Known(&self.activities[index]);
+        }
+        match self.reply_targets.get(event_id) {
+            Some(ReplyTargetState::Loaded(activity)) => ReplyTarget::Known(activity),
+            Some(ReplyTargetState::Failed) => ReplyTarget::Unavailable,
+            Some(ReplyTargetState::Pending) | None => ReplyTarget::Loading,
+        }
+    }
+
+    pub(super) fn find_activity_index_by_event_id(&self, event_id: &str) -> Option<usize> {
+        self.activities
+            .iter()
+            .position(|activity| room_activity_event_id(activity) == Some(event_id))
+    }
+
+    fn find_pending_message_activity_index(&self, transaction_id: &str) -> Option<usize> {
+        self.activities.iter().position(|activity| {
+            matches!(
+                &activity.kind,
+                RoomActivityKind::Message(RoomMessageActivity {
+                    transaction_id: Some(existing_transaction_id),
+                    send_state: RoomMessageSendState::Pending,
+                    ..
+                }) if existing_transaction_id == transaction_id
+            )
+        })
+    }
+
+    fn find_pending_message_activity_mut(
+        &mut self,
+        transaction_id: &str,
+    ) -> Option<&mut RoomActivity> {
+        let index = self.find_pending_message_activity_index(transaction_id)?;
+        self.activities.get_mut(index)
+    }
+
+    fn rebuild_threads(&mut self) {
+        let root_labels = self
+            .activities
+            .iter()
+            .filter_map(|activity| {
+                Some((
+                    room_activity_event_id(activity)?.to_owned(),
+                    room_activity_thread_root_label(activity)?,
+                ))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        self.threads = self
+            .activities
+            .iter()
+            .filter_map(|activity| room_activity_thread_root_event_id(activity))
+            .map(|thread_root_event_id| {
+                let label = root_labels
+                    .get(thread_root_event_id)
+                    .cloned()
+                    .unwrap_or_else(|| thread_root_event_id.to_owned());
+                (thread_root_event_id.to_owned(), ThreadViewModel { label })
+            })
+            .collect();
+    }
+
+    fn validate_update(&self, update: &RoomActivityUpdate) -> Result<(), String> {
+        match (&update.target, &update.kind) {
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageSent { .. },
+            ) => self
+                .find_pending_message_activity_index(transaction_id)
+                .map(|_| ())
+                .ok_or_else(|| "outgoing sent requires an existing queued timeline row".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { transaction_id },
+                RoomActivityUpdateKind::MessageFailed { .. },
+            ) => self
+                .find_pending_message_activity_index(transaction_id)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    "outgoing failed requires an existing queued timeline row".to_owned()
+                }),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::MessageReplaced { .. },
+            ) => self
+                .find_message_activity_index(None, Some(event_id))
+                .map(|_| ())
+                .ok_or_else(|| "message edit requires an existing visible target event".to_owned()),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ActivityRedacted { .. },
+            ) => self
+                .find_activity_index_by_event_id(event_id)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    "activity redaction requires an existing visible target event".to_owned()
+                }),
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionAdded { .. },
+            ) => {
+                let Some(index) = self.find_activity_index_by_event_id(event_id) else {
+                    return Err("reaction add requires an existing visible target event".to_owned());
+                };
+                if matches!(self.activities[index].kind, RoomActivityKind::Redacted(_)) {
+                    return Err("reaction add requires an existing visible target event".to_owned());
+                }
+                Ok(())
+            }
+            (
+                RoomActivityUpdateTarget::Event { event_id },
+                RoomActivityUpdateKind::ReactionRemoved {
+                    reaction_event_id,
+                    key,
+                    ..
+                },
+            ) => self
+                .reactions_by_target
+                .get(event_id)
+                .and_then(|reactions| reactions.get(reaction_event_id))
+                .filter(|entry| entry.key == *key)
+                .map(|_| ())
+                .ok_or_else(|| {
+                    "reaction removal requires a matching stored reaction event".to_owned()
+                }),
+            (
+                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::MessageSent { .. },
+            ) => Err("message sent update requires a transaction target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Event { .. },
+                RoomActivityUpdateKind::MessageFailed { .. },
+            ) => Err("message failed update requires a transaction target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::MessageReplaced { .. },
+            ) => Err("message edit requires an event target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::ActivityRedacted { .. },
+            ) => Err("activity redacted update requires an event target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::ReactionAdded { .. },
+            ) => Err("reaction add requires an event target".to_owned()),
+            (
+                RoomActivityUpdateTarget::Transaction { .. },
+                RoomActivityUpdateKind::ReactionRemoved { .. },
+            ) => Err("reaction removal requires an event target".to_owned()),
+        }
+    }
+
+    fn retain_preview_media_for_visible_activities(&mut self) {
+        self.preview_media.retain(|activity_id, _| {
+            self.activities
+                .iter()
+                .any(|activity| activity.activity_id == *activity_id)
+        });
+    }
+}
+
+pub(super) fn validate_synthetic_room_activity_events(
+    room_views: &BTreeMap<String, RoomViewModel>,
+    events: &[Event],
+) -> Result<(), String> {
+    let mut room_views = room_views.clone();
+
+    for event in events {
+        match event {
+            Event::RoomActivity(activity) => room_views
+                .entry(activity.room_id.clone())
+                .or_default()
+                .apply_activity(activity.as_ref().clone()),
+            Event::RoomActivityUpdate(update) => {
+                let room_view = room_views.entry(update.room_id.clone()).or_default();
+                room_view.validate_update(update)?;
+                match (&update.target, &update.kind) {
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::MessageSent { .. },
+                    ) => room_view.mark_message_sent(update.clone()),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::MessageFailed { .. },
+                    ) => room_view.mark_message_failed(update.clone()),
+                    (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::MessageReplaced {
+                            presentation,
+                            body,
+                            styles,
+                            ..
+                        },
+                    ) => {
+                        let replaced = room_view.replace_message(
+                            event_id,
+                            MessageReplacementFields {
+                                presentation: *presentation,
+                                body: body.clone(),
+                                styles: styles.clone(),
+                            },
+                        );
+                        assert!(replaced, "validated synthetic message edit must resolve");
+                    }
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::MessageReplaced { .. },
+                    ) => panic!("message edit requires an event target"),
+                    (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::ActivityRedacted { .. },
+                    ) => {
+                        let redacted = room_view.redact_activity(event_id);
+                        assert!(
+                            redacted,
+                            "validated synthetic activity redaction must resolve"
+                        );
+                    }
+                    (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::ReactionAdded {
+                            reaction_event_id,
+                            sender,
+                            timestamp_ms,
+                            key,
+                        },
+                    ) => {
+                        let added = room_view.add_reaction(
+                            event_id,
+                            reaction_event_id,
+                            sender,
+                            *timestamp_ms,
+                            key,
+                        );
+                        assert!(added, "validated synthetic reaction add must resolve");
+                    }
+                    (
+                        RoomActivityUpdateTarget::Event { event_id },
+                        RoomActivityUpdateKind::ReactionRemoved {
+                            reaction_event_id,
+                            key,
+                            ..
+                        },
+                    ) => {
+                        let removed = room_view.remove_reaction(event_id, reaction_event_id, key);
+                        assert!(removed, "validated synthetic reaction removal must resolve");
+                    }
+                    (
+                        RoomActivityUpdateTarget::Event { .. },
+                        RoomActivityUpdateKind::MessageSent { .. },
+                    ) => panic!("message sent update requires a transaction target"),
+                    (
+                        RoomActivityUpdateTarget::Event { .. },
+                        RoomActivityUpdateKind::MessageFailed { .. },
+                    ) => panic!("message failed update requires a transaction target"),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::ActivityRedacted { .. },
+                    ) => panic!("activity redacted update requires an event target"),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::ReactionAdded { .. },
+                    ) => panic!("reaction add requires an event target"),
+                    (
+                        RoomActivityUpdateTarget::Transaction { .. },
+                        RoomActivityUpdateKind::ReactionRemoved { .. },
+                    ) => panic!("reaction removal requires an event target"),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+pub(super) fn last_activity_from_room_activity(
+    activity: &RoomActivity,
+) -> Option<LastMessageActivity> {
+    match &activity.kind {
+        RoomActivityKind::Message(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: message.event_id.clone(),
+            transaction_id: message.transaction_id.clone(),
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: message.presentation,
+            body: message.body.clone(),
+            send_state: message.send_state.clone(),
+        }),
+        RoomActivityKind::UnsupportedMessage(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!("[unsupported {}] {}", message.msgtype, message.body),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::UnableToDecrypt(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: "[encrypted] Unable to decrypt message".to_owned(),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::Image(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[image] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::File(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[file] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::Audio(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[audio] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::Video(message) => Some(LastMessageActivity {
+            room_id: activity.room_id.clone(),
+            event_id: Some(message.event_id.clone()),
+            transaction_id: None,
+            sender: message.sender.user_id.clone(),
+            timestamp_ms: activity.timestamp_ms,
+            presentation: RoomMessagePresentationKind::Text,
+            body: format!(
+                "[video] {}",
+                message.filename.as_deref().unwrap_or(message.body.as_str())
+            ),
+            send_state: RoomMessageSendState::Sent,
+        }),
+        RoomActivityKind::StateNotice(_) => None,
+        RoomActivityKind::Redacted(_) => None,
+    }
+}
+
+/// Who a line comes from. A redaction placeholder has no sender: the core
+/// does not report who removed the event.
+pub(super) fn room_activity_sender_user_id(activity: &RoomActivity) -> Option<&str> {
+    match &activity.kind {
+        RoomActivityKind::Message(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Image(message) => Some(&message.sender.user_id),
+        RoomActivityKind::File(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Audio(message) => Some(&message.sender.user_id),
+        RoomActivityKind::Video(message) => Some(&message.sender.user_id),
+        RoomActivityKind::UnsupportedMessage(message) => Some(&message.sender.user_id),
+        RoomActivityKind::UnableToDecrypt(message) => Some(&message.sender.user_id),
+        RoomActivityKind::StateNotice(notice) => Some(&notice.sender.user_id),
+        RoomActivityKind::Redacted(RoomRedactedActivity { event_id: _ }) => None,
+    }
+}
+
+/// The activity a line marks its view with while the user is elsewhere.
+/// `None` for our own lines, as in mIRC: our pending echo, its sync echo
+/// and what we sent from another device. Without a signed-in user
+/// (`own_user_id` is `None`) no line is ours. The login flow delivers the
+/// initial sync's lines before `LoggedIn`, but their rooms are not in the
+/// room list yet, so they colour nothing either.
+pub(super) fn activity_level_for(
+    activity: &RoomActivity,
+    own_user_id: Option<&str>,
+) -> Option<ViewActivityLevel> {
+    if own_user_id.is_some_and(|me| room_activity_sender_user_id(activity) == Some(me)) {
+        return None;
+    }
+    let level = match &activity.kind {
+        RoomActivityKind::Message(_)
+        | RoomActivityKind::Image(_)
+        | RoomActivityKind::File(_)
+        | RoomActivityKind::Audio(_)
+        | RoomActivityKind::Video(_)
+        | RoomActivityKind::UnsupportedMessage(_)
+        | RoomActivityKind::UnableToDecrypt(_) => ViewActivityLevel::Message,
+        RoomActivityKind::StateNotice(_) | RoomActivityKind::Redacted(_) => {
+            ViewActivityLevel::Event
+        }
+    };
+    Some(if activity.highlight {
+        ViewActivityLevel::Highlight
+    } else {
+        level
+    })
+}
+
+/// Records activity in a view, keeping the higher level: mIRC never lowers
+/// a window's colour until the user looks at it.
+pub(super) fn raise_view_activity(
+    state: &mut WindowState,
+    view_id: ViewId,
+    level: ViewActivityLevel,
+) {
+    let recorded = state.room_activity.entry(view_id).or_insert(level);
+    *recorded = (*recorded).max(level);
+}
+
+pub(super) fn room_activity_event_id(activity: &RoomActivity) -> Option<&str> {
+    match &activity.kind {
+        RoomActivityKind::Message(RoomMessageActivity {
+            event_id: Some(event_id),
+            ..
+        }) => Some(event_id.as_str()),
+        RoomActivityKind::Image(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::File(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::Audio(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::Video(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::UnsupportedMessage(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::UnableToDecrypt(message) => Some(message.event_id.as_str()),
+        RoomActivityKind::StateNotice(notice) => Some(notice.event_id.as_str()),
+        RoomActivityKind::Redacted(activity) => Some(activity.event_id.as_str()),
+        _ => None,
+    }
+}
+
+fn room_activity_thread_root_event_id(activity: &RoomActivity) -> Option<&str> {
+    match &activity.relation {
+        Some(RoomActivityRelation::Thread {
+            thread_root_event_id,
+            ..
+        }) => Some(thread_root_event_id.as_str()),
+        _ => None,
+    }
+}
+
+fn room_activity_thread_root_label(activity: &RoomActivity) -> Option<String> {
+    match &activity.kind {
+        RoomActivityKind::Message(message) => Some(message.body.clone()),
+        RoomActivityKind::Image(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::File(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::Audio(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::Video(message) => Some(
+            message
+                .filename
+                .as_deref()
+                .unwrap_or(message.body.as_str())
+                .to_owned(),
+        ),
+        RoomActivityKind::UnsupportedMessage(message) => Some(message.body.clone()),
+        RoomActivityKind::UnableToDecrypt(_) => Some("Unable to decrypt message".to_owned()),
+        RoomActivityKind::StateNotice(_) => None,
+        RoomActivityKind::Redacted(_) => Some("Message redacted".to_owned()),
+    }
+}
+
+pub(super) fn room_activity_belongs_to_thread(
+    activity: &RoomActivity,
+    thread_root_event_id: &str,
+) -> bool {
+    room_activity_event_id(activity) == Some(thread_root_event_id)
+        || room_activity_thread_root_event_id(activity) == Some(thread_root_event_id)
+}
+
+fn room_activity_view_id(room_id: &str, relation: Option<&RoomActivityRelation>) -> ViewId {
+    match relation {
+        Some(RoomActivityRelation::Thread {
+            thread_root_event_id,
+            ..
+        }) => ViewId::Thread {
+            room_id: room_id.to_owned(),
+            thread_root_event_id: thread_root_event_id.clone(),
+        },
+        _ => ViewId::Room(room_id.to_owned()),
+    }
+}
+
+pub(super) fn room_activity_target_view_id(activity: &RoomActivity) -> ViewId {
+    room_activity_view_id(&activity.room_id, activity.relation.as_ref())
+}
+
+pub(super) fn room_activity_update_marks_inactive_room(update: &RoomActivityUpdate) -> bool {
+    matches!(
+        (&update.target, &update.kind),
+        (
+            RoomActivityUpdateTarget::Transaction { .. },
+            RoomActivityUpdateKind::MessageFailed { .. }
+        )
+    )
+}
+
+pub(super) fn failed_room_activity_update_view_id(
+    state: &WindowState,
+    update: &RoomActivityUpdate,
+) -> ViewId {
+    let (
+        RoomActivityUpdateTarget::Transaction { transaction_id },
+        RoomActivityUpdateKind::MessageFailed { .. },
+    ) = (&update.target, &update.kind)
+    else {
+        panic!("failed room activity marker target requires a failed activity update");
+    };
+    let room_view = state
+        .model
+        .room_views
+        .get(&update.room_id)
+        .expect("outgoing failed requires an existing queued timeline row");
+    let pending_index = room_view
+        .find_pending_message_activity_index(transaction_id)
+        .expect("outgoing failed requires an existing queued timeline row");
+    let pending_activity = room_view
+        .activities
+        .get(pending_index)
+        .expect("pending room activity index must resolve");
+    room_activity_target_view_id(pending_activity)
+}
+
+pub(super) fn read_target_for_room_activity(activity: &RoomActivity) -> Option<&str> {
+    match &activity.kind {
+        RoomActivityKind::Message(RoomMessageActivity { send_state, .. })
+            if !matches!(send_state, RoomMessageSendState::Pending) =>
+        {
+            room_activity_event_id(activity)
+        }
+        RoomActivityKind::Image(_)
+        | RoomActivityKind::File(_)
+        | RoomActivityKind::Audio(_)
+        | RoomActivityKind::Video(_)
+        | RoomActivityKind::UnsupportedMessage(_)
+        | RoomActivityKind::UnableToDecrypt(_)
+        | RoomActivityKind::StateNotice(_)
+        | RoomActivityKind::Redacted(_) => room_activity_event_id(activity),
+        _ => None,
+    }
+}
+
+/// The message `event_id` names among the lines of the window `view_id`.
+/// A redacted message is no longer one.
+pub(super) fn window_message<'a>(
+    model: &'a UiModel,
+    view_id: &ViewId,
+    event_id: &str,
+) -> Option<&'a RoomActivity> {
+    let room_view = model.room_views.get(view_id.room_id()?)?;
+    let activity = &room_view.activities[room_view.find_activity_index_by_event_id(event_id)?];
+    let in_window = view_id
+        .thread_key()
+        .is_none_or(|(_, thread_root_event_id)| {
+            room_activity_belongs_to_thread(activity, thread_root_event_id)
+        });
+    (in_window && !matches!(activity.kind, RoomActivityKind::Redacted(_))).then_some(activity)
+}
+
+pub(super) fn is_joined_message_room(room: &RoomSummary) -> bool {
+    room.membership == RoomMembership::Join && !room.is_space
+}
+
+pub(super) fn is_invited_room(room: &RoomSummary) -> bool {
+    room.membership == RoomMembership::Invite && !room.is_space
+}
+
+pub(super) fn is_navigable_room(room: &RoomSummary) -> bool {
+    is_joined_message_room(room) || is_invited_room(room)
+}
+
+/// What kind of mIRC window a navigable room is. The order is mIRC's
+/// window order: channels, then queries; invites, which mIRC lacks, last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum RoomWindowKind {
+    Channel,
+    Query,
+    Invite,
+}
+
+pub(super) fn room_window_kind(room: &RoomSummary) -> RoomWindowKind {
+    assert!(
+        is_navigable_room(room),
+        "only navigable rooms have windows: {}",
+        room.room_id
+    );
+    match room.membership {
+        RoomMembership::Invite => RoomWindowKind::Invite,
+        RoomMembership::Join if room.is_direct => RoomWindowKind::Query,
+        RoomMembership::Join => RoomWindowKind::Channel,
+    }
+}
+
+/// The navigable rooms in window order, each kind in model order.
+pub(super) fn rooms_in_window_order(rooms: &[RoomSummary]) -> Vec<&RoomSummary> {
+    let mut ordered = rooms
+        .iter()
+        .filter(|room| is_navigable_room(room))
+        .collect::<Vec<_>>();
+    ordered.sort_by_key(|room| room_window_kind(room));
+    ordered
+}
+
+pub(super) fn is_sendable_room(room: &RoomSummary) -> bool {
+    is_joined_message_room(room)
+}
+
+pub(super) fn is_invite_command_target(room: &RoomSummary) -> bool {
+    is_invited_room(room)
+}
+
+pub(super) fn room_by_id<'a>(rooms: &'a [RoomSummary], room_id: &str) -> Option<&'a RoomSummary> {
+    rooms.iter().find(|room| room.room_id == room_id)
+}
+
+pub(super) fn navigable_room_by_id<'a>(
+    rooms: &'a [RoomSummary],
+    room_id: &str,
+) -> Option<&'a RoomSummary> {
+    room_by_id(rooms, room_id).filter(|room| is_navigable_room(room))
+}
+
+pub(super) fn sendable_room_by_id<'a>(
+    rooms: &'a [RoomSummary],
+    room_id: &str,
+) -> Option<&'a RoomSummary> {
+    room_by_id(rooms, room_id).filter(|room| is_sendable_room(room))
+}
+
+/// A joined room's notification mode, which the core reports for every
+/// joined room.
+pub(super) fn joined_room_notification_mode(room: &RoomSummary) -> RoomNotificationMode {
+    room.notification_mode
+        .expect("a joined room has a notification mode")
+}
+
+pub(super) fn view_id_is_valid_for_rooms(
+    rooms: &[RoomSummary],
+    room_views: &BTreeMap<String, RoomViewModel>,
+    view_id: &ViewId,
+) -> bool {
+    match view_id {
+        ViewId::Status => true,
+        ViewId::RoomList => unreachable!("the Rooms List has no activity"),
+        ViewId::Room(room_id) => navigable_room_by_id(rooms, room_id).is_some(),
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => {
+            sendable_room_by_id(rooms, room_id).is_some()
+                && room_views
+                    .get(room_id)
+                    .is_some_and(|room_view| room_view.threads.contains_key(thread_root_event_id))
+        }
+    }
+}
+
+pub(super) fn projected_thread_by_id<'a>(
+    model: &'a UiModel,
+    room_id: &str,
+    thread_root_event_id: &str,
+) -> Option<&'a ThreadViewModel> {
+    sendable_room_by_id(&model.rooms, room_id)?;
+    model
+        .room_views
+        .get(room_id)?
+        .threads
+        .get(thread_root_event_id)
+}
+
+pub(super) fn view_id_is_valid(model: &UiModel, view_id: &ViewId) -> bool {
+    match view_id {
+        ViewId::Status => true,
+        ViewId::RoomList => model.room_list.is_some(),
+        ViewId::Room(room_id) => navigable_room_by_id(&model.rooms, room_id).is_some(),
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => projected_thread_by_id(model, room_id, thread_root_event_id).is_some(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_fixtures::*;
+    use super::*;
+
+    #[test]
+    fn synthetic_event_validation_rejects_invalid_message_sent_sequence() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[outgoing_sent("!ops:example", "txn-1", "$event:example.org")]
+            ),
+            Err("outgoing sent requires an existing queued timeline row".to_owned())
+        );
+    }
+
+    #[test]
+    fn synthetic_event_validation_accepts_pending_then_sent_sequence() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[
+                    outgoing_queued("!ops:example", "txn-1", "hello"),
+                    outgoing_sent("!ops:example", "txn-1", "$event:example.org"),
+                ]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn synthetic_event_validation_rejects_message_edit_with_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::MessageReplaced {
+                        replacement_event_id: "$edit:example.org".to_owned(),
+                        sender: "@alice:example".to_owned(),
+                        timestamp_ms: 1_700_000_000_500,
+                        presentation: RoomMessagePresentationKind::Text,
+                        body: "edited".to_owned(),
+                        styles: Vec::new(),
+                    },
+                })]
+            ),
+            Err("message edit requires an event target".to_owned())
+        );
+    }
+
+    #[test]
+    fn synthetic_event_validation_rejects_message_edit_without_visible_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[incoming_replaced(
+                    "!ops:example",
+                    "$missing:example.org",
+                    "$edit:example.org",
+                    RoomMessagePresentationKind::Text,
+                    "edited"
+                )]
+            ),
+            Err("message edit requires an existing visible target event".to_owned())
+        );
+    }
+
+    #[test]
+    fn redaction_synthetic_event_validation_rejects_missing_event_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[incoming_redacted(
+                    "!ops:example",
+                    "$missing:example.org",
+                    "$redaction:example.org",
+                )]
+            ),
+            Err("activity redaction requires an existing visible target event".to_owned())
+        );
+    }
+
+    #[test]
+    fn redaction_synthetic_event_validation_rejects_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ActivityRedacted {
+                        redaction_event_id: "$redaction:example.org".to_owned(),
+                    },
+                })]
+            ),
+            Err("activity redacted update requires an event target".to_owned())
+        );
+    }
+
+    #[test]
+    fn reaction_add_synthetic_event_validation_rejects_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ReactionAdded {
+                        reaction_event_id: "$reaction:example.org".to_owned(),
+                        sender: "@alice:example".to_owned(),
+                        timestamp_ms: 1_700_000_000_500,
+                        key: "+1".to_owned(),
+                    },
+                })]
+            ),
+            Err("reaction add requires an event target".to_owned())
+        );
+    }
+
+    #[test]
+    fn reaction_removed_synthetic_event_validation_rejects_transaction_target() {
+        assert_eq!(
+            validate_synthetic_room_activity_events(
+                &BTreeMap::new(),
+                &[Event::RoomActivityUpdate(RoomActivityUpdate {
+                    room_id: "!ops:example".to_owned(),
+                    target: RoomActivityUpdateTarget::Transaction {
+                        transaction_id: "txn-1".to_owned(),
+                    },
+                    kind: RoomActivityUpdateKind::ReactionRemoved {
+                        reaction_event_id: "$reaction:example.org".to_owned(),
+                        redaction_event_id: "$redaction:example.org".to_owned(),
+                        key: "+1".to_owned(),
+                    },
+                })]
+            ),
+            Err("reaction removal requires an event target".to_owned())
+        );
+    }
+
+    #[test]
+    fn thread_labels_use_observed_root_body_when_available_and_fall_back_to_root_event_id() {
+        let mut room_view = RoomViewModel::default();
+
+        room_view.apply_activity(sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$thread-1",
+            None,
+            Some(thread_relation("$thread-root")),
+            RoomMessagePresentationKind::Text,
+            "thread rep",
+            1_700_000_120_000,
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("$thread-root")
+        );
+
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$thread-root",
+            None,
+            "root msg",
+            1_700_000_060_000,
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("root msg")
+        );
+
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$thread-root",
+            None,
+            "root msg",
+            1_700_000_060_000,
+        ));
+        room_view.apply_activity(sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$thread-2",
+            None,
+            Some(thread_relation("$thread-root")),
+            RoomMessagePresentationKind::Text,
+            "thread rep",
+            1_700_000_120_000,
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("root msg")
+        );
+    }
+
+    #[test]
+    fn replacing_thread_root_updates_thread_label() {
+        let mut room_view = RoomViewModel::default();
+        room_view.apply_activity(sent_message_activity(
+            "!ops:example",
+            "$thread-root",
+            None,
+            "old root",
+            1_700_000_060_000,
+        ));
+        room_view.apply_activity(sent_message_activity_with_relation_and_presentation(
+            "!ops:example",
+            "$thread-1",
+            None,
+            Some(thread_relation("$thread-root")),
+            RoomMessagePresentationKind::Text,
+            "thread rep",
+            1_700_000_120_000,
+        ));
+
+        assert!(room_view.replace_message(
+            "$thread-root",
+            MessageReplacementFields {
+                presentation: RoomMessagePresentationKind::Text,
+                body: "edited root".to_owned(),
+                styles: Vec::new(),
+            }
+        ));
+        assert_eq!(
+            room_view
+                .threads
+                .get("$thread-root")
+                .map(|thread| thread.label.as_str()),
+            Some("edited root")
+        );
+    }
+
+    fn event_room_activity(event: Event) -> RoomActivity {
+        let Event::RoomActivity(activity) = event else {
+            panic!("expected a room activity event, got {event:?}");
+        };
+        *activity
+    }
+
+    #[test]
+    fn activity_level_for_maps_every_kind_and_highlight_overrides() {
+        let message = sent_message_activity("!room:example", "$m", None, "hi", 1);
+        let image = image_activity("!room:example", "$i", "@bob:example", 1, "i", None, None);
+        let file = file_activity("!room:example", "$f", "@bob:example", 1, "f", None, None);
+        let audio = audio_activity("!room:example", "$a", "@bob:example", 1, "a", None, None);
+        let video = event_room_activity(video_message("!room:example", "$v"));
+        let unsupported = unsupported_message_activity(
+            "!room:example",
+            "$u",
+            "@bob:example",
+            1,
+            "org.example.custom",
+            "u",
+        );
+        let undecryptable = event_room_activity(unable_to_decrypt_activity(
+            "!room:example",
+            "$e",
+            "@bob:example",
+            1,
+        ));
+        let state_notice = event_room_activity(topic_state("!room:example", "topic"));
+        let redacted = RoomActivity {
+            kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+                event_id: "$r".to_owned(),
+            }),
+            ..message.clone()
+        };
+
+        for activity in [
+            &message,
+            &image,
+            &file,
+            &audio,
+            &video,
+            &unsupported,
+            &undecryptable,
+        ] {
+            assert_eq!(
+                activity_level_for(activity, None),
+                Some(ViewActivityLevel::Message),
+                "{activity:?}"
+            );
+        }
+        for activity in [&state_notice, &redacted] {
+            assert_eq!(
+                activity_level_for(activity, None),
+                Some(ViewActivityLevel::Event),
+                "{activity:?}"
+            );
+        }
+        for activity in [message, image, state_notice, redacted] {
+            assert_eq!(
+                activity_level_for(&highlighted(activity), None),
+                Some(ViewActivityLevel::Highlight)
+            );
+        }
+    }
+
+    #[test]
+    fn activity_level_for_ignores_our_own_lines() {
+        let me = Some("@alice:example");
+        let own_message = sent_message_activity("!room:example", "$m", None, "hi", 1);
+        let own_pending = pending_message_activity("!room:example", "txn", "draft");
+        let own_image = image_activity("!room:example", "$i", "@alice:example", 1, "i", None, None);
+        let own_notice = event_room_activity(topic_state("!room:example", "topic"));
+        let others_image =
+            image_activity("!room:example", "$o", "@bob:example", 1, "o", None, None);
+        let redacted = RoomActivity {
+            kind: RoomActivityKind::Redacted(RoomRedactedActivity {
+                event_id: "$r".to_owned(),
+            }),
+            ..own_message.clone()
+        };
+
+        for activity in [&own_message, &own_pending, &own_image, &own_notice] {
+            assert_eq!(activity_level_for(activity, me), None, "{activity:?}");
+        }
+        // Sender first: the core never highlights our own line, but a
+        // highlight must not make it ours to look at.
+        assert_eq!(
+            activity_level_for(&highlighted(own_message.clone()), me),
+            None
+        );
+        assert_eq!(
+            activity_level_for(&others_image, me),
+            Some(ViewActivityLevel::Message)
+        );
+        assert_eq!(
+            activity_level_for(&redacted, me),
+            Some(ViewActivityLevel::Event)
+        );
+        // Not signed in: nothing is ours.
+        assert_eq!(
+            activity_level_for(&own_message, None),
+            Some(ViewActivityLevel::Message)
+        );
+    }
+
+    #[test]
+    fn file_and_audio_room_activities_expose_event_ids_read_targets_and_thread_labels() {
+        let file = file_activity(
+            "!media:example.org",
+            "$file1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "Quarterly report",
+            Some("report.pdf"),
+            Some(RoomFileInfo {
+                mimetype: Some("application/pdf".to_owned()),
+                size: Some(45_678),
+            }),
+        );
+        let audio = audio_activity(
+            "!media:example.org",
+            "$audio1:example.org",
+            "@alice:example.org",
+            1_710_000_060_000,
+            "Voice note",
+            Some("voice-note.ogg"),
+            Some(RoomAudioInfo {
+                mimetype: Some("audio/ogg".to_owned()),
+                size: Some(23_456),
+                duration_ms: Some(12_000),
+            }),
+        );
+
+        assert_eq!(room_activity_event_id(&file), Some("$file1:example.org"));
+        assert_eq!(
+            read_target_for_room_activity(&file),
+            Some("$file1:example.org")
+        );
+        assert_eq!(
+            room_activity_thread_root_label(&file),
+            Some("report.pdf".to_owned())
+        );
+
+        assert_eq!(room_activity_event_id(&audio), Some("$audio1:example.org"));
+        assert_eq!(
+            read_target_for_room_activity(&audio),
+            Some("$audio1:example.org")
+        );
+        assert_eq!(
+            room_activity_thread_root_label(&audio),
+            Some("voice-note.ogg".to_owned())
+        );
+    }
+
+    #[test]
+    fn unsupported_room_activity_updates_last_activity_preview() {
+        let activity = unsupported_message_activity(
+            "!media:example.org",
+            "$image1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "com.example.custom",
+            "clip.mp4",
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$image1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[unsupported com.example.custom] clip.mp4".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn image_room_activity_updates_last_activity_preview() {
+        let activity = image_activity(
+            "!media:example.org",
+            "$image1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "body fallback",
+            Some("diagram.png"),
+            Some(RoomImageInfo {
+                mimetype: Some("image/png".to_owned()),
+                size: Some(12_345),
+                width: Some(640),
+                height: Some(480),
+                is_animated: Some(false),
+                thumbnail_source: None,
+            }),
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$image1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[image] diagram.png".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn file_room_activity_updates_last_activity_preview() {
+        let activity = file_activity(
+            "!media:example.org",
+            "$file1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "Quarterly report",
+            Some("report.pdf"),
+            Some(RoomFileInfo {
+                mimetype: Some("application/pdf".to_owned()),
+                size: Some(45_678),
+            }),
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$file1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[file] report.pdf".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+
+    #[test]
+    fn audio_room_activity_updates_last_activity_preview() {
+        let activity = audio_activity(
+            "!media:example.org",
+            "$audio1:example.org",
+            "@alice:example.org",
+            1_710_000_000_000,
+            "Voice note",
+            Some("voice-note.ogg"),
+            Some(RoomAudioInfo {
+                mimetype: Some("audio/ogg".to_owned()),
+                size: Some(23_456),
+                duration_ms: Some(12_000),
+            }),
+        );
+
+        assert_eq!(
+            last_activity_from_room_activity(&activity),
+            Some(LastMessageActivity {
+                room_id: "!media:example.org".to_owned(),
+                event_id: Some("$audio1:example.org".to_owned()),
+                transaction_id: None,
+                sender: "@alice:example.org".to_owned(),
+                timestamp_ms: 1_710_000_000_000,
+                presentation: RoomMessagePresentationKind::Text,
+                body: "[audio] voice-note.ogg".to_owned(),
+                send_state: RoomMessageSendState::Sent,
+            })
+        );
+    }
+}
