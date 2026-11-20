@@ -21,7 +21,7 @@ const LOGIN_DIALOG_CLASS_NAME: &str = "mirxWin32LoginDialog";
 const RECOVER_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32RecoverE2eeDialog";
 const SETUP_E2EE_DIALOG_CLASS_NAME: &str = "mirxWin32SetupE2eeDialog";
 const RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME: &str = "mirxWin32RecoveryKeyHandoffDialog";
-pub(super) const FIND_DIALOG_CLASS_NAME: &str = "mirxWin32FindDialog";
+pub(super) const SINGLE_FIELD_DIALOG_CLASS_NAME: &str = "mirxWin32SingleFieldDialog";
 pub(super) const ABOUT_DIALOG_CLASS_NAME: &str = "mirxWin32AboutDialog";
 
 const LOGIN_DIALOG_HOME_SERVER_ID: u16 = 5001;
@@ -39,9 +39,9 @@ const SETUP_E2EE_DIALOG_OK_ID: usize = 5015;
 const SETUP_E2EE_DIALOG_CANCEL_ID: usize = 5016;
 const RECOVERY_KEY_HANDOFF_DIALOG_KEY_ID: u16 = 5017;
 const RECOVERY_KEY_HANDOFF_DIALOG_ACK_ID: usize = 5018;
-const FIND_DIALOG_QUERY_ID: u16 = 5010;
-const FIND_DIALOG_OK_ID: usize = 5011;
-const FIND_DIALOG_CANCEL_ID: usize = 5012;
+const SINGLE_FIELD_DIALOG_EDIT_ID: u16 = 5010;
+const SINGLE_FIELD_DIALOG_OK_ID: usize = 5011;
+const SINGLE_FIELD_DIALOG_CANCEL_ID: usize = 5012;
 /// The About box's lines, top to bottom, with the control ids tests read.
 const ABOUT_DIALOG_LINES: [(u16, &str); 5] = [
     (5019, concat!("mirx ", env!("CARGO_PKG_VERSION"))),
@@ -122,7 +122,7 @@ pub(super) struct SubmittedSetupE2eeRecovery {
     pub(super) wait_for_backups_to_upload: bool,
 }
 
-pub(super) struct FindDialogState {
+pub(super) struct SingleFieldDialogState {
     pub(super) result: Arc<Mutex<Option<String>>>,
 }
 
@@ -141,7 +141,10 @@ const DIALOG_CLASSES: [(&str, WNDPROC); 7] = [
         RECOVERY_KEY_HANDOFF_DIALOG_CLASS_NAME,
         Some(recovery_key_handoff_dialog_window_proc),
     ),
-    (FIND_DIALOG_CLASS_NAME, Some(find_dialog_window_proc)),
+    (
+        SINGLE_FIELD_DIALOG_CLASS_NAME,
+        Some(single_field_dialog_window_proc),
+    ),
     (ABOUT_DIALOG_CLASS_NAME, Some(about_dialog_window_proc)),
     (
         options_dialog::OPTIONS_DIALOG_CLASS_NAME,
@@ -645,7 +648,7 @@ unsafe extern "system" fn recovery_key_handoff_dialog_window_proc(
     }
 }
 
-unsafe extern "system" fn find_dialog_window_proc(
+unsafe extern "system" fn single_field_dialog_window_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
@@ -653,38 +656,38 @@ unsafe extern "system" fn find_dialog_window_proc(
 ) -> LRESULT {
     match message {
         WM_NCCREATE => {
-            window_data::adopt_create_param::<FindDialogState>(hwnd, lparam);
+            window_data::adopt_create_param::<SingleFieldDialogState>(hwnd, lparam);
             // Sets the window text from the CreateWindowExW title.
             DefWindowProcW(hwnd, message, wparam, lparam)
         }
         WM_COMMAND => {
             let command_id = wparam & 0xffff;
             match command_id {
-                FIND_DIALOG_OK_ID => {
-                    let state = find_dialog_state(hwnd);
+                SINGLE_FIELD_DIALOG_OK_ID => {
+                    let state = single_field_dialog_state(hwnd);
                     *state
                         .result
                         .lock()
-                        .expect("find dialog result mutex poisoned") = Some(read_window_text(
-                        GetDlgItem(hwnd, FIND_DIALOG_QUERY_ID.into()),
-                    ));
+                        .expect("single-field dialog result mutex poisoned") = Some(
+                        read_window_text(GetDlgItem(hwnd, SINGLE_FIELD_DIALOG_EDIT_ID.into())),
+                    );
                     DestroyWindow(hwnd);
                     0
                 }
-                FIND_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
+                SINGLE_FIELD_DIALOG_CANCEL_ID | ESC_CANCEL_ID => {
                     DestroyWindow(hwnd);
                     0
                 }
                 _ => DefWindowProcW(hwnd, message, wparam, lparam),
             }
         }
-        DM_GETDEFID => default_button(FIND_DIALOG_OK_ID),
+        DM_GETDEFID => default_button(SINGLE_FIELD_DIALOG_OK_ID),
         WM_CLOSE => {
             DestroyWindow(hwnd);
             0
         }
         WM_NCDESTROY => {
-            window_data::drop_owned::<FindDialogState>(hwnd);
+            window_data::drop_owned::<SingleFieldDialogState>(hwnd);
             0
         }
         _ => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -876,17 +879,20 @@ unsafe fn create_single_field_dialog(
     initial_text: &str,
     result: Arc<Mutex<Option<String>>>,
 ) -> Result<HWND, String> {
-    let mut state = window_data::CreateParam::new(FindDialogState { result });
+    let mut state = window_data::CreateParam::new(SingleFieldDialogState { result });
     create_modal_dialog(
         owner,
-        FIND_DIALOG_CLASS_NAME,
+        SINGLE_FIELD_DIALOG_CLASS_NAME,
         title,
         state.as_param(),
         |dialog| {
             let mut column = DialogColumn::new(dialog, SINGLE_FIELD_DIALOG_WIDTH);
             column.label(label, 0, 0)?;
-            column.edit(FIND_DIALOG_QUERY_ID, initial_text, 0)?;
-            column.buttons(&[(FIND_DIALOG_OK_ID, "OK"), (FIND_DIALOG_CANCEL_ID, "Cancel")])
+            column.edit(SINGLE_FIELD_DIALOG_EDIT_ID, initial_text, 0)?;
+            column.buttons(&[
+                (SINGLE_FIELD_DIALOG_OK_ID, "OK"),
+                (SINGLE_FIELD_DIALOG_CANCEL_ID, "Cancel"),
+            ])
         },
     )
 }
@@ -900,7 +906,7 @@ pub(super) unsafe fn show_single_field_dialog(
     let result = Arc::new(Mutex::new(None));
     let dialog =
         create_single_field_dialog(owner, title, label, initial_text, Arc::clone(&result))?;
-    let edit = GetDlgItem(dialog, FIND_DIALOG_QUERY_ID.into());
+    let edit = GetDlgItem(dialog, SINGLE_FIELD_DIALOG_EDIT_ID.into());
     let len = initial_text.encode_utf16().count();
     SendMessageW(edit, EM_SETSEL, len, len as LPARAM);
     SetFocus(edit);
@@ -908,7 +914,7 @@ pub(super) unsafe fn show_single_field_dialog(
     run_modal_dialog(owner, dialog);
     Ok(result
         .lock()
-        .expect("find dialog result mutex poisoned")
+        .expect("single-field dialog result mutex poisoned")
         .clone())
 }
 
@@ -1087,7 +1093,7 @@ unsafe fn setup_e2ee_dialog_state(hwnd: HWND) -> &'static SetupE2eeRecoveryDialo
     window_data::get(hwnd).expect("the setup e2ee dialog has its state")
 }
 
-unsafe fn find_dialog_state(hwnd: HWND) -> &'static FindDialogState {
+unsafe fn single_field_dialog_state(hwnd: HWND) -> &'static SingleFieldDialogState {
     window_data::get(hwnd).expect("the single-field dialog has its state")
 }
 
@@ -1147,8 +1153,8 @@ mod tests {
         _time: u32,
     ) {
         KillTimer(frame, timer);
-        let dialog = owned_dialog(frame, FIND_DIALOG_CLASS_NAME);
-        let edit = GetDlgItem(dialog, FIND_DIALOG_QUERY_ID.into());
+        let dialog = owned_dialog(frame, SINGLE_FIELD_DIALOG_CLASS_NAME);
+        let edit = GetDlgItem(dialog, SINGLE_FIELD_DIALOG_EDIT_ID.into());
         PostMessageW(edit, WM_CHAR, 'c' as WPARAM, 0);
         PostMessageW(edit, WM_KEYDOWN, VK_RETURN_KEY, 0);
     }

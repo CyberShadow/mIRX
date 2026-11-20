@@ -11698,9 +11698,9 @@ const MENU_ID_HELP_TOPICS: usize = 40034;
 const MENU_ID_HELP_ABOUT: usize = 40035;
 const ABOUT_DIALOG_VERSION_ID: i32 = 5019;
 const ABOUT_DIALOG_OK_ID: usize = 5024;
-const FIND_DIALOG_QUERY_ID: i32 = 5010;
-const FIND_DIALOG_OK_ID: usize = 5011;
-const FIND_DIALOG_CANCEL_ID: usize = 5012;
+const SINGLE_FIELD_DIALOG_EDIT_ID: i32 = 5010;
+const SINGLE_FIELD_DIALOG_OK_ID: usize = 5011;
+const SINGLE_FIELD_DIALOG_CANCEL_ID: usize = 5012;
 const SYSMENU_ID_FIND: WPARAM = 0x0120;
 
 /// Picks the Commands menu item at `index` as a click does, filling its
@@ -11731,14 +11731,14 @@ fn run_commands_menu_item(
 
 /// Types `input` into the open Commands prompt and presses OK.
 fn answer_commands_prompt(input: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let class_name = wide_null("mirxWin32FindDialog");
+    let class_name = wide_null("mirxWin32SingleFieldDialog");
     let dialog = wait_for_window(&class_name, "Commands prompt")?;
-    let edit = unsafe { GetDlgItem(dialog, FIND_DIALOG_QUERY_ID) };
+    let edit = unsafe { GetDlgItem(dialog, SINGLE_FIELD_DIALOG_EDIT_ID) };
     assert!(!edit.is_null(), "Commands prompt edit must exist");
     let input = wide_null(input);
     assert_ne!(unsafe { SetWindowTextW(edit, input.as_ptr()) }, 0);
     assert_ne!(
-        unsafe { PostMessageW(dialog, WM_COMMAND, FIND_DIALOG_OK_ID as WPARAM, 0) },
+        unsafe { PostMessageW(dialog, WM_COMMAND, SINGLE_FIELD_DIALOG_OK_ID as WPARAM, 0) },
         0
     );
     wait_for_window_gone(dialog, "Commands prompt")
@@ -12757,11 +12757,18 @@ fn help_about_dialog_shows_version_and_closes() -> Result<(), Box<dyn std::error
 
 /// Cancels the open Find dialog.
 fn cancel_find_dialog() -> Result<(), Box<dyn std::error::Error>> {
-    let class_name = wide_null("mirxWin32FindDialog");
+    let class_name = wide_null("mirxWin32SingleFieldDialog");
     let dialog = wait_for_window(&class_name, "Find dialog")?;
     assert_eq!(unsafe { read_window_text(dialog) }, "Find");
     assert_ne!(
-        unsafe { PostMessageW(dialog, WM_COMMAND, FIND_DIALOG_CANCEL_ID as WPARAM, 0) },
+        unsafe {
+            PostMessageW(
+                dialog,
+                WM_COMMAND,
+                SINGLE_FIELD_DIALOG_CANCEL_ID as WPARAM,
+                0,
+            )
+        },
         0
     );
     wait_for_window_gone(dialog, "Find dialog")
@@ -12881,7 +12888,7 @@ fn open_dialog_opens_each_dialog_over_the_frame() -> Result<(), Box<dyn std::err
         ),
         (
             AutomationDialog::CommandsJoin,
-            "mirxWin32FindDialog",
+            "mirxWin32SingleFieldDialog",
             "Join room",
         ),
         (

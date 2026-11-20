@@ -277,7 +277,9 @@ use core_events::{
     resolve_timeline_room_id,
 };
 #[cfg(test)]
-use dialogs::{ABOUT_DIALOG_OK_ID, FIND_DIALOG_CLASS_NAME, FindDialogState, create_about_dialog};
+use dialogs::{
+    ABOUT_DIALOG_OK_ID, SINGLE_FIELD_DIALOG_CLASS_NAME, SingleFieldDialogState, create_about_dialog,
+};
 use dialogs::{
     SubmittedSetupE2eeRecovery, create_child_window, pack_size_lparam, register_dialog_classes,
     run_modal_dialog, run_options_dialog, show_about_dialog, show_e2ee_recovery_key,
@@ -1219,12 +1221,12 @@ mod tests {
     fn a_window_does_not_give_its_state_as_another_kind() {
         unsafe {
             register_dialog_classes(GetModuleHandleW(null())).unwrap();
-            let mut dialog_state = window_data::CreateParam::new(FindDialogState {
+            let mut dialog_state = window_data::CreateParam::new(SingleFieldDialogState {
                 result: Arc::new(Mutex::new(None)),
             });
             let dialog = CreateWindowExW(
                 0,
-                wide_null(FIND_DIALOG_CLASS_NAME).as_ptr(),
+                wide_null(SINGLE_FIELD_DIALOG_CLASS_NAME).as_ptr(),
                 wide_null("Find").as_ptr(),
                 WS_OVERLAPPED,
                 0,
