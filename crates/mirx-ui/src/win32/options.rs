@@ -6,7 +6,9 @@
 
 use mirx_core::{HighlightWord, validate_highlight_word};
 
-use super::settings::{ActivityColors, ConnectSetting, Settings, parse_button_width};
+use super::settings::{
+    ActivityColors, ConnectSetting, LoggingSetting, Settings, parse_button_width,
+};
 use super::timestamp::TimestampFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,10 +16,11 @@ pub(super) enum OptionsPage {
     ConnectOptions,
     IrcMessages,
     IrcHighlight,
+    IrcLogging,
     Display,
 }
 
-use OptionsPage::{ConnectOptions, Display, IrcHighlight, IrcMessages};
+use OptionsPage::{ConnectOptions, Display, IrcHighlight, IrcLogging, IrcMessages};
 
 /// The tree, in order: (label, depth, page). A category without a page of
 /// its own shows its first child's.
@@ -27,6 +30,7 @@ pub(super) const OPTIONS_TREE: &[(&str, u8, OptionsPage)] = &[
     ("IRC", 0, IrcMessages),
     ("Messages", 1, IrcMessages),
     ("Highlight", 1, IrcHighlight),
+    ("Logging", 1, IrcLogging),
     ("Display", 0, Display),
 ];
 
@@ -94,6 +98,8 @@ pub(super) struct OptionsForm {
     pub(super) switchbar_buttons: String,
     /// Picked from the palette, so never wrong.
     pub(super) activity_colors: ActivityColors,
+    /// Checkboxes, so never wrong.
+    pub(super) logging: LoggingSetting,
 }
 
 impl OptionsForm {
@@ -104,6 +110,7 @@ impl OptionsForm {
             timestamp_format: settings.timestamp.format.to_string(),
             switchbar_buttons: settings.switchbar.buttons.to_string(),
             activity_colors: settings.switchbar.activity,
+            logging: settings.logging,
         }
     }
 
@@ -131,6 +138,7 @@ impl OptionsForm {
         settings.timestamp.format = format;
         settings.switchbar.buttons = buttons;
         settings.switchbar.activity = self.activity_colors;
+        settings.logging = self.logging;
         Ok(settings)
     }
 }
@@ -265,16 +273,19 @@ mod tests {
                 "IRC",
                 "IRC/Messages",
                 "IRC/Highlight",
+                "IRC/Logging",
                 "Display"
             ]
         );
         assert_eq!(page_tree_index(ConnectOptions), 1);
         assert_eq!(page_tree_index(IrcMessages), 3);
         assert_eq!(page_tree_index(IrcHighlight), 4);
-        assert_eq!(page_tree_index(Display), 5);
+        assert_eq!(page_tree_index(IrcLogging), 5);
+        assert_eq!(page_tree_index(Display), 6);
         assert_eq!(tree_index("Connect"), Some(0));
         assert_eq!(tree_index("IRC/Messages"), Some(3));
-        assert_eq!(tree_index("Display"), Some(5));
+        assert_eq!(tree_index("IRC/Logging"), Some(5));
+        assert_eq!(tree_index("Display"), Some(6));
         for path in ["", "IRC/", "Messages", "irc/messages", "IRC > Messages"] {
             assert_eq!(tree_index(path), None, "{path:?}");
         }
@@ -338,6 +349,20 @@ mod tests {
             applied(|form| form.activity_colors.message = PaletteIndex::new(9).unwrap()),
             expected
         );
+
+        for change in [
+            |form: &mut OptionsForm| form.logging.channels = true,
+            |form: &mut OptionsForm| form.logging.queries = true,
+            |form: &mut OptionsForm| form.logging.strip_codes = true,
+            |form: &mut OptionsForm| form.logging.timestamp = false,
+        ] {
+            let mut changed = form.clone();
+            change(&mut changed);
+            let mut expected = current.clone();
+            expected.logging = changed.logging;
+            assert_ne!(expected, current);
+            assert_eq!(applied(change), expected);
+        }
     }
 
     #[test]

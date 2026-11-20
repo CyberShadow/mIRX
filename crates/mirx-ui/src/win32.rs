@@ -233,15 +233,14 @@ mod verification;
 mod views;
 mod window_data;
 
+use account::{
+    PROFILE_SUBDIR, delete_saved_session, load_or_create_store_passphrase, profile_dir,
+    save_session, session_path, submit_login, submit_logout, submit_recover_e2ee,
+    submit_restore_saved_session, submit_restore_session, submit_setup_e2ee_recovery,
+    submit_start_sync,
+};
 #[cfg(test)]
-use account::{
-    PROFILE_SUBDIR, SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session,
-};
-use account::{
-    delete_saved_session, load_or_create_store_passphrase, profile_dir, save_session, session_path,
-    submit_login, submit_logout, submit_recover_e2ee, submit_restore_saved_session,
-    submit_restore_session, submit_setup_e2ee_recovery, submit_start_sync,
-};
+use account::{SAVED_SESSION_VERSION, SESSION_FILE_NAME, SavedSession, load_saved_session};
 use attachments::{
     AttachmentSaveResult, PendingAttachmentSave, apply_attachment_save_media_event,
     save_selected_message_attachment,

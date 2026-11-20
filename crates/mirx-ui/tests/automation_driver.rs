@@ -47,11 +47,11 @@ use mirx_testkit::{
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
     UiActiveTimeline, UiActivityColors, UiColorCodePart, UiColorItem, UiColorsDialog,
-    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu,
-    UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState,
-    UiTimelineLineKind, UiTimelineLink, UiTimestamp, UnsupportedRoomMessageActivity,
-    UserCommandAction, Verification, VerificationActionKind, VerificationState, ViewActivityLevel,
-    ViewIdentity,
+    UiComposeTarget, UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState,
+    UiLoggingOptions, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState, UiRoomReadState,
+    UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
+    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
+    VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -13739,6 +13739,11 @@ const OPTIONS_HIGHLIGHT_WORD_ID: i32 = 6402;
 const OPTIONS_HIGHLIGHT_ADD_ID: i32 = 6403;
 const OPTIONS_HIGHLIGHT_DELETE_ID: i32 = 6404;
 const OPTIONS_HIGHLIGHT_NOTE_ID: i32 = 6405;
+const OPTIONS_LOG_CHANNELS_ID: i32 = 6501;
+const OPTIONS_LOG_QUERIES_ID: i32 = 6502;
+const OPTIONS_LOG_STRIP_CODES_ID: i32 = 6503;
+const OPTIONS_LOG_TIMESTAMP_ID: i32 = 6504;
+const OPTIONS_LOG_FOLDER_ID: i32 = 6505;
 
 /// Waits for the Options dialog to be open and shown, and returns it.
 fn wait_for_options_dialog(app: &MirxApp) -> Result<HWND, Box<dyn std::error::Error>> {
@@ -13800,6 +13805,7 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
             "IRC",
             "IRC/Messages",
             "IRC/Highlight",
+            "IRC/Logging",
             "Display"
         ]
     );
@@ -13885,6 +13891,90 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
     post_options_command(dialog, IDCANCEL)?;
     wait_for_window_gone(dialog, "Options dialog")?;
     menu_thread.join().expect("the menu thread must not panic");
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn options_logging_page_saves_and_new_windows_follow_it() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    app.open_dialog(AutomationDialog::Options)?;
+    let dialog = wait_for_options_dialog(&app)?;
+    app.select_options_page("IRC/Logging")?;
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open");
+    assert_eq!(
+        options.visible_controls,
+        [
+            OPTIONS_LOG_CHANNELS_ID as u16,
+            OPTIONS_LOG_QUERIES_ID as u16,
+            OPTIONS_LOG_STRIP_CODES_ID as u16,
+            OPTIONS_LOG_TIMESTAMP_ID as u16,
+            OPTIONS_LOG_FOLDER_ID as u16,
+        ]
+    );
+    assert_eq!(
+        options.logging,
+        UiLoggingOptions {
+            channels: false,
+            queries: false,
+            strip_codes: false,
+            timestamp: true,
+        }
+    );
+    assert_eq!(
+        unsafe { read_window_text(GetDlgItem(dialog, OPTIONS_LOG_FOLDER_ID)) },
+        r"Folder: %LOCALAPPDATA%\mirx\ui-shell\logs"
+    );
+    unsafe {
+        set_options_check(dialog, OPTIONS_LOG_QUERIES_ID, true);
+        set_options_check(dialog, OPTIONS_LOG_STRIP_CODES_ID, true);
+        set_options_check(dialog, OPTIONS_LOG_TIMESTAMP_ID, false);
+    }
+    assert_eq!(
+        app.dump_ui_state()?
+            .options_dialog
+            .expect("the dialog is open")
+            .logging,
+        UiLoggingOptions {
+            channels: false,
+            queries: true,
+            strip_codes: true,
+            timestamp: false,
+        }
+    );
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(
+        fs::read_to_string(settings_file_path(&local_app_data))?
+            .contains("[logging]\r\nchannels=off\r\nqueries=on\r\nstrip=on\r\ntimestamp=off\r\n")
+    );
+    // Windows already open have decided; a query that opens now logs.
+    assert_eq!(view_log(&app, &room_identity("!alpha:example"))?, None);
+    let mut carol = room_summary("!carol:example", "Carol", false);
+    carol.is_direct = true;
+    carol.direct_user_ids = vec!["@carol:example".to_owned()];
+    let mut rooms = close_lifecycle_rooms();
+    rooms.push(carol);
+    app.append_synthetic_events(&serde_json::to_string(&vec![Event::SyncedRooms(rooms)])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(view_log(&app, &room_identity("!carol:example"))?.is_some());
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event(
+        "!carol:example",
+        "@carol:example",
+        now_ms(),
+        "carol news",
+    )])?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    // Without timestamps.
+    let log = read_log(&log_file_path(&local_app_data, "@carol.example"))?;
+    assert_eq!(log[2..], ["<@carol:example> carol news".to_owned()]);
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
@@ -14742,6 +14832,7 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
     for (path, selected) in [
         ("IRC/Messages", "IRC/Messages"),
         ("IRC/Highlight", "IRC/Highlight"),
+        ("IRC/Logging", "IRC/Logging"),
         ("Display", "Display"),
         ("Connect/Options", "Connect/Options"),
         // A category without a page of its own shows its first page.
@@ -14754,7 +14845,7 @@ fn select_options_page_selects_each_page() -> Result<(), Box<dyn std::error::Err
             .expect("the dialog is open");
         assert_eq!(options.selected, selected, "{path}");
     }
-    for path in ["IRC/Logging", "irc/messages", ""] {
+    for path in ["IRC/Sounds", "irc/messages", ""] {
         assert_protocol_error(app.select_options_page(path), "unknown_options_page");
     }
     let options = app

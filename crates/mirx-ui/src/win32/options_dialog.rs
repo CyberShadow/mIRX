@@ -42,11 +42,12 @@ use super::dialogs::{
     DIALOG_EDIT_HEIGHT, DIALOG_EDIT_STYLE, DIALOG_GAP, DIALOG_LABEL_GAP, DIALOG_MARGIN,
     controls_extent, create_modal_dialog, dialog_text_size, end_modal_dialog,
 };
+use super::logging::logs_folder_label;
 use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
     OptionsPage, page_tree_index, tree_index, tree_paths,
 };
-use super::settings::{ActivityColors, Settings};
+use super::settings::{ActivityColors, LoggingSetting, Settings};
 use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
 use super::{
@@ -54,7 +55,7 @@ use super::{
     create_child_window, expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text,
     run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
-use crate::automation::UiOptionsDialog;
+use crate::automation::{UiLoggingOptions, UiOptionsDialog};
 
 pub(super) const OPTIONS_DIALOG_CLASS_NAME: &str = "mirxWin32OptionsDialog";
 const OPTIONS_DIALOG_TITLE: &str = "mirx Options";
@@ -71,6 +72,11 @@ pub(super) const OPTIONS_HIGHLIGHT_WORD_ID: u16 = 6402;
 pub(super) const OPTIONS_HIGHLIGHT_ADD_ID: u16 = 6403;
 pub(super) const OPTIONS_HIGHLIGHT_DELETE_ID: u16 = 6404;
 pub(super) const OPTIONS_HIGHLIGHT_NOTE_ID: u16 = 6405;
+pub(super) const OPTIONS_LOG_CHANNELS_ID: u16 = 6501;
+pub(super) const OPTIONS_LOG_QUERIES_ID: u16 = 6502;
+pub(super) const OPTIONS_LOG_STRIP_CODES_ID: u16 = 6503;
+pub(super) const OPTIONS_LOG_TIMESTAMP_ID: u16 = 6504;
+pub(super) const OPTIONS_LOG_FOLDER_ID: u16 = 6505;
 const LISTBOX_CLASS_NAME: &str = "LISTBOX";
 const HIGHLIGHT_NOTE: &str = "Words are matched as whole words; * and ? are wildcards. \
 Highlight words are kept on your Matrix server and shared with your other clients.";
@@ -99,6 +105,10 @@ struct Fields {
     switchbar_buttons: HWND,
     /// Event, Message, Highlight.
     activity_colors: [HWND; 3],
+    log_channels: HWND,
+    log_queries: HWND,
+    log_strip_codes: HWND,
+    log_timestamp: HWND,
 }
 
 impl Fields {
@@ -110,6 +120,12 @@ impl Fields {
             timestamp_format: read_window_text(self.timestamp_format),
             switchbar_buttons: read_window_text(self.switchbar_buttons),
             activity_colors: self.read_activity_colors(),
+            logging: LoggingSetting {
+                channels: checked(self.log_channels),
+                queries: checked(self.log_queries),
+                strip_codes: checked(self.log_strip_codes),
+                timestamp: checked(self.log_timestamp),
+            },
         }
     }
 
@@ -199,6 +215,10 @@ impl OptionsDialog {
                 timestamp_format: null_mut(),
                 switchbar_buttons: null_mut(),
                 activity_colors: [null_mut(); 3],
+                log_channels: null_mut(),
+                log_queries: null_mut(),
+                log_strip_codes: null_mut(),
+                log_timestamp: null_mut(),
             },
             saved: None,
         }));
@@ -539,6 +559,45 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     }
     refill_highlight_list(state);
 
+    // mIRC's Logging page: what logs by itself, and how lines are written.
+    let (auto_label, (_, auto_label_height)) = label("Automatically log:", 0, 0, PAGE_X, page_top)?;
+    state
+        .page_controls
+        .push((OptionsPage::IrcLogging, auto_label));
+    let mut row_y = page_top + auto_label_height + DIALOG_LABEL_GAP;
+    let mut log_check_box = |text: &str, id: u16, indent: i32| {
+        let check_box = place(
+            control(BUTTON_CLASS_NAME, text, checkbox, 0, id)?,
+            PAGE_X + indent,
+            row_y,
+            PAGE_WIDTH - indent,
+            DIALOG_CHECKBOX_HEIGHT,
+        );
+        row_y += DIALOG_CHECKBOX_HEIGHT + DIALOG_GAP;
+        Ok::<_, String>(check_box)
+    };
+    // The kinds of window sit under "Automatically log:".
+    state.fields.log_channels = log_check_box("Channels", OPTIONS_LOG_CHANNELS_ID, DIALOG_MARGIN)?;
+    state.fields.log_queries = log_check_box("Queries", OPTIONS_LOG_QUERIES_ID, DIALOG_MARGIN)?;
+    state.fields.log_strip_codes = log_check_box("Strip codes", OPTIONS_LOG_STRIP_CODES_ID, 0)?;
+    state.fields.log_timestamp = log_check_box("Timestamp logs", OPTIONS_LOG_TIMESTAMP_ID, 0)?;
+    for control in [
+        state.fields.log_channels,
+        state.fields.log_queries,
+        state.fields.log_strip_codes,
+        state.fields.log_timestamp,
+    ] {
+        state.page_controls.push((OptionsPage::IrcLogging, control));
+    }
+    let (folder, _) = label(
+        &format!("Folder: {}", logs_folder_label()),
+        OPTIONS_LOG_FOLDER_ID,
+        0,
+        PAGE_X,
+        row_y,
+    )?;
+    state.page_controls.push((OptionsPage::IrcLogging, folder));
+
     // OK is `IDOK` and Cancel `IDCANCEL`: what `IsDialogMessageW` sends
     // for Enter and Esc. They sit a margin under the tree and every page,
     // right-aligned with the pages.
@@ -586,6 +645,14 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
         check(form.timestamp_show),
         0,
     );
+    for (check_box, checked) in [
+        (state.fields.log_channels, form.logging.channels),
+        (state.fields.log_queries, form.logging.queries),
+        (state.fields.log_strip_codes, form.logging.strip_codes),
+        (state.fields.log_timestamp, form.logging.timestamp),
+    ] {
+        SendMessageW(check_box, BM_SETCHECK, check(checked), 0);
+    }
     set_window_text(state.fields.timestamp_format, &form.timestamp_format);
     set_window_text(state.fields.switchbar_buttons, &form.switchbar_buttons);
     let ActivityColors {
@@ -920,5 +987,15 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
         highlight_controls_enabled,
         highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
         activity_colors: dump_activity_colors(&state.fields.read_activity_colors()),
+        logging: dump_logging_options(&state.fields.read().logging),
     })
+}
+
+fn dump_logging_options(logging: &LoggingSetting) -> UiLoggingOptions {
+    UiLoggingOptions {
+        channels: logging.channels,
+        queries: logging.queries,
+        strip_codes: logging.strip_codes,
+        timestamp: logging.timestamp,
+    }
 }

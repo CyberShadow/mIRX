@@ -1123,6 +1123,20 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub(crate) activity_colors: UiActivityColors,
+    /// The Logging page's checkboxes.
+    pub(crate) logging: UiLoggingOptions,
+}
+
+/// Options > IRC > Logging's checkboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UiLoggingOptions {
+    /// Automatically log channels.
+    pub(crate) channels: bool,
+    /// Automatically log queries.
+    pub(crate) queries: bool,
+    pub(crate) strip_codes: bool,
+    pub(crate) timestamp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -5946,6 +5960,12 @@ mod tests {
                             message: 4,
                             highlight: 12,
                         },
+                        logging: super::UiLoggingOptions {
+                            channels: true,
+                            queries: false,
+                            strip_codes: false,
+                            timestamp: true,
+                        },
                     }),
                     colors_dialog: Some(super::UiColorsDialog {
                         selected: "normal".to_owned(),
@@ -6164,7 +6184,8 @@ mod tests {
                         "highlight_items":["deploy"],
                         "highlight_controls_enabled":true,
                         "highlight_delete_enabled":false,
-                        "activity_colors":{"event":5,"message":4,"highlight":12}
+                        "activity_colors":{"event":5,"message":4,"highlight":12},
+                        "logging":{"channels":true,"queries":false,"strip_codes":false,"timestamp":true}
                     },
                     "colors_dialog":{
                         "selected":"normal",

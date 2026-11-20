@@ -240,7 +240,7 @@ impl Default for TreebarSetting {
 }
 
 /// mIRC's Options > IRC > Logging.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct LoggingSetting {
     /// Automatically log channels: every channel window logs from when it
     /// opens. Off by default, as in mIRC.

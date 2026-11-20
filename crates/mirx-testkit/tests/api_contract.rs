@@ -39,11 +39,12 @@ use mirx_testkit::{
     SubmittedReplyThreadTarget, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SwitchbarItem, SwitchbarState, TestkitError, UiActiveTimeline,
     UiActivityColors, UiColorItem, UiColors, UiComposeTarget, UiComposeTargetKind, UiError,
-    UiFindHistorySearchState, UiFindState, UiFrameLayout, UiMenu, UiMenuItem, UiOptionsDialog,
-    UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState, UiRoomState, UiState,
-    UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionArgs,
-    VerificationDecimals, VerificationEmoji, VerificationState, ViewActivityLevel, ViewIdentity,
+    UiFindHistorySearchState, UiFindState, UiFrameLayout, UiLoggingOptions, UiMenu, UiMenuItem,
+    UiOptionsDialog, UiPoint, UiRect, UiRoomHistoryBackfillState, UiRoomList, UiRoomReadState,
+    UiRoomState, UiState, UiTextFont, UiTimelineLine, UiTimelineLineKind, UiTimelineLink,
+    UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionArgs, VerificationDecimals, VerificationEmoji, VerificationState,
+    ViewActivityLevel, ViewIdentity,
 };
 
 #[test]
@@ -981,6 +982,12 @@ fn data_models_round_trip_through_json() {
                 message: 9,
                 highlight: 12,
             },
+            logging: UiLoggingOptions {
+                channels: false,
+                queries: true,
+                strip_codes: true,
+                timestamp: false,
+            },
         }),
         active_timeline: Some(UiActiveTimeline {
             top_line: 0,
@@ -1278,6 +1285,7 @@ fn data_models_round_trip_through_json() {
                 "highlight_controls_enabled": true,
                 "highlight_delete_enabled": true,
                 "activity_colors": {"event": 5, "message": 9, "highlight": 12},
+                "logging": {"channels": false, "queries": true, "strip_codes": true, "timestamp": false},
             },
             "colors_dialog": null,
             "color_index": null,

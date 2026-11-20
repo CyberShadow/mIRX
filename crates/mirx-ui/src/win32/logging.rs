@@ -17,6 +17,12 @@ use super::*;
 
 const LOGS_SUBDIR: &str = "logs";
 
+/// Where the logs go, as Options > IRC > Logging shows it: the same in
+/// every profile.
+pub(super) fn logs_folder_label() -> String {
+    format!("%LOCALAPPDATA%\\{PROFILE_SUBDIR}\\{LOGS_SUBDIR}")
+}
+
 /// A window's log.
 pub(super) enum ViewLog {
     /// The Rooms List and thread windows: no log of their own. A thread
@@ -465,6 +471,11 @@ mod tests {
         let mut room = summary("!abc:matrix.org");
         room.canonical_alias = Some("CON".to_owned());
         stem(room);
+    }
+
+    #[test]
+    fn the_logs_folder_label_is_where_the_logs_go() {
+        assert_eq!(logs_folder_label(), r"%LOCALAPPDATA%\mirx\ui-shell\logs");
     }
 
     #[test]

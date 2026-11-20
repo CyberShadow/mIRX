@@ -288,6 +288,10 @@ configure_case_expectations() {
           ordered_actions=(dialog:options:IRC/Highlight)
           expect_dialog_title='mirx Options'
           ;;
+        dialog-options-logging)
+          ordered_actions=(dialog:options:IRC/Logging)
+          expect_dialog_title='mirx Options'
+          ;;
         dialog-options-display)
           ordered_actions=(dialog:options:Display)
           expect_dialog_title='mirx Options'

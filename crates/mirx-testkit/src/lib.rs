@@ -1343,6 +1343,20 @@ pub struct UiOptionsDialog {
     pub highlight_delete_enabled: bool,
     /// The Display page's switchbar Event, Message and Highlight colours.
     pub activity_colors: UiActivityColors,
+    /// The Logging page's checkboxes.
+    pub logging: UiLoggingOptions,
+}
+
+/// Options > IRC > Logging's checkboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UiLoggingOptions {
+    /// Automatically log channels.
+    pub channels: bool,
+    /// Automatically log queries.
+    pub queries: bool,
+    pub strip_codes: bool,
+    pub timestamp: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
