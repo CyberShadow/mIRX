@@ -412,14 +412,14 @@ use timeline_text::{
 #[cfg(test)]
 use timeline_window::clamped_timeline_top_line;
 use timeline_window::{
-    cancel_original_jump_for_view, capture_room_history_backfill_anchor, clamp_timeline_top_line,
+    ScrollGesture, cancel_original_jump_for_view, capture_room_history_backfill_anchor,
     continue_original_jump, go_to_original_of_selected_message, loading_room_history_room_id,
-    rebuild_timeline_paint_lines, register_timeline_class, restore_room_history_backfill_anchor,
-    select_timeline_event_at_client_y, set_timeline_rows, split_rendered_lines,
+    register_timeline_class, relayout_timeline, restore_room_history_backfill_anchor,
+    scroll_timeline_by, select_timeline_event_at_client_y, set_timeline_rows, split_rendered_lines,
     submit_backfill_room_history_for_room, timeline_max_top_line,
     timeline_source_row_index_for_top_line, timeline_state_mut, timeline_state_ref,
-    timeline_top_line_for_source_row_index, timeline_visible_rows, timeline_window_state,
-    update_timeline_scrollbar, validate_selected_timeline_event,
+    timeline_top_line_for_source_row_index, timeline_visible_rows, update_timeline_scrollbar,
+    validate_selected_timeline_event,
 };
 #[cfg(test)]
 use timestamp::TimestampSetting;

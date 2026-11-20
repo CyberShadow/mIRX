@@ -57,10 +57,12 @@ use windows_sys::Win32::System::DataExchange::{
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
-use windows_sys::Win32::UI::Controls::{EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED};
+use windows_sys::Win32::UI::Controls::{
+    EM_GETSEL, EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VK_CONTROL, VK_DOWN,
-    VK_ESCAPE, VK_MENU, VK_RETURN, VK_SHIFT, VK_TAB,
+    VK_END, VK_ESCAPE, VK_HOME, VK_MENU, VK_NEXT, VK_PRIOR, VK_RETURN, VK_SHIFT, VK_TAB,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BM_SETCHECK, CS_DBLCLKS, EnumThreadWindows, FindWindowExW, FindWindowW, GCL_STYLE,
@@ -69,10 +71,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IDCANCEL, IDNO, IDOK, IDYES,
     IsWindow, IsWindowVisible, LB_GETCOUNT, LB_GETITEMHEIGHT, LB_GETTEXT, LB_GETTEXTLEN,
     LBS_OWNERDRAWFIXED, PostMessageW, SB_BOTTOM, SB_PAGEUP, SB_TOP, SB_VERT, SC_CLOSE, SCROLLINFO,
-    SIF_ALL, SMTO_NORMAL, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, WM_CHAR, WM_COMMAND, WM_GETTEXT,
-    WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE,
-    WM_MDIGETACTIVE, WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
+    SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
+    WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEWHEEL, WM_PASTE,
+    WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -6492,6 +6495,244 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
     assert_eq!(ui_state.mdi.active, room_identity("!beta:example"));
     assert_active_switchbar_item(&ui_state, &room_identity("!beta:example"));
 
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// An `--automation` app showing `!beta:example` with `rows` lines of
+/// history, signed in to a homeserver that never answers `/messages`, so
+/// a request for older history stays loading.
+fn launch_long_beta_room(
+    rows: u64,
+) -> Result<(GuiTestApp, MockBackfillHomeserver, PathBuf), Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let options = launch_options(Some(local_app_data.clone()));
+    let app = launch_app_with_options(&exe_path, &[OsString::from("--automation")], options)?;
+    app.wait_for_lifecycle_state("core_started", Duration::from_secs(30))?;
+    app.restore_session(&server.base_url, stored_session())?;
+    app.wait_for_lifecycle_state("ready", Duration::from_secs(30))?;
+    let mut events = base_events();
+    for index in 0..rows {
+        events.push(text_event(
+            "!beta:example",
+            "@bob:example",
+            1_700_001_000_000 + index * 60_000,
+            &format!("history row {index:03}"),
+        ));
+    }
+    app.load_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    app.select_room("!beta:example")?;
+    app.wait_for_room_activity_contains(
+        Some("!beta:example"),
+        &format!("history row {:03}", rows - 1),
+        Duration::from_secs(5),
+    )?;
+    Ok((app, server, local_app_data))
+}
+
+/// The lines one wheel notch scrolls, as the system is set.
+fn wheel_scroll_lines() -> i32 {
+    let mut lines = 0u32;
+    assert_ne!(
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETWHEELSCROLLLINES,
+                0,
+                (&mut lines as *mut u32).cast(),
+                0,
+            )
+        },
+        0
+    );
+    assert!(
+        (1..=10).contains(&lines),
+        "the test needs a wheel that scrolls lines, not pages: {lines}"
+    );
+    lines as i32
+}
+
+/// Turns the wheel by `delta` over `hwnd`, sent so that it is handled
+/// before this returns.
+fn send_wheel(hwnd: HWND, delta: i16) {
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                WM_MOUSEWHEEL,
+                (delta as u16 as WPARAM) << 16,
+                0,
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0,
+        "the window must handle the wheel without blocking"
+    );
+}
+
+/// Waits until `timeline`'s top line is `expected`: typed keys are queued
+/// input, which the app reads after any sent automation request.
+fn wait_for_top_line(timeline: HWND, expected: i32) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let top_line = unsafe { timeline_top_line(timeline) };
+        if top_line == expected {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("top line is {top_line}, expected {expected}").into());
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+#[test]
+fn wheel_scrolls_the_timeline_under_the_cursor_and_from_the_editbox()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_long_beta_room(80)?;
+    let timeline = unsafe { active_room_timeline_hwnd(&app) };
+    let lines = wheel_scroll_lines();
+    let bottom = unsafe { timeline_top_line(timeline) };
+    assert!(bottom > 3 * lines, "the room must be long: {bottom}");
+
+    send_wheel(timeline, 120);
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom - lines);
+    // Wine turns the wheel at the focused editbox: it scrolls its window.
+    send_wheel(unsafe { compose_edit_hwnd(&app) }, 120);
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom - 2 * lines);
+    // Half notches add up.
+    send_wheel(timeline, 60);
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom - 2 * lines);
+    send_wheel(timeline, 60);
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom - 3 * lines);
+    send_wheel(timeline, -360);
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom);
+    assert!(app.dump_model()?.submitted_history_commands.is_empty());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn wheel_to_the_top_asks_for_older_history() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_long_beta_room(80)?;
+    let timeline = unsafe { active_room_timeline_hwnd(&app) };
+
+    send_wheel(timeline, i16::MAX);
+    assert_eq!(unsafe { timeline_top_line(timeline) }, 0);
+    assert_eq!(
+        app.dump_model()?.submitted_history_commands,
+        vec![SubmittedHistoryCommand {
+            room_id: "!beta:example".to_owned(),
+            from: None,
+            limit: 50,
+        }]
+    );
+    // The request is loading: more turns at the top ask for nothing more.
+    send_wheel(timeline, 120);
+    send_wheel(unsafe { compose_edit_hwnd(&app) }, 120);
+    assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// The editbox's caret position.
+unsafe fn edit_caret(edit: HWND) -> usize {
+    (unsafe { SendMessageW(edit, EM_GETSEL, 0, 0) } as usize) >> 16
+}
+
+#[test]
+fn page_keys_in_the_editbox_scroll_the_timeline() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, _server, local_app_data) = launch_long_beta_room(160)?;
+    let timeline = unsafe { active_room_timeline_hwnd(&app) };
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    assert_compose_has_focus(&app);
+    let bottom = unsafe { timeline_top_line(timeline) };
+    // A page as the scroll bar pages it.
+    unsafe { SendMessageW(timeline, WM_VSCROLL, SB_PAGEUP as WPARAM, 0) };
+    let page = bottom - unsafe { timeline_top_line(timeline) };
+    unsafe { SendMessageW(timeline, WM_VSCROLL, SB_BOTTOM as WPARAM, 0) };
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom);
+    assert!(bottom > 2 * page, "the room must be long: {bottom}");
+
+    press_keys(&[VK_PRIOR]);
+    wait_for_top_line(timeline, bottom - page)?;
+    press_keys(&[VK_PRIOR]);
+    wait_for_top_line(timeline, bottom - 2 * page)?;
+    press_keys(&[VK_NEXT]);
+    wait_for_top_line(timeline, bottom - page)?;
+    press_keys(&[VK_CONTROL, VK_PRIOR]);
+    wait_for_top_line(timeline, bottom - page - 1)?;
+    press_keys(&[VK_CONTROL, VK_NEXT]);
+    wait_for_top_line(timeline, bottom - page)?;
+
+    // With text in the editbox, Ctrl+Home moves its caret.
+    app.set_compose_text("draft")?;
+    let edit = unsafe { compose_edit_hwnd(&app) };
+    assert_eq!(unsafe { edit_caret(edit) }, "draft".len());
+    press_keys(&[VK_CONTROL, VK_HOME]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { edit_caret(edit) } != 0 {
+        assert!(Instant::now() < deadline, "Ctrl+Home must move the caret");
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert_eq!(unsafe { timeline_top_line(timeline) }, bottom - page);
+    assert_eq!(app.compose_text()?, "draft");
+
+    // Empty, Ctrl+Home and Ctrl+End go to the top and the bottom.
+    app.set_compose_text("")?;
+    press_keys(&[VK_CONTROL, VK_HOME]);
+    wait_for_top_line(timeline, 0)?;
+    assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
+    press_keys(&[VK_CONTROL, VK_END]);
+    wait_for_top_line(timeline, bottom)?;
+
+    // The Status window's editbox pages its own timeline.
+    activate_switchbar_item_by_command(&app, &ViewIdentity::Status)?;
+    assert_compose_has_focus(&app);
+    for _ in 0..12 {
+        app.set_compose_text("/help")?;
+        app.send_compose_key(ComposeKey::Return)?;
+    }
+    app.wait_idle(Duration::from_secs(5))?;
+    let status = unsafe { active_mdi_content_hwnd(&app) };
+    assert_eq!(unsafe { class_name(status) }, "mirxWin32Timeline");
+    let status_bottom = unsafe { timeline_top_line(status) };
+    assert!(status_bottom > 0, "/help must fill the Status window");
+    // Filling it showed the scroll bar, which narrowed the window: it still
+    // shows its newest line.
+    let status_timeline = app
+        .dump_ui_state()?
+        .active_timeline
+        .ok_or("Status has a timeline")?;
+    assert_eq!(status_timeline.top_line, status_bottom as usize);
+    assert!(
+        status_timeline
+            .visible_lines
+            .last()
+            .is_some_and(|line| line.text.ends_with("* /help <command> for usage")),
+        "{:?}",
+        status_timeline.visible_lines.last()
+    );
+    press_keys(&[VK_CONTROL, VK_PRIOR]);
+    wait_for_top_line(status, status_bottom - 1)?;
+    press_keys(&[VK_CONTROL, VK_HOME]);
+    wait_for_top_line(status, 0)?;
+    press_keys(&[VK_CONTROL, VK_END]);
+    wait_for_top_line(status, status_bottom)?;
+    assert_eq!(app.dump_model()?.submitted_history_commands.len(), 1);
+
+    drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())
 }

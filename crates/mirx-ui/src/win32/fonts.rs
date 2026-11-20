@@ -108,9 +108,7 @@ pub(super) unsafe fn set_timeline_font(hwnd: HWND, font: HFONT) {
         state.font = font;
         state.line_height = font_line_height(font);
     }
-    rebuild_timeline_paint_lines(hwnd);
-    clamp_timeline_top_line(hwnd);
-    update_timeline_scrollbar(hwnd);
+    relayout_timeline(hwnd);
 }
 
 /// Sets the text font on the controls of a view's window that draw text in

@@ -628,7 +628,7 @@ unsafe fn paint_timeline_loaded_image(
     width: u32,
     height: u32,
 ) {
-    let window_state = timeline_window_state(hwnd);
+    let window_state = state_ref(frame_window_for(hwnd));
     let Some(image) = window_state.decoded_images.get(key) else {
         paint_timeline_image_placeholder(hdc, rect, "image unavailable");
         return;

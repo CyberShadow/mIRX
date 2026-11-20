@@ -2,6 +2,9 @@
 //! selection, history backfill anchor and Go to Original.
 
 use super::*;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    SPI_GETWHEELSCROLLLINES, SystemParametersInfoW, WHEEL_DELTA, WM_MOUSEWHEEL,
+};
 
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
 
@@ -23,6 +26,13 @@ pub(super) struct TimelineState {
     /// The timestamp prefix sample that log rows' continuation lines are
     /// indented past; set with the rows, as the rows were stamped with it.
     pub(super) indent_sample: String,
+    /// The wheel's turn since its last whole notch, for wheels that report
+    /// finer steps than `WHEEL_DELTA`.
+    wheel_remainder: i32,
+    /// The rows `top_line` was last placed for. A resize or a new font
+    /// changes the client's rows before the control hears of it, and whether
+    /// the window showed its newest line is a question about the old layout.
+    laid_out_visible_rows: usize,
 }
 
 impl TimelineState {
@@ -38,6 +48,8 @@ impl TimelineState {
             line_height,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
             indent_sample: String::new(),
+            wheel_remainder: 0,
+            laid_out_visible_rows: 1,
         }
     }
 }
@@ -104,13 +116,15 @@ unsafe extern "system" fn timeline_window_proc(
         WM_GETTEXT => timeline_get_text(hwnd, wparam, lparam),
         WM_TIMELINE_GET_TOP_LINE => timeline_state_ref(hwnd).top_line as LRESULT,
         WM_SIZE => {
-            rebuild_timeline_paint_lines(hwnd);
-            clamp_timeline_top_line(hwnd);
-            update_timeline_scrollbar(hwnd);
+            relayout_timeline(hwnd);
             InvalidateRect(hwnd, null(), 1);
             0
         }
         WM_VSCROLL => scroll_timeline(hwnd, wparam),
+        WM_MOUSEWHEEL => {
+            scroll_timeline_with_wheel(hwnd, wparam);
+            0
+        }
         WM_LBUTTONDOWN => {
             select_timeline_row(hwnd, lparam);
             0
@@ -162,18 +176,42 @@ unsafe fn timeline_client_width(hwnd: HWND) -> i32 {
     rect.right - rect.left
 }
 
-pub(super) unsafe fn rebuild_timeline_paint_lines(hwnd: HWND) {
+/// Rewraps the lines for the control's size and font. A window that showed
+/// its newest line still does, as in mIRC; otherwise the top line stays,
+/// within the new end.
+pub(super) unsafe fn relayout_timeline(hwnd: HWND) {
     let client_width = timeline_client_width(hwnd);
-    let (source_rows, lines) = {
+    let (source_rows, lines, tail_pinned) = {
         let state = timeline_state_ref(hwnd);
-        (state.source_rows.clone(), state.lines.clone())
+        (
+            state.source_rows.clone(),
+            state.lines.clone(),
+            timeline_is_tail_pinned(
+                state.source_rows.len(),
+                state.top_line,
+                state.paint_lines.len(),
+                state.laid_out_visible_rows,
+            ),
+        )
     };
     let paint_lines = if source_rows.is_empty() {
         plain_timeline_paint_lines(&lines)
     } else {
         timeline_row_paint_lines(hwnd, &source_rows, client_width)
     };
-    timeline_state_mut(hwnd).paint_lines = paint_lines;
+    let visible_rows = timeline_visible_rows(hwnd);
+    let state = timeline_state_mut(hwnd);
+    state.paint_lines = paint_lines;
+    state.laid_out_visible_rows = visible_rows;
+    state.top_line = timeline_top_line_after_content_replaced(
+        state.top_line,
+        tail_pinned,
+        state.paint_lines.len(),
+        visible_rows,
+    );
+    // Showing or hiding the scroll bar resizes the client, which lays the
+    // lines out again inside this call.
+    update_timeline_scrollbar(hwnd);
 }
 
 unsafe fn apply_timeline_content(
@@ -202,6 +240,7 @@ unsafe fn apply_timeline_content(
     state.rendered_text = rendered_text;
     state.lines = lines;
     state.paint_lines = paint_lines;
+    state.laid_out_visible_rows = visible_rows;
     state.top_line = timeline_top_line_after_content_replaced(
         top_line,
         tail_pinned && retain_tail,
@@ -389,13 +428,6 @@ fn timeline_top_line_after_content_replaced(
     }
 }
 
-pub(super) unsafe fn clamp_timeline_top_line(hwnd: HWND) {
-    let visible_rows = timeline_visible_rows(hwnd);
-    let state = timeline_state_mut(hwnd);
-    state.top_line =
-        clamped_timeline_top_line(state.top_line, state.paint_lines.len(), visible_rows);
-}
-
 pub(super) unsafe fn update_timeline_scrollbar(hwnd: HWND) {
     let visible_rows = timeline_visible_rows(hwnd);
     let state = timeline_state_ref(hwnd);
@@ -547,25 +579,95 @@ pub(super) unsafe fn restore_room_history_backfill_anchor(
     InvalidateRect(timeline, null(), 1);
 }
 
-unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
-    // The user scrolling a window drops its pending Go to Original; the
-    // jump's own scroll sets the top line without WM_VSCROLL.
-    cancel_original_jump_for_timeline(hwnd);
-    let command = (wparam & 0xffff) as i32;
-    let visible_rows = timeline_visible_rows(hwnd);
-    let max_top_line = {
-        let state = timeline_state_ref(hwnd);
-        timeline_max_top_line(state.paint_lines.len(), visible_rows)
-    };
-    let current = timeline_state_ref(hwnd).top_line;
+/// How the user scrolls a timeline: its scroll bar, the wheel, or the
+/// editbox's paging keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScrollGesture {
+    Top,
+    Bottom,
+    /// Lines down; negative is up.
+    Lines(isize),
+    /// Pages down; negative is up.
+    Pages(isize),
+    /// The scroll bar's thumb, at a line.
+    Thumb(usize),
+}
 
-    let next = match command {
-        SB_TOP => 0,
-        SB_BOTTOM => max_top_line,
-        SB_LINEUP => current.saturating_sub(1),
-        SB_LINEDOWN => current.saturating_add(1),
-        SB_PAGEUP => current.saturating_sub(visible_rows),
-        SB_PAGEDOWN => current.saturating_add(visible_rows),
+impl ScrollGesture {
+    /// Whether the gesture heads for older lines: ending at the first line
+    /// it asks for older history.
+    fn heads_up(self) -> bool {
+        match self {
+            Self::Top | Self::Thumb(_) => true,
+            Self::Bottom => false,
+            Self::Lines(lines) | Self::Pages(lines) => lines < 0,
+        }
+    }
+}
+
+/// The top line after `gesture` from `current`.
+fn scrolled_top_line(
+    current: usize,
+    gesture: ScrollGesture,
+    visible_rows: usize,
+    max_top_line: usize,
+) -> usize {
+    match gesture {
+        ScrollGesture::Top => 0,
+        ScrollGesture::Bottom => max_top_line,
+        ScrollGesture::Lines(lines) => current.saturating_add_signed(lines),
+        ScrollGesture::Pages(pages) => {
+            current.saturating_add_signed(pages.saturating_mul(visible_rows as isize))
+        }
+        ScrollGesture::Thumb(line) => line,
+    }
+    .min(max_top_line)
+}
+
+/// The system's wheel setting: `WHEEL_PAGESCROLL` scrolls a page per notch.
+const WHEEL_PAGESCROLL: u32 = u32::MAX;
+
+/// The gesture for a wheel `delta` (positive is away from the user, up) on
+/// top of the `remainder` of earlier partial notches, and the new remainder.
+fn wheel_gesture(remainder: i32, delta: i16, lines_per_notch: u32) -> (Option<ScrollGesture>, i32) {
+    let total = remainder + i32::from(delta);
+    let notches = total / WHEEL_DELTA as i32;
+    let remainder = total % WHEEL_DELTA as i32;
+    let up_notches = -(notches as isize);
+    let gesture = match (notches, lines_per_notch) {
+        (0, _) | (_, 0) => None,
+        (_, WHEEL_PAGESCROLL) => Some(ScrollGesture::Pages(up_notches)),
+        (_, lines) => Some(ScrollGesture::Lines(up_notches * lines as isize)),
+    };
+    (gesture, remainder)
+}
+
+unsafe fn scroll_timeline_with_wheel(hwnd: HWND, wparam: WPARAM) {
+    let delta = (wparam >> 16) as u16 as i16;
+    let mut lines_per_notch = 0u32;
+    let read = SystemParametersInfoW(
+        SPI_GETWHEELSCROLLLINES,
+        0,
+        (&mut lines_per_notch as *mut u32).cast(),
+        0,
+    );
+    assert_ne!(read, 0, "SPI_GETWHEELSCROLLLINES always answers");
+    let state = timeline_state_mut(hwnd);
+    let (gesture, remainder) = wheel_gesture(state.wheel_remainder, delta, lines_per_notch);
+    state.wheel_remainder = remainder;
+    if let Some(gesture) = gesture {
+        scroll_timeline_by(hwnd, gesture);
+    }
+}
+
+unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
+    let gesture = match (wparam & 0xffff) as i32 {
+        SB_TOP => ScrollGesture::Top,
+        SB_BOTTOM => ScrollGesture::Bottom,
+        SB_LINEUP => ScrollGesture::Lines(-1),
+        SB_LINEDOWN => ScrollGesture::Lines(1),
+        SB_PAGEUP => ScrollGesture::Pages(-1),
+        SB_PAGEDOWN => ScrollGesture::Pages(1),
         SB_THUMBPOSITION | SB_THUMBTRACK => {
             let mut scroll_info = SCROLLINFO {
                 cbSize: size_of::<SCROLLINFO>() as u32,
@@ -577,11 +679,32 @@ unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
                 nTrackPos: 0,
             };
             GetScrollInfo(hwnd, SB_VERT, &mut scroll_info);
-            scroll_info.nTrackPos.max(0) as usize
+            ScrollGesture::Thumb(scroll_info.nTrackPos.max(0) as usize)
         }
-        _ => current,
-    }
-    .min(max_top_line);
+        // SB_ENDSCROLL ends a gesture the scroll bar already sent.
+        _ => return 0,
+    };
+    scroll_timeline_by(hwnd, gesture);
+    0
+}
+
+/// Scrolls the timeline as the user asked. A gesture heading up that ends
+/// at the first line asks for older history: one request per gesture, which
+/// `submit_backfill_room_history_for_room` refuses while one is loading or
+/// history is exhausted.
+pub(super) unsafe fn scroll_timeline_by(hwnd: HWND, gesture: ScrollGesture) {
+    // The user scrolling a window drops its pending Go to Original; the
+    // jump's own scroll sets the top line directly.
+    cancel_original_jump_for_timeline(hwnd);
+    let visible_rows = timeline_visible_rows(hwnd);
+    let (current, max_top_line) = {
+        let state = timeline_state_ref(hwnd);
+        (
+            state.top_line,
+            timeline_max_top_line(state.paint_lines.len(), visible_rows),
+        )
+    };
+    let next = scrolled_top_line(current, gesture, visible_rows, max_top_line);
 
     if next != current {
         timeline_state_mut(hwnd).top_line = next;
@@ -589,58 +712,12 @@ unsafe fn scroll_timeline(hwnd: HWND, wparam: WPARAM) -> LRESULT {
         InvalidateRect(hwnd, null(), 1);
     }
 
-    if matches!(
-        command,
-        SB_TOP | SB_PAGEUP | SB_THUMBPOSITION | SB_THUMBTRACK
-    ) && next == 0
+    if gesture.heads_up()
+        && next == 0
         && let Err(message) = submit_backfill_room_history(hwnd)
     {
         eprintln!("{message}");
     }
-
-    0
-}
-
-pub(super) unsafe fn timeline_window_state(hwnd: HWND) -> &'static WindowState {
-    let room_content = GetParent(hwnd);
-    assert!(
-        !room_content.is_null(),
-        "timeline control must have a room content parent"
-    );
-    let mdi_child = GetParent(room_content);
-    assert!(
-        !mdi_child.is_null(),
-        "room content must have an mdi child parent"
-    );
-    let mdi_client = GetParent(mdi_child);
-    assert!(
-        !mdi_client.is_null(),
-        "mdi child must have an mdi client parent"
-    );
-    let frame = GetParent(mdi_client);
-    assert!(!frame.is_null(), "mdi client must have a frame parent");
-    state_ref(frame)
-}
-
-unsafe fn timeline_window_state_mut(hwnd: HWND) -> &'static mut WindowState {
-    let room_content = GetParent(hwnd);
-    assert!(
-        !room_content.is_null(),
-        "timeline control must have a room content parent"
-    );
-    let mdi_child = GetParent(room_content);
-    assert!(
-        !mdi_child.is_null(),
-        "room content must have an mdi child parent"
-    );
-    let mdi_client = GetParent(mdi_child);
-    assert!(
-        !mdi_client.is_null(),
-        "mdi child must have an mdi client parent"
-    );
-    let frame = GetParent(mdi_client);
-    assert!(!frame.is_null(), "mdi client must have a frame parent");
-    state_mut(frame)
 }
 
 fn render_view_text(lines: &[String]) -> String {
@@ -869,29 +946,21 @@ pub(super) fn submit_backfill_room_history_for_room(
     Ok(true)
 }
 
+/// Asks for older history of the room whose window `hwnd` is the timeline
+/// of, if it is the active window: the backfill anchor keeps the active
+/// window's reading position.
 unsafe fn submit_backfill_room_history(hwnd: HWND) -> Result<(), String> {
-    let room_content = GetParent(hwnd);
-    if room_content.is_null() {
-        return Ok(());
-    }
-    let mdi_child = GetParent(room_content);
-    if mdi_child.is_null() {
-        return Ok(());
-    }
-
-    let state = timeline_window_state_mut(hwnd);
+    let state = state_mut(frame_window_for(hwnd));
     let room_id = match &state.active_view {
         ViewId::Room(room_id) | ViewId::Thread { room_id, .. } => room_id.clone(),
         ViewId::Status | ViewId::RoomList => return Ok(()),
     };
-    let Some(active_view) = state.views.get(&state.active_view) else {
-        return Ok(());
-    };
-    if active_view.child != mdi_child {
+    let active_view = &state.views[&state.active_view];
+    if view_timeline(&state.active_view, active_view.content) != hwnd {
         return Ok(());
     }
 
-    let _ = submit_backfill_room_history_for_room(state, &room_id)?;
+    submit_backfill_room_history_for_room(state, &room_id)?;
     Ok(())
 }
 
@@ -899,6 +968,7 @@ unsafe fn submit_backfill_room_history(hwnd: HWND) -> Result<(), String> {
 mod tests {
     use super::super::test_fixtures::*;
     use super::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SWP_NOMOVE, SWP_NOZORDER, SetWindowPos};
 
     fn history_backfill_event_from_event(event: Event) -> RoomHistoryBackfillEvent {
         match event {
@@ -957,6 +1027,62 @@ mod tests {
         assert_eq!(timeline_top_line_after_content_replaced(2, false, 12, 3), 2);
 
         assert_eq!(timeline_top_line_after_content_replaced(8, false, 10, 5), 5);
+    }
+
+    #[test]
+    fn scroll_gestures_move_the_top_line_within_the_buffer() {
+        // 50 lines, 10 visible: the top line runs 0..=40.
+        let scrolled = |current, gesture| scrolled_top_line(current, gesture, 10, 40);
+        assert_eq!(scrolled(20, ScrollGesture::Top), 0);
+        assert_eq!(scrolled(20, ScrollGesture::Bottom), 40);
+        assert_eq!(scrolled(20, ScrollGesture::Lines(-3)), 17);
+        assert_eq!(scrolled(2, ScrollGesture::Lines(-3)), 0);
+        assert_eq!(scrolled(39, ScrollGesture::Lines(3)), 40);
+        assert_eq!(scrolled(20, ScrollGesture::Pages(-1)), 10);
+        assert_eq!(scrolled(5, ScrollGesture::Pages(-1)), 0);
+        assert_eq!(scrolled(35, ScrollGesture::Pages(1)), 40);
+        assert_eq!(scrolled(20, ScrollGesture::Thumb(55)), 40);
+        assert_eq!(scrolled(20, ScrollGesture::Thumb(7)), 7);
+    }
+
+    #[test]
+    fn only_gestures_heading_up_ask_for_older_history() {
+        assert!(ScrollGesture::Top.heads_up());
+        assert!(ScrollGesture::Thumb(0).heads_up());
+        assert!(ScrollGesture::Lines(-1).heads_up());
+        assert!(ScrollGesture::Pages(-1).heads_up());
+        assert!(!ScrollGesture::Bottom.heads_up());
+        assert!(!ScrollGesture::Lines(1).heads_up());
+        assert!(!ScrollGesture::Pages(1).heads_up());
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_system_lines_per_whole_notch() {
+        assert_eq!(
+            wheel_gesture(0, 120, 3),
+            (Some(ScrollGesture::Lines(-3)), 0)
+        );
+        assert_eq!(
+            wheel_gesture(0, -240, 3),
+            (Some(ScrollGesture::Lines(6)), 0)
+        );
+        // A finer wheel's steps add up to a notch.
+        assert_eq!(wheel_gesture(0, 60, 3), (None, 60));
+        assert_eq!(
+            wheel_gesture(60, 60, 3),
+            (Some(ScrollGesture::Lines(-3)), 0)
+        );
+        assert_eq!(
+            wheel_gesture(60, 100, 3),
+            (Some(ScrollGesture::Lines(-3)), 40)
+        );
+        assert_eq!(wheel_gesture(40, -60, 3), (None, -20));
+        assert_eq!(
+            wheel_gesture(0, 120, WHEEL_PAGESCROLL),
+            (Some(ScrollGesture::Pages(-1)), 0)
+        );
+        // A wheel set to scroll nothing scrolls nothing.
+        assert_eq!(wheel_gesture(0, 120, 0), (None, 0));
     }
 
     #[test]
@@ -1405,6 +1531,84 @@ mod tests {
                 .unwrap();
                 assert_ne!(top_line_event_id(timeline).as_deref(), Some("$old"));
                 assert!(timeline_state_ref(timeline).top_line >= top_line);
+            });
+        }
+    }
+
+    #[test]
+    fn the_wheel_to_the_top_asks_for_older_history_once_per_gesture() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                assert_ne!(timeline_state_ref(timeline).top_line, 0);
+                let wheel_up = (i16::MAX as u16 as WPARAM) << 16;
+                SendMessageW(timeline, WM_MOUSEWHEEL, wheel_up, 0);
+                assert_eq!(timeline_state_ref(timeline).top_line, 0);
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+                // Loading: a further notch asks for nothing more.
+                SendMessageW(timeline, WM_MOUSEWHEEL, 120 << 16, 0);
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+                // Down and back up to the top by lines is a new gesture,
+                // refused while the first request loads.
+                SendMessageW(timeline, WM_VSCROLL, SB_LINEDOWN as WPARAM, 0);
+                SendMessageW(timeline, WM_VSCROLL, SB_LINEUP as WPARAM, 0);
+                assert_eq!(timeline_state_ref(timeline).top_line, 0);
+                assert_eq!(backfill_requests(state_ref(hwnd)), 1);
+            });
+        }
+    }
+
+    unsafe fn resize(hwnd: HWND, width: i32, height: i32) {
+        SetWindowPos(
+            hwnd,
+            null_mut(),
+            0,
+            0,
+            width,
+            height,
+            SWP_NOMOVE | SWP_NOZORDER,
+        );
+    }
+
+    unsafe fn at_its_end(timeline: HWND) -> bool {
+        let state = timeline_state_ref(timeline);
+        state.top_line
+            == timeline_max_top_line(state.paint_lines.len(), timeline_visible_rows(timeline))
+    }
+
+    #[test]
+    fn a_window_showing_its_newest_line_still_does_after_a_resize() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                let timeline = ops_timeline(hwnd, &room_view_id("!ops:example"));
+                assert!(at_its_end(timeline));
+                // Narrower rewraps into more lines, shorter shows fewer.
+                resize(timeline, 120, 200);
+                assert!(at_its_end(timeline));
+                resize(timeline, 120, 90);
+                assert!(at_its_end(timeline));
+                resize(timeline, 400, 300);
+                assert!(at_its_end(timeline));
+
+                // A window scrolled back keeps its top line.
+                SendMessageW(timeline, WM_VSCROLL, SB_LINEUP as WPARAM, 0);
+                let top_line = timeline_state_ref(timeline).top_line;
+                resize(timeline, 400, 200);
+                assert_eq!(timeline_state_ref(timeline).top_line, top_line);
+                assert!(!at_its_end(timeline));
+            });
+        }
+    }
+
+    #[test]
+    fn scrolling_the_status_window_to_the_top_asks_for_nothing() {
+        unsafe {
+            with_original_jump_frame("$q", |hwnd| {
+                activate_view(hwnd, &ViewId::Status, None).unwrap();
+                let status = ops_timeline(hwnd, &ViewId::Status);
+                SendMessageW(status, WM_VSCROLL, SB_TOP as WPARAM, 0);
+                SendMessageW(status, WM_MOUSEWHEEL, 120 << 16, 0);
+                assert_eq!(backfill_requests(state_ref(hwnd)), 0);
             });
         }
     }

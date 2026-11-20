@@ -2,9 +2,37 @@
 //! targets, and submitting what was typed.
 
 use super::*;
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, WM_MOUSEWHEEL};
 
 const VK_DELETE_KEY: WPARAM = 46;
 const VK_TAB_KEY: WPARAM = 9;
+const VK_PRIOR_KEY: WPARAM = 0x21;
+const VK_NEXT_KEY: WPARAM = 0x22;
+const VK_END_KEY: WPARAM = 0x23;
+const VK_HOME_KEY: WPARAM = 0x24;
+
+/// The timeline gesture of a paging key in the editbox, as in mIRC: Page
+/// Up/Down scroll a page, a line with Ctrl, and Ctrl+Home/End go to the
+/// top or bottom while the editbox is empty (otherwise they move the
+/// caret, which is the edit control's).
+fn compose_scroll_gesture(key: WPARAM, ctrl: bool, edit_empty: bool) -> Option<ScrollGesture> {
+    match (key, ctrl) {
+        (VK_PRIOR_KEY, false) => Some(ScrollGesture::Pages(-1)),
+        (VK_NEXT_KEY, false) => Some(ScrollGesture::Pages(1)),
+        (VK_PRIOR_KEY, true) => Some(ScrollGesture::Lines(-1)),
+        (VK_NEXT_KEY, true) => Some(ScrollGesture::Lines(1)),
+        (VK_HOME_KEY, true) if edit_empty => Some(ScrollGesture::Top),
+        (VK_END_KEY, true) if edit_empty => Some(ScrollGesture::Bottom),
+        _ => None,
+    }
+}
+
+/// The timeline of the window `edit` is the editbox of.
+unsafe fn editbox_timeline(frame: HWND, edit: HWND) -> HWND {
+    let state = state_ref(frame);
+    let view_id = &state.hwnd_views[&(GetParent(edit) as isize)];
+    view_timeline(view_id, state.views[view_id].content)
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub(super) struct ComposeHistory {
@@ -692,12 +720,27 @@ unsafe extern "system" fn edit_window_proc(
         return result;
     }
 
+    // Windows sends the wheel to the window under the pointer, Wine to the
+    // focused one: an editbox passes it on to its window's timeline. Its
+    // MDI child would hand it to DefMDIChildProc instead.
+    if message == WM_MOUSEWHEEL {
+        return SendMessageW(editbox_timeline(parent, hwnd), message, wparam, lparam);
+    }
+
     // Keys reach only the focused editbox, and focusing an editbox
     // activates its window, so it is always the active window's.
     let is_compose_key = message == WM_KEYDOWN
         && matches!(
             wparam,
-            VK_RETURN_KEY | VK_UP_KEY | VK_DOWN_KEY | VK_TAB_KEY | VK_ESCAPE_KEY
+            VK_RETURN_KEY
+                | VK_UP_KEY
+                | VK_DOWN_KEY
+                | VK_TAB_KEY
+                | VK_ESCAPE_KEY
+                | VK_PRIOR_KEY
+                | VK_NEXT_KEY
+                | VK_HOME_KEY
+                | VK_END_KEY
         );
     if is_compose_key {
         assert_eq!(
@@ -705,6 +748,18 @@ unsafe extern "system" fn edit_window_proc(
             hwnd,
             "compose keys must arrive at the active window's editbox"
         );
+    }
+
+    // Paging keys produce no WM_CHAR, so swallowing the key down is enough.
+    if message == WM_KEYDOWN
+        && let Some(gesture) = compose_scroll_gesture(
+            wparam,
+            GetKeyState(VK_CONTROL as i32) < 0,
+            GetWindowTextLengthW(hwnd) == 0,
+        )
+    {
+        scroll_timeline_by(editbox_timeline(parent, hwnd), gesture);
+        return 0;
     }
 
     if message == WM_KEYDOWN && wparam == VK_RETURN_KEY {
@@ -788,6 +843,40 @@ unsafe fn set_compose_edit_text(hwnd: HWND, text: &str) {
 mod tests {
     use super::super::test_fixtures::*;
     use super::*;
+
+    #[test]
+    fn paging_keys_scroll_and_ctrl_home_end_need_an_empty_editbox() {
+        for edit_empty in [false, true] {
+            assert_eq!(
+                compose_scroll_gesture(VK_PRIOR_KEY, false, edit_empty),
+                Some(ScrollGesture::Pages(-1))
+            );
+            assert_eq!(
+                compose_scroll_gesture(VK_NEXT_KEY, false, edit_empty),
+                Some(ScrollGesture::Pages(1))
+            );
+            assert_eq!(
+                compose_scroll_gesture(VK_PRIOR_KEY, true, edit_empty),
+                Some(ScrollGesture::Lines(-1))
+            );
+            assert_eq!(
+                compose_scroll_gesture(VK_NEXT_KEY, true, edit_empty),
+                Some(ScrollGesture::Lines(1))
+            );
+            assert_eq!(compose_scroll_gesture(VK_HOME_KEY, false, edit_empty), None);
+            assert_eq!(compose_scroll_gesture(VK_END_KEY, false, edit_empty), None);
+        }
+        assert_eq!(
+            compose_scroll_gesture(VK_HOME_KEY, true, true),
+            Some(ScrollGesture::Top)
+        );
+        assert_eq!(
+            compose_scroll_gesture(VK_END_KEY, true, true),
+            Some(ScrollGesture::Bottom)
+        );
+        assert_eq!(compose_scroll_gesture(VK_HOME_KEY, true, false), None);
+        assert_eq!(compose_scroll_gesture(VK_END_KEY, true, false), None);
+    }
 
     unsafe fn install_test_active_timeline_event(hwnd: HWND, event_id: &str) {
         let instance = GetModuleHandleW(null());
