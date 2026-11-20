@@ -8,27 +8,36 @@
 
 use std::ptr::{null, null_mut};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    COLOR_HIGHLIGHT, COLOR_WINDOW, DrawFocusRect, FillRect, GetSysColorBrush, HBRUSH, SetBkMode,
+    TRANSPARENT,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    BST_CHECKED, BST_UNCHECKED, EM_SETSEL, NMHDR, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT,
-    TVM_GETNEXTITEM, TVM_SELECTITEM, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES,
-    TVS_LINESATROOT, TVS_SHOWSELALWAYS,
+    BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, EM_SETSEL, MEASUREITEMSTRUCT, NMHDR, ODS_FOCUS,
+    ODS_SELECTED, ODT_COMBOBOX, TVGN_CARET, TVGN_CHILD, TVGN_NEXT, TVGN_ROOT, TVM_GETNEXTITEM,
+    TVM_SELECTITEM, TVN_SELCHANGEDW, TVS_HASBUTTONS, TVS_HASLINES, TVS_LINESATROOT,
+    TVS_SHOWSELALWAYS,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DefWindowProcW,
+    BM_GETCHECK, BM_SETCHECK, BS_AUTOCHECKBOX, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CB_ADDSTRING,
+    CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST, CBS_OWNERDRAWFIXED, DefWindowProcW,
     DestroyWindow, ES_NUMBER, GWL_STYLE, GetDlgCtrlID, GetWindowLongPtrW, IDCANCEL, IDOK,
     LB_ADDSTRING, LB_ERR, LB_GETCOUNT, LB_GETCURSEL, LB_GETTEXT, LB_GETTEXTLEN, LB_RESETCONTENT,
     LBN_SELCHANGE, LBS_NOINTEGRALHEIGHT, LBS_NOTIFY, MB_ICONERROR, MB_OK, MessageBoxW, MoveWindow,
-    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY,
-    WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+    SW_HIDE, SW_SHOW, SendMessageW, ShowWindow, WM_COMMAND, WM_DRAWITEM, WM_MEASUREITEM,
+    WM_NCCREATE, WM_NCDESTROY, WM_NOTIFY, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    WS_VSCROLL,
 };
 
 use mirx_core::HighlightWord;
 
+use super::automation_dump::dump_activity_colors;
+use super::colors::{PALETTE_COLORS, PaletteIndex, paint_palette_cells};
 use super::dialogs::{
     DIALOG_BUTTON_HEIGHT, DIALOG_BUTTON_WIDTH, DIALOG_CHECKBOX_HEIGHT, DIALOG_EDIT_EX_STYLE,
     DIALOG_EDIT_HEIGHT, DIALOG_EDIT_STYLE, DIALOG_GAP, DIALOG_LABEL_GAP, DIALOG_MARGIN,
@@ -38,13 +47,13 @@ use super::options::{
     FIRST_PAGE, HighlightChanges, HighlightList, OPTIONS_TREE, OptionsField, OptionsForm,
     OptionsPage, page_tree_index, tree_index, tree_paths,
 };
-use super::settings::Settings;
+use super::settings::{ActivityColors, Settings};
 use super::timestamp::format_tokens;
 use super::window_data::{self, WindowData};
 use super::{
-    BUTTON_CLASS_NAME, EDIT_CLASS_NAME, STATIC_CLASS_NAME, TREE_CLASS_NAME, create_child_window,
-    expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text, run_modal_dialog,
-    selected_tree_item, set_window_text, wide_null,
+    BUTTON_CLASS_NAME, COMBOBOX_CLASS_NAME, EDIT_CLASS_NAME, STATIC_CLASS_NAME, TREE_CLASS_NAME,
+    create_child_window, expand_tree_item, insert_tree_item, read_tree_item_text, read_window_text,
+    run_modal_dialog, selected_tree_item, set_window_text, wide_null,
 };
 use crate::automation::UiOptionsDialog;
 
@@ -56,6 +65,8 @@ pub(super) const OPTIONS_TIMESTAMP_SHOW_ID: u16 = 6201;
 pub(super) const OPTIONS_TIMESTAMP_FORMAT_ID: u16 = 6202;
 pub(super) const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
 pub(super) const OPTIONS_SWITCHBAR_BUTTONS_ID: u16 = 6301;
+/// The switchbar's Event, Message and Highlight colours: 6302-6304.
+pub(super) const OPTIONS_ACTIVITY_COLOR_IDS: [u16; 3] = [6302, 6303, 6304];
 pub(super) const OPTIONS_HIGHLIGHT_LIST_ID: u16 = 6401;
 pub(super) const OPTIONS_HIGHLIGHT_WORD_ID: u16 = 6402;
 pub(super) const OPTIONS_HIGHLIGHT_ADD_ID: u16 = 6403;
@@ -74,6 +85,12 @@ const TIMESTAMP_FORMAT_WIDTH: i32 = 120;
 /// Three digits.
 const SWITCHBAR_BUTTONS_WIDTH: i32 = 40;
 const HIGHLIGHT_LIST_HEIGHT: i32 = 130;
+/// A colour drop-down's item: a numbered palette box, as tall as the
+/// closed drop-down is with an edit field's height.
+const ACTIVITY_COLOR_ITEM_HEIGHT: i32 = 15;
+const ACTIVITY_COLOR_WIDTH: i32 = 60;
+/// The open list shows half the palette.
+const ACTIVITY_COLOR_DROPPED_ITEMS: i32 = 8;
 
 /// The form's controls.
 struct Fields {
@@ -81,6 +98,8 @@ struct Fields {
     timestamp_show: HWND,
     timestamp_format: HWND,
     switchbar_buttons: HWND,
+    /// Event, Message, Highlight.
+    activity_colors: [HWND; 3],
 }
 
 impl Fields {
@@ -91,6 +110,19 @@ impl Fields {
             timestamp_show: checked(self.timestamp_show),
             timestamp_format: read_window_text(self.timestamp_format),
             switchbar_buttons: read_window_text(self.switchbar_buttons),
+            activity_colors: self.read_activity_colors(),
+        }
+    }
+
+    unsafe fn read_activity_colors(&self) -> ActivityColors {
+        let [event, message, highlight] = self.activity_colors.map(|combo| {
+            let index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+            palette_index(usize::try_from(index).expect("a colour drop-down always has a pick"))
+        });
+        ActivityColors {
+            event,
+            message,
+            highlight,
         }
     }
 
@@ -167,6 +199,7 @@ impl OptionsDialog {
                 timestamp_show: null_mut(),
                 timestamp_format: null_mut(),
                 switchbar_buttons: null_mut(),
+                activity_colors: [null_mut(); 3],
             },
             saved: None,
         }));
@@ -375,6 +408,45 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     for control in [buttons_label, state.fields.switchbar_buttons, pixels_label] {
         state.page_controls.push((OptionsPage::Display, control));
     }
+    // mIRC's switchbar colours, one row each under the buttons' width.
+    let activity_labels = ["Event:", "Message:", "Highlight:"];
+    let activity_x = PAGE_X
+        + activity_labels
+            .iter()
+            .map(|text| dialog_text_size(text, PAGE_WIDTH).0)
+            .max()
+            .expect("there are three labels")
+        + DIALOG_GAP;
+    for (row, (text, id)) in activity_labels
+        .into_iter()
+        .zip(OPTIONS_ACTIVITY_COLOR_IDS)
+        .enumerate()
+    {
+        let row_y = page_top + (row as i32 + 1) * (DIALOG_EDIT_HEIGHT + DIALOG_GAP);
+        let (row_label, _) = label_beside_field(text, PAGE_X, row_y)?;
+        let combo = place(
+            control(
+                COMBOBOX_CLASS_NAME,
+                "",
+                WS_TABSTOP | WS_VSCROLL | (CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED) as u32,
+                0,
+                id,
+            )?,
+            activity_x,
+            row_y,
+            ACTIVITY_COLOR_WIDTH,
+            // A drop-down's height includes its open list.
+            DIALOG_EDIT_HEIGHT + ACTIVITY_COLOR_DROPPED_ITEMS * ACTIVITY_COLOR_ITEM_HEIGHT + 2,
+        );
+        // Without CBS_HASSTRINGS an item is its data: the palette index.
+        for index in 0..PALETTE_COLORS {
+            SendMessageW(combo, CB_ADDSTRING, 0, index as LPARAM);
+        }
+        state.fields.activity_colors[row] = combo;
+        for control in [row_label, combo] {
+            state.page_controls.push((OptionsPage::Display, control));
+        }
+    }
 
     let (highlight_label, (_, highlight_label_height)) = label(
         "Highlight messages that contain these words:",
@@ -517,6 +589,19 @@ unsafe fn create_controls(hwnd: HWND) -> Result<(), String> {
     );
     set_window_text(state.fields.timestamp_format, &form.timestamp_format);
     set_window_text(state.fields.switchbar_buttons, &form.switchbar_buttons);
+    let ActivityColors {
+        event,
+        message,
+        highlight,
+    } = form.activity_colors;
+    for (combo, index) in state
+        .fields
+        .activity_colors
+        .into_iter()
+        .zip([event, message, highlight])
+    {
+        SendMessageW(combo, CB_SETCURSEL, usize::from(index.get()), 0);
+    }
 
     // Selecting the page's item shows it, through TVN_SELCHANGEDW.
     select_page(hwnd, FIRST_PAGE);
@@ -574,6 +659,42 @@ unsafe fn handle_selection(hwnd: HWND) {
                 SW_HIDE
             },
         );
+    }
+}
+
+fn palette_index(index: usize) -> PaletteIndex {
+    PaletteIndex::new(u8::try_from(index).expect("a colour drop-down holds the palette"))
+        .expect("a colour drop-down holds the palette")
+}
+
+/// A colour drop-down's item: its numbered palette box on the list's
+/// background, or the selection's.
+unsafe fn draw_activity_color(item: &DRAWITEMSTRUCT) {
+    assert_eq!(
+        item.CtlType, ODT_COMBOBOX,
+        "only the colour drop-downs are owner-drawn"
+    );
+    let background = match item.itemState & ODS_SELECTED {
+        0 => COLOR_WINDOW,
+        _ => COLOR_HIGHLIGHT,
+    };
+    FillRect(
+        item.hDC,
+        &item.rcItem,
+        GetSysColorBrush(background) as HBRUSH,
+    );
+    let cell = RECT {
+        left: item.rcItem.left + 2,
+        top: item.rcItem.top + 1,
+        right: item.rcItem.right - 2,
+        bottom: item.rcItem.bottom - 1,
+    };
+    let index = palette_index(item.itemID as usize);
+    let mode = SetBkMode(item.hDC, TRANSPARENT as i32);
+    paint_palette_cells(item.hDC, &[cell], index, None, true);
+    SetBkMode(item.hDC, mode);
+    if item.itemState & ODS_FOCUS != 0 {
+        DrawFocusRect(item.hDC, &item.rcItem);
     }
 }
 
@@ -706,6 +827,19 @@ pub(super) unsafe extern "system" fn window_proc(
             DestroyWindow(hwnd);
             0
         }
+        WM_MEASUREITEM => {
+            let item = &mut *(lparam as *mut MEASUREITEMSTRUCT);
+            assert_eq!(
+                item.CtlType, ODT_COMBOBOX,
+                "only the colour drop-downs are owner-drawn"
+            );
+            item.itemHeight = ACTIVITY_COLOR_ITEM_HEIGHT as u32;
+            1
+        }
+        WM_DRAWITEM => {
+            draw_activity_color(&*(lparam as *const DRAWITEMSTRUCT));
+            1
+        }
         WM_NOTIFY => {
             let header = &*(lparam as *const NMHDR);
             if header.idFrom == usize::from(OPTIONS_TREE_ID) && header.code == TVN_SELCHANGEDW {
@@ -786,5 +920,6 @@ pub(super) unsafe fn dump(hwnd: HWND) -> Result<UiOptionsDialog, String> {
         highlight_items,
         highlight_controls_enabled,
         highlight_delete_enabled: IsWindowEnabled(controls.delete) != 0,
+        activity_colors: dump_activity_colors(&state.fields.read_activity_colors()),
     })
 }

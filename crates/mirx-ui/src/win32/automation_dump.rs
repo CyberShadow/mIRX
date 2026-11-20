@@ -6,7 +6,7 @@ use mirx_core::MatrixLink;
 
 use super::colors::colorref_hex;
 use super::hotlinks::LinkKind;
-use super::settings::Settings;
+use super::settings::{ActivityColors, Settings};
 use super::timeline_layout::timeline_row_color;
 use super::*;
 use crate::automation::{UiActivityColors, UiColorItem, UiColors};
@@ -501,14 +501,17 @@ fn ui_timeline_line_kind(kind: &TimelineRowKind) -> UiTimelineLineKind {
 }
 
 fn dump_colors(settings: &Settings) -> UiColors {
-    let activity = &settings.switchbar.activity;
     UiColors {
         items: dump_color_items(&settings.colors),
-        switchbar: UiActivityColors {
-            event: activity.event.get(),
-            message: activity.message.get(),
-            highlight: activity.highlight.get(),
-        },
+        switchbar: dump_activity_colors(&settings.switchbar.activity),
+    }
+}
+
+pub(super) fn dump_activity_colors(colors: &ActivityColors) -> UiActivityColors {
+    UiActivityColors {
+        event: colors.event.get(),
+        message: colors.message.get(),
+        highlight: colors.highlight.get(),
     }
 }
 

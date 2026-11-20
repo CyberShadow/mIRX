@@ -37,8 +37,8 @@ use super::dialogs::{
 };
 use super::window_data::{self, WindowData};
 use super::{
-    BUTTON_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, last_os_error, run_modal_dialog,
-    state_ref, wide_null,
+    BUTTON_CLASS_NAME, COMBOBOX_CLASS_NAME, STATIC_CLASS_NAME, create_child_window, last_os_error,
+    run_modal_dialog, state_ref, wide_null,
 };
 use crate::automation::{UiColorsDialog, UiColorsPreviewItem, UiPoint, UiRect};
 
@@ -46,7 +46,6 @@ pub(super) const COLORS_DIALOG_CLASS_NAME: &str = "mirxWin32ColorsDialog";
 const COLORS_DIALOG_TITLE: &str = "mirx Colors";
 const PREVIEW_CLASS_NAME: &str = "mirxColorsPreview";
 const PALETTE_CLASS_NAME: &str = "mirxColorPalette";
-const COMBOBOX_CLASS_NAME: &str = "COMBOBOX";
 pub(super) const COLORS_PREVIEW_ID: u16 = 6501;
 pub(super) const COLORS_ITEM_ID: u16 = 6502;
 pub(super) const COLORS_PALETTE_ID: u16 = 6503;

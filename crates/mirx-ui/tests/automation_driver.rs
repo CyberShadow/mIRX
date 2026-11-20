@@ -46,11 +46,11 @@ use mirx_testkit::{
     SubmittedRedactionCommand, SubmittedReplyCommand, SubmittedReplyThreadTarget,
     SubmittedRoomListRequest, SubmittedRoomTopicCommand, SubmittedSetupRecoveryCommand,
     SubmittedUserCommand, SubmittedVerificationAction, SwitchbarItem, TestkitError,
-    UiActiveTimeline, UiColorItem, UiColorsDialog, UiComposeTarget, UiComposeTargetKind, UiError,
-    UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem, UiPoint, UiRoomHistoryBackfillState,
-    UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind, UiTimelineLink, UiTimestamp,
-    UnsupportedRoomMessageActivity, UserCommandAction, Verification, VerificationActionKind,
-    VerificationState, ViewActivityLevel, ViewIdentity,
+    UiActiveTimeline, UiActivityColors, UiColorItem, UiColorsDialog, UiComposeTarget,
+    UiComposeTargetKind, UiError, UiFindHistorySearchState, UiFindState, UiMenu, UiMenuItem,
+    UiPoint, UiRoomHistoryBackfillState, UiRoomReadState, UiRoomState, UiState, UiTimelineLineKind,
+    UiTimelineLink, UiTimestamp, UnsupportedRoomMessageActivity, UserCommandAction, Verification,
+    VerificationActionKind, VerificationState, ViewActivityLevel, ViewIdentity,
 };
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
@@ -2985,7 +2985,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 51);
+    assert_eq!(version.protocol_version, 52);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -13237,6 +13237,8 @@ const OPTIONS_TIMESTAMP_SHOW_ID: i32 = 6201;
 const OPTIONS_TIMESTAMP_FORMAT_ID: i32 = 6202;
 const OPTIONS_TIMESTAMP_TOKENS_ID: u16 = 6203;
 const OPTIONS_SWITCHBAR_BUTTONS_ID: i32 = 6301;
+/// Display's Event, Message and Highlight colours.
+const OPTIONS_ACTIVITY_COLOR_IDS: [i32; 3] = [6302, 6303, 6304];
 const OPTIONS_HIGHLIGHT_LIST_ID: i32 = 6401;
 const OPTIONS_HIGHLIGHT_WORD_ID: i32 = 6402;
 const OPTIONS_HIGHLIGHT_ADD_ID: i32 = 6403;
@@ -13395,6 +13397,71 @@ fn options_dialog_saves_connect_timestamp_and_buttons() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn options_display_activity_colours_recolour_the_switchbar()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    assert_eq!(
+        app.dump_ui_state()?.colors.switchbar,
+        UiActivityColors {
+            event: 5,
+            message: 4,
+            highlight: 12,
+        }
+    );
+    let menu_thread = open_options_from_menu(&app);
+    let dialog = wait_for_options_dialog(&app)?;
+    app.select_options_page("Display")?;
+    let options = app
+        .dump_ui_state()?
+        .options_dialog
+        .expect("the dialog is open");
+    assert_eq!(
+        options.activity_colors,
+        UiActivityColors {
+            event: 5,
+            message: 4,
+            highlight: 12,
+        }
+    );
+    // Picking from a drop-down, as the keyboard or the list does.
+    for (id, index) in OPTIONS_ACTIVITY_COLOR_IDS.into_iter().zip([3, 9, 13]) {
+        unsafe { SendMessageW(GetDlgItem(dialog, id), CB_SETCURSEL, index, 0) };
+    }
+    let picked = UiActivityColors {
+        event: 3,
+        message: 9,
+        highlight: 13,
+    };
+    assert_eq!(
+        app.dump_ui_state()?
+            .options_dialog
+            .expect("the dialog is open")
+            .activity_colors,
+        picked
+    );
+    post_options_command(dialog, IDOK)?;
+    wait_for_window_gone(dialog, "Options dialog")?;
+    menu_thread.join().expect("the menu thread must not panic");
+    app.wait_idle(Duration::from_secs(5))?;
+
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.colors.switchbar, picked);
+    assert_eq!(ui_state.status_bar.text, "options saved");
+    let ini = fs::read_to_string(settings_file_path(&local_app_data))?;
+    assert!(
+        ini.contains("event=3\r\nmessage=9\r\nhighlight=13\r\n"),
+        "{ini:?}"
+    );
+    drop(app);
+
+    let (app, _) = launch_close_lifecycle_app_in(local_app_data.clone())?;
+    assert_eq!(app.dump_ui_state()?.colors.switchbar, picked);
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
 fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
 -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_close_lifecycle_app()?;
@@ -13414,7 +13481,12 @@ fn options_dialog_rejects_a_bad_field_and_cancel_changes_nothing()
     assert_eq!(options.selected, "Display");
     assert_eq!(
         options.visible_controls,
-        [OPTIONS_SWITCHBAR_BUTTONS_ID as u16]
+        [
+            OPTIONS_SWITCHBAR_BUTTONS_ID as u16,
+            OPTIONS_ACTIVITY_COLOR_IDS[0] as u16,
+            OPTIONS_ACTIVITY_COLOR_IDS[1] as u16,
+            OPTIONS_ACTIVITY_COLOR_IDS[2] as u16,
+        ]
     );
     answer_message_box(&app, message_box, IDOK)?;
     assert_ne!(unsafe { IsWindow(dialog) }, 0);

@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 51;
+pub(crate) const PROTOCOL_VERSION: u32 = 52;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1117,6 +1117,8 @@ pub(crate) struct UiOptionsDialog {
     pub(crate) highlight_controls_enabled: bool,
     /// Whether the Highlight page's Delete is enabled (an item selected).
     pub(crate) highlight_delete_enabled: bool,
+    /// The Display page's switchbar Event, Message and Highlight colours.
+    pub(crate) activity_colors: UiActivityColors,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3314,7 +3316,7 @@ mod tests {
 
     #[test]
     fn protocol_version_is_51() {
-        assert_eq!(PROTOCOL_VERSION, 51);
+        assert_eq!(PROTOCOL_VERSION, 52);
     }
 
     #[test]
@@ -5269,7 +5271,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":51,
+                    "protocol_version":52,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5904,6 +5906,11 @@ mod tests {
                         highlight_items: vec!["deploy".to_owned()],
                         highlight_controls_enabled: true,
                         highlight_delete_enabled: false,
+                        activity_colors: super::UiActivityColors {
+                            event: 5,
+                            message: 4,
+                            highlight: 12,
+                        },
                     }),
                     colors_dialog: Some(super::UiColorsDialog {
                         selected: "normal".to_owned(),
@@ -6102,7 +6109,8 @@ mod tests {
                         "visible_controls":[6101],
                         "highlight_items":["deploy"],
                         "highlight_controls_enabled":true,
-                        "highlight_delete_enabled":false
+                        "highlight_delete_enabled":false,
+                        "activity_colors":{"event":5,"message":4,"highlight":12}
                     },
                     "colors_dialog":{
                         "selected":"normal",

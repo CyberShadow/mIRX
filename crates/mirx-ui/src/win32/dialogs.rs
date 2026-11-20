@@ -1030,6 +1030,12 @@ pub(super) unsafe fn run_options_dialog(hwnd: HWND) -> Result<(), String> {
         );
         layout_controls(hwnd);
     }
+    if new.switchbar.activity != old.switchbar.activity {
+        let controls = &state_ref(hwnd).controls;
+        for bar in [controls.switchbar, controls.tree] {
+            InvalidateRect(bar, null(), 1);
+        }
+    }
     let commands = highlight_changes
         .add
         .into_iter()

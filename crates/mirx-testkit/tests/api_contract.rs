@@ -971,6 +971,11 @@ fn data_models_round_trip_through_json() {
             highlight_items: vec!["build (notify only)".to_owned()],
             highlight_controls_enabled: true,
             highlight_delete_enabled: true,
+            activity_colors: UiActivityColors {
+                event: 5,
+                message: 9,
+                highlight: 12,
+            },
         }),
         active_timeline: Some(UiActiveTimeline {
             top_line: 0,
@@ -1264,6 +1269,7 @@ fn data_models_round_trip_through_json() {
                 "highlight_items": ["build (notify only)"],
                 "highlight_controls_enabled": true,
                 "highlight_delete_enabled": true,
+                "activity_colors": {"event": 5, "message": 9, "highlight": 12},
             },
             "colors_dialog": null,
             "active_timeline": {

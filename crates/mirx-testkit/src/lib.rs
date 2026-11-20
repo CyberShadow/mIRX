@@ -1337,6 +1337,8 @@ pub struct UiOptionsDialog {
     pub highlight_controls_enabled: bool,
     /// Whether the Highlight page's Delete is enabled (an item selected).
     pub highlight_delete_enabled: bool,
+    /// The Display page's switchbar Event, Message and Highlight colours.
+    pub activity_colors: UiActivityColors,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

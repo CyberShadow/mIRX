@@ -6,7 +6,7 @@
 
 use mirx_core::{HighlightWord, validate_highlight_word};
 
-use super::settings::{ConnectSetting, Settings, parse_button_width};
+use super::settings::{ActivityColors, ConnectSetting, Settings, parse_button_width};
 use super::timestamp::TimestampFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +92,8 @@ pub(super) struct OptionsForm {
     pub(super) timestamp_show: bool,
     pub(super) timestamp_format: String,
     pub(super) switchbar_buttons: String,
+    /// Picked from the palette, so never wrong.
+    pub(super) activity_colors: ActivityColors,
 }
 
 impl OptionsForm {
@@ -101,6 +103,7 @@ impl OptionsForm {
             timestamp_show: settings.timestamp.show,
             timestamp_format: settings.timestamp.format.to_string(),
             switchbar_buttons: settings.switchbar.buttons.to_string(),
+            activity_colors: settings.switchbar.activity,
         }
     }
 
@@ -127,6 +130,7 @@ impl OptionsForm {
         settings.timestamp.show = self.timestamp_show;
         settings.timestamp.format = format;
         settings.switchbar.buttons = buttons;
+        settings.switchbar.activity = self.activity_colors;
         Ok(settings)
     }
 }
@@ -237,6 +241,7 @@ impl HighlightList {
 
 #[cfg(test)]
 mod tests {
+    use super::super::colors::PaletteIndex;
     use super::super::settings::{ButtonWidth, FontSetting};
     use super::*;
 
@@ -324,6 +329,13 @@ mod tests {
         expected.switchbar.buttons = ButtonWidth::new(90).unwrap();
         assert_eq!(
             applied(|form| form.switchbar_buttons = "90".to_owned()),
+            expected
+        );
+
+        let mut expected = current.clone();
+        expected.switchbar.activity.message = PaletteIndex::new(9).unwrap();
+        assert_eq!(
+            applied(|form| form.activity_colors.message = PaletteIndex::new(9).unwrap()),
             expected
         );
     }
