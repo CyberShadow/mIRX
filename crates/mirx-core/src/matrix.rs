@@ -143,7 +143,7 @@ use crate::api::{
 use crate::api::{TextStyleSpan, UserLinkSpan, check_text_styles, validate_highlight_word};
 use crate::mentions::body_mentions;
 use crate::rich_text::{StyledText, html_from_styled_text, styled_text_from_html};
-use crate::runtime::{EventSender, emit_event};
+use crate::runtime::{EventSender, InitialSnapshot, emit_event};
 
 #[derive(Debug)]
 pub(crate) struct MatrixCoreError {
@@ -432,17 +432,15 @@ pub(crate) async fn finish_browser_login(
     Ok(stored_session(client))
 }
 
-pub(crate) async fn initial_room_sync(
-    client: &Client,
-) -> Result<Vec<RoomSummary>, MatrixCoreError> {
-    // No `emit_member_snapshots_after_sync`: the runtime emits every joined
-    // room's member snapshot right after this, with the room list.
+/// The session's first sync; the runtime then reads the room snapshot.
+pub(crate) async fn initial_room_sync(client: &Client) -> Result<(), MatrixCoreError> {
+    // No `emit_member_snapshots_after_sync`: the snapshot has every joined
+    // room's members.
     client
         .sync_once(SyncSettings::default())
         .await
         .map_err(|err| MatrixCoreError::new(format!("initial Matrix sync failed: {err}")))?;
-
-    summarize_rooms(client).await
+    Ok(())
 }
 
 pub(crate) fn map_e2ee_recovery_state(state: RecoveryState) -> E2eeRecoveryState {
@@ -3201,9 +3199,14 @@ fn map_decimals((first, second, third): (u16, u16, u16)) -> VerificationDecimals
     }
 }
 
-/// Runs continuous sync until it fails: `SyncConnected` at the first
-/// response, then `SyncStopped` with why it ended.
-pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle<()> {
+/// Runs continuous sync until it fails: the initial snapshot if it is still
+/// to come and `SyncConnected` at the first response, then `SyncStopped`
+/// with why it ended.
+pub(crate) fn start_sync_task(
+    client: Client,
+    events: EventSender,
+    initial_snapshot: InitialSnapshot,
+) -> JoinHandle<()> {
     tokio::task::spawn_local(async move {
         let connected = Cell::new(false);
         let result = client
@@ -3211,9 +3214,13 @@ pub(crate) fn start_sync_task(client: Client, events: EventSender) -> JoinHandle
                 let client = client.clone();
                 let events = events.clone();
                 let connected = &connected;
+                let initial_snapshot = &initial_snapshot;
                 async move {
                     let response = result?;
                     if !connected.replace(true) {
+                        // Before SyncConnected: the UI's connected session
+                        // has its rooms.
+                        initial_snapshot.emit_if_pending(&client, &events).await;
                         emit_event(&events, Event::SyncConnected);
                     }
                     emit_member_snapshots_after_sync(&client, &response, &events).await;

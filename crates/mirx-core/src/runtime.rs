@@ -1,7 +1,9 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
@@ -115,6 +117,8 @@ enum WorkerState {
     AwaitingBrowser(Box<PendingBrowserLogin>),
     Ready {
         client: Client,
+        /// Given to every sync task, which emits it if it is pending.
+        initial_snapshot: InitialSnapshot,
         sync_task: Option<TokioJoinHandle<()>>,
         session_update_task: TokioJoinHandle<()>,
         send_queue_update_task: TokioJoinHandle<()>,
@@ -542,7 +546,8 @@ async fn handle_restore_session(
 /// Brings a signed-in client online: the initial sync and the first room
 /// snapshot, announced by `signed_in` (`LoggedIn` or `RestoredSession`),
 /// the update tasks and the E2EE status. Initial sync failures are errors
-/// of `operation`; the session stands either way.
+/// of `operation`; the session stands either way, and the first sync task
+/// response emits the snapshot instead.
 async fn enter_session(
     client: Client,
     signed_in: Event,
@@ -570,35 +575,23 @@ async fn enter_session(
         .subscribe()
         .expect("the session's client is alive");
     let read_state_updates = client.room_info_notable_update_receiver();
-    let rooms = matrix::initial_room_sync(&client).await;
-    let room_members = if rooms.is_ok() {
-        Some(matrix::summarize_joined_room_members(&client).await)
-    } else {
-        None
-    };
-    let room_read_states = rooms
-        .as_ref()
-        .ok()
-        .map(|_| matrix::summarize_joined_room_read_states(&client));
-    let account_lists = if rooms.is_ok() {
-        Some(AccountLists::read(&client).await)
-    } else {
-        None
+    let snapshot = match matrix::initial_room_sync(&client).await {
+        Ok(()) => RoomSnapshot::read(&client).await,
+        Err(err) => Err(err),
     };
     emit_event(event_tx, signed_in);
-    match rooms {
-        Ok(rooms) => match room_members.expect("room members exist after successful sync") {
-            Ok(room_members) => emit_initial_room_snapshot(
-                event_tx,
-                rooms,
-                room_members,
-                room_read_states.expect("read states exist after successful sync"),
-                account_lists.expect("account lists exist after successful sync"),
-            ),
-            Err(err) => emit_matrix_error(event_tx, operation, err),
-        },
-        Err(err) => emit_matrix_error(event_tx, operation, err),
-    }
+    // Offline, or the server is down: the first sync that gets through
+    // emits the snapshot.
+    let initial_snapshot = InitialSnapshot::pending(match snapshot {
+        Ok(snapshot) => {
+            snapshot.emit(event_tx);
+            false
+        }
+        Err(err) => {
+            emit_matrix_error(event_tx, operation, err);
+            true
+        }
+    });
     let room_read_state_update_task = matrix::start_room_read_state_update_task(
         client.clone(),
         event_tx.clone(),
@@ -617,6 +610,7 @@ async fn enter_session(
 
     *state = WorkerState::Ready {
         client,
+        initial_snapshot,
         sync_task: None,
         session_update_task,
         send_queue_update_task,
@@ -634,7 +628,10 @@ async fn enter_session(
 
 fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
     let WorkerState::Ready {
-        client, sync_task, ..
+        client,
+        initial_snapshot,
+        sync_task,
+        ..
     } = state
     else {
         emit_invalid_state(
@@ -657,7 +654,11 @@ fn handle_start_sync(event_tx: &EventSender, state: &mut WorkerState) -> bool {
         return false;
     }
 
-    *sync_task = Some(matrix::start_sync_task(client.clone(), event_tx.clone()));
+    *sync_task = Some(matrix::start_sync_task(
+        client.clone(),
+        event_tx.clone(),
+        initial_snapshot.clone(),
+    ));
     emit_event(event_tx, Event::SyncStarted);
     false
 }
@@ -1591,6 +1592,7 @@ async fn handle_reject_verification_sas(
 async fn handle_logout(event_tx: &EventSender, state: &mut WorkerState) -> bool {
     let WorkerState::Ready {
         client,
+        initial_snapshot: _,
         sync_task,
         session_update_task,
         send_queue_update_task,
@@ -1650,6 +1652,7 @@ async fn shutdown_state(state: &mut WorkerState) {
         }
         WorkerState::Ready {
             client: _,
+            initial_snapshot: _,
             sync_task,
             session_update_task,
             send_queue_update_task,
@@ -1770,36 +1773,85 @@ impl AccountLists {
     }
 }
 
-fn emit_initial_room_snapshot(
-    event_tx: &EventSender,
+/// A session's first room snapshot: the room list, the account lists, and
+/// every joined room's members and read state. Later changes come as they
+/// happen.
+struct RoomSnapshot {
     rooms: Vec<RoomSummary>,
     room_members: Vec<RoomMembers>,
     room_read_states: Vec<RoomReadState>,
     account_lists: AccountLists,
-) {
-    let joined_room_ids = rooms
-        .iter()
-        .filter(|room| room.membership == RoomMembership::Join)
-        .map(|room| room.room_id.clone())
-        .collect::<std::collections::HashSet<_>>();
+}
 
-    emit_event(event_tx, Event::SyncedRooms(rooms));
-    match account_lists.highlight_words {
-        Ok(words) => emit_event(event_tx, Event::HighlightWords(words)),
-        Err(err) => emit_matrix_error(event_tx, Operation::HighlightWords, err),
+impl RoomSnapshot {
+    /// After a successful sync: the store has the rooms.
+    async fn read(client: &Client) -> Result<Self, MatrixCoreError> {
+        Ok(Self {
+            rooms: matrix::summarize_rooms(client).await?,
+            room_members: matrix::summarize_joined_room_members(client).await?,
+            room_read_states: matrix::summarize_joined_room_read_states(client),
+            account_lists: AccountLists::read(client).await,
+        })
     }
-    match account_lists.ignored_users {
-        Ok(user_ids) => emit_event(event_tx, Event::IgnoredUsers(user_ids)),
-        Err(err) => emit_matrix_error(event_tx, Operation::IgnoredUsers, err),
-    }
-    for members in room_members {
-        if joined_room_ids.contains(&members.room_id) {
-            emit_event(event_tx, Event::RoomMembers(members));
+
+    fn emit(self, event_tx: &EventSender) {
+        let Self {
+            rooms,
+            room_members,
+            room_read_states,
+            account_lists,
+        } = self;
+        let joined_room_ids = rooms
+            .iter()
+            .filter(|room| room.membership == RoomMembership::Join)
+            .map(|room| room.room_id.clone())
+            .collect::<std::collections::HashSet<_>>();
+
+        emit_event(event_tx, Event::SyncedRooms(rooms));
+        match account_lists.highlight_words {
+            Ok(words) => emit_event(event_tx, Event::HighlightWords(words)),
+            Err(err) => emit_matrix_error(event_tx, Operation::HighlightWords, err),
+        }
+        match account_lists.ignored_users {
+            Ok(user_ids) => emit_event(event_tx, Event::IgnoredUsers(user_ids)),
+            Err(err) => emit_matrix_error(event_tx, Operation::IgnoredUsers, err),
+        }
+        for members in room_members {
+            if joined_room_ids.contains(&members.room_id) {
+                emit_event(event_tx, Event::RoomMembers(members));
+            }
+        }
+        for read_state in room_read_states {
+            if joined_room_ids.contains(&read_state.room_id) {
+                emit_event(event_tx, Event::RoomReadState(read_state));
+            }
         }
     }
-    for read_state in room_read_states {
-        if joined_room_ids.contains(&read_state.room_id) {
-            emit_event(event_tx, Event::RoomReadState(read_state));
+}
+
+/// Whether the session's first room snapshot is still to come: its initial
+/// sync, or reading the snapshot, failed. Shared by the session's sync
+/// tasks, one at a time.
+#[derive(Clone)]
+pub(crate) struct InitialSnapshot(Rc<Cell<bool>>);
+
+impl InitialSnapshot {
+    fn pending(pending: bool) -> Self {
+        Self(Rc::new(Cell::new(pending)))
+    }
+
+    /// At a sync task's first successful response: emits the snapshot if it
+    /// is still to come. Failing to read it leaves it to the next task.
+    pub(crate) async fn emit_if_pending(&self, client: &Client, event_tx: &EventSender) {
+        if !self.0.get() {
+            return;
+        }
+        match RoomSnapshot::read(client).await {
+            Ok(snapshot) => {
+                snapshot.emit(event_tx);
+                self.0.set(false);
+            }
+            Err(err) => emit_matrix_error(event_tx, Operation::RoomList, err),
         }
     }
 }
@@ -1863,7 +1915,7 @@ mod tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     use super::{
-        AccountLists, EventSender, WorkerState, emit_initial_room_snapshot, handle_command,
+        AccountLists, EventSender, InitialSnapshot, RoomSnapshot, WorkerState, handle_command,
         handle_login, handle_restore_session, handle_start_sync, handle_stop_sync, run_worker,
         shutdown_state,
     };
@@ -1937,6 +1989,7 @@ mod tests {
     fn ready_state(client: matrix_sdk::Client) -> WorkerState {
         WorkerState::Ready {
             client,
+            initial_snapshot: InitialSnapshot::pending(false),
             sync_task: None,
             room_list_update_task: tokio::task::spawn_local(async {}),
             room_read_state_update_task: tokio::task::spawn_local(async {}),
@@ -2498,6 +2551,7 @@ mod tests {
             let (event_tx, event_rx) = mpsc::channel::<Event>();
             let mut state = WorkerState::Ready {
                 client,
+                initial_snapshot: InitialSnapshot::pending(false),
                 sync_task: Some(existing_task),
                 room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
@@ -2585,19 +2639,19 @@ mod tests {
             ),
         ];
 
-        emit_initial_room_snapshot(
-            &event_tx as &EventSender,
-            rooms.clone(),
-            room_members.clone(),
-            read_states.clone(),
-            AccountLists {
+        RoomSnapshot {
+            rooms: rooms.clone(),
+            room_members: room_members.clone(),
+            room_read_states: read_states.clone(),
+            account_lists: AccountLists {
                 highlight_words: Ok(vec![HighlightWord {
                     word: "deploy".to_owned(),
                     highlights: true,
                 }]),
                 ignored_users: Ok(vec!["@spam:example.org".to_owned()]),
             },
-        );
+        }
+        .emit(&event_tx as &EventSender);
 
         assert_eq!(
             event_rx
@@ -2675,6 +2729,7 @@ mod tests {
             });
             let mut state = WorkerState::Ready {
                 client,
+                initial_snapshot: InitialSnapshot::pending(false),
                 sync_task: None,
                 room_list_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
                 room_read_state_update_task: tokio::task::spawn_local(std::future::pending::<()>()),
@@ -2895,11 +2950,10 @@ mod tests {
     #[test]
     fn sync_without_a_server_stops_with_lost_and_never_connects() {
         run_local(async {
-            let client = matrix_sdk::test_utils::client::MockClientBuilder::new(Some(
-                &closed_port_url(),
-            ))
-            .build()
-            .await;
+            let client =
+                matrix_sdk::test_utils::client::MockClientBuilder::new(Some(&closed_port_url()))
+                    .build()
+                    .await;
             let (event_tx, event_rx) = mpsc::channel::<Event>();
             let mut state = ready_state(client);
 
@@ -2972,7 +3026,9 @@ mod tests {
     /// A URL whose port refuses connections: the network is down.
     fn closed_port_url() -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-        let address = listener.local_addr().expect("a bound listener has an address");
+        let address = listener
+            .local_addr()
+            .expect("a bound listener has an address");
         drop(listener);
         format!("http://{address}")
     }
@@ -3086,6 +3142,47 @@ mod tests {
         });
     }
 
+    /// The snapshot came with the initial sync: the sync task only
+    /// announces the connection.
+    #[test]
+    fn a_session_that_starts_online_gets_its_rooms_once() {
+        run_local(async {
+            let mock_server = mock_login_server().await;
+            let profile = tempfile::TempDir::new().expect("temporary profile directory");
+            let config = CoreConfig {
+                profile_dir: profile.path().join("profile"),
+                store_passphrase: "test-store-passphrase".to_owned(),
+            };
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = WorkerState::NoClient;
+            assert!(
+                !handle_login(
+                    &config,
+                    &event_tx,
+                    &mut state,
+                    login_request(&mock_server, true)
+                )
+                .await
+            );
+
+            let events = settled_events(&event_rx).await;
+            let snapshot_events = |events: &[Event]| {
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::HighlightWords(_)))
+                    .count()
+            };
+            assert_eq!(snapshot_events(&events), 1, "{events:?}");
+            let sync_started = event_position(&events, |event| *event == Event::SyncStarted);
+            let sync_connected = event_position(&events, |event| *event == Event::SyncConnected);
+            assert!(
+                sync_started.is_some() && sync_started < sync_connected,
+                "{events:?}"
+            );
+            shutdown_state(&mut state).await;
+        });
+    }
+
     #[test]
     fn login_without_start_sync_leaves_sync_idle() {
         run_local(async {
@@ -3151,6 +3248,130 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// mirx started before the network was up: the first sync that gets
+    /// through brings the whole room snapshot, before `SyncConnected`, and
+    /// later reconnections do not repeat it.
+    #[test]
+    fn a_session_that_starts_offline_gets_its_rooms_at_the_first_sync_that_connects() {
+        run_local(async {
+            let mock_server = MatrixMockServer::new().await;
+            mock_server.mock_versions().ok().mount().await;
+            mock_server.mock_login().ok().mount().await;
+            mock_server
+                .mock_get_members()
+                .expect_any_access_token()
+                .ok(logged_in_user_room_members())
+                .mount()
+                .await;
+            mock_server
+                .mock_room_state_encryption()
+                .expect_any_access_token()
+                .plain()
+                .mount()
+                .await;
+            let failing_sync =
+                mock_server
+                    .mock_sync()
+                    .respond_with(wiremock::ResponseTemplate::new(400).set_body_json(
+                        serde_json::json!({ "errcode": "M_UNKNOWN", "error": "down" }),
+                    ))
+                    .mount_as_scoped()
+                    .await;
+            let profile = tempfile::TempDir::new().expect("temporary profile directory");
+            let config = CoreConfig {
+                profile_dir: profile.path().join("profile"),
+                store_passphrase: "test-store-passphrase".to_owned(),
+            };
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            let mut state = WorkerState::NoClient;
+            assert!(
+                !handle_login(
+                    &config,
+                    &event_tx,
+                    &mut state,
+                    login_request(&mock_server, true)
+                )
+                .await
+            );
+            let events = settled_events(&event_rx).await;
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    Event::Error(error) if error.operation == Operation::Login
+                )),
+                "{events:?}"
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, Event::SyncStopped(SyncStopReason::Lost(_)))),
+                "{events:?}"
+            );
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    Event::SyncedRooms(_) | Event::HighlightWords(_) | Event::SyncConnected
+                )),
+                "{events:?}"
+            );
+
+            drop(failing_sync);
+            let room_id = room_id();
+            mock_server
+                .mock_sync()
+                .ok(|builder| {
+                    builder.add_joined_room(
+                        JoinedRoomBuilder::new(room_id.as_ref())
+                            .add_state_bulk(logged_in_user_room_members()),
+                    );
+                })
+                .mount()
+                .await;
+            assert!(!handle_start_sync(&event_tx, &mut state));
+            let events = settled_events(&event_rx).await;
+            let position = |name: &str, matches: &dyn Fn(&Event) -> bool| {
+                event_position(&events, matches).unwrap_or_else(|| panic!("{name} in {events:?}"))
+            };
+            let sync_started = position("SyncStarted", &|event| *event == Event::SyncStarted);
+            let synced_rooms = position("SyncedRooms", &|event| {
+                matches!(event, Event::SyncedRooms(rooms)
+                    if rooms.iter().any(|room| room.room_id == room_id.as_str()))
+            });
+            let highlight_words = position("HighlightWords", &|event| {
+                matches!(event, Event::HighlightWords(_))
+            });
+            let ignored_users = position("IgnoredUsers", &|event| {
+                matches!(event, Event::IgnoredUsers(_))
+            });
+            let room_members = position(
+                "RoomMembers",
+                &|event| matches!(event, Event::RoomMembers(members) if members.room_id == room_id.as_str()),
+            );
+            let sync_connected = position("SyncConnected", &|event| *event == Event::SyncConnected);
+            assert!(
+                sync_started < synced_rooms
+                    && synced_rooms < highlight_words
+                    && highlight_words < ignored_users
+                    && ignored_users < room_members
+                    && room_members < sync_connected,
+                "{events:?}"
+            );
+
+            assert!(!handle_stop_sync(&event_tx, &mut state));
+            assert!(!handle_start_sync(&event_tx, &mut state));
+            let events = settled_events(&event_rx).await;
+            assert!(events.contains(&Event::SyncConnected), "{events:?}");
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    Event::HighlightWords(_) | Event::IgnoredUsers(_)
+                )),
+                "{events:?}"
+            );
+            shutdown_state(&mut state).await;
+        });
     }
 
     /// The SDK's event cache counts unread messages, those of the session's
