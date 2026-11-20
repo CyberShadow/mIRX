@@ -3641,7 +3641,24 @@ fn reconnect_retries_until_the_first_sync_succeeds() -> Result<(), Box<dyn std::
         "{lines:?}"
     );
     wait_for_status_line(&app, "* Reconnected to example", Duration::from_secs(30))?;
-    assert_eq!(app.dump_model()?.reconnect_attempts, 0);
+    let model = app.dump_model()?;
+    assert_eq!(model.reconnect_attempts, 0);
+    // The offline start's restore error is from before the connection and
+    // leaves the status bar. (An error a post-connect task reports would be
+    // current and could stay, so only the stale one is ruled out.)
+    assert!(
+        model
+            .last_error
+            .as_ref()
+            .is_none_or(|error| error.operation != "restore_session"),
+        "{:?}",
+        model.last_error
+    );
+    let status_bar = app.dump_ui_state()?.status_bar.text;
+    assert!(
+        !status_bar.contains("error: restore session"),
+        "{status_bar}"
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

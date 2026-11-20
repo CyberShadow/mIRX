@@ -635,6 +635,10 @@ pub(super) fn apply_core_event(
                 log_status(state, StatusLineKind::Info, line);
             }
             state.model.status = format!("connected to {}", session_server(state));
+            // Connected now: an earlier error (the offline start's restore,
+            // a /join before the drop) is past, and stays in Status or its
+            // window. The bar's error segment says what is wrong now.
+            state.model.last_error = None;
         }
         Event::SyncStopped(reason) => {
             let (kind, line) = match reason {
@@ -4945,6 +4949,48 @@ mod tests {
                     "[22:12] * Reconnected to example".to_owned(),
                 ]
             );
+        });
+    }
+
+    #[test]
+    fn connecting_clears_an_error_from_before_but_not_one_after() {
+        with_local_app_data(|_| {
+            let mut state = test_state();
+            state.synthetic_load_in_progress = true;
+            apply_core_event(
+                &mut state,
+                Event::LoggedIn {
+                    session: stored_session(),
+                    homeserver_url: "https://matrix.example".to_owned(),
+                },
+            )
+            .unwrap();
+            apply_core_event(
+                &mut state,
+                Event::Error(CoreErrorEvent {
+                    operation: Operation::RestoreSession,
+                    room_id: None,
+                    message: "offline".to_owned(),
+                }),
+            )
+            .unwrap();
+            assert!(frame_status_text(&state).contains(" | error: "));
+            apply_core_event(&mut state, Event::SyncStarted).unwrap();
+            apply_core_event(&mut state, Event::SyncConnected).unwrap();
+            assert_eq!(state.model.last_error, None);
+            assert!(
+                !frame_status_text(&state).contains("| error:"),
+                "{}",
+                frame_status_text(&state)
+            );
+
+            let join_failed = CoreErrorEvent {
+                operation: Operation::JoinRoom,
+                room_id: None,
+                message: "forbidden".to_owned(),
+            };
+            apply_core_event(&mut state, Event::Error(join_failed.clone())).unwrap();
+            assert_eq!(state.model.last_error, Some(join_failed));
         });
     }
 
