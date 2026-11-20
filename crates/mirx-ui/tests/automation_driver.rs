@@ -5367,7 +5367,13 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [timestamp]\r\nshow=on\r\nformat=[HH:nn:ss]\r\n\
          [connect]\r\nstartup=on\r\n\
          [switchbar]\r\nshow=on\r\nbuttons=120\r\n\
-         [treebar]\r\nshow=on\r\n"
+         event=5\r\nmessage=4\r\nhighlight=12\r\n\
+         [treebar]\r\nshow=on\r\n\
+         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
+         invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
+         notice=5\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
+         editbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\ngray=14\r\n\
+         treebar=0\r\ntreebar_text=1\r\n"
     );
     drop(app);
 
@@ -13100,6 +13106,7 @@ fn expected_menu_bar(file: [bool; 4]) -> Vec<UiMenu> {
                 ("Confirm &SAS", false),
                 ("Re&ject SAS", false),
                 ("&Cancel Verification", false),
+                ("&Colors...\tAlt+K", true),
                 ("&Options...\tAlt+O", true),
             ],
         ),
