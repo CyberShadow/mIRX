@@ -782,6 +782,21 @@ fn spawn_mock_homeserver_with_auth(
                 continue;
             }
 
+            // A send is `$sent-<transaction>`; the sync body never echoes
+            // it.
+            if let Some(transaction_id) = path
+                .strip_prefix("/_matrix/client/v3/rooms/!")
+                .filter(|rest| rest.contains(":example/send/"))
+                .and_then(|rest| rest.rsplit('/').next())
+            {
+                respond_json(
+                    &mut stream,
+                    200,
+                    &serde_json::json!({ "event_id": format!("$sent-{transaction_id}") }),
+                );
+                continue;
+            }
+
             // `/create` makes `!created:example`.
             if path == "/_matrix/client/v3/createRoom" {
                 respond_json(
@@ -3772,6 +3787,77 @@ fn reconnect_connect_while_waiting_retries_now() -> Result<(), Box<dyn std::erro
     app.wait_for_connection("syncing", Duration::from_secs(20))?;
     assert!(typed.elapsed() < Duration::from_secs(20));
     assert!(!status_view_contains(&app, "* Connect retry")?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// A line typed while the server takes no sends waits in the queue, and
+/// goes by itself once it does: one line, sent. In a room without E2EE,
+/// which the mock homeserver cannot do.
+#[test]
+fn reconnect_a_message_typed_offline_goes_once_the_connection_returns()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (local_app_data, server, app) = reconnect_app("retry_delay=1\r\n")?;
+    wait_until_connected(&app)?;
+    let plain = room_identity("!plain:example");
+    app.select_room("!beta:example")?;
+    type_commands(&app, &["/join #plain:example"])?;
+    app.wait_for_ui_state(
+        "the joined room active",
+        Duration::from_secs(10),
+        |ui_state| ui_state.mdi.active == plain,
+    )?;
+    let typed_lines = |ui_state: &UiState| {
+        view_lines_containing(find_view(ui_state, &plain), "typed offline")
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+
+    server.faults.send_down.store(true, Ordering::SeqCst);
+    type_commands(&app, &["typed offline"])?;
+    app.wait_for_ui_state(
+        "the line waiting to send",
+        Duration::from_secs(30),
+        |ui_state| {
+            typed_lines(ui_state)
+                .iter()
+                .any(|line| line.ends_with("> typed offline (waiting to send)"))
+        },
+    )?;
+    assert!(app.dump_model()?.last_error.is_none());
+
+    server.faults.send_down.store(false, Ordering::SeqCst);
+    let ui_state = app.wait_for_ui_state("the line sent", Duration::from_secs(30), |ui_state| {
+        typed_lines(ui_state)
+            .iter()
+            .any(|line| line.ends_with("> typed offline"))
+    })?;
+    assert_eq!(
+        typed_lines(&ui_state).len(),
+        1,
+        "{:?}",
+        typed_lines(&ui_state)
+    );
+    let sent = app
+        .room_activity(Some("!plain:example"))?
+        .into_iter()
+        .filter_map(|activity| match activity.kind {
+            RoomActivityKind::Message(message) if message.body == "typed offline" => Some(message),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].send_state, RoomMessageSendState::Sent);
+    assert!(
+        sent[0]
+            .event_id
+            .as_deref()
+            .is_some_and(|event_id| event_id.starts_with("$sent-")),
+        "{sent:?}"
+    );
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
