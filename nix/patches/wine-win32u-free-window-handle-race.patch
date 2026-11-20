@@ -1,0 +1,35 @@
+From: mirx developers
+Subject: [PATCH] win32u: Do not clear a reused window handle's object pointer.
+
+free_window_handle asks the server to destroy the window, which frees
+its user handle, and then sets client_objects[index] to NULL.  But as
+soon as the server has freed the handle, another thread can allocate
+the same index (with a new generation) for a new window, menu or other
+user object: alloc_user_handle stores the new object's pointer without
+user_lock.  If that store comes first, free_window_handle's NULL store
+then wipes it, and the new handle is valid on the server but has no
+object: every later use of it fails as an invalid handle.
+
+Clear the pointer only if it still points to the window being freed,
+as free_user_handle already does for the other object types.
+
+Seen as AppendMenuW failing on a menu that CreatePopupMenu had just
+returned (no error set; grab_menu_ptr warns "invalid menu handle"),
+while another thread destroyed a window whose index the menu reused.
+12 threads that each create and destroy 150 frame windows with menus
+hit it on almost every run.
+
+---
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -5207,7 +5207,9 @@ static void free_window_handle( HWND hwnd )
+         {
+             req->handle = wine_server_user_handle( hwnd );
+             wine_server_call( req );
+-            set_user_handle_ptr( hwnd, NULL );
++            /* The server has freed the handle, so another thread may already
++             * have allocated its index and stored its own object there. */
++            InterlockedCompareExchangePointer( &client_objects[USER_HANDLE_TO_INDEX( hwnd )], NULL, win );
+         }
+         SERVER_END_REQ;
+         user_unlock();
