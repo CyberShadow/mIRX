@@ -564,3 +564,43 @@ fn shutdown_stops_waiting_for_the_browser() {
     assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     harness.core.join().expect("join core");
 }
+
+#[test]
+fn a_sign_in_page_that_is_not_a_web_address_is_refused() {
+    let harness = Harness::new(async |server| {
+        server.mock_versions().ok().mount().await;
+        let issuer = format!("{}/", server.uri());
+        Mock::given(method("GET"))
+            .and(path(
+                "/_matrix/client/unstable/org.matrix.msc2965/auth_metadata",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "issuer": issuer,
+                "authorization_endpoint": "file:///C:/Windows/System32/calc.exe",
+                "token_endpoint": format!("{issuer}oauth2/token"),
+                "registration_endpoint": format!("{issuer}oauth2/registration"),
+                "revocation_endpoint": format!("{issuer}oauth2/revoke"),
+                "response_types_supported": ["code"],
+                "response_modes_supported": ["query", "fragment"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
+                "code_challenge_methods_supported": ["S256"],
+            })))
+            .mount(server.server())
+            .await;
+        server.oauth().mock_registration().ok().mount().await;
+    });
+
+    harness.browser_login(None);
+    let Event::Error(error) = next_event(harness.core.events()) else {
+        panic!("expected the login error, and no SignInUrl");
+    };
+    assert_eq!(error.operation, Operation::Login);
+    assert!(
+        error
+            .message
+            .starts_with("the homeserver's sign-in page is not a web address: file:///"),
+        "{}",
+        error.message
+    );
+    harness.shut_down();
+}

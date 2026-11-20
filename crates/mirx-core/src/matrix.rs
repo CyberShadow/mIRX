@@ -318,6 +318,15 @@ pub(crate) async fn start_browser_login(
             let authorization = login.build().await.map_err(|err| {
                 MatrixCoreError::new(format!("failed to start the OAuth 2.0 sign-in: {err}"))
             })?;
+            // mirx hands the page to the shell unasked. The SDK checks the
+            // endpoint is https only for an https homeserver; for a plain
+            // http one, any scheme (file:, ms-msdt:) would reach the shell.
+            if !matches!(authorization.url.scheme(), "https" | "http") {
+                return Err(MatrixCoreError::new(format!(
+                    "the homeserver's sign-in page is not a web address: {}",
+                    authorization.url
+                )));
+            }
             Ok(BrowserSignIn {
                 flow: BrowserFlow::OAuth,
                 url: authorization.url.into(),
