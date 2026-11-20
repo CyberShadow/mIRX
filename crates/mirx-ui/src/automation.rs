@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 55;
+pub(crate) const PROTOCOL_VERSION: u32 = 56;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1767,8 +1767,20 @@ pub(crate) struct DumpModel {
     /// The web links handed to the shell, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) opened_links: Vec<String>,
+    /// The tips the shell took, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) shown_tips: Vec<DumpShownTip>,
     pub(crate) last_error: Option<DumpError>,
     pub(crate) selected_room: Option<String>,
+}
+
+/// A tip: the window it is about, its title and its line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DumpShownTip {
+    pub(crate) view: ViewIdentity,
+    pub(crate) title: String,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3399,8 +3411,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_55() {
-        assert_eq!(PROTOCOL_VERSION, 55);
+    fn protocol_version_is_56() {
+        assert_eq!(PROTOCOL_VERSION, 56);
     }
 
     #[test]
@@ -5392,7 +5404,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":55,
+                    "protocol_version":56,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5465,6 +5477,7 @@ mod tests {
                     submitted_setup_recovery_commands: Vec::new(),
                     submitted_room_list_requests: Vec::new(),
                     opened_links: Vec::new(),
+                    shown_tips: Vec::new(),
                     last_error: None,
                     selected_room: Some("!room:example".to_owned()),
                 },
@@ -6350,6 +6363,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -6444,6 +6458,7 @@ mod tests {
             }],
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: None,
         };
@@ -6502,6 +6517,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6571,6 +6587,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6667,6 +6684,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6770,6 +6788,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -6877,6 +6896,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: Some("!ops:example".to_owned()),
         };
@@ -7012,6 +7032,7 @@ mod tests {
             submitted_setup_recovery_commands: Vec::new(),
             submitted_room_list_requests: Vec::new(),
             opened_links: Vec::new(),
+            shown_tips: Vec::new(),
             last_error: None,
             selected_room: Some("!room:example".to_owned()),
         };
@@ -7091,6 +7112,7 @@ mod tests {
                 submitted_setup_recovery_commands: Vec::new(),
                 submitted_room_list_requests: Vec::new(),
                 opened_links: Vec::new(),
+                shown_tips: Vec::new(),
                 last_error: None,
                 selected_room: None,
             }

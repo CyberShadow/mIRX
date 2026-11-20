@@ -451,8 +451,9 @@ use timeline_window::{
 };
 use timestamp::{LocalTime, LocalTimeFn, TimestampSetting, TimestampStyle};
 use tray::{
-    TrayState, choose_tray_menu_item, dump_tray, hide_to_tray, minimize_frame, on_taskbar_created,
-    on_tray_icon, remove_tray_icon, sync_tray_icon, taskbar_created_message,
+    TipCandidate, TrayState, choose_tray_menu_item, dump_shown_tips, dump_tray, hide_to_tray,
+    minimize_frame, on_taskbar_created, on_tray_icon, remove_tray_icon, show_tip, sync_tray_icon,
+    taskbar_created_message,
 };
 use verification::{
     apply_verification_event, e2ee_backup_health_summary, e2ee_cross_signing_label,

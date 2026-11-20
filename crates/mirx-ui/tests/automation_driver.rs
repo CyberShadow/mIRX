@@ -38,7 +38,7 @@ use mirx_testkit::{
     RoomImageActivity, RoomImageInfo, RoomImageMediaState, RoomMediaSource, RoomMemberChange,
     RoomMessageActivity, RoomMessageActivityLine, RoomMessagePresentationKind,
     RoomMessageSendState, RoomReactionSummary, RoomRedactedActivity, RoomStateNoticeActivity,
-    RoomStateNoticeContent, RoomTag, SessionAuth, SpaceChild, StoredSession,
+    RoomStateNoticeContent, RoomTag, SessionAuth, ShownTip, SpaceChild, StoredSession,
     SubmittedDirectRoomCommand, SubmittedEditCommand, SubmittedFileCommand,
     SubmittedHistoryCommand, SubmittedMemberModerationCommand, SubmittedMembershipCommand,
     SubmittedMessageCommand, SubmittedNotificationCommand, SubmittedPowerLevelCommand,
@@ -2987,7 +2987,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 55);
+    assert_eq!(version.protocol_version, 56);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -5372,6 +5372,7 @@ fn timestamp_command_toggles_formats_and_persists() -> Result<(), Box<dyn std::e
          [treebar]\r\nshow=on\r\n\
          [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
          [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
+         [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
          [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\n\
          invite=3\r\njoin=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\n\
          notice=5\r\nother=6\r\nown=1\r\npart=3\r\ntopic=3\r\neditbox=0\r\n\
@@ -5928,6 +5929,9 @@ fn backfilled_history_is_not_logged() -> Result<(), Box<dyn std::error::Error>> 
 /// The tray icon's callback message, `WM_APP + 4` (`WM_TRAY_ICON` in
 /// win32.rs).
 const WM_TRAY_ICON: u32 = 0x8000 + 4;
+/// The tip's callbacks, `NIN_BALLOONTIMEOUT` and `NIN_BALLOONUSERCLICK`.
+const NIN_BALLOONTIMEOUT: u32 = 0x0404;
+const NIN_BALLOONUSERCLICK: u32 = 0x0405;
 
 /// Sends the frame the icon's callback as the shell does with
 /// `NOTIFYICON_VERSION_4`: the event in `LOWORD(lParam)`, the icon's id in
@@ -6163,6 +6167,198 @@ fn tray_menu_lists_windows_in_switchbar_order_and_checks_new_messages()
     assert_eq!(ui_state.mdi.active, alpha);
     assert_eq!((ui_state.tray.icon, ui_state.tray.hidden), (false, false));
     assert_protocol_error(app.choose_tray_menu_item("Gamma"), "unknown_tray_menu_item");
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+fn highlighted(mut event: Event) -> Event {
+    let Event::RoomActivity(activity) = &mut event else {
+        unreachable!("a message event")
+    };
+    activity.highlight = true;
+    event
+}
+
+fn append_events(app: &MirxApp, events: Vec<Event>) -> Result<(), Box<dyn std::error::Error>> {
+    app.append_synthetic_events(&serde_json::to_string(&events)?)?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(())
+}
+
+fn shown_tips(app: &MirxApp) -> Result<Vec<ShownTip>, Box<dyn std::error::Error>> {
+    Ok(app.dump_model()?.shown_tips)
+}
+
+fn tip(view: &ViewIdentity, title: &str, text: &str) -> ShownTip {
+    ShownTip {
+        view: view.clone(),
+        title: title.to_owned(),
+        text: text.to_owned(),
+    }
+}
+
+/// The close-lifecycle app hidden in the tray, so it is not the active
+/// application.
+fn launch_hidden_in_tray(tips: &str) -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    write_settings(
+        &local_app_data,
+        &format!("[tray]\r\nminimize=on\r\n[tips]\r\n{tips}"),
+    )?;
+    let (app, local_app_data) = launch_close_lifecycle_app_in(local_app_data)?;
+    minimize_frame(&app)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    Ok((app, local_app_data))
+}
+
+#[test]
+fn a_query_message_tips_while_mirx_is_hidden() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_hidden_in_tray("")?;
+    append_events(
+        &app,
+        vec![text_event(
+            "!alpha:example",
+            "@alice:example",
+            now_ms(),
+            "hi",
+        )],
+    )?;
+    assert_eq!(
+        shown_tips(&app)?,
+        [tip(
+            &room_identity("!alpha:example"),
+            "Alpha",
+            "<@alice:example> hi"
+        )]
+    );
+    assert!(app.dump_ui_state()?.tray.icon);
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn tips_follow_the_options_and_the_rooms_mode() -> Result<(), Box<dyn std::error::Error>> {
+    let beta = room_identity("!beta:example");
+    let (app, local_app_data) = launch_hidden_in_tray("")?;
+    append_events(
+        &app,
+        vec![text_event(
+            "!beta:example",
+            "@bob:example",
+            now_ms(),
+            "chatter",
+        )],
+    )?;
+    assert_eq!(shown_tips(&app)?, [], "a channel message, by default");
+    append_events(
+        &app,
+        vec![highlighted(text_event(
+            "!beta:example",
+            "@bob:example",
+            now_ms(),
+            "me: look",
+        ))],
+    )?;
+    assert_eq!(
+        shown_tips(&app)?,
+        [tip(&beta, "Beta", "<@bob:example> me: look")]
+    );
+    let mut rooms = close_lifecycle_rooms();
+    rooms[0].notification_mode = Some(RoomNotificationMode::Mute);
+    append_events(
+        &app,
+        vec![
+            Event::SyncedRooms(rooms),
+            highlighted(text_event(
+                "!beta:example",
+                "@bob:example",
+                now_ms(),
+                "me: muted",
+            )),
+        ],
+    )?;
+    assert_eq!(shown_tips(&app)?.len(), 1, "a muted room never tips");
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+
+    let (app, local_app_data) = launch_hidden_in_tray("channels=on\r\nqueries=off\r\n")?;
+    append_events(
+        &app,
+        vec![
+            text_event("!alpha:example", "@alice:example", now_ms(), "a query"),
+            text_event("!beta:example", "@bob:example", now_ms(), "a channel"),
+        ],
+    )?;
+    assert_eq!(
+        shown_tips(&app)?,
+        [tip(&beta, "Beta", "<@bob:example> a channel")]
+    );
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn no_tip_while_mirx_is_active() -> Result<(), Box<dyn std::error::Error>> {
+    let (app, local_app_data) = launch_close_lifecycle_app()?;
+    let frame = app.automation_frame_hwnd() as HWND;
+    unsafe { SetForegroundWindow(frame) };
+    assert_eq!(unsafe { GetForegroundWindow() }, frame);
+    append_events(
+        &app,
+        vec![text_event(
+            "!alpha:example",
+            "@alice:example",
+            now_ms(),
+            "hi",
+        )],
+    )?;
+    assert_eq!(shown_tips(&app)?, []);
+    assert!(!app.dump_ui_state()?.tray.icon);
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn clicking_a_tip_opens_its_window() -> Result<(), Box<dyn std::error::Error>> {
+    let alpha = room_identity("!alpha:example");
+    let (app, local_app_data) = launch_hidden_in_tray("")?;
+    assert_ne!(app.dump_ui_state()?.mdi.active, alpha);
+    append_events(
+        &app,
+        vec![text_event(
+            "!alpha:example",
+            "@alice:example",
+            now_ms(),
+            "hi",
+        )],
+    )?;
+    assert_eq!(shown_tips(&app)?.len(), 1);
+    tray_icon_event(&app, NIN_BALLOONUSERCLICK)?;
+    assert_eq!(frame_shown(&app), (true, false));
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(ui_state.mdi.active, alpha);
+    assert_eq!((ui_state.tray.icon, ui_state.tray.hidden), (false, false));
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+
+    // A tip that times out leaves mirx where it was, its icon kept.
+    let (app, local_app_data) = launch_hidden_in_tray("")?;
+    append_events(
+        &app,
+        vec![text_event(
+            "!alpha:example",
+            "@alice:example",
+            now_ms(),
+            "hi",
+        )],
+    )?;
+    tray_icon_event(&app, NIN_BALLOONTIMEOUT)?;
+    assert_eq!(tray_icon_and_hidden(&app)?, (true, true));
+    assert!(!frame_shown(&app).0);
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);
     Ok(())

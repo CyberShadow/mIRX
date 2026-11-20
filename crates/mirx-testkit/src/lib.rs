@@ -428,8 +428,20 @@ pub struct Model {
     /// The web links handed to the shell, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub opened_links: Vec<String>,
+    /// The tips the shell took, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shown_tips: Vec<ShownTip>,
     pub last_error: Option<UiError>,
     pub selected_room: Option<String>,
+}
+
+/// A tip: the window it is about, its title and its line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShownTip {
+    pub view: ViewIdentity,
+    pub title: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

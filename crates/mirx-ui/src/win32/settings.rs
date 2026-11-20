@@ -92,6 +92,7 @@ pub(super) struct Settings {
     pub(super) treebar: TreebarSetting,
     pub(super) logging: LoggingSetting,
     pub(super) tray: TraySetting,
+    pub(super) tips: TipsSetting,
     /// mIRC's Tools > Colors.
     pub(super) colors: ColorScheme,
 }
@@ -278,6 +279,27 @@ pub(super) struct TraySetting {
     pub(super) single_click: bool,
 }
 
+/// mIRC's Options > Display > Tips: which lines show a desktop
+/// notification while mirx is not the active application. The defaults
+/// are what flashes the taskbar: highlights and query messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TipsSetting {
+    pub(super) highlights: bool,
+    pub(super) queries: bool,
+    /// Every channel message, as far as the room's notification mode lets.
+    pub(super) channels: bool,
+}
+
+impl Default for TipsSetting {
+    fn default() -> Self {
+        Self {
+            highlights: true,
+            queries: true,
+            channels: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Fonts,
@@ -287,6 +309,7 @@ enum Section {
     Treebar,
     Logging,
     Tray,
+    Tips,
     Colors,
 }
 
@@ -313,6 +336,7 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
                 "treebar" => Section::Treebar,
                 "logging" => Section::Logging,
                 "tray" => Section::Tray,
+                "tips" => Section::Tips,
                 "colors" => Section::Colors,
                 _ => return Err(error(format!("unknown section [{name}]"))),
             });
@@ -386,6 +410,15 @@ pub(super) fn parse_ini(text: &str) -> Result<Settings, String> {
             (Section::Tray, "single_click") => {
                 settings.tray.single_click = parse_on_off(value, "single_click").map_err(error)?;
             }
+            (Section::Tips, "highlights") => {
+                settings.tips.highlights = parse_on_off(value, "highlights").map_err(error)?;
+            }
+            (Section::Tips, "queries") => {
+                settings.tips.queries = parse_on_off(value, "queries").map_err(error)?;
+            }
+            (Section::Tips, "channels") => {
+                settings.tips.channels = parse_on_off(value, "channels").map_err(error)?;
+            }
             (Section::Colors, key) if let Some(item) = ColorItem::from_ini_key(key) => {
                 settings
                     .colors
@@ -435,6 +468,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
     let activity = &settings.switchbar.activity;
     let logging = &settings.logging;
     let tray = &settings.tray;
+    let tips = &settings.tips;
     let colors = ColorItem::ALL
         .into_iter()
         .map(|item| format!("{}={}\r\n", item.ini_key(), settings.colors.get(item).get()))
@@ -448,6 +482,7 @@ pub(super) fn to_ini(settings: &Settings) -> String {
          [treebar]\r\nshow={}\r\n\
          [logging]\r\nchannels={}\r\nqueries={}\r\nstrip={}\r\ntimestamp={}\r\n\
          [tray]\r\nalways={}\r\nstartup={}\r\nminimize={}\r\nsingle_click={}\r\n\
+         [tips]\r\nhighlights={}\r\nqueries={}\r\nchannels={}\r\n\
          [colors]\r\n{colors}",
         font.face,
         font.points,
@@ -468,6 +503,9 @@ pub(super) fn to_ini(settings: &Settings) -> String {
         on_off(tray.startup),
         on_off(tray.minimize),
         on_off(tray.single_click),
+        on_off(tips.highlights),
+        on_off(tips.queries),
+        on_off(tips.channels),
     )
 }
 
@@ -547,6 +585,7 @@ mod tests {
         [treebar]\r\nshow=on\r\n\
         [logging]\r\nchannels=off\r\nqueries=off\r\nstrip=off\r\ntimestamp=on\r\n\
         [tray]\r\nalways=off\r\nstartup=off\r\nminimize=off\r\nsingle_click=off\r\n\
+        [tips]\r\nhighlights=on\r\nqueries=on\r\nchannels=off\r\n\
         [colors]\r\nbackground=0\r\naction=6\r\nhighlight=5\r\ninfo=2\r\ninvite=3\r\n\
         join=3\r\nkick=3\r\nmode=3\r\nnick=3\r\nnormal=1\r\nnotice=5\r\nother=6\r\nown=1\r\n\
         part=3\r\ntopic=3\r\neditbox=0\r\neditbox_text=1\r\nlistbox=0\r\nlistbox_text=1\r\n\
@@ -668,7 +707,7 @@ mod tests {
         };
         let text = to_ini(&settings);
         assert!(text.contains(
-            "[tray]\r\nalways=on\r\nstartup=off\r\nminimize=on\r\nsingle_click=on\r\n[colors]"
+            "[tray]\r\nalways=on\r\nstartup=off\r\nminimize=on\r\nsingle_click=on\r\n[tips]"
         ));
         assert_eq!(parse_ini(&text), Ok(settings));
         assert_eq!(
@@ -685,6 +724,34 @@ mod tests {
                 "line 2: single_click must be on or off",
             ),
             ("[tray]\nicon=mirx.ico", "line 2: unknown key icon"),
+        ] {
+            assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
+        }
+    }
+
+    #[test]
+    fn tips_settings_round_trip() {
+        let settings = Settings {
+            tips: TipsSetting {
+                highlights: false,
+                queries: true,
+                channels: true,
+            },
+            ..Settings::default()
+        };
+        let text = to_ini(&settings);
+        assert!(text.contains("[tips]\r\nhighlights=off\r\nqueries=on\r\nchannels=on\r\n[colors]"));
+        assert_eq!(parse_ini(&text), Ok(settings));
+        assert_eq!(
+            parse_ini("[tips]\nqueries=off").map(|settings| settings.tips),
+            Ok(TipsSetting {
+                queries: false,
+                ..TipsSetting::default()
+            })
+        );
+        for (text, error) in [
+            ("[tips]\nchannels=1", "line 2: channels must be on or off"),
+            ("[tips]\nqueue=5", "line 2: unknown key queue"),
         ] {
             assert_eq!(parse_ini(text), Err(error.to_owned()), "{text}");
         }

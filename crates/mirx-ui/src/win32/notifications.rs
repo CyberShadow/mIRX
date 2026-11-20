@@ -8,6 +8,7 @@
 
 use mirx_core::RoomNotificationMode;
 
+use super::settings::TipsSetting;
 use crate::automation::ViewActivityLevel;
 
 /// The colour a room's activity may reach: a muted room only ever shows that
@@ -39,11 +40,36 @@ pub(super) fn activity_wants_attention(
     }
 }
 
+/// Whether a line shows a tip (mIRC's Options > Display > Tips) while mirx
+/// is not the active application: what the options choose, capped by the
+/// room's mode as flashing is. `level` is the uncapped one.
+pub(super) fn activity_wants_tip(
+    level: ViewActivityLevel,
+    room_is_direct: bool,
+    mode: RoomNotificationMode,
+    tips: &TipsSetting,
+) -> bool {
+    match (mode, level) {
+        (RoomNotificationMode::Mute, _) => false,
+        (_, ViewActivityLevel::Highlight) => tips.highlights,
+        (RoomNotificationMode::AllMessages, ViewActivityLevel::Message) => {
+            if room_is_direct {
+                tips.queries
+            } else {
+                tips.channels
+            }
+        }
+        (RoomNotificationMode::MentionsAndKeywordsOnly, ViewActivityLevel::Message) => false,
+        (_, ViewActivityLevel::Event) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mirx_core::RoomNotificationMode::{AllMessages, MentionsAndKeywordsOnly, Mute};
 
-    use super::{activity_wants_attention, room_activity_level};
+    use super::super::settings::TipsSetting;
+    use super::{activity_wants_attention, activity_wants_tip, room_activity_level};
     use crate::automation::ViewActivityLevel::{Event, Highlight, Message};
 
     #[test]
@@ -90,6 +116,43 @@ mod tests {
                 activity_wants_attention(level, room_is_direct, mode),
                 expected,
                 "{level:?} direct={room_is_direct} {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tips_follow_the_options_capped_by_the_rooms_mode() {
+        let all = TipsSetting {
+            highlights: true,
+            queries: true,
+            channels: true,
+        };
+        let none = TipsSetting {
+            highlights: false,
+            queries: false,
+            channels: false,
+        };
+        for (level, room_is_direct, mode, tips, expected) in [
+            (Highlight, false, AllMessages, all, true),
+            (Highlight, true, MentionsAndKeywordsOnly, all, true),
+            (Highlight, false, AllMessages, none, false),
+            (Message, true, AllMessages, all, true),
+            (Message, true, AllMessages, none, false),
+            (Message, false, AllMessages, all, true),
+            (Message, false, AllMessages, TipsSetting::default(), false),
+            (Message, true, AllMessages, TipsSetting::default(), true),
+            (Message, true, MentionsAndKeywordsOnly, all, false),
+            (Message, false, MentionsAndKeywordsOnly, all, false),
+            (Event, true, AllMessages, all, false),
+            (Event, false, AllMessages, all, false),
+            (Highlight, true, Mute, all, false),
+            (Message, true, Mute, all, false),
+            (Event, true, Mute, all, false),
+        ] {
+            assert_eq!(
+                activity_wants_tip(level, room_is_direct, mode, &tips),
+                expected,
+                "{level:?} direct={room_is_direct} {mode:?} {tips:?}"
             );
         }
     }

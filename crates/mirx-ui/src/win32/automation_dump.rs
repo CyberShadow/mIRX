@@ -1152,6 +1152,7 @@ pub(super) fn dump_model_from_state(state: &WindowState) -> DumpModel {
         submitted_setup_recovery_commands: submitted_setup_recovery_commands_from_state(state),
         submitted_room_list_requests: submitted_room_list_requests_from_state(state),
         opened_links: state.opened_links.clone(),
+        shown_tips: dump_shown_tips(state),
         last_error: model.last_error.as_ref().map(dump_error_from_core),
         selected_room: model.selected_room.clone(),
     }

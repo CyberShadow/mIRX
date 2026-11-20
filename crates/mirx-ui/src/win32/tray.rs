@@ -1,5 +1,7 @@
 //! mIRC's tray icon (Options > Display > Tray): minimizing to the tray, the
-//! icon's clicks and its window popup.
+//! icon's clicks and its window popup; and mIRC's tips (Options > Display >
+//! Tips), shown as the icon's balloons, which Windows 10+ shows as
+//! notifications.
 //!
 //! The shell holds the icon; mirx only asks. `sync_tray_icon` is the one
 //! place that adds or removes it, from what the options, the frame and the
@@ -11,9 +13,10 @@ use std::sync::OnceLock;
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_SETVERSION, NIN_SELECT,
-    NINF_KEY, NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, NOTIFYICONDATAW_0,
-    Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_REALTIME, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIM_ADD,
+    NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_BALLOONHIDE, NIN_BALLOONTIMEOUT,
+    NIN_BALLOONUSERCLICK, NIN_SELECT, NINF_KEY, NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4,
+    NOTIFYICONDATAW, NOTIFYICONDATAW_0, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowThreadProcessId, IDI_APPLICATION, IsWindowVisible, LoadIconW,
@@ -23,7 +26,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::settings::TraySetting;
 use super::*;
-use crate::automation::{UiTray, UiTrayMenuItem};
+use crate::automation::{DumpShownTip, UiTray, UiTrayMenuItem};
 
 /// The icon's id among the frame's: it has one.
 const TRAY_ICON_ID: u32 = 1;
@@ -36,6 +39,26 @@ pub(super) struct TrayState {
     /// The shell holds the icon: an `NIM_ADD` succeeded, and no
     /// `NIM_DELETE` or Explorer restart has dropped it since.
     icon_added: bool,
+    /// The window the tip on the icon is about, while it shows.
+    tip: Option<ViewId>,
+    /// Every tip the shell took, in order, for the automation dump.
+    shown_tips: Vec<ShownTip>,
+}
+
+/// A line that may show a tip, found while the batch applies; the tip is
+/// shown once the window's rows are built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TipCandidate {
+    /// The window the line is in: its room's or its thread's.
+    pub(super) view: ViewId,
+    pub(super) activity_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShownTip {
+    view: ViewId,
+    title: String,
+    text: String,
 }
 
 /// Whether the icon should be in the tray: always, while the frame is
@@ -90,19 +113,26 @@ fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
     }
 }
 
-/// Copies `text` into a fixed UTF-16 field, cut at a character boundary so
-/// it ends in a NUL.
-pub(super) fn fill_utf16<const N: usize>(field: &mut [u16; N], text: &str) {
+/// The longest start of `text` that is at most `units` UTF-16 units,
+/// cut at a character boundary: a surrogate pair is never split.
+fn utf16_prefix(text: &str, units: usize) -> &str {
     let mut length = 0;
-    for ch in text.chars() {
-        let width = ch.len_utf16();
-        if length + width >= N {
-            break;
+    for (index, ch) in text.char_indices() {
+        length += ch.len_utf16();
+        if length > units {
+            return &text[..index];
         }
-        ch.encode_utf16(&mut field[length..length + width]);
-        length += width;
     }
-    field[length] = 0;
+    text
+}
+
+/// Copies `text` into a fixed UTF-16 field, ending in a NUL: the caller
+/// cut it to fit.
+fn fill_utf16<const N: usize>(field: &mut [u16; N], text: &str) {
+    let units = text.encode_utf16().collect::<Vec<_>>();
+    assert!(units.len() < N, "{text:?} fits the field");
+    field[..units.len()].copy_from_slice(&units);
+    field[units.len()] = 0;
 }
 
 unsafe fn notify_icon(message: NOTIFY_ICON_MESSAGE, data: &NOTIFYICONDATAW) -> Result<(), String> {
@@ -165,10 +195,11 @@ unsafe fn set_tray_icon(hwnd: HWND, wanted: bool) -> Result<bool, String> {
 
 /// Adds or removes the icon as the options, the frame and the tips want.
 pub(super) unsafe fn sync_tray_icon(hwnd: HWND) -> Result<(), String> {
+    let state = state_ref(hwnd);
     let wanted = icon_wanted(
-        &state_ref(hwnd).settings.settings().tray,
+        &state.settings.settings().tray,
         frame_in_tray(hwnd),
-        false,
+        state.tray.tip.is_some(),
     );
     set_tray_icon(hwnd, wanted).map(|_| ())
 }
@@ -238,6 +269,11 @@ pub(super) unsafe fn on_tray_icon(
         WM_LBUTTONUP if single_click => toggle_from_tray(hwnd),
         WM_LBUTTONDBLCLK if !single_click => toggle_from_tray(hwnd),
         NIN_KEYSELECT => toggle_from_tray(hwnd),
+        NIN_BALLOONUSERCLICK => open_tip_view(hwnd),
+        NIN_BALLOONTIMEOUT | NIN_BALLOONHIDE => {
+            state_mut(hwnd).tray.tip = None;
+            sync_tray_icon(hwnd)
+        }
         // A right click, Shift+F10 or the Apps key.
         WM_CONTEXTMENU => show_tray_menu(
             hwnd,
@@ -326,6 +362,85 @@ unsafe fn choose_tray_view(hwnd: HWND, view: &ViewId) -> Result<(), String> {
     Ok(())
 }
 
+/// The line of a tip: as its window shows it, without the timestamp, in
+/// plain text. `None` once the line is no longer shown.
+fn tip_line(state: &WindowState, candidate: &TipCandidate) -> Option<String> {
+    let timestamp = TimestampSetting {
+        show: false,
+        format: state.settings.settings().timestamp.format.clone(),
+    };
+    let timestamps = TimestampStyle::new(&timestamp, state.local_time);
+    let rows = match &candidate.view {
+        ViewId::Room(room_id) => build_room_timeline_rows(&state.model, room_id, timestamps),
+        ViewId::Thread {
+            room_id,
+            thread_root_event_id,
+        } => build_thread_timeline_rows(&state.model, room_id, thread_root_event_id, timestamps),
+        ViewId::Status | ViewId::RoomList => unreachable!("a room's line is in its window"),
+    };
+    let identity = TimelineRowIdentity::activity_primary(&candidate.activity_id);
+    rows.into_iter()
+        .find(|row| row.identity == identity)
+        .map(|row| row.logical_text)
+}
+
+/// Shows a tip about a line, while the user works in another application:
+/// the window's name over the line, as a balloon on the icon (added for
+/// it if need be).
+pub(super) unsafe fn show_tip(hwnd: HWND, candidate: TipCandidate) -> Result<(), String> {
+    if mirx_is_foreground() {
+        return Ok(());
+    }
+    let state = state_ref(hwnd);
+    // The batch may have left the room, or cleared the line.
+    if !view_id_is_valid(&state.model, &candidate.view) {
+        return Ok(());
+    }
+    let Some(line) = tip_line(state, &candidate) else {
+        return Ok(());
+    };
+    let title = view_short_title(&state.model, &candidate.view);
+    // A refused icon is said in Status; there is nothing to show it on.
+    if !set_tray_icon(hwnd, true)? {
+        return Ok(());
+    }
+    let mut data = icon_data(hwnd);
+    // Real-time: a tip that cannot show now is not news later.
+    data.uFlags = NIF_INFO | NIF_REALTIME;
+    data.dwInfoFlags = NIIF_INFO;
+    let title = utf16_prefix(&title, data.szInfoTitle.len() - 1);
+    let text = utf16_prefix(&line, data.szInfo.len() - 1);
+    fill_utf16(&mut data.szInfoTitle, title);
+    fill_utf16(&mut data.szInfo, text);
+    let tray = &mut state_mut(hwnd).tray;
+    match notify_icon(NIM_MODIFY, &data) {
+        Ok(()) => {
+            tray.tip = Some(candidate.view.clone());
+            tray.shown_tips.push(ShownTip {
+                view: candidate.view,
+                title: title.to_owned(),
+                text: text.to_owned(),
+            });
+            Ok(())
+        }
+        Err(error) => {
+            report_tray_error(hwnd, &error)?;
+            sync_tray_icon(hwnd)
+        }
+    }
+}
+
+/// The tip was clicked: mirx comes back with its window active.
+unsafe fn open_tip_view(hwnd: HWND) -> Result<(), String> {
+    let view = state_mut(hwnd).tray.tip.take();
+    restore_from_tray(hwnd)?;
+    // The window may have gone while the tip showed.
+    if let Some(view) = view.filter(|view| view_id_is_valid(&state_ref(hwnd).model, view)) {
+        activate_view(hwnd, &view, None)?;
+    }
+    Ok(())
+}
+
 /// The automation's choice of a popup item by its label, as a click on it.
 pub(super) unsafe fn choose_tray_menu_item(hwnd: HWND, label: &str) -> Result<(), String> {
     let view = tray_menu_items(state_ref(hwnd))
@@ -334,6 +449,19 @@ pub(super) unsafe fn choose_tray_menu_item(hwnd: HWND, label: &str) -> Result<()
         .ok_or_else(|| format!("the tray popup has no item {label}"))?
         .view;
     choose_tray_view(hwnd, &view)
+}
+
+pub(super) fn dump_shown_tips(state: &WindowState) -> Vec<DumpShownTip> {
+    state
+        .tray
+        .shown_tips
+        .iter()
+        .map(|tip| DumpShownTip {
+            view: view_identity_from_view_id(&tip.view),
+            title: tip.title.clone(),
+            text: tip.text.clone(),
+        })
+        .collect()
 }
 
 pub(super) unsafe fn dump_tray(hwnd: HWND) -> UiTray {
@@ -394,17 +522,29 @@ mod tests {
     }
 
     #[test]
-    fn text_is_cut_at_a_character_boundary_and_ends_in_nul() {
-        let mut field = [0xffff_u16; 4];
-        fill_utf16(&mut field, "ab");
-        assert_eq!(field, [b'a' as u16, b'b' as u16, 0, 0xffff]);
-        fill_utf16(&mut field, "abcdef");
-        assert_eq!(field, [b'a' as u16, b'b' as u16, b'c' as u16, 0]);
+    fn text_is_cut_at_a_character_boundary() {
+        assert_eq!(utf16_prefix("abc", 3), "abc");
+        assert_eq!(utf16_prefix("abcdef", 3), "abc");
+        assert_eq!(utf16_prefix("", 3), "");
         // A surrogate pair that does not fit whole is left out.
-        fill_utf16(&mut field, "ab\u{1F600}");
-        assert_eq!(field[..3], [b'a' as u16, b'b' as u16, 0]);
+        assert_eq!(utf16_prefix("ab\u{1F600}", 3), "ab");
+        assert_eq!(utf16_prefix("a\u{1F600}", 3), "a\u{1F600}");
+        assert_eq!(utf16_prefix("héllo", 2), "hé");
+    }
+
+    #[test]
+    fn a_field_holds_the_text_and_a_nul() {
+        let mut field = [0xffff_u16; 4];
         fill_utf16(&mut field, "a\u{1F600}");
         assert_eq!(field, [b'a' as u16, 0xd83d, 0xde00, 0]);
+        fill_utf16(&mut field, "");
+        assert_eq!(field[0], 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "fits the field")]
+    fn a_field_never_cuts_the_text() {
+        fill_utf16(&mut [0_u16; 4], "abcd");
     }
 
     #[test]

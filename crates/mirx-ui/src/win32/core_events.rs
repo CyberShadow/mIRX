@@ -18,17 +18,29 @@ fn apply_room_event_fetch(state: &mut WindowState, fetch: RoomEventFetch) {
 /// Returns whether the activity should flash the frame. The active view gets
 /// no activity colour, but it can still want attention while mIRC is in the
 /// background.
-fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) -> bool {
+fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) -> ActivityAttention {
     let clears_last_activity = matches!(activity.kind, RoomActivityKind::Redacted(_));
     let target_view_id = room_activity_target_view_id(&activity);
-    let mut wants_attention = false;
+    let mut attention = ActivityAttention::default();
     if let Some(level) = activity_level_for(&activity, state.model.own_user_id.as_deref())
         && let Some((room_is_direct, mode)) =
             sendable_room_by_id(&state.model.rooms, &activity.room_id)
                 .map(|room| (room.is_direct, joined_room_notification_mode(room)))
     {
-        wants_attention = !state.synthetic_load_in_progress
-            && notifications::activity_wants_attention(level, room_is_direct, mode);
+        // A replayed event load is not news.
+        if !state.synthetic_load_in_progress {
+            attention.flash = notifications::activity_wants_attention(level, room_is_direct, mode);
+            attention.tip = notifications::activity_wants_tip(
+                level,
+                room_is_direct,
+                mode,
+                &state.settings.settings().tips,
+            )
+            .then(|| TipCandidate {
+                view: target_view_id.clone(),
+                activity_id: activity.activity_id.clone(),
+            });
+        }
         // A closed query pops up again when the other side talks, as in
         // mIRC, muted or not; the next view sync recreates its window.
         if level >= ViewActivityLevel::Message
@@ -62,7 +74,26 @@ fn apply_room_activity_event(state: &mut WindowState, activity: RoomActivity) ->
     } else if clears_last_activity {
         state.model.last_activity = None;
     }
-    wants_attention
+    attention
+}
+
+/// What a line asks of the user's attention: a taskbar flash, and a tip
+/// about it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct ActivityAttention {
+    pub(super) flash: bool,
+    pub(super) tip: Option<TipCandidate>,
+}
+
+impl ActivityAttention {
+    /// A batch's: it flashes if any line does, and tips about its last
+    /// line that wants one (one tip per batch; Windows queues no more).
+    fn then(self, later: Self) -> Self {
+        Self {
+            flash: self.flash || later.flash,
+            tip: later.tip.or(self.tip),
+        }
+    }
 }
 
 fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivityUpdate) {
@@ -364,7 +395,10 @@ pub(super) unsafe fn handle_core_events(hwnd: HWND) {
 }
 
 /// Returns whether the event should flash the frame.
-pub(super) fn apply_core_event(state: &mut WindowState, event: Event) -> Result<bool, String> {
+pub(super) fn apply_core_event(
+    state: &mut WindowState,
+    event: Event,
+) -> Result<ActivityAttention, String> {
     state.model.connection = connection::after_event(state.model.connection, &event);
     match event {
         Event::Started => {
@@ -625,7 +659,7 @@ pub(super) fn apply_core_event(state: &mut WindowState, event: Event) -> Result<
             state.model.last_error = Some(error);
         }
     }
-    Ok(false)
+    Ok(ActivityAttention::default())
 }
 
 /// A join the user asked for opens the room's window and makes it active,
@@ -685,7 +719,7 @@ pub(super) unsafe fn apply_events_and_refresh(
     let mut history_backfill_views = Vec::new();
     let mut backfill_result = false;
     let mut failed_backfill_room_id = None;
-    let mut wants_attention = false;
+    let mut attention = ActivityAttention::default();
     for event in events {
         if let Event::E2eeRecoverySetupSucceeded(result) = &event {
             show_e2ee_recovery_key(hwnd, &result.recovery_key)?;
@@ -727,7 +761,7 @@ pub(super) unsafe fn apply_events_and_refresh(
             Event::SignInUrl { url } if !state.synthetic_load_in_progress => Some(url.clone()),
             _ => None,
         };
-        wants_attention |= apply_core_event(state, event)?;
+        attention = attention.then(apply_core_event(state, event)?);
         state.event_generation += 1;
         if let Some(url) = sign_in_url {
             open_web_link(hwnd, url)?;
@@ -735,8 +769,12 @@ pub(super) unsafe fn apply_events_and_refresh(
     }
 
     sync_views_and_tree(hwnd)?;
-    if wants_attention {
+    if attention.flash {
         request_frame_attention(hwnd);
+    }
+    // The rows exist now, so the tip can show the line as the window does.
+    if let Some(tip) = attention.tip {
+        show_tip(hwnd, tip)?;
     }
     if let Some(anchor) = history_backfill_anchor {
         restore_room_history_backfill_anchor(hwnd, anchor);
@@ -2867,10 +2905,10 @@ mod tests {
         };
         assert_ne!(state.active_view, room_view_id("!dm:example"));
 
-        assert!(!apply_room_activity_event(
-            &mut state,
-            message_from("$own", "@me:example")
-        ));
+        assert_eq!(
+            apply_room_activity_event(&mut state, message_from("$own", "@me:example")),
+            ActivityAttention::default()
+        );
         assert_eq!(state.room_activity.get(&room_view_id("!dm:example")), None);
         assert_eq!(
             state
@@ -2879,10 +2917,9 @@ mod tests {
             None
         );
 
-        assert!(apply_room_activity_event(
-            &mut state,
-            message_from("$theirs", "@alice:example")
-        ));
+        assert!(
+            apply_room_activity_event(&mut state, message_from("$theirs", "@alice:example")).flash
+        );
         assert_eq!(
             state.room_activity.get(&room_view_id("!dm:example")),
             Some(&ViewActivityLevel::Message)
@@ -2943,20 +2980,79 @@ mod tests {
             ))))
         };
 
-        assert!(!apply_core_event(&mut state, timeline("!room:example", "hello")).unwrap());
-        assert!(!apply_core_event(&mut state, topic_state("!query:example", "topic")).unwrap());
-        assert!(apply_core_event(&mut state, timeline("!query:example", "hi")).unwrap());
+        let mut apply = |event| apply_core_event(&mut state, event).unwrap();
+        let tip = |room_id: &str, activity_id: &str| {
+            Some(TipCandidate {
+                view: room_view_id(room_id),
+                activity_id: activity_id.to_owned(),
+            })
+        };
+        let quiet = ActivityAttention::default();
+        assert_eq!(apply(timeline("!room:example", "hello")), quiet);
+        assert_eq!(apply(topic_state("!query:example", "topic")), quiet);
+        assert_eq!(
+            apply(timeline("!query:example", "hi")),
+            ActivityAttention {
+                flash: true,
+                tip: tip("!query:example", "event:$!query:example:hi"),
+            }
+        );
+        assert_eq!(
+            apply(ping()),
+            ActivityAttention {
+                flash: true,
+                tip: tip("!room:example", "event:$ping"),
+            }
+        );
+        assert_eq!(apply(Event::SyncStarted), quiet);
         assert!(
             !state
                 .room_activity
                 .contains_key(&room_view_id("!query:example"))
         );
-        assert!(apply_core_event(&mut state, ping()).unwrap());
-        assert!(!apply_core_event(&mut state, Event::SyncStarted).unwrap());
 
         state.synthetic_load_in_progress = true;
-        assert!(!apply_core_event(&mut state, ping()).unwrap());
-        assert!(!apply_core_event(&mut state, timeline("!query:example", "loaded")).unwrap());
+        assert_eq!(apply_core_event(&mut state, ping()).unwrap(), quiet);
+        assert_eq!(
+            apply_core_event(&mut state, timeline("!query:example", "loaded")).unwrap(),
+            quiet
+        );
+    }
+
+    #[test]
+    fn a_batch_flashes_if_any_line_does_and_tips_about_its_last_tip() {
+        let tip = |activity_id: &str| {
+            Some(TipCandidate {
+                view: room_view_id("!room:example"),
+                activity_id: activity_id.to_owned(),
+            })
+        };
+        let first = ActivityAttention {
+            flash: true,
+            tip: tip("first"),
+        };
+        let quiet = ActivityAttention::default();
+        assert_eq!(
+            first.then(quiet).then(ActivityAttention {
+                flash: false,
+                tip: tip("last"),
+            }),
+            ActivityAttention {
+                flash: true,
+                tip: tip("last"),
+            }
+        );
+        assert_eq!(
+            ActivityAttention {
+                flash: false,
+                tip: tip("only"),
+            }
+            .then(ActivityAttention::default()),
+            ActivityAttention {
+                flash: false,
+                tip: tip("only"),
+            }
+        );
     }
 
     fn with_mode(mut room: RoomSummary, mode: RoomNotificationMode) -> RoomSummary {
@@ -2980,7 +3076,10 @@ mod tests {
         ];
         state.active_view = room_view_id("!active:example");
 
-        assert!(!apply_core_event(&mut state, timeline("!muted:example", "hello")).unwrap());
+        assert_eq!(
+            apply_core_event(&mut state, timeline("!muted:example", "hello")).unwrap(),
+            ActivityAttention::default()
+        );
         let ping = highlighted(sent_message_activity(
             "!muted:example",
             "$ping",
@@ -2988,8 +3087,14 @@ mod tests {
             "Alice: ping",
             1,
         ));
-        assert!(!apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap());
-        assert!(!apply_core_event(&mut state, timeline("!quiet-dm:example", "hi")).unwrap());
+        assert_eq!(
+            apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap(),
+            ActivityAttention::default()
+        );
+        assert_eq!(
+            apply_core_event(&mut state, timeline("!quiet-dm:example", "hi")).unwrap(),
+            ActivityAttention::default()
+        );
         assert_eq!(
             state.room_activity.get(&room_view_id("!muted:example")),
             Some(&ViewActivityLevel::Event)
@@ -3012,7 +3117,10 @@ mod tests {
         ];
         state.active_view = room_view_id("!active:example");
 
-        assert!(!apply_core_event(&mut state, timeline("!dm:example", "hi")).unwrap());
+        assert_eq!(
+            apply_core_event(&mut state, timeline("!dm:example", "hi")).unwrap(),
+            ActivityAttention::default()
+        );
         assert_eq!(
             state.room_activity.get(&room_view_id("!dm:example")),
             Some(&ViewActivityLevel::Message)
@@ -3024,7 +3132,8 @@ mod tests {
             "Casey: ping",
             1,
         ));
-        assert!(apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap());
+        let attention = apply_core_event(&mut state, Event::RoomActivity(Box::new(ping))).unwrap();
+        assert!(attention.flash && attention.tip.is_some(), "{attention:?}");
     }
 
     #[test]
