@@ -83,6 +83,7 @@
         "presentation": "text",
         "body": "morning all",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

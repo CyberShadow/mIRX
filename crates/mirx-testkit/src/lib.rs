@@ -1050,6 +1050,7 @@ pub enum RoomActivityUpdateKind {
         presentation: RoomMessagePresentationKind,
         body: String,
         styles: Vec<mirx_core::TextStyleSpan>,
+        user_links: Vec<mirx_core::UserLinkSpan>,
     },
     ReactionAdded {
         reaction_event_id: String,

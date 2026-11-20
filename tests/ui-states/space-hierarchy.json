@@ -135,6 +135,7 @@
         "presentation": "text",
         "body": "ops workspace is ready",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -156,6 +157,7 @@
         "presentation": "text",
         "body": "shared room has updates",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -177,6 +179,7 @@
         "presentation": "text",
         "body": "random room has updates",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

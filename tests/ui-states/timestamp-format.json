@@ -60,6 +60,7 @@
         "presentation": "text",
         "body": "welcome to the lobby",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -81,6 +82,7 @@
         "presentation": "text",
         "body": "build is green",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -140,6 +142,7 @@
         "presentation": "text",
         "body": "ops topic: incident review",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -161,6 +164,7 @@
         "presentation": "text",
         "body": "encryption enabled for ops",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -182,6 +186,7 @@
         "presentation": "text",
         "body": "deploy window opens at 18:00 UTC",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -203,6 +208,7 @@
         "presentation": "text",
         "body": "random: lunch votes are in",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

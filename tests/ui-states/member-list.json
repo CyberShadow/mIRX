@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "member list context line",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "timeline stays visible beside the list",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -74,6 +76,7 @@
         "presentation": "text",
         "body": "shared names show the user ID",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "current room line one",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "current room line two",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -74,6 +76,7 @@
         "presentation": "text",
         "body": "scroll filler line 01 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -95,6 +98,7 @@
         "presentation": "text",
         "body": "scroll filler line 02 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -116,6 +120,7 @@
         "presentation": "text",
         "body": "scroll filler line 03 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -137,6 +142,7 @@
         "presentation": "text",
         "body": "scroll filler line 04 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -158,6 +164,7 @@
         "presentation": "text",
         "body": "scroll filler line 05 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -179,6 +186,7 @@
         "presentation": "text",
         "body": "scroll filler line 06 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -200,6 +208,7 @@
         "presentation": "text",
         "body": "scroll filler line 07 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -221,6 +230,7 @@
         "presentation": "text",
         "body": "scroll filler line 08 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -242,6 +252,7 @@
         "presentation": "text",
         "body": "scroll filler line 09 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -263,6 +274,7 @@
         "presentation": "text",
         "body": "scroll filler line 10 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -284,6 +296,7 @@
         "presentation": "text",
         "body": "scroll filler line 11 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -305,6 +318,7 @@
         "presentation": "text",
         "body": "scroll filler line 12 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -326,6 +340,7 @@
         "presentation": "text",
         "body": "scroll filler line 13 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -347,6 +362,7 @@
         "presentation": "text",
         "body": "scroll filler line 14 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -368,6 +384,7 @@
         "presentation": "text",
         "body": "scroll filler line 15 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -389,6 +406,7 @@
         "presentation": "text",
         "body": "scroll filler line 16 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -410,6 +428,7 @@
         "presentation": "text",
         "body": "scroll filler line 17 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -431,6 +450,7 @@
         "presentation": "text",
         "body": "scroll filler line 18 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -452,6 +472,7 @@
         "presentation": "text",
         "body": "scroll filler line 19 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -473,6 +494,7 @@
         "presentation": "text",
         "body": "scroll filler line 20 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -494,6 +516,7 @@
         "presentation": "text",
         "body": "scroll filler line 21 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -515,6 +538,7 @@
         "presentation": "text",
         "body": "scroll filler line 22 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -536,6 +560,7 @@
         "presentation": "text",
         "body": "scroll filler line 23 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -557,6 +582,7 @@
         "presentation": "text",
         "body": "scroll filler line 24 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -578,6 +604,7 @@
         "presentation": "text",
         "body": "scroll filler line 25 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -599,6 +626,7 @@
         "presentation": "text",
         "body": "scroll filler line 26 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -620,6 +648,7 @@
         "presentation": "text",
         "body": "scroll filler line 27 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -641,6 +670,7 @@
         "presentation": "text",
         "body": "scroll filler line 28 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -662,6 +692,7 @@
         "presentation": "text",
         "body": "scroll filler line 29 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -683,6 +714,7 @@
         "presentation": "text",
         "body": "scroll filler line 30 alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

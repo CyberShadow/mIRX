@@ -119,6 +119,7 @@ fn sent_message_activity(
             presentation: RoomMessagePresentationKind::Text,
             body: body.to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Sent,
         }),
     }

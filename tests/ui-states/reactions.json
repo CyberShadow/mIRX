@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "normal reaction target",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "thread reaction root",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -80,6 +82,7 @@
         "presentation": "text",
         "body": "thread reaction reply",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

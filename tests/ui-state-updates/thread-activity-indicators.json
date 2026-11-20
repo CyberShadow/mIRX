@@ -19,6 +19,7 @@
         "presentation": "text",
         "body": "fresh thread activity",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

@@ -81,6 +81,7 @@
         "presentation": "text",
         "body": "are we deploying today? the build looks green on every platform now",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -109,6 +110,7 @@
         "presentation": "text",
         "body": "yes, after lunch",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -137,6 +139,7 @@
         "presentation": "emote",
         "body": "cheers",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -165,6 +168,7 @@
         "presentation": "text",
         "body": "I will tag the release",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -190,6 +194,7 @@
         "presentation": "text",
         "body": "the deploy window is 13:00 UTC",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -210,7 +215,8 @@
         "timestamp_ms": 1700000250000,
         "presentation": "text",
         "body": "the deploy window is 14:00 UTC",
-        "styles": []
+        "styles": [],
+        "user_links": []
       }
     }
   },
@@ -236,6 +242,7 @@
         "presentation": "text",
         "body": "that one was fixed last week",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -264,6 +271,7 @@
         "presentation": "text",
         "body": "still seeing it here",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -294,6 +302,7 @@
             "presentation": "text",
             "body": "the login page times out on the second try",
             "styles": [],
+            "user_links": [],
             "send_state": {
               "state": "sent"
             }

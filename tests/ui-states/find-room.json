@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "opening line before the search hit",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "needle in the first matching row",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -74,6 +76,7 @@
         "presentation": "text",
         "body": "neutral middle line",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -95,6 +98,7 @@
         "presentation": "text",
         "body": "needle appears again in the second matching row",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "alpha status update",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "beta follow-up",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

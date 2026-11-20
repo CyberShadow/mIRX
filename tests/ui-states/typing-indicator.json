@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "typing context",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

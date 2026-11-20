@@ -18,6 +18,7 @@
         "presentation": "text",
         "body": "standup in five",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -43,6 +44,7 @@
         "presentation": "text",
         "body": "new release notes are up",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -68,6 +70,7 @@
         "presentation": "text",
         "body": "build #4211 passed",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -93,6 +96,7 @@
         "presentation": "text",
         "body": "Alice: the deploy is yours",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

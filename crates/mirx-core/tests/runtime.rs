@@ -2094,6 +2094,7 @@ fn room_activity_events_round_trip_through_serde() {
             presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Sent,
         }),
     }));
@@ -2110,6 +2111,7 @@ fn room_activity_events_round_trip_through_serde() {
             presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Pending,
         }),
     }));
@@ -2352,6 +2354,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             presentation: RoomMessagePresentationKind::Text,
             body: "hello".to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Pending,
         }),
     }));
@@ -2488,6 +2491,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
             presentation: RoomMessagePresentationKind::Text,
             body: "edited body".to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
         },
     });
     let redacted_update_event = Event::RoomActivityUpdate(RoomActivityUpdate {
@@ -2525,7 +2529,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
 
     assert_eq!(
         serde_json::to_string(&pending_message_event).expect("serialize pending room activity"),
-        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"send_state":{"state":"pending"}}}}"#
+        r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"pending"}}}}"#
     );
     assert_eq!(
         serde_json::to_string(&member_notice_event).expect("serialize member room activity"),
@@ -2559,7 +2563,7 @@ fn room_activity_events_serialize_with_tagged_wire_shape() {
     assert_eq!(
         serde_json::to_string(&replaced_update_event)
             .expect("serialize replaced room activity update"),
-        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","styles":[]}}}"#
+        r#"{"RoomActivityUpdate":{"room_id":"!ops:example.org","target":{"type":"event","event_id":"$original:example.org"},"kind":{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","styles":[],"user_links":[]}}}"#
     );
     assert_eq!(
         serde_json::to_string(&redacted_update_event)
@@ -2757,6 +2761,7 @@ fn room_history_backfill_event_round_trips_through_serde() {
                     presentation: RoomMessagePresentationKind::Text,
                     body: "older message".to_owned(),
                     styles: Vec::new(),
+                    user_links: Vec::new(),
                     send_state: RoomMessageSendState::Sent,
                 }),
             })),
@@ -2778,7 +2783,7 @@ fn room_history_backfill_event_round_trips_through_serde() {
     let json = serde_json::to_string(&event).expect("serialize room history backfill event");
     assert_eq!(
         json,
-        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","start":"t4747337_219380_2603","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"older message","styles":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
+        r#"{"RoomHistoryBackfill":{"room_id":"!ops:example.org","start":"t4747337_219380_2603","end":"t4747337_219379_2603","events":[{"type":"activity","room_id":"!ops:example.org","activity_id":"event:$message:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$message:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"older message","styles":[],"user_links":[],"send_state":{"state":"sent"}}},{"type":"activity_update","room_id":"!ops:example.org","target":{"type":"event","event_id":"$message:example.org"},"kind":{"type":"reaction_added","reaction_event_id":"$reaction:example.org","sender":"@bob:example.org","timestamp_ms":1700000000100,"key":"heart"}}]}}"#
     );
 
     let restored: Event =
@@ -2812,7 +2817,7 @@ fn room_history_backfill_rejects_invalid_nested_event_tag() {
 fn room_history_backfill_event_rejects_unknown_fields() {
     assert!(
         serde_json::from_str::<RoomHistoryBackfillEvent>(
-            r#"{"type":"activity","room_id":"!room:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
+            r#"{"type":"activity","room_id":"!room:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":null,"sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
         )
         .is_err(),
         "room history backfill event must reject unknown fields"
@@ -3384,7 +3389,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomActivity>(
-            r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
+            r#"{"room_id":"!ops:example.org","activity_id":"event:$event:example.org","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}},"unexpected":"value"}"#
         )
         .is_err(),
         "room activity must reject unknown fields"
@@ -3392,7 +3397,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomMessageActivity>(
-            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"send_state":{"state":"sent"},"unexpected":"value"}"#
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"},"unexpected":"value"}"#
         )
         .is_err(),
         "room message activity must reject unknown fields"
@@ -3480,7 +3485,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<Event>(
-            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
+            r#"{"RoomActivity":{"room_id":"!ops:example.org","activity_id":"txn:txn-1","timestamp_ms":1700000000000,"highlight":false,"kind":{"type":"message","event_id":null,"transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"failed","message":"send failed","recoverable":true,"unexpected":"value"}}}}"#
         )
         .is_err(),
         "failed message send state must reject unknown fields"
@@ -3496,7 +3501,7 @@ fn room_activity_dtos_reject_unknown_fields() {
 
     assert!(
         serde_json::from_str::<RoomMessageActivity>(
-            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"html","body":"hello","styles":[],"send_state":{"state":"sent"}}"#
+            r#"{"event_id":"$event:example.org","transaction_id":"txn-1","sender":{"user_id":"@alice:example.org","display_name":"Alice","display_name_ambiguous":false},"presentation":"html","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}}"#
         )
         .is_err(),
         "room message activity must reject unknown presentation"

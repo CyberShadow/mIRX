@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "dense text row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "notice",
         "body": "dense notice row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -74,6 +76,7 @@
         "presentation": "emote",
         "body": "dense emote row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -194,6 +197,7 @@
         "presentation": "text",
         "body": "dense pending row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "pending"
         }
@@ -215,6 +219,7 @@
         "presentation": "text",
         "body": "dense failed row alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "pending"
         }
@@ -277,6 +282,7 @@
         "presentation": "text",
         "body": "dense thread root alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -304,6 +310,7 @@
         "presentation": "text",
         "body": "dense threaded reply alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

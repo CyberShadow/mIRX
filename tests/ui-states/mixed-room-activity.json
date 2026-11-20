@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "synced hello",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -111,6 +112,7 @@
         "presentation": "notice",
         "body": "server maintenance",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -132,6 +134,7 @@
         "presentation": "emote",
         "body": "waves hello",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -153,6 +156,7 @@
         "presentation": "emote",
         "body": "pending local echo",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "pending"
         }
@@ -174,6 +178,7 @@
         "presentation": "emote",
         "body": "failed local echo",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "pending"
         }

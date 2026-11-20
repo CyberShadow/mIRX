@@ -131,6 +131,7 @@ pub(super) fn sent_message_activity_with_presentation(
             presentation,
             body: body.to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Sent,
         }),
     }
@@ -293,6 +294,7 @@ pub(super) fn pending_message_activity_with_presentation(
             presentation,
             body: body.to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Pending,
         }),
     }
@@ -379,6 +381,7 @@ pub(super) fn incoming_replaced(
             presentation,
             body: body.to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
         },
     })
 }
@@ -475,6 +478,7 @@ pub(super) fn failed_message_activity_with_presentation(
             presentation,
             body: body.to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
             send_state: RoomMessageSendState::Failed {
                 message: message.to_owned(),
                 recoverable: true,

@@ -2860,6 +2860,7 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             presentation: RoomMessagePresentationKind::Text,
             body: "edited body".to_owned(),
             styles: Vec::new(),
+            user_links: Vec::new(),
         },
     };
     let redacted = RoomActivityUpdate {
@@ -2931,7 +2932,8 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
             "timestamp_ms": 1700000001000u64,
             "presentation": "text",
             "body": "edited body",
-            "styles": []
+            "styles": [],
+            "user_links": []
         }
     });
     let redacted_json = serde_json::json!({
@@ -3040,6 +3042,7 @@ fn room_activity_update_dtos_round_trip_across_testkit_and_core() {
                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "edited body".to_owned(),
                 styles: Vec::new(),
+                user_links: Vec::new(),
             },
         }
     );
@@ -3294,7 +3297,7 @@ fn room_activity_update_dtos_reject_unknown_fields_and_invalid_tags() {
     );
     assert!(
         serde_json::from_str::<RoomActivityUpdateKind>(
-            r#"{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","styles":[],"unexpected":"value"}"#
+            r#"{"type":"message_replaced","replacement_event_id":"$edit:example.org","sender":"@alice:example.org","timestamp_ms":1700000001000,"presentation":"text","body":"edited body","styles":[],"user_links":[],"unexpected":"value"}"#
         )
         .is_err(),
         "message replaced kind must reject unknown fields"

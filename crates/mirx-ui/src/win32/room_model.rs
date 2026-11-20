@@ -104,6 +104,7 @@ pub(super) struct MessageReplacementFields {
     pub(super) presentation: RoomMessagePresentationKind,
     pub(super) body: String,
     pub(super) styles: Vec<TextStyleSpan>,
+    pub(super) user_links: Vec<UserLinkSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,6 +226,7 @@ impl RoomViewModel {
                                 presentation,
                                 body,
                                 styles,
+                                user_links,
                                 ..
                             },
                         ) => self.replace_message(
@@ -233,6 +235,7 @@ impl RoomViewModel {
                                 presentation: *presentation,
                                 body: body.clone(),
                                 styles: styles.clone(),
+                                user_links: user_links.clone(),
                             },
                         ),
                         (
@@ -526,6 +529,7 @@ impl RoomViewModel {
         message.presentation = replacement.presentation;
         message.body = replacement.body;
         message.styles = replacement.styles;
+        message.user_links = replacement.user_links;
         self.edited_event_ids.insert(target_event_id.to_owned());
         self.rebuild_threads();
         true
@@ -869,6 +873,7 @@ pub(super) fn validate_synthetic_room_activity_events(
                             presentation,
                             body,
                             styles,
+                            user_links,
                             ..
                         },
                     ) => {
@@ -878,6 +883,7 @@ pub(super) fn validate_synthetic_room_activity_events(
                                 presentation: *presentation,
                                 body: body.clone(),
                                 styles: styles.clone(),
+                                user_links: user_links.clone(),
                             },
                         );
                         assert!(replaced, "validated synthetic message edit must resolve");
@@ -1437,6 +1443,7 @@ mod tests {
                         presentation: RoomMessagePresentationKind::Text,
                         body: "edited".to_owned(),
                         styles: Vec::new(),
+                        user_links: Vec::new(),
                     },
                 })]
             ),
@@ -1626,6 +1633,7 @@ mod tests {
                 presentation: RoomMessagePresentationKind::Text,
                 body: "edited root".to_owned(),
                 styles: Vec::new(),
+                user_links: Vec::new(),
             }
         ));
         assert_eq!(

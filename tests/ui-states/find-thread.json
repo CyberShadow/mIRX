@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "root msg",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "room-only lobby note",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -80,6 +82,7 @@
         "presentation": "text",
         "body": "thread needle alpha",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -106,6 +109,7 @@
         "presentation": "text",
         "body": "thread needle beta",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

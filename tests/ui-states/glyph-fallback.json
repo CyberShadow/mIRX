@@ -37,6 +37,7 @@
         "presentation": "text",
         "body": "it’s ready — ship it 🚀",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -62,6 +63,7 @@
         "presentation": "text",
         "body": "naïve café ½",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -87,6 +89,7 @@
         "presentation": "text",
         "body": "Привет, мир / ελληνικά",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -112,6 +115,7 @@
         "presentation": "text",
         "body": "👍️ with VS16, 👨‍👩‍👧 family, 🇩🇪 flag",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -137,6 +141,7 @@
         "presentation": "text",
         "body": "日本語",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

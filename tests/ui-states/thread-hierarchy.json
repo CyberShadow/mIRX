@@ -52,6 +52,7 @@
         "presentation": "text",
         "body": "lobby",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -73,6 +74,7 @@
         "presentation": "text",
         "body": "root msg",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -98,6 +100,7 @@
         "presentation": "text",
         "body": "plain",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -124,6 +127,7 @@
         "presentation": "text",
         "body": "thread rep",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -150,6 +154,7 @@
         "presentation": "text",
         "body": "pending threaded draft",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "pending"
         }

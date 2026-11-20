@@ -137,6 +137,7 @@
         "presentation": "text",
         "body": "the treebar roots at the Status window",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

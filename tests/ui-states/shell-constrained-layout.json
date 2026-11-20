@@ -60,6 +60,7 @@
         "presentation": "text",
         "body": "focus kickoff for constrained shell snapshot coverage",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -81,6 +82,7 @@
         "presentation": "text",
         "body": "member pane stays visible while the timeline still has enough width to read",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -102,6 +104,7 @@
         "presentation": "text",
         "body": "long visible timeline line for the 900x620 shell frame so the MDI content remains obvious",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -123,6 +126,7 @@
         "presentation": "text",
         "body": "another line keeps the room busy without depending on any new protocol behavior",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -144,6 +148,7 @@
         "presentation": "text",
         "body": "inbox update keeps the status bar visible",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

@@ -3574,7 +3574,7 @@ mod tests {
         assert_eq!(
             parse_command_request(
                 COMMAND_ID_LOAD_SYNTHETIC_STATE,
-                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"send_state":{"state":"sent"}}}}]}}"#,
+                br#"{"id":"load","args":{"events":["Started",{"SyncedRooms":[{"room_id":"!room:example","display_name":"Room","topic":null,"membership":"join","encrypted":true,"is_space":false,"is_direct":false,"direct_user_ids":[],"tags":[],"space_children":[],"notification_mode":"all_messages","canonical_alias":null,"alt_aliases":[]}]},{"RoomActivity":{"room_id":"!room:example","activity_id":"event:$event:example","timestamp_ms":1700000000000,"highlight":false,"relation":null,"kind":{"type":"message","event_id":"$event:example","transaction_id":null,"sender":{"user_id":"@alice:example","display_name":null,"display_name_ambiguous":false},"presentation":"text","body":"hello","styles":[],"user_links":[],"send_state":{"state":"sent"}}}}]}}"#,
             )
             .unwrap(),
             ParsedCommand::LoadSyntheticState {
@@ -3610,6 +3610,7 @@ mod tests {
                                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                                 body: "hello".to_owned(),
                                 styles: Vec::new(),
+                                user_links: Vec::new(),
                                 send_state: RoomMessageSendState::Sent,
                             }),
                         })),
@@ -6918,6 +6919,7 @@ mod tests {
                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "plain".to_owned(),
                 styles: Vec::new(),
+                user_links: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         };
@@ -6957,6 +6959,7 @@ mod tests {
                 presentation: mirx_core::RoomMessagePresentationKind::Text,
                 body: "hello".to_owned(),
                 styles: Vec::new(),
+                user_links: Vec::new(),
                 send_state: RoomMessageSendState::Sent,
             }),
         };

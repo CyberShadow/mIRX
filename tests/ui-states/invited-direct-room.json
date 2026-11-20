@@ -49,6 +49,7 @@
         "presentation": "text",
         "body": "beta latest",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

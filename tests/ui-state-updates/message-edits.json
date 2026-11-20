@@ -13,7 +13,8 @@
         "timestamp_ms": 1700000180000,
         "presentation": "text",
         "body": "lobby edited",
-        "styles": []
+        "styles": [],
+        "user_links": []
       }
     }
   },
@@ -31,7 +32,8 @@
         "timestamp_ms": 1700000240000,
         "presentation": "text",
         "body": "root msg edited",
-        "styles": []
+        "styles": [],
+        "user_links": []
       }
     }
   }

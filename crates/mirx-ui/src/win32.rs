@@ -33,8 +33,8 @@ use mirx_core::{
     RoomVideoInfo, SendFileRequest, SendMessageReplyTarget, SendMessageRequest,
     SendMessageThreadTarget, SendReactionRequest, SessionAuth, SetDisplayNameRequest,
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
-    SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserProfile,
-    VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
+    SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserLinkSpan,
+    UserProfile, VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
     VerificationStateEvent, login_method, login_server, start,
 };
 use serde::Serialize;

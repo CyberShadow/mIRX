@@ -906,8 +906,10 @@ pub fn check_user_links(body: &str, links: &[UserLinkSpan]) -> Result<(), String
     Ok(())
 }
 
-/// A text, notice or emote message. `styles` format `body`; they pass
-/// [`check_text_styles`], which the wire form enforces.
+/// A text, notice or emote message. `styles` format `body` and
+/// `user_links` say where it links to users; they pass
+/// [`check_text_styles`] and [`check_user_links`], which the wire form
+/// enforces.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "WireRoomMessageActivity")]
 pub struct RoomMessageActivity {
@@ -917,6 +919,7 @@ pub struct RoomMessageActivity {
     pub presentation: RoomMessagePresentationKind,
     pub body: String,
     pub styles: Vec<TextStyleSpan>,
+    pub user_links: Vec<UserLinkSpan>,
     pub send_state: RoomMessageSendState,
 }
 
@@ -929,6 +932,7 @@ struct WireRoomMessageActivity {
     presentation: RoomMessagePresentationKind,
     body: String,
     styles: Vec<TextStyleSpan>,
+    user_links: Vec<UserLinkSpan>,
     send_state: RoomMessageSendState,
 }
 
@@ -942,6 +946,12 @@ impl TryFrom<WireRoomMessageActivity> for RoomMessageActivity {
                 message.event_id, message.transaction_id
             )
         })?;
+        check_user_links(&message.body, &message.user_links).map_err(|err| {
+            format!(
+                "invalid user links for message (event {:?}, transaction {:?}): {err}",
+                message.event_id, message.transaction_id
+            )
+        })?;
         Ok(Self {
             event_id: message.event_id,
             transaction_id: message.transaction_id,
@@ -949,6 +959,7 @@ impl TryFrom<WireRoomMessageActivity> for RoomMessageActivity {
             presentation: message.presentation,
             body: message.body,
             styles: message.styles,
+            user_links: message.user_links,
             send_state: message.send_state,
         })
     }
@@ -1163,8 +1174,9 @@ pub enum RoomMemberChange {
     AvatarChanged,
 }
 
-/// A change to an earlier activity. A `MessageReplaced` kind's styles pass
-/// [`check_text_styles`], which the wire form enforces.
+/// A change to an earlier activity. A `MessageReplaced` kind's styles and
+/// user links pass [`check_text_styles`] and [`check_user_links`], which
+/// the wire form enforces.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "WireRoomActivityUpdate")]
 pub struct RoomActivityUpdate {
@@ -1189,11 +1201,15 @@ impl TryFrom<WireRoomActivityUpdate> for RoomActivityUpdate {
             replacement_event_id,
             body,
             styles,
+            user_links,
             ..
         } = &update.kind
         {
             check_text_styles(body, styles).map_err(|err| {
                 format!("invalid styles for replacement {replacement_event_id}: {err}")
+            })?;
+            check_user_links(body, user_links).map_err(|err| {
+                format!("invalid user links for replacement {replacement_event_id}: {err}")
             })?;
         }
         Ok(Self {
@@ -1445,6 +1461,7 @@ pub enum RoomActivityUpdateKind {
         presentation: RoomMessagePresentationKind,
         body: String,
         styles: Vec<TextStyleSpan>,
+        user_links: Vec<UserLinkSpan>,
     },
     ReactionAdded {
         reaction_event_id: String,
@@ -1968,12 +1985,13 @@ mod tests {
             "presentation": "text",
             "body": "hi there",
             "styles": styles,
+            "user_links": [],
             "send_state": { "state": "sent" },
         })
     }
 
     #[test]
-    fn message_activities_carry_checked_styles() {
+    fn message_activities_carry_checked_styles_and_user_links() {
         let message = serde_json::from_value::<RoomMessageActivity>(message_json(
             serde_json::json!([{ "start": 0, "end": 2, "style": bold() }]),
         ))
@@ -1999,13 +2017,36 @@ mod tests {
             .to_string();
         assert!(err.contains("missing field `styles`"), "{err}");
 
+        let mut linked = message_json(serde_json::json!([]));
+        linked["user_links"] =
+            serde_json::json!([{ "start": 3, "end": 8, "user_id": "@bob:example.org" }]);
+        let message = serde_json::from_value::<RoomMessageActivity>(linked.clone()).unwrap();
+        assert_eq!(
+            message.user_links,
+            vec![user_link(3, 8, "@bob:example.org")]
+        );
+        assert_eq!(serde_json::to_value(&message).unwrap(), linked);
+        linked["user_links"][0]["end"] = serde_json::json!(9);
+        let err = serde_json::from_value::<RoomMessageActivity>(linked)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid user links"), "{err}");
+        assert!(err.contains("past the body"), "{err}");
+
+        let mut missing = message_json(serde_json::json!([]));
+        missing.as_object_mut().unwrap().remove("user_links");
+        let err = serde_json::from_value::<RoomMessageActivity>(missing)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing field `user_links`"), "{err}");
+
         let mut unknown = message_json(serde_json::json!([]));
         unknown["unexpected"] = serde_json::json!(true);
         assert!(serde_json::from_value::<RoomMessageActivity>(unknown).is_err());
     }
 
     #[test]
-    fn message_replacements_carry_checked_styles() {
+    fn message_replacements_carry_checked_styles_and_user_links() {
         let update = |styles: serde_json::Value| {
             serde_json::json!({
                 "room_id": "!ops:example.org",
@@ -2018,6 +2059,7 @@ mod tests {
                     "presentation": "text",
                     "body": "edited",
                     "styles": styles,
+                    "user_links": [],
                 },
             })
         };
@@ -2038,6 +2080,15 @@ mod tests {
         .to_string();
         assert!(err.contains("$edit:example.org"), "{err}");
         assert!(err.contains("plain"), "{err}");
+
+        let mut linked = update(serde_json::json!([]));
+        linked["kind"]["user_links"] =
+            serde_json::json!([{ "start": 0, "end": 6, "user_id": "not a user" }]);
+        let err = serde_json::from_value::<RoomActivityUpdate>(linked)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("$edit:example.org"), "{err}");
+        assert!(err.contains("invalid user ID"), "{err}");
 
         let mut unknown = update(serde_json::json!([]));
         unknown["unexpected"] = serde_json::json!(true);

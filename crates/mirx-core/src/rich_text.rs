@@ -15,13 +15,16 @@ use ruma_html::{Html, NodeData, NodeRef, SanitizerConfig};
 use crate::api::{
     TextColor, TextStyle, TextStyleSpan, UserLinkSpan, check_text_styles, check_user_links,
 };
+use crate::matrix_link::{MatrixLink, matrix_link};
 
-/// A message's display text and the styles that format it, which pass
-/// [`check_text_styles`].
+/// A message's display text, the styles that format it, which pass
+/// [`check_text_styles`], and where it links to users (pills), which pass
+/// [`check_user_links`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StyledText {
     pub(crate) body: String,
     pub(crate) styles: Vec<TextStyleSpan>,
+    pub(crate) user_links: Vec<UserLinkSpan>,
 }
 
 impl StyledText {
@@ -29,6 +32,7 @@ impl StyledText {
         Self {
             body,
             styles: Vec::new(),
+            user_links: Vec::new(),
         }
     }
 }
@@ -88,6 +92,12 @@ struct Writer {
     /// The current list item's marker, for its first line.
     marker: Option<String>,
     lists: Vec<List>,
+    user_links: Vec<UserLinkSpan>,
+    /// Inside a link to a user: where its text starts, once its first
+    /// character is written. Prefixes and a pending space are written
+    /// lazily with that character, so the body's length when the link
+    /// starts can be before them.
+    user_link_start: Option<Option<usize>>,
 }
 
 impl Writer {
@@ -236,10 +246,38 @@ impl Writer {
 
     /// A link's text, then its URL unless the text already says it or the
     /// link is a matrix.to permalink, whose text (a pill's display name)
-    /// is what it shows.
+    /// is what it shows. A link to a user (a matrix.to or `matrix:u/` one)
+    /// is a user link over its text, if that is on one line. One nested in
+    /// another (HTML does not allow it, but a table cell in a link can hold
+    /// one) is the outer one's text.
     fn link(&mut self, node: &NodeRef, href: Option<String>, context: Context) {
+        let user_id = href
+            .as_deref()
+            .and_then(matrix_link)
+            .and_then(|link| match link {
+                MatrixLink::User { user_id } => Some(user_id),
+                MatrixLink::Room { .. } | MatrixLink::Event { .. } => None,
+            });
+        let user_id = user_id.filter(|_| self.user_link_start.is_none());
+        if user_id.is_some() {
+            self.user_link_start = Some(None);
+        }
         let start = self.body.len();
         self.children(node, context);
+        if let Some(user_id) = user_id {
+            let end = self.body.len();
+            match self.user_link_start.take().expect("set above") {
+                Some(text_start) if !self.body[text_start..end].contains('\n') => {
+                    self.user_links.push(UserLinkSpan {
+                        start: text_start,
+                        end,
+                        user_id,
+                    });
+                }
+                // No text, or text on several lines.
+                Some(_) | None => {}
+            }
+        }
         let Some(href) = href else {
             return;
         };
@@ -314,6 +352,9 @@ impl Writer {
         if let Some(space_style) = self.pending_space.take() {
             self.push(" ", space_style);
         }
+        if self.user_link_start == Some(None) {
+            self.user_link_start = Some(Some(self.body.len()));
+        }
         // A no-break space is a space that HTML keeps: mirx writes runs of
         // spaces and spaces at a line's ends as `&nbsp;`.
         self.push(&text.replace('\u{a0}', " "), style);
@@ -355,9 +396,11 @@ impl Writer {
         let trimmed = self.body.trim_end_matches('\n').len();
         self.body.truncate(trimmed);
         debug_assert_eq!(check_text_styles(&self.body, &self.styles), Ok(()));
+        debug_assert_eq!(check_user_links(&self.body, &self.user_links), Ok(()));
         StyledText {
             body: self.body,
             styles: self.styles,
+            user_links: self.user_links,
         }
     }
 }
@@ -1074,12 +1117,140 @@ mod tests {
                         styled_text_from_html(&html),
                         StyledText {
                             body: body.clone(),
-                            styles: spans.clone()
+                            styles: spans.clone(),
+                            user_links: Vec::new(),
                         },
                         "{html}"
                     );
                 }
             }
+        }
+    }
+
+    /// Each user link's text and user ID.
+    fn user_links(html: &str) -> (String, Vec<(String, String)>) {
+        let text = styled_text_from_html(html);
+        assert_eq!(
+            check_user_links(&text.body, &text.user_links),
+            Ok(()),
+            "{html}"
+        );
+        let links = text
+            .user_links
+            .iter()
+            .map(|link| {
+                (
+                    text.body[link.start..link.end].to_owned(),
+                    link.user_id.clone(),
+                )
+            })
+            .collect();
+        (text.body, links)
+    }
+
+    fn named(links: &[(&str, &str)]) -> Vec<(String, String)> {
+        links
+            .iter()
+            .map(|(text, user_id)| ((*text).to_owned(), (*user_id).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn links_to_users_are_user_links() {
+        assert_eq!(
+            user_links(
+                r#"hi <a href="https://matrix.to/#/@alice:example.org">Alice</a> and <a href="matrix:u/bob:example.org">Bob</a>!"#
+            ),
+            (
+                "hi Alice and Bob!".to_owned(),
+                named(&[("Alice", "@alice:example.org"), ("Bob", "@bob:example.org")])
+            )
+        );
+        assert_eq!(
+            user_links(r#"<a href="https://matrix.to/#/%40alice%3Aexample.org"><b>Al</b>ice</a>"#),
+            (
+                "Alice".to_owned(),
+                named(&[("Alice", "@alice:example.org")])
+            )
+        );
+    }
+
+    #[test]
+    fn user_links_start_after_lazily_written_prefixes_and_spaces() {
+        let alice = r#"<a href="https://matrix.to/#/@alice:example.org">Alice</a>"#;
+        assert_eq!(
+            user_links(&format!("<blockquote>{alice} said</blockquote>")),
+            (
+                "> Alice said".to_owned(),
+                named(&[("Alice", "@alice:example.org")])
+            )
+        );
+        assert_eq!(
+            user_links(&format!("<ul><li>{alice}</li></ul>")),
+            (
+                "* Alice".to_owned(),
+                named(&[("Alice", "@alice:example.org")])
+            )
+        );
+        assert_eq!(
+            user_links(&format!("hi   {alice}  ")),
+            (
+                "hi Alice".to_owned(),
+                named(&[("Alice", "@alice:example.org")])
+            )
+        );
+        assert_eq!(
+            user_links(r#"hi<a href="https://matrix.to/#/@alice:example.org">  Alice  </a>there"#),
+            (
+                "hi Alice there".to_owned(),
+                named(&[("Alice", "@alice:example.org")])
+            ),
+            "the collapsed spaces inside the link are not its text"
+        );
+    }
+
+    #[test]
+    fn links_without_one_line_of_text_or_to_rooms_are_no_user_links() {
+        for html in [
+            r#"<a href="https://matrix.to/#/@alice:example.org"></a>x"#,
+            r#"<a href="https://matrix.to/#/@alice:example.org">two<br>lines</a>"#,
+            r##"<a href="https://matrix.to/#/#rust:matrix.org">#rust</a>"##,
+            r#"<a href="https://matrix.to/#/!abc:example.org/$event">message</a>"#,
+            r#"<a href="https://example.org/@alice:example.org">site</a>"#,
+            r#"<a href="https://matrix.to/#/garbage">x</a>"#,
+        ] {
+            assert_eq!(user_links(html).1, Vec::new(), "{html}");
+        }
+    }
+
+    #[test]
+    fn pills_and_styles_round_trip_through_html() {
+        let alice = "@alice:example.org";
+        let bob = "@bob:example.org";
+        for (body, styles, pills) in [
+            ("Alice: hi", vec![], vec![pill(0, 5, alice)]),
+            ("AliceBob", vec![], vec![pill(0, 5, alice), pill(5, 8, bob)]),
+            (
+                "  Alice  ok\nBob ",
+                vec![span(0, 4, bold()), span(9, 11, italic())],
+                vec![pill(2, 7, alice), pill(12, 15, bob)],
+            ),
+            (
+                "ärger Ärger",
+                vec![span(7, 9, bold())],
+                vec![pill(7, 13, alice)],
+            ),
+        ] {
+            let html = html_from_styled_text(body, &styles, &pills);
+            assert_eq!(
+                styled_text_from_html(&html),
+                StyledText {
+                    body: body.to_owned(),
+                    styles,
+                    user_links: pills,
+                },
+                "{html}"
+            );
         }
     }
 }

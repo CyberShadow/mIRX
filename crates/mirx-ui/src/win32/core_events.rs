@@ -147,6 +147,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                 presentation,
                 body,
                 styles,
+                user_links,
                 ..
             },
         ) => {
@@ -161,6 +162,7 @@ fn apply_room_activity_update_event(state: &mut WindowState, update: RoomActivit
                         presentation: *presentation,
                         body: body.clone(),
                         styles: styles.clone(),
+                        user_links: user_links.clone(),
                     },
                 );
         }

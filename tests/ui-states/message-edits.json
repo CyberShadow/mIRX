@@ -52,6 +52,7 @@
         "presentation": "text",
         "body": "lobby draft",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -73,6 +74,7 @@
         "presentation": "text",
         "body": "root msg draft",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -100,6 +102,7 @@
         "presentation": "text",
         "body": "thread reply",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

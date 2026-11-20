@@ -54,6 +54,7 @@
         "presentation": "text",
         "body": "welcome to ops",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -79,6 +80,7 @@
         "presentation": "text",
         "body": "who is around?",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -104,6 +106,7 @@
         "presentation": "text",
         "body": "lunch?",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

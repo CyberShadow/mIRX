@@ -32,6 +32,7 @@
         "presentation": "text",
         "body": "redaction text payload should disappear",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -53,6 +54,7 @@
         "presentation": "text",
         "body": "redaction edited original should disappear",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -117,6 +119,7 @@
         "presentation": "text",
         "body": "redaction thread root payload should disappear",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -144,6 +147,7 @@
         "presentation": "text",
         "body": "redaction thread reply payload should disappear",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

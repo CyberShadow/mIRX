@@ -13,6 +13,7 @@
         "presentation": "text",
         "body": "beta wakeup",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -40,6 +41,7 @@
         "presentation": "text",
         "body": "fresh alpha thread",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

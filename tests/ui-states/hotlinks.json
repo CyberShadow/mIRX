@@ -52,6 +52,7 @@
         "presentation": "text",
         "body": "the spec is at https://spec.matrix.org/latest/ for anyone asking",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -77,6 +78,7 @@
         "presentation": "text",
         "body": "mirror on www.example.org.",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -102,6 +104,7 @@
         "presentation": "text",
         "body": "see docs (https://example.org/docs)",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -127,6 +130,7 @@
         "presentation": "text",
         "body": "join https://matrix.to/#/%23rust%3Amatrix.org or #rust:matrix.org, ask https://matrix.to/#/@bob:example",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -152,6 +156,7 @@
         "presentation": "text",
         "body": "logs: https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html then more",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -177,6 +182,7 @@
         "presentation": "text",
         "body": "C# is not a link, nor is issue#12",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -202,6 +208,7 @@
         "presentation": "text",
         "body": "elsewhere: https://matrix.to/#/%23elsewhere%3Aexample.org?via=example.org",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

@@ -46,6 +46,7 @@
         "presentation": "text",
         "body": "support queue is empty",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -67,6 +68,7 @@
         "presentation": "text",
         "body": "verification requested by @alice:example",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -88,6 +90,7 @@
         "presentation": "text",
         "body": "sas emoji ready",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -109,6 +112,7 @@
         "presentation": "text",
         "body": "waiting for confirmation",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }

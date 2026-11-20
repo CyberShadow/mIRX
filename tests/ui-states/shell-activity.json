@@ -46,6 +46,7 @@
         "presentation": "text",
         "body": "alpha lobby",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -67,6 +68,7 @@
         "presentation": "text",
         "body": "alpha root",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -88,6 +90,7 @@
         "presentation": "text",
         "body": "alpha parent room content",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
@@ -115,6 +118,7 @@
         "presentation": "text",
         "body": "alpha thread base",
         "styles": [],
+        "user_links": [],
         "send_state": {
           "state": "sent"
         }
