@@ -862,6 +862,28 @@ configure_case_expectations() {
         --expect-no-navigation-text 'flow-verify-request'
       )
       ;;
+    sign-in-browser)
+      # A replayed load: the page is printed, not opened.
+      expect_active_view='status'
+      select_views=('status')
+      status_view_expect_args=(
+        --expect-status-view '[22:12] * Sign in on the page your browser opened; File > Disconnect cancels'
+        --expect-status-view '[22:12] * If no browser opened, go to https://account.example.org/oauth2/authorize?response_type=code&client_id=01JMIRXCLIENT&state=bXlzdGF0ZQ&redirect_uri=http%3A%2F%2F127.0.0.1%3A49152%2FkOGorr0udgDnscqBELcVTQ&scope=urn%3Amatrix%3Aorg.matrix.msc2967.client%3Aapi%3A%2A'
+      )
+      status_view_forbid_args=(
+        --expect-no-status-view 'Unable to open'
+      )
+      status_bar_expect_args=(
+        --expect-status-bar 'waiting for browser sign-in'
+      )
+      mdi_title_expect_args=(
+        --expect-mdi-title 'status::Status'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+      )
+      expect_switchbar_active='status'
+      ;;
     status-log)
       expect_active_view='status'
       select_views=('status')

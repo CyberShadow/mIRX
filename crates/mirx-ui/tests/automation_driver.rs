@@ -3552,11 +3552,30 @@ fn select_server_browser_sign_in_with_oauth_restores_after_restart()
         &format!("* If no browser opened, go to {sign_in}")
     )?);
     // The devshell's Wine has no browser to start; the printed address
-    // still works.
+    // still works: it is a hotlink.
     assert!(status_view_contains(
         &app,
         &format!("* Unable to open {sign_in}: ShellExecuteExW failed")
     )?);
+    let timeline = app
+        .dump_ui_state()?
+        .active_timeline
+        .ok_or("the Status window is active")?;
+    let lines = &timeline.visible_lines;
+    let printed = lines
+        .iter()
+        .position(|line| line.text.contains("If no browser opened"))
+        .ok_or("the address is on screen")?;
+    let unable = lines
+        .iter()
+        .position(|line| line.text.contains("Unable to open"))
+        .ok_or("the failure is on screen")?;
+    assert!(
+        lines[printed..unable]
+            .iter()
+            .any(|line| line.links.iter().any(|link| link.url == sign_in)),
+        "{lines:#?}"
+    );
 
     let state = query_param(&sign_in, "state").ok_or("no state")?;
     let page = browse_to_redirect(&sign_in, &format!("code=c&state={state}"))?;
