@@ -171,6 +171,7 @@ mod account;
 mod attachments;
 mod automation_dump;
 mod automation_host;
+mod clipboard;
 mod cmap;
 mod command_runner;
 mod commands;
@@ -210,6 +211,7 @@ mod status_log;
 mod switchbar;
 #[cfg(test)]
 mod test_fixtures;
+mod text_selection;
 mod timeline_layout;
 mod timeline_rows;
 mod timeline_text;
@@ -247,10 +249,11 @@ use automation_host::{
 use command_runner::run_slash_command;
 use command_runner::{
     echo_lines_in_active_view, enqueue_command, known_nick, own_server, report_command_error,
-    resolve_invite_command_room_id, resolve_joined_room_target, run_local_command, send_edit,
-    send_reply, set_local_command_status, submit_accept_slash_command, submit_join_room,
-    submit_part_slash_command, submit_query_slash_command, submit_redact_slash_command,
-    submit_reject_slash_command, submit_room_notification_mode, whois_lines,
+    report_error_line, resolve_invite_command_room_id, resolve_joined_room_target,
+    run_local_command, send_edit, send_reply, set_local_command_status,
+    submit_accept_slash_command, submit_join_room, submit_part_slash_command,
+    submit_query_slash_command, submit_redact_slash_command, submit_reject_slash_command,
+    submit_room_notification_mode, whois_lines,
 };
 use commands::{
     BarCommand, CommandError, ComposeSubmission, CreateRoomArgs, E2eeSlashCommand, FontCommand,

@@ -4,9 +4,10 @@
 use std::ops::Range;
 
 use mirx_core::{TextColor, TextStyle, TextStyleSpan};
-use windows_sys::Win32::Graphics::Gdi::HDC;
+use windows_sys::Win32::Graphics::Gdi::{HDC, InvertRect};
 
 use super::mirc_format::MIRC_PALETTE;
+use super::text_selection::line_selection;
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,11 +22,13 @@ pub(super) struct TimelinePaintLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TimelinePaintLineVisual {
     /// Text drawn `indent` pixels right of the timeline's left padding, in
-    /// the row's styles clipped to it, at their offsets in `text`.
+    /// the row's styles clipped to it, at their offsets in `text`. `text` is
+    /// `range` of its row's `logical_text`: where marking and links find it.
     Text {
         text: String,
         indent: i32,
         styles: Vec<TextStyleSpan>,
+        range: Range<usize>,
     },
     ImageSlot,
 }
@@ -43,6 +46,7 @@ pub(super) fn plain_timeline_paint_lines(lines: &[String]) -> Vec<TimelinePaintL
         .map(|text| TimelinePaintLine {
             kind: TimelineRowKind::Plain,
             visual: TimelinePaintLineVisual::Text {
+                range: 0..text.len(),
                 text,
                 indent: 0,
                 styles: Vec::new(),
@@ -184,7 +188,7 @@ where
 }
 
 /// The parts of `styles` inside `segment`, at their offsets in it.
-fn clip_styles(styles: &[TextStyleSpan], segment: &Range<usize>) -> Vec<TextStyleSpan> {
+pub(super) fn clip_styles(styles: &[TextStyleSpan], segment: &Range<usize>) -> Vec<TextStyleSpan> {
     styles
         .iter()
         .filter_map(|span| {
@@ -228,6 +232,7 @@ where
                     text: row.logical_text[segment.clone()].to_owned(),
                     indent,
                     styles: clip_styles(&row.styles, &segment),
+                    range: segment,
                 },
                 image_state: None,
                 image_slot_index: None,
@@ -315,6 +320,7 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
     let selection_brush = CreateSolidBrush(TIMELINE_SELECTION_COLOR);
 
     let selected_event_id = selected_timeline_event_id(frame_state);
+    let mark = state.drag.and_then(|drag| drag.mark());
     let visible_rows = timeline_visible_rows(hwnd);
     for (row, line) in state
         .paint_lines
@@ -361,6 +367,7 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                 text,
                 indent,
                 styles,
+                range,
             } => {
                 let left = TIMELINE_LEFT_PADDING + indent;
                 let rect = RECT {
@@ -378,6 +385,19 @@ pub(super) unsafe fn paint_timeline(hwnd: HWND) {
                     styles,
                     timeline_row_color(&line.kind),
                 );
+                // mIRC shows marked text in inverse video, which keeps
+                // every style's colours readable.
+                if let (Some((anchor, focus)), Some(row)) = (mark, line.source_row_index)
+                    && let Some(marked) = line_selection(row, range, anchor, focus)
+                {
+                    let marked = RECT {
+                        left: left + glyphs.measure(hdc, &text[..marked.start]),
+                        top: line_y,
+                        right: left + glyphs.measure(hdc, &text[..marked.end]),
+                        bottom: line_y + state.line_height,
+                    };
+                    InvertRect(hdc, &marked);
+                }
             }
             TimelinePaintLineVisual::ImageSlot => {}
         }
@@ -754,6 +774,7 @@ mod tests {
             logical_lines
                 .into_iter()
                 .map(|text| TimelinePaintLineVisual::Text {
+                    range: 0..text.len(),
                     text,
                     indent: 0,
                     styles: Vec::new(),
@@ -771,6 +792,15 @@ mod tests {
     }
 
     fn log_paint_texts(text: &str, client_width: i32) -> Vec<(String, i32)> {
+        log_paint_lines(text, client_width)
+            .into_iter()
+            .map(|(text, indent, _)| (text, indent))
+            .collect()
+    }
+
+    /// Each paint line of a message row: its text, indent, and range of the
+    /// row's text.
+    fn log_paint_lines(text: &str, client_width: i32) -> Vec<(String, i32, Range<usize>)> {
         let rows = vec![TimelineRow::log(
             TimelineRowKind::Message {
                 presentation: RoomMessagePresentationKind::Text,
@@ -788,10 +818,41 @@ mod tests {
         )
         .into_iter()
         .map(|line| match line.visual {
-            TimelinePaintLineVisual::Text { text, indent, .. } => (text, indent),
+            TimelinePaintLineVisual::Text {
+                text,
+                indent,
+                range,
+                ..
+            } => (text, indent, range),
             TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
         })
         .collect()
+    }
+
+    #[test]
+    fn paint_lines_carry_their_range_of_the_rows_text() {
+        let text = "[22:13] <bob> alpha beta gamma\nnext";
+        let lines = log_paint_lines(text, client_width_for_text(20));
+        assert_eq!(
+            lines,
+            vec![
+                ("[22:13] <bob> alpha".to_owned(), 0, 0..19),
+                ("beta gamma".to_owned(), 8, 20..30),
+                ("next".to_owned(), 8, 31..35),
+            ]
+        );
+        for (line_text, _, range) in lines {
+            assert_eq!(&text[range], line_text);
+        }
+        assert_eq!(
+            plain_timeline_paint_lines(&["abc".to_owned()])[0].visual,
+            TimelinePaintLineVisual::Text {
+                text: "abc".to_owned(),
+                indent: 0,
+                styles: Vec::new(),
+                range: 0..3,
+            }
+        );
     }
 
     #[test]

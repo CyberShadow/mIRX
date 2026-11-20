@@ -53,10 +53,10 @@ use mirx_testkit::{
 use windows_sys::Win32::Foundation::{GetLastError, HWND, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::MapWindowPoints;
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-use windows_sys::Win32::System::SystemServices::MK_LBUTTON;
+use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_LBUTTON};
 use windows_sys::Win32::UI::Controls::{
     EM_GETSEL, EM_SETSEL, TB_GETSTATE, TBSTATE_CHECKED, TBSTATE_MARKED,
 };
@@ -74,8 +74,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SIF_ALL, SMTO_NORMAL, SPI_GETWHEELSCROLLLINES, SWP_NOMOVE, SWP_NOZORDER, SendMessageTimeoutW,
     SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, SystemParametersInfoW,
     WM_CHAR, WM_COMMAND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEWHEEL, WM_PASTE,
-    WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MDIACTIVATE, WM_MDIGETACTIVE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_PASTE, WM_SETTEXT, WM_SYSCOMMAND, WM_VSCROLL, WS_VSCROLL,
 };
 
 fn user_profile(user_id: &str) -> mirx_core::RoomUserProfile {
@@ -2873,7 +2873,7 @@ fn automation_driver_can_attach_and_replace_state_via_testkit()
     attached.ping()?;
 
     let version = attached.get_version()?;
-    assert_eq!(version.protocol_version, 45);
+    assert_eq!(version.protocol_version, 46);
     assert_eq!(version.app_version, env!("CARGO_PKG_VERSION"));
 
     assert_eq!(
@@ -6230,7 +6230,7 @@ fn automation_driver_loads_member_list_fixture_in_narrow_frame()
 
     // mIRC keeps the nick list in a narrow channel window and shrinks the
     // text area beside it.
-    let timeline_rect = unsafe { client_rect(active_room_timeline_hwnd(&app)) };
+    let timeline_rect = unsafe { client_rect(app.active_timeline_hwnd()? as HWND) };
     let member_list = unsafe { active_room_member_list_hwnd(&app) };
     let member_list_rect = unsafe { client_rect(member_list) };
     assert!(unsafe { IsWindowVisible(member_list) } != 0);
@@ -6354,7 +6354,7 @@ fn custom_room_timeline_scrollbar_reports_visible_range_and_pages()
 
     let content_hwnd = unsafe { active_mdi_content_hwnd(&app) };
     assert_eq!(unsafe { class_name(content_hwnd) }, "mirxWin32RoomContent");
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline_hwnd = app.active_timeline_hwnd()? as HWND;
     let member_list_hwnd = unsafe { active_room_member_list_hwnd(&app) };
     assert_eq!(unsafe { class_name(timeline_hwnd) }, "mirxWin32Timeline");
     assert_eq!(unsafe { class_name(member_list_hwnd) }, "ListBox");
@@ -6596,7 +6596,7 @@ fn wait_for_top_line(timeline: HWND, expected: i32) -> Result<(), Box<dyn std::e
 fn wheel_scrolls_the_timeline_under_the_cursor_and_from_the_editbox()
 -> Result<(), Box<dyn std::error::Error>> {
     let (app, _server, local_app_data) = launch_long_beta_room(80)?;
-    let timeline = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline = app.active_timeline_hwnd()? as HWND;
     let lines = wheel_scroll_lines();
     let bottom = unsafe { timeline_top_line(timeline) };
     assert!(bottom > 3 * lines, "the room must be long: {bottom}");
@@ -6623,7 +6623,7 @@ fn wheel_scrolls_the_timeline_under_the_cursor_and_from_the_editbox()
 #[test]
 fn wheel_to_the_top_asks_for_older_history() -> Result<(), Box<dyn std::error::Error>> {
     let (app, _server, local_app_data) = launch_long_beta_room(80)?;
-    let timeline = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline = app.active_timeline_hwnd()? as HWND;
 
     send_wheel(timeline, i16::MAX);
     assert_eq!(unsafe { timeline_top_line(timeline) }, 0);
@@ -6653,7 +6653,7 @@ unsafe fn edit_caret(edit: HWND) -> usize {
 #[test]
 fn page_keys_in_the_editbox_scroll_the_timeline() -> Result<(), Box<dyn std::error::Error>> {
     let (app, _server, local_app_data) = launch_long_beta_room(160)?;
-    let timeline = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline = app.active_timeline_hwnd()? as HWND;
     let frame = app.automation_frame_hwnd() as HWND;
     unsafe { SetForegroundWindow(frame) };
     assert_compose_has_focus(&app);
@@ -6705,8 +6705,7 @@ fn page_keys_in_the_editbox_scroll_the_timeline() -> Result<(), Box<dyn std::err
         app.send_compose_key(ComposeKey::Return)?;
     }
     app.wait_idle(Duration::from_secs(5))?;
-    let status = unsafe { active_mdi_content_hwnd(&app) };
-    assert_eq!(unsafe { class_name(status) }, "mirxWin32Timeline");
+    let status = app.active_timeline_hwnd()? as HWND;
     let status_bottom = unsafe { timeline_top_line(status) };
     assert!(status_bottom > 0, "/help must fill the Status window");
     // Filling it showed the scroll bar, which narrowed the window: it still
@@ -7313,7 +7312,7 @@ fn automation_driver_history_backfill_prepends_older_messages_without_disturbing
     );
     assert_eq!(app.selected_navigation_view()?, expected_view);
     assert_compose_has_focus(&app);
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline_hwnd = app.active_timeline_hwnd()? as HWND;
     unsafe {
         SendMessageW(timeline_hwnd, WM_VSCROLL, SB_TOP as WPARAM, 0);
     }
@@ -7455,7 +7454,7 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
         Duration::from_secs(5),
     )?;
 
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline_hwnd = app.active_timeline_hwnd()? as HWND;
     let text = unsafe { read_window_text(timeline_hwnd) };
     assert!(
         text.contains("multiline row 00 line a\r\nmultiline row 00 line b"),
@@ -7467,7 +7466,7 @@ fn custom_room_timeline_gettext_normalizes_multiline_bodies()
     app.select_room("!beta:example")?;
     app.wait_idle(Duration::from_secs(2))?;
 
-    let text_after_switch = unsafe { read_window_text(active_room_timeline_hwnd(&app)) };
+    let text_after_switch = unsafe { read_window_text(app.active_timeline_hwnd()? as HWND) };
     assert!(
         text_after_switch.contains("multiline row 00 line a\r\nmultiline row 00 line b"),
         "timeline WM_GETTEXT must preserve CRLF normalization after view switches: {text_after_switch:?}"
@@ -7504,7 +7503,7 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
         Duration::from_secs(5),
     )?;
 
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline_hwnd = app.active_timeline_hwnd()? as HWND;
     let text = unsafe { read_window_text(timeline_hwnd) };
     assert!(
         text.contains("trailing blank line a\r\n"),
@@ -7516,7 +7515,7 @@ fn custom_room_timeline_gettext_preserves_trailing_blank_line()
     app.select_room("!beta:example")?;
     app.wait_idle(Duration::from_secs(2))?;
 
-    let text_after_switch = unsafe { read_window_text(active_room_timeline_hwnd(&app)) };
+    let text_after_switch = unsafe { read_window_text(app.active_timeline_hwnd()? as HWND) };
     assert!(
         text_after_switch.contains("trailing blank line a\r\n"),
         "timeline WM_GETTEXT must keep trailing blank lines after view switches: {text_after_switch:?}"
@@ -7568,7 +7567,7 @@ fn custom_room_timeline_wrapped_rows_preserve_logical_gettext_and_scroll()
     app.select_room("!beta:example")?;
     app.wait_for_room_activity_contains(Some("!beta:example"), long_body, Duration::from_secs(5))?;
 
-    let timeline_hwnd = unsafe { active_room_timeline_hwnd(&app) };
+    let timeline_hwnd = app.active_timeline_hwnd()? as HWND;
     let timeline_style = unsafe { window_style(timeline_hwnd) };
     let timeline_rect = unsafe { client_rect(timeline_hwnd) };
     assert!(
@@ -7661,10 +7660,6 @@ unsafe fn active_mdi_content_hwnd(app: &MirxApp) -> HWND {
     let content = unsafe { GetDlgItem(active_child, VIEW_CONTENT_ID) };
     assert!(!content.is_null(), "active MDI child content must exist");
     content
-}
-
-unsafe fn active_room_timeline_hwnd(app: &MirxApp) -> HWND {
-    unsafe { child_window_with_class(active_mdi_content_hwnd(app), "mirxWin32Timeline") }
 }
 
 unsafe fn active_room_member_list_hwnd(app: &MirxApp) -> HWND {
@@ -16383,7 +16378,7 @@ fn launch_replies_app() -> Result<(GuiTestApp, PathBuf), Box<dyn std::error::Err
     // At the end, where the replies are.
     unsafe {
         SendMessageW(
-            active_room_timeline_hwnd(&app),
+            app.active_timeline_hwnd()? as HWND,
             WM_VSCROLL,
             SB_BOTTOM as WPARAM,
             0,
@@ -16415,7 +16410,7 @@ fn double_click_quote_of(
         .unwrap_or_else(|| panic!("the quote of {reply_event_id} is on screen: {timeline:?}"));
     // The jump opens nothing modal, so the click can be sent.
     send_left_click(
-        unsafe { active_room_timeline_hwnd(app) },
+        app.active_timeline_hwnd()? as HWND,
         &quote.click_point,
         true,
     );
@@ -16423,11 +16418,225 @@ fn double_click_quote_of(
     Ok(())
 }
 
+fn launch_render_state(fixture: &str) -> Result<GuiTestApp, Box<dyn std::error::Error>> {
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let fixture_path = fixture_state_path(fixture);
+    let app = launch_app(
+        &exe_path,
+        &[
+            OsString::from("--render-state"),
+            fixture_path.as_os_str().to_os_string(),
+        ],
+    )?;
+    app.wait_idle(Duration::from_secs(5))?;
+    Ok(app)
+}
+
+/// The client point of the boundary before byte `offset` of the visible
+/// line whose text contains `needle`, in the fixed-pitch text font.
+fn text_point(
+    app: &MirxApp,
+    needle: &str,
+    offset_in_needle: usize,
+) -> Result<UiPoint, Box<dyn std::error::Error>> {
+    let ui_state = app.dump_ui_state()?;
+    assert_eq!(
+        ui_state.text_font.face, "Fixedsys",
+        "points are computed for a fixed-pitch face"
+    );
+    let width = ui_state.text_font.average_char_width;
+    let timeline = ui_state.active_timeline.ok_or("a timeline is active")?;
+    let line = timeline
+        .visible_lines
+        .iter()
+        .find(|line| line.text.contains(needle))
+        .ok_or_else(|| format!("{needle:?} is on screen: {:?}", timeline.visible_lines))?;
+    let offset = line.text.find(needle).expect("found above") + offset_in_needle;
+    assert!(line.text[..offset].is_ascii(), "ASCII before the point");
+    Ok(UiPoint {
+        x: line.text_left + offset as i32 * width + width / 4,
+        y: line.click_point.y,
+    })
+}
+
+/// Sends a mouse message to `hwnd` and waits for it to be handled.
+fn send_mouse(hwnd: HWND, message: u32, buttons: u32, point: &UiPoint) {
+    let mut result = 0;
+    assert_ne!(
+        unsafe {
+            SendMessageTimeoutW(
+                hwnd,
+                message,
+                buttons as WPARAM,
+                mouse_lparam(point),
+                SMTO_NORMAL,
+                5_000,
+                &mut result,
+            )
+        },
+        0,
+        "the timeline must handle the mouse without blocking"
+    );
+}
+
+/// Presses at `from`, moves to `to` and releases there, with `release`
+/// the button-up's key flags.
+fn drag_text(hwnd: HWND, from: &UiPoint, to: &UiPoint, release: u32) {
+    send_mouse(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, from);
+    send_mouse(hwnd, WM_MOUSEMOVE, MK_LBUTTON, to);
+    send_mouse(hwnd, WM_LBUTTONUP, release, to);
+}
+
+fn clipboard_text() -> Result<String, String> {
+    unsafe {
+        if OpenClipboard(null_mut()) == 0 {
+            return Err(format!(
+                "OpenClipboard failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let memory = GetClipboardData(CF_UNICODETEXT);
+        let text = if memory.is_null() {
+            Err("the clipboard holds no text".to_owned())
+        } else {
+            let locked = GlobalLock(memory).cast::<u16>();
+            let len = (0..).take_while(|&index| *locked.add(index) != 0).count();
+            let text = String::from_utf16_lossy(std::slice::from_raw_parts(locked, len));
+            GlobalUnlock(memory);
+            Ok(text)
+        };
+        CloseClipboard();
+        text
+    }
+}
+
+#[test]
+fn dragging_copies_the_marked_text_on_release() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    // From "spec" in Alice's wrapped message into Bob's next one.
+    let from = text_point(&app, "the spec is", 4)?;
+    let to = text_point(&app, "<Bob> mirror", "<Bob> mirror".len())?;
+    drag_text(timeline, &from, &to, 0);
+    assert_eq!(
+        clipboard_text()?,
+        "spec is at https://spec.matrix.org/latest/ for anyone asking\r\n[22:14] <Bob> mirror"
+    );
+    // The press selected its message, as a click does.
+    assert_eq!(
+        app.dump_message_menu_state()?.selected_event_id.as_deref(),
+        Some("$links-0")
+    );
+
+    // Upwards and from inside a line works the same.
+    let from = text_point(&app, "anyone asking", "anyone".len())?;
+    let to = text_point(&app, "the spec is", 0)?;
+    drag_text(timeline, &from, &to, 0);
+    assert_eq!(
+        clipboard_text()?,
+        "the spec is at https://spec.matrix.org/latest/ for anyone"
+    );
+    Ok(())
+}
+
+#[test]
+fn dragging_with_ctrl_copies_control_codes() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("rich-text.json")?;
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    let from = text_point(&app, "<Alice> bold italic", "<Alice> ".len())?;
+    let to = text_point(&app, "<Alice> bold italic", "<Alice> bold italic".len())?;
+    drag_text(timeline, &from, &to, MK_CONTROL);
+    assert_eq!(clipboard_text()?, "\x02bold\x0f \x1ditalic");
+    // Without Ctrl, the text alone.
+    drag_text(timeline, &from, &to, 0);
+    assert_eq!(clipboard_text()?, "bold italic");
+    Ok(())
+}
+
+#[test]
+fn a_click_without_a_drag_copies_nothing() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    set_clipboard_text(null_mut(), "sentinel")?;
+    let point = text_point(&app, "<Bob> mirror", 2)?;
+    send_left_click(timeline, &point, false);
+    // A wobble inside the drag box is still a click.
+    send_mouse(timeline, WM_LBUTTONDOWN, MK_LBUTTON, &point);
+    send_mouse(
+        timeline,
+        WM_MOUSEMOVE,
+        MK_LBUTTON,
+        &UiPoint {
+            x: point.x + 1,
+            y: point.y,
+        },
+    );
+    send_mouse(timeline, WM_LBUTTONUP, 0, &point);
+    assert_eq!(clipboard_text()?, "sentinel");
+    assert_eq!(
+        app.dump_message_menu_state()?.selected_event_id.as_deref(),
+        Some("$links-1")
+    );
+    Ok(())
+}
+
+#[test]
+fn new_lines_during_a_drag_keep_the_mark() -> Result<(), Box<dyn std::error::Error>> {
+    let app = launch_render_state("hotlinks.json")?;
+    let timeline = app.active_timeline_hwnd()? as HWND;
+    let from = text_point(&app, "<Bob> mirror", "<Bob> ".len())?;
+    let to = text_point(&app, "<Carol> see docs", "<Carol> see".len())?;
+
+    send_mouse(timeline, WM_LBUTTONDOWN, MK_LBUTTON, &from);
+    app.append_synthetic_events(&serde_json::to_string(&vec![text_event_with_event_id(
+        "!links:example",
+        "$late",
+        "@alice:example",
+        1_700_000_600_000,
+        "a late line",
+    )])?)?;
+    app.wait_for_room_activity_contains(
+        Some("!links:example"),
+        "a late line",
+        Duration::from_secs(5),
+    )?;
+    send_mouse(timeline, WM_MOUSEMOVE, MK_LBUTTON, &to);
+    send_mouse(timeline, WM_LBUTTONUP, 0, &to);
+    assert_eq!(
+        clipboard_text()?,
+        "mirror on www.example.org.\r\n[22:15] <Carol> see"
+    );
+
+    // An edit of the row the mark starts in drops the mark.
+    set_clipboard_text(null_mut(), "sentinel")?;
+    send_mouse(timeline, WM_LBUTTONDOWN, MK_LBUTTON, &from);
+    app.append_synthetic_events(&serde_json::to_string(&vec![
+        text_message_replaced_update_event(
+            "!links:example",
+            "$links-1",
+            "$links-1-edit",
+            "@bob:example",
+            1_700_000_700_000,
+            "mirror moved",
+        ),
+    ])?)?;
+    app.wait_for_room_activity_contains(
+        Some("!links:example"),
+        "mirror moved",
+        Duration::from_secs(5),
+    )?;
+    send_mouse(timeline, WM_MOUSEMOVE, MK_LBUTTON, &to);
+    send_mouse(timeline, WM_LBUTTONUP, 0, &to);
+    assert_eq!(clipboard_text()?, "sentinel");
+    Ok(())
+}
+
 #[test]
 fn go_to_original_by_double_clicking_a_quote() -> Result<(), Box<dyn std::error::Error>> {
     let (app, local_app_data) = launch_replies_app()?;
     // Windows sends WM_LBUTTONDBLCLK only to a class that asks for it.
-    let style = unsafe { GetClassLongPtrW(active_room_timeline_hwnd(&app), GCL_STYLE) } as u32;
+    let style = unsafe { GetClassLongPtrW(app.active_timeline_hwnd()? as HWND, GCL_STYLE) } as u32;
     assert_ne!(style & CS_DBLCLKS, 0);
     let before = active_timeline(&app)?;
     assert_ne!(before.top_line, 0, "the window starts scrolled to its end");

@@ -513,7 +513,12 @@ fn bar_is_line(bar: Bar, shown: bool) -> String {
 /// A typed command's error, printed in the window it was typed in; the
 /// status bar says the same.
 pub(super) unsafe fn report_command_error(hwnd: HWND, error: CommandError) -> Result<(), String> {
-    let text = error.to_string();
+    report_error_line(hwnd, error.to_string())
+}
+
+/// An error line, `* ...`, printed in the active window as a typed
+/// command's errors are; the status bar says the same.
+pub(super) unsafe fn report_error_line(hwnd: HWND, text: String) -> Result<(), String> {
     echo_in_active_view(hwnd, [text.clone()])?;
     set_local_command_status(hwnd, text)
 }

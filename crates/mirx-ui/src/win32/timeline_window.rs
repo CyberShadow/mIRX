@@ -2,8 +2,16 @@
 //! selection, history backfill anchor and Go to Original.
 
 use super::*;
+use windows_sys::Win32::System::SystemServices::MK_CONTROL;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    SPI_GETWHEELSCROLLLINES, SystemParametersInfoW, WHEEL_DELTA, WM_MOUSEWHEEL,
+    GetSystemMetrics, SM_CXDRAG, SM_CYDRAG, SPI_GETWHEELSCROLLLINES, SystemParametersInfoW,
+    WHEEL_DELTA, WM_CAPTURECHANGED, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+};
+
+use super::clipboard::copy_to_clipboard;
+use super::text_selection::{
+    LineGeometry, TextDrag, TextPoint, left_drag_box, point_at, remap, selected_text,
 };
 
 const WM_TIMELINE_GET_TOP_LINE: u32 = WM_APP + 100;
@@ -33,6 +41,8 @@ pub(super) struct TimelineState {
     /// changes the client's rows before the control hears of it, and whether
     /// the window showed its newest line is a question about the old layout.
     laid_out_visible_rows: usize,
+    /// The left button marking text, from its press to its release.
+    pub(super) drag: Option<TextDrag>,
 }
 
 impl TimelineState {
@@ -50,6 +60,7 @@ impl TimelineState {
             indent_sample: String::new(),
             wheel_remainder: 0,
             laid_out_visible_rows: 1,
+            drag: None,
         }
     }
 }
@@ -125,12 +136,32 @@ unsafe extern "system" fn timeline_window_proc(
             scroll_timeline_with_wheel(hwnd, wparam);
             0
         }
+        // A press selects the message for the menus, and starts marking
+        // text; moving with the button down marks, and the release copies
+        // what is marked, as mIRC does.
         WM_LBUTTONDOWN => {
             select_timeline_row(hwnd, lparam);
+            start_text_drag(hwnd, client_point(lparam));
+            0
+        }
+        WM_MOUSEMOVE => {
+            if timeline_state_ref(hwnd).drag.is_some() {
+                extend_text_drag(hwnd, client_point(lparam));
+            }
+            0
+        }
+        WM_LBUTTONUP => {
+            finish_text_drag(hwnd, wparam as u32 & MK_CONTROL != 0);
+            0
+        }
+        // Another window took the mouse: the mark goes, copied or not.
+        WM_CAPTURECHANGED => {
+            timeline_state_mut(hwnd).drag = None;
+            InvalidateRect(hwnd, null(), 1);
             0
         }
         // The second click of a double-click: it selects as a click does,
-        // and on a quote line goes to the quoted message.
+        // and on a quote line goes to the quoted message. It marks nothing.
         WM_LBUTTONDBLCLK => {
             select_timeline_row(hwnd, lparam);
             let y = ((lparam >> 16) as i16) as i32;
@@ -236,6 +267,15 @@ unsafe fn apply_timeline_content(
         )
     };
     let state = timeline_state_mut(hwnd);
+    // New lines arrive, and history above, while the user marks: the mark
+    // follows its rows, and goes if one of them does or changes.
+    state.drag = state.drag.and_then(|drag| {
+        Some(TextDrag {
+            anchor: remap(drag.anchor, &state.source_rows, &source_rows)?,
+            focus: remap(drag.focus, &state.source_rows, &source_rows)?,
+            ..drag
+        })
+    });
     state.source_rows = source_rows;
     state.rendered_text = rendered_text;
     state.lines = lines;
@@ -249,6 +289,105 @@ unsafe fn apply_timeline_content(
     );
     update_timeline_scrollbar(hwnd);
     InvalidateRect(hwnd, null(), 1);
+}
+
+/// The client point of a mouse message, which is outside the client while
+/// the mouse is captured.
+fn client_point(lparam: LPARAM) -> (i32, i32) {
+    (
+        i32::from(lparam as u16 as i16),
+        i32::from((lparam >> 16) as u16 as i16),
+    )
+}
+
+pub(super) unsafe fn timeline_line_geometry(hwnd: HWND) -> LineGeometry {
+    let state = timeline_state_ref(hwnd);
+    LineGeometry {
+        top_line: state.top_line,
+        visible_rows: timeline_visible_rows(hwnd),
+        line_height: state.line_height,
+        vertical_padding: state.vertical_padding,
+    }
+}
+
+type TextHitTest =
+    fn(&[TimelinePaintLine], LineGeometry, i32, i32, &dyn Fn(&str) -> i32) -> Option<TextPoint>;
+
+/// `hit` at client `at`, measuring in the text font.
+pub(super) unsafe fn timeline_text_hit(
+    hwnd: HWND,
+    at: (i32, i32),
+    hit: TextHitTest,
+) -> Option<TextPoint> {
+    let glyphs = &state_ref(frame_window_for(hwnd)).text_font.glyphs;
+    let hdc = GetDC(hwnd);
+    assert!(
+        !hdc.is_null(),
+        "GetDC must succeed for timeline hit testing"
+    );
+    let point = hit(
+        &timeline_state_ref(hwnd).paint_lines,
+        timeline_line_geometry(hwnd),
+        at.0,
+        at.1,
+        &|text| glyphs.measure(hdc, text),
+    );
+    ReleaseDC(hwnd, hdc);
+    point
+}
+
+/// Starts marking at client `at`, if the timeline has rows there: plain
+/// text set with `WM_SETTEXT` has none. Pressing selected the message
+/// first, which may have refreshed the rows, so the point is found now.
+unsafe fn start_text_drag(hwnd: HWND, at: (i32, i32)) {
+    if let Some(point) = timeline_text_hit(hwnd, at, point_at) {
+        timeline_state_mut(hwnd).drag = Some(TextDrag::new(point, at));
+        // Marking goes on outside the window, clamped to its lines.
+        SetCapture(hwnd);
+    }
+}
+
+unsafe fn extend_text_drag(hwnd: HWND, at: (i32, i32)) {
+    let drag = timeline_state_ref(hwnd)
+        .drag
+        .expect("only a drag is extended");
+    let drag_box = (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG));
+    if !drag.moved && !left_drag_box(drag.down, at, drag_box) {
+        return;
+    }
+    let focus =
+        timeline_text_hit(hwnd, at, point_at).expect("a timeline marking text shows its rows");
+    timeline_state_mut(hwnd).drag = Some(TextDrag {
+        focus,
+        moved: true,
+        ..drag
+    });
+    InvalidateRect(hwnd, null(), 1);
+}
+
+/// The release: copies the mark, with mIRC's control codes if Ctrl is
+/// held, and drops it. The button message's own `MK_CONTROL` says whether
+/// it was, for this very release.
+unsafe fn finish_text_drag(hwnd: HWND, with_codes: bool) {
+    // Taken before the capture goes, so WM_CAPTURECHANGED finds no drag.
+    let drag = timeline_state_mut(hwnd).drag.take();
+    ReleaseCapture();
+    let Some((anchor, focus)) = drag.and_then(|drag| drag.mark()) else {
+        return;
+    };
+    InvalidateRect(hwnd, null(), 1);
+    let text = selected_text(
+        &timeline_state_ref(hwnd).source_rows,
+        anchor,
+        focus,
+        with_codes,
+    );
+    if let Err(error) = copy_to_clipboard(hwnd, &text) {
+        let frame = frame_window_for(hwnd);
+        if let Err(message) = report_error_line(frame, format!("* Unable to copy: {error}")) {
+            show_error_message(frame, "Copy", &message);
+        }
+    }
 }
 
 unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {

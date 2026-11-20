@@ -1260,6 +1260,8 @@ pub struct UiTimelineLine {
     /// The event the line belongs to; clicking it selects that event.
     pub event_id: Option<String>,
     pub click_point: UiPoint,
+    /// The client x where `text` starts.
+    pub text_left: i32,
 }
 
 /// What a timeline line shows.
@@ -1398,6 +1400,9 @@ pub struct UiTextFont {
     pub line_height: i32,
     /// The active editbox's height in pixels.
     pub edit_height: i32,
+    /// The text font's average character width (`tmAveCharWidth`): every
+    /// character's, in a fixed-pitch face.
+    pub average_char_width: i32,
     /// The fallback faces, in order, that draw characters the text font
     /// has no glyph for.
     pub fallback_faces: Vec<String>,
@@ -2122,6 +2127,13 @@ impl MirxApp {
     #[cfg(windows)]
     pub fn wait_for_modal_dialog(&self, timeout: Duration) -> Result<ModalDialog, TestkitError> {
         self.inner.wait_for_modal_dialog(timeout)
+    }
+
+    /// The active window's timeline control: the Status window's content
+    /// itself, or the timeline beside a room or thread window's nick list.
+    #[cfg(windows)]
+    pub fn active_timeline_hwnd(&self) -> Result<isize, TestkitError> {
+        self.inner.active_timeline_hwnd().map(|hwnd| hwnd as isize)
     }
 
     /// Repaints another thread's window, frame and children included, and
@@ -3793,8 +3805,7 @@ mod imp {
         pub(crate) fn trigger_active_timeline_history_backfill(&self) -> Result<(), TestkitError> {
             let active_child = self.active_mdi_child_hwnd()?;
             self.require_active_timeline_view(active_child)?;
-            let content = self.active_mdi_content_hwnd()?;
-            let timeline_hwnd = self.child_window_with_class(content, TIMELINE_CLASS_NAME)?;
+            let timeline_hwnd = self.active_timeline_hwnd()?;
             // One scroll to the top, as one user gesture: each one at the
             // top asks for older history unless a request is in flight, and
             // a request can fail (and so stop being in flight) between two.
@@ -4178,6 +4189,15 @@ mod imp {
             }
 
             Ok(content)
+        }
+
+        pub(crate) fn active_timeline_hwnd(&self) -> Result<HWND, TestkitError> {
+            let content = self.active_mdi_content_hwnd()?;
+            // The Status window's content is a timeline.
+            if unsafe { class_name(content) }.as_deref() == Some(TIMELINE_CLASS_NAME) {
+                return Ok(content);
+            }
+            self.child_window_with_class(content, TIMELINE_CLASS_NAME)
         }
 
         fn active_mdi_child_hwnd(&self) -> Result<HWND, TestkitError> {

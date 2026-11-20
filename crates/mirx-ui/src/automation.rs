@@ -16,7 +16,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub(crate) const PROTOCOL_VERSION: u32 = 45;
+pub(crate) const PROTOCOL_VERSION: u32 = 46;
 pub(crate) const COMMAND_ID_PING: u32 = 1;
 pub(crate) const COMMAND_ID_GET_VERSION: u32 = 2;
 pub(crate) const COMMAND_ID_WAIT_IDLE: u32 = 3;
@@ -1027,6 +1027,8 @@ pub(crate) struct UiTimelineLine {
     /// The event the line belongs to; clicking it selects that event.
     pub(crate) event_id: Option<String>,
     pub(crate) click_point: UiPoint,
+    /// The client x where `text` starts.
+    pub(crate) text_left: i32,
 }
 
 /// What a timeline line shows.
@@ -1155,6 +1157,9 @@ pub(crate) struct UiTextFont {
     pub(crate) line_height: i32,
     /// The active editbox's height in pixels.
     pub(crate) edit_height: i32,
+    /// The text font's average character width (`tmAveCharWidth`): every
+    /// character's, in a fixed-pitch face.
+    pub(crate) average_char_width: i32,
     /// The fallback faces, in order, that draw characters the text font
     /// has no glyph for.
     pub(crate) fallback_faces: Vec<String>,
@@ -3191,8 +3196,8 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_45() {
-        assert_eq!(PROTOCOL_VERSION, 45);
+    fn protocol_version_is_46() {
+        assert_eq!(PROTOCOL_VERSION, 46);
     }
 
     #[test]
@@ -4190,7 +4195,7 @@ mod tests {
             "frame_layout":{"switchbar":{"x":0,"y":0,"width":1008,"height":28},"treebar":{"x":0,"y":28,"width":240,"height":600},"mdi_client":{"x":240,"y":28,"width":768,"height":600}},
             "active_find":null,
             "rooms":[],
-            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
+            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"average_char_width":8,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
             "active_system_menu_items":[],
             "menu_bar":[]
@@ -4214,7 +4219,7 @@ mod tests {
                 "history_search":{"state":"loading"}
             },
             "rooms":[],
-            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"fallback_faces":["Tahoma","Noto Emoji"]},
+            "text_font":{"face":"Fixedsys","points":9,"bold":false,"line_height":15,"edit_height":25,"average_char_width":8,"fallback_faces":["Tahoma","Noto Emoji"]},
             "timestamp":{"show":true,"format":"[HH:nn]"},
             "active_system_menu_items":[],
             "menu_bar":[]
@@ -5097,7 +5102,7 @@ mod tests {
                 "id":"version",
                 "ok":true,
                 "json":{
-                    "protocol_version":45,
+                    "protocol_version":46,
                     "app_version":env!("CARGO_PKG_VERSION")
                 }
             })
@@ -5678,6 +5683,7 @@ mod tests {
                         bold: false,
                         line_height: 15,
                         edit_height: 25,
+                        average_char_width: 8,
                         fallback_faces: vec!["Tahoma".to_owned(), "Noto Emoji".to_owned()],
                     },
                     timestamp: super::UiTimestamp {
@@ -5721,6 +5727,7 @@ mod tests {
                             styles: Vec::new(),
                             event_id: Some("$answer".to_owned()),
                             click_point: super::UiPoint { x: 8, y: 9 },
+                            text_left: 8,
                         }],
                     }),
                     ignored_users: Some(vec!["@spam:example".to_owned()]),
@@ -5857,6 +5864,7 @@ mod tests {
                         "bold":false,
                         "line_height":15,
                         "edit_height":25,
+                        "average_char_width":8,
                         "fallback_faces":["Tahoma","Noto Emoji"]
                     },
                     "timestamp":{"show":true,"format":"[HH:nn]"},
@@ -5886,7 +5894,8 @@ mod tests {
                             "kind":"reply_quote",
                             "styles":[],
                             "event_id":"$answer",
-                            "click_point":{"x":8,"y":9}
+                            "click_point":{"x":8,"y":9},
+                            "text_left":8
                         }]
                     },
                     "ignored_users":["@spam:example"]

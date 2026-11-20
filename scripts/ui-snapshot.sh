@@ -1771,6 +1771,32 @@ configure_case_expectations() {
       )
       expect_switchbar_active='room:!rich:example'
       ;;
+    hotlinks)
+      expect_selected='!links:example'
+      expect_active_view='room:!links:example'
+      room_expect_args=(
+        --expect-room '!links:example'
+      )
+      room_view_expect_args=(
+        --expect-room-view '!links:example::<Alice> the spec is at https://spec.matrix.org/latest/ for anyone asking'
+        --expect-room-view '!links:example::<Bob> mirror on www.example.org.'
+        --expect-room-view '!links:example::<Carol> see docs (https://example.org/docs)'
+        --expect-room-view '!links:example::<Alice> join https://matrix.to/#/%23rust%3Amatrix.org or #rust:matrix.org, ask https://matrix.to/#/@bob:example'
+        --expect-room-view '!links:example::<Bob> logs: https://example.org/a/very/long/path/that/wraps/over/the/edge/of/the/window/to/the/next/line/index.html then more'
+        --expect-room-view '!links:example::<Carol> C# is not a link, nor is issue#12'
+      )
+      room_member_expect_args=(
+        --expect-room-member '!links:example::Alice'
+        --expect-room-member '!links:example::Bob'
+        --expect-room-member '!links:example::Carol'
+      )
+      switchbar_item_expect_args=(
+        --expect-switchbar-item 'status::Status'
+        --expect-switchbar-item 'room:!links:example::Links'
+        --expect-switchbar-item 'room:!rust:example::Rust'
+      )
+      expect_switchbar_active='room:!links:example'
+      ;;
     irc-commands)
       expect_selected='!ops:example'
       expect_active_view='room:!ops:example'

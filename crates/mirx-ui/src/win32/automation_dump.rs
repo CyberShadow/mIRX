@@ -312,6 +312,7 @@ unsafe fn dump_text_font(state: &WindowState, view_id: &ViewId, view: &MdiViewSt
         bold: setting.bold(),
         line_height: timeline_state.line_height,
         edit_height: edit_rect.bottom - edit_rect.top,
+        average_char_width: state.text_font.glyphs.metrics().tmAveCharWidth,
         fallback_faces: state
             .text_font
             .glyphs
@@ -404,11 +405,14 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
         .skip(state.top_line)
         .take(visible_rows)
         .map(|(line_index, line)| {
-            let (text, styles) = match &line.visual {
-                TimelinePaintLineVisual::Text { text, styles, .. } => {
-                    (text.clone(), styles.clone())
-                }
-                TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new()),
+            let (text, styles, indent) = match &line.visual {
+                TimelinePaintLineVisual::Text {
+                    text,
+                    styles,
+                    indent,
+                    ..
+                } => (text.clone(), styles.clone(), *indent),
+                TimelinePaintLineVisual::ImageSlot => (String::new(), Vec::new(), 0),
             };
             UiTimelineLine {
                 text,
@@ -424,6 +428,7 @@ unsafe fn dump_active_timeline(timeline: HWND) -> UiActiveTimeline {
                         + (line_index - state.top_line) as i32 * state.line_height
                         + state.line_height / 2,
                 },
+                text_left: TIMELINE_LEFT_PADDING + indent,
             }
         })
         .collect();
