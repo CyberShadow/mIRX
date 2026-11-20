@@ -138,6 +138,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
 };
 
+use self::app_icon::{IconSize, app_icon};
 use self::glyph_fonts::GlyphFonts;
 use crate::{
     AppCommand, FrameSize, HELP, RunOptions,
@@ -176,6 +177,7 @@ use crate::{
 };
 
 mod account;
+mod app_icon;
 #[cfg(test)]
 mod app_resources;
 mod attachments;

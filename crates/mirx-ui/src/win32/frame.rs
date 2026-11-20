@@ -33,12 +33,12 @@ pub(super) fn register_frame_class(instance: *mut c_void) -> Result<(), String> 
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance,
-        hIcon: null_mut(),
+        hIcon: app_icon(instance, IconSize::Large),
         hCursor: unsafe { LoadCursorW(null_mut(), IDC_ARROW) },
         hbrBackground: (COLOR_WINDOW as isize + 1) as HBRUSH,
         lpszMenuName: null(),
         lpszClassName: class_name.as_ptr(),
-        hIconSm: null_mut(),
+        hIconSm: app_icon(instance, IconSize::Small),
     };
 
     let atom = unsafe { RegisterClassExW(&window_class) };

@@ -13,7 +13,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, DC_HASDEFID, DM_GETDEFID, EnumChildWindows, GW_OWNER, GetNextDlgTabItem,
     GetWindow, IDCANCEL, IsDialogMessageW, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-    WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC,
+    WINDOW_STYLE, WM_NEXTDLGCTL, WNDPROC, WS_EX_DLGMODALFRAME,
 };
 use windows_sys::core::BOOL;
 
@@ -84,6 +84,9 @@ pub(super) const DIALOG_EDIT_STYLE: u32 = WS_TABSTOP | ES_AUTOHSCROLL as u32;
 pub(super) const DIALOG_EDIT_EX_STYLE: u32 = WS_EX_CLIENTEDGE;
 
 const DIALOG_STYLE: WINDOW_STYLE = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+/// A modal dialog's frame: like mIRC's resource dialogs, no caption icon.
+/// `AdjustWindowRectEx` must get it too, or the client area drifts.
+const DIALOG_EX_STYLE: WINDOW_EX_STYLE = WS_EX_DLGMODALFRAME;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LoginForm {
@@ -196,7 +199,7 @@ pub(super) unsafe fn create_modal_dialog(
     let class_name = wide_null(class);
     let title = wide_null(title);
     let dialog = CreateWindowExW(
-        0,
+        DIALOG_EX_STYLE,
         class_name.as_ptr(),
         title.as_ptr(),
         DIALOG_STYLE,
@@ -225,7 +228,7 @@ pub(super) unsafe fn create_modal_dialog(
         right: right + DIALOG_MARGIN,
         bottom: bottom + DIALOG_MARGIN,
     };
-    if AdjustWindowRectEx(&mut frame, DIALOG_STYLE, 0, 0) == 0 {
+    if AdjustWindowRectEx(&mut frame, DIALOG_STYLE, 0, DIALOG_EX_STYLE) == 0 {
         DestroyWindow(dialog);
         return Err(last_os_error("AdjustWindowRectEx dialog"));
     }

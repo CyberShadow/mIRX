@@ -19,9 +19,8 @@ use windows_sys::Win32::UI::Shell::{
     NOTIFYICONDATAW, NOTIFYICONDATAW_0, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowThreadProcessId, IDI_APPLICATION, IsWindowVisible, LoadIconW,
-    RegisterWindowMessageW, SW_HIDE, SW_RESTORE, SW_SHOW, WM_CONTEXTMENU, WM_LBUTTONDBLCLK,
-    WM_LBUTTONUP, WM_NULL,
+    GetForegroundWindow, GetWindowThreadProcessId, IsWindowVisible, RegisterWindowMessageW,
+    SW_HIDE, SW_RESTORE, SW_SHOW, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
 };
 
 use super::settings::TraySetting;
@@ -165,8 +164,7 @@ unsafe fn set_tray_icon(hwnd: HWND, wanted: bool) -> Result<bool, String> {
             let mut data = icon_data(hwnd);
             data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
             data.uCallbackMessage = WM_TRAY_ICON;
-            // No icon resource yet: the stock one, as the frame has.
-            data.hIcon = LoadIconW(null_mut(), IDI_APPLICATION);
+            data.hIcon = app_icon(GetModuleHandleW(null()), IconSize::Small);
             fill_utf16(&mut data.szTip, FRAME_TITLE);
             if let Err(error) = notify_icon(NIM_ADD, &data) {
                 report_tray_error(hwnd, &error)?;

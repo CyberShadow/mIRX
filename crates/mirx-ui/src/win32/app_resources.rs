@@ -15,8 +15,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use windows_sys::core::PCWSTR;
 
-/// The id `build/resources.rs` gives the icon and the version block.
-const RESOURCE_ID: u16 = 1;
+use super::app_icon::APP_ICON_ID;
+
+/// `build/resources.rs` gives the version block id 1.
+const VERSION_ID: u16 = 1;
 
 fn int_resource(id: u16) -> PCWSTR {
     id as usize as PCWSTR
@@ -56,7 +58,7 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
 fn app_icon_group_has_every_size() {
     // GRPICONDIR: reserved, type, count, then 14-byte GRPICONDIRENTRYs
     // (width, height, colours, reserved, planes, bit count, size, id).
-    let group = resource_bytes(RT_GROUP_ICON, RESOURCE_ID);
+    let group = resource_bytes(RT_GROUP_ICON, APP_ICON_ID);
     assert_eq!(u16_at(group, 2), 1, "an icon group");
     let count = u16_at(group, 4) as usize;
     let entries: Vec<(u8, u16)> = (0..count)
@@ -80,7 +82,7 @@ fn app_icon_loads_at_small_and_large_metrics() {
         unsafe {
             let icon = LoadImageW(
                 this_module(),
-                int_resource(RESOURCE_ID),
+                int_resource(APP_ICON_ID),
                 IMAGE_ICON,
                 size,
                 size,
@@ -109,7 +111,7 @@ fn app_icon_loads_at_small_and_large_metrics() {
 
 #[test]
 fn version_info_names_mirx_and_the_crate_version() {
-    let version = resource_bytes(RT_VERSION, RESOURCE_ID);
+    let version = resource_bytes(RT_VERSION, VERSION_ID);
     let fixed = version
         .windows(4)
         .position(|word| word == 0xFEEF_04BDu32.to_le_bytes())
