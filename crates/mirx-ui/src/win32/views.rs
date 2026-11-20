@@ -1037,15 +1037,11 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
         // window, which the rows built next then show.
         ViewId::Status => {
             write_view_log(state_mut(hwnd), view_id);
-            let (rows, indent_sample) = {
+            let rows = {
                 let state = state_ref(hwnd);
-                let timestamps = state.timestamps();
-                (
-                    build_status_timeline_rows(&state.model.status_log, timestamps),
-                    timestamps.indent_sample(),
-                )
+                build_status_timeline_rows(&state.model.status_log, state.timestamps())
             };
-            set_timeline_rows(content, &rows, indent_sample);
+            set_timeline_rows(content, &rows);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             apply_find_to_active_view(hwnd, view_id)?;
             InvalidateRect(content, null(), 1);
@@ -1053,7 +1049,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
         ViewId::Room(room_id) => {
             decide_auto_log(state_mut(hwnd), view_id);
             write_view_log(state_mut(hwnd), view_id);
-            let (rows, indent_sample, member_rows, image_requests, reply_target_requests) = {
+            let (rows, member_rows, image_requests, reply_target_requests) = {
                 let state = state_ref(hwnd);
                 let room = room_by_id(&state.model.rooms, room_id)
                     .expect("room view must target an existing room");
@@ -1080,19 +1076,13 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
                 } else {
                     Vec::new()
                 };
-                (
-                    rows,
-                    timestamps.indent_sample(),
-                    member_rows,
-                    image_requests,
-                    reply_target_requests,
-                )
+                (rows, member_rows, image_requests, reply_target_requests)
             };
             dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
             dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
-            set_timeline_rows(timeline, &rows, indent_sample);
+            set_timeline_rows(timeline, &rows);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;
@@ -1108,7 +1098,7 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
             room_id,
             thread_root_event_id,
         } => {
-            let (rows, indent_sample, member_rows, image_requests, reply_target_requests) = {
+            let (rows, member_rows, image_requests, reply_target_requests) = {
                 let state = state_ref(hwnd);
                 let room_view = state
                     .model
@@ -1133,19 +1123,13 @@ pub(super) unsafe fn refresh_view_content(hwnd: HWND, view_id: &ViewId) -> Resul
                 let reply_target_requests =
                     collect_reply_target_requests(room_view, thread_activities());
                 let member_rows = room_member_view_rows(room_view.members.as_slice());
-                (
-                    rows,
-                    timestamps.indent_sample(),
-                    member_rows,
-                    image_requests,
-                    reply_target_requests,
-                )
+                (rows, member_rows, image_requests, reply_target_requests)
             };
             dispatch_lazy_room_preview_media_requests(state_mut(hwnd), room_id, image_requests)?;
             dispatch_reply_target_fetches(state_mut(hwnd), room_id, reply_target_requests)?;
             validate_selected_timeline_event(state_mut(hwnd), view_id, &rows);
             let timeline = room_content_timeline(content);
-            set_timeline_rows(timeline, &rows, indent_sample);
+            set_timeline_rows(timeline, &rows);
             recompute_find_for_view(state_mut(hwnd), view_id, &rows);
             if state_ref(hwnd).active_view == *view_id {
                 apply_find_to_active_view(hwnd, view_id)?;

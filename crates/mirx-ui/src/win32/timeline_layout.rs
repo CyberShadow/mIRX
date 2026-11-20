@@ -159,21 +159,24 @@ fn line_break_within(text: &str, fit_end: usize) -> Option<usize> {
         .last()
 }
 
+/// What a continuation line is indented by, measured in the text font:
+/// two spaces, mIRC's default wrap indent (`/echo -i`). mIRC has no option
+/// for it, and it does not follow the timestamp.
+const WRAP_INDENT_SAMPLE: &str = "  ";
+
 /// Paint lines for a log row, as ranges of `text` with their indent: the
 /// first line starts at the left padding and every continuation, whether
-/// wrapped or from a newline in the text, is indented past the timestamp
-/// like mIRC's hanging indent: by the width of `indent_sample`, a timestamp
-/// prefix.
+/// wrapped or from a newline in the text, is indented by the width of
+/// [`WRAP_INDENT_SAMPLE`], as in mIRC.
 fn timeline_log_paint_ranges<Measure>(
     text: &str,
     width: i32,
-    indent_sample: &str,
     measure: &Measure,
 ) -> Vec<(Range<usize>, i32)>
 where
     Measure: Fn(&str) -> i32,
 {
-    let indent = measure(indent_sample).min(width - 1);
+    let indent = measure(WRAP_INDENT_SAMPLE).min(width - 1);
     let continuation_width = width - indent;
     let mut lines = Vec::new();
     for line in rendered_line_ranges(text) {
@@ -218,7 +221,6 @@ fn timeline_row_paint_lines_with_measure<Measure>(
     rows: &[TimelineRow],
     client_width: i32,
     line_height: i32,
-    indent_sample: &str,
     measure: &Measure,
 ) -> Vec<TimelinePaintLine>
 where
@@ -232,9 +234,7 @@ where
                 .into_iter()
                 .map(|line| (line, 0))
                 .collect(),
-            TimelineRowLayout::Log => {
-                timeline_log_paint_ranges(&row.logical_text, width, indent_sample, measure)
-            }
+            TimelineRowLayout::Log => timeline_log_paint_ranges(&row.logical_text, width, measure),
         };
         for (segment, indent) in segments {
             paint_lines.push(TimelinePaintLine {
@@ -286,7 +286,6 @@ pub(super) unsafe fn timeline_row_paint_lines(
         rows,
         client_width,
         state.line_height,
-        &state.indent_sample,
         &|text| unsafe { glyphs.measure(hdc, text) },
     );
     ReleaseDC(hwnd, hdc);
@@ -718,22 +717,18 @@ mod tests {
     }
 
     #[test]
-    fn the_hanging_indent_is_as_wide_as_the_timestamp_format() {
-        let mut setting = TimestampSetting {
-            show: true,
-            format: timestamp::TimestampFormat::parse("[HH:nn:ss]").unwrap(),
-        };
+    fn continuation_lines_are_indented_two_spaces_whatever_the_timestamp() {
         let indent_of = |setting: &TimestampSetting| {
-            let sample = TimestampStyle::new(setting, timestamp::utc_local_time).indent_sample();
+            let prefix =
+                TimestampStyle::new(setting, timestamp::utc_local_time).prefix(1_700_000_000_000);
             let rows = [TimelineRow::log(
                 TimelineRowKind::Info,
-                format!("{sample}alpha beta gamma"),
+                format!("{prefix}alpha beta gamma"),
             )];
             timeline_row_paint_lines_with_measure(
                 &rows,
-                client_width_for_text(sample.len() as i32 + 10),
+                client_width_for_text(prefix.len() as i32 + 10),
                 20,
-                &sample,
                 &measure_ascii_width,
             )
             .into_iter()
@@ -744,9 +739,45 @@ mod tests {
             .collect::<Vec<_>>()
         };
 
-        assert_eq!(indent_of(&setting), vec![0, 11]);
-        setting.show = false;
-        assert_eq!(indent_of(&setting), vec![0, 0]);
+        for format in ["[HH:nn]", "[HH:nn:ss]"] {
+            let setting = TimestampSetting {
+                show: true,
+                format: timestamp::TimestampFormat::parse(format).unwrap(),
+            };
+            assert_eq!(indent_of(&setting), vec![0, 2], "{format}");
+        }
+        let off = TimestampSetting {
+            show: false,
+            ..TimestampSetting::default()
+        };
+        assert_eq!(indent_of(&off), vec![0, 2]);
+    }
+
+    /// The lines of a log row's text in a text area `width` wide.
+    fn log_lines(text: &str, width: i32) -> Vec<(&str, i32)> {
+        timeline_log_paint_ranges(text, width, &measure_ascii_width)
+            .into_iter()
+            .map(|(range, indent)| (&text[range], indent))
+            .collect()
+    }
+
+    #[test]
+    fn a_token_moves_to_the_next_line_before_it_is_split() {
+        assert_eq!(
+            log_lines("aaa bbbbbbbbbb", 10),
+            vec![("aaa", 0), ("bbbbbbbb", 2), ("bb", 2)]
+        );
+        // A narrow tile: with a two-space indent the words fit whole.
+        let lines = log_lines("* Messages in this room are end-to-end encrypted", 18);
+        assert_eq!(
+            lines,
+            vec![
+                ("* Messages in this", 0),
+                ("room are", 2),
+                ("end-to-end", 2),
+                ("encrypted", 2),
+            ]
+        );
     }
 
     #[test]
@@ -767,7 +798,7 @@ mod tests {
 
         let logical_lines = project_timeline_rows(&rows);
         let paint_lines =
-            timeline_row_paint_lines_with_measure(&rows, 360, 20, "[00:00] ", &measure_ascii_width);
+            timeline_row_paint_lines_with_measure(&rows, 360, 20, &measure_ascii_width);
 
         assert_eq!(
             logical_lines,
@@ -822,24 +853,18 @@ mod tests {
             },
             text.to_owned(),
         )];
-        timeline_row_paint_lines_with_measure(
-            &rows,
-            client_width,
-            20,
-            "[00:00] ",
-            &measure_ascii_width,
-        )
-        .into_iter()
-        .map(|line| match line.visual {
-            TimelinePaintLineVisual::Text {
-                text,
-                indent,
-                range,
-                ..
-            } => (text, indent, range),
-            TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
-        })
-        .collect()
+        timeline_row_paint_lines_with_measure(&rows, client_width, 20, &measure_ascii_width)
+            .into_iter()
+            .map(|line| match line.visual {
+                TimelinePaintLineVisual::Text {
+                    text,
+                    indent,
+                    range,
+                    ..
+                } => (text, indent, range),
+                TimelinePaintLineVisual::ImageSlot => unreachable!("message rows have no image"),
+            })
+            .collect()
     }
 
     #[test]
@@ -850,8 +875,8 @@ mod tests {
             lines,
             vec![
                 ("[22:13] <bob> alpha".to_owned(), 0, 0..19),
-                ("beta gamma".to_owned(), 8, 20..30),
-                ("next".to_owned(), 8, 31..35),
+                ("beta gamma".to_owned(), 2, 20..30),
+                ("next".to_owned(), 2, 31..35),
             ]
         );
         for (line_text, _, range) in lines {
@@ -885,7 +910,7 @@ mod tests {
     #[test]
     fn timeline_row_paint_lines_wrap_log_rows_with_a_hanging_indent() {
         let text = "[22:13] <@alice:example> alpha beta gamma";
-        let indent = "[00:00] ".len() as i32;
+        let indent = 2;
 
         assert_eq!(
             log_paint_texts(text, client_width_for_text(30)),
@@ -902,16 +927,16 @@ mod tests {
 
     #[test]
     fn timeline_row_paint_lines_indent_lines_after_newlines_like_wrapped_lines() {
-        let indent = "[00:00] ".len() as i32;
+        let indent = 2;
 
         assert_eq!(
             log_paint_texts(
-                "[22:13] <@alice:example> first\nsecond line here and more",
+                "[22:13] <@alice:example> first\nsecond line here and some more",
                 client_width_for_text(30)
             ),
             vec![
                 ("[22:13] <@alice:example> first".to_owned(), 0),
-                ("second line here and".to_owned(), indent),
+                ("second line here and some".to_owned(), indent),
                 ("more".to_owned(), indent),
             ]
         );
@@ -1005,7 +1030,6 @@ mod tests {
             &[row],
             client_width_for_text(30),
             20,
-            "[00:00] ",
             &measure_ascii_width,
         )
         .into_iter()
@@ -1196,7 +1220,6 @@ mod tests {
             &[row],
             client_width_for_text(30),
             20,
-            "[00:00] ",
             &measure_ascii_width,
         );
         let caption_lines = paint_lines
@@ -1239,7 +1262,6 @@ mod tests {
             &rows,
             client_width_for_text(30),
             20,
-            "[00:00] ",
             &measure_ascii_width,
         );
 

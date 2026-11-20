@@ -111,8 +111,8 @@ pub(super) struct TimelineRow {
 pub(super) enum TimelineRowLayout {
     /// Context rows (typing, history backfill): one painted line per text line.
     FullWidth,
-    /// mIRC log lines: wrapped to the view, continuation lines indented past
-    /// the timestamp.
+    /// mIRC log lines: wrapped to the view, continuation lines indented by
+    /// two spaces.
     Log,
 }
 
@@ -2695,7 +2695,6 @@ mod tests {
             )),
             vec!["* ready".to_owned()]
         );
-        assert_eq!(state.timestamps().indent_sample(), "");
 
         state
             .settings

@@ -35,9 +35,6 @@ pub(super) struct TimelineState {
     /// The height of a line in `font`.
     pub(super) line_height: i32,
     pub(super) vertical_padding: i32,
-    /// The timestamp prefix sample that log rows' continuation lines are
-    /// indented past; set with the rows, as the rows were stamped with it.
-    pub(super) indent_sample: String,
     /// The wheel's turn since its last whole notch, for wheels that report
     /// finer steps than `WHEEL_DELTA`.
     wheel_remainder: i32,
@@ -61,7 +58,6 @@ impl TimelineState {
             font: null_mut(),
             line_height,
             vertical_padding: TIMELINE_VERTICAL_PADDING,
-            indent_sample: String::new(),
             wheel_remainder: 0,
             laid_out_visible_rows: 1,
             drag: None,
@@ -434,9 +430,8 @@ unsafe fn set_timeline_text(hwnd: HWND, text_ptr: *const u16) -> LRESULT {
     1
 }
 
-/// Shows `rows`, whose timestamps are as wide as `indent_sample`.
-pub(super) unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow], indent_sample: String) {
-    timeline_state_mut(hwnd).indent_sample = indent_sample;
+/// Shows `rows`.
+pub(super) unsafe fn set_timeline_rows(hwnd: HWND, rows: &[TimelineRow]) {
     let (rendered_text, lines) =
         normalize_timeline_text(&render_view_text(&project_timeline_rows(rows)));
     let paint_lines = timeline_row_paint_lines(hwnd, rows, timeline_client_width(hwnd));

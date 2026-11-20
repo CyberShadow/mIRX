@@ -1608,7 +1608,6 @@ mod tests {
                 let timeline = room_content_timeline(
                     state_ref(hwnd).views[&state_ref(hwnd).active_view].content,
                 );
-                assert_eq!(timeline_state_ref(timeline).indent_sample, "[00:00:00] ");
                 assert_eq!(
                     timeline_state_ref(timeline)
                         .source_rows

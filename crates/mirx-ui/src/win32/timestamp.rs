@@ -290,16 +290,6 @@ impl Default for TimestampSetting {
     }
 }
 
-/// The time every hanging indent is measured with: wide digits only.
-const INDENT_SAMPLE_TIME: LocalTime = LocalTime {
-    year: 2000,
-    month: 1,
-    day: 1,
-    hour: 0,
-    minute: 0,
-    second: 0,
-};
-
 /// Stamps lines with a [`TimestampSetting`] in the local time zone.
 #[derive(Clone, Copy)]
 pub(super) struct TimestampStyle<'a> {
@@ -319,12 +309,6 @@ impl<'a> TimestampStyle<'a> {
     /// timestamps are off.
     pub(super) fn prefix(self, timestamp_ms: u64) -> String {
         self.prefix_for((self.local_time)(timestamp_ms))
-    }
-
-    /// A prefix as wide as a line's: continuation lines are indented by its
-    /// width so they align past the timestamp.
-    pub(super) fn indent_sample(self) -> String {
-        self.prefix_for(INDENT_SAMPLE_TIME)
     }
 
     fn prefix_for(self, time: LocalTime) -> String {
@@ -450,21 +434,18 @@ mod tests {
     }
 
     #[test]
-    fn prefix_and_indent_follow_the_setting() {
+    fn prefix_follows_the_setting() {
         let mut setting = TimestampSetting::default();
         let style = TimestampStyle::new(&setting, utc_local_time);
         assert_eq!(style.prefix(1_700_000_000_000), "[22:13] ");
-        assert_eq!(style.indent_sample(), "[00:00] ");
 
         setting.format = TimestampFormat::parse("[H:nn:ss tt]").unwrap();
         let style = TimestampStyle::new(&setting, utc_local_time);
         assert_eq!(style.prefix(1_700_000_000_000), "[22:13:20 pm] ");
-        assert_eq!(style.indent_sample(), "[0:00:00 am] ");
 
         setting.show = false;
         let style = TimestampStyle::new(&setting, utc_local_time);
         assert_eq!(style.prefix(1_700_000_000_000), "");
-        assert_eq!(style.indent_sample(), "");
     }
 
     fn date(year: u16, month: u8, day: u8) -> LocalTime {

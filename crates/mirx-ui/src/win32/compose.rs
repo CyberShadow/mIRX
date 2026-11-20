@@ -974,7 +974,6 @@ mod tests {
                 "[00:00] @alice: message".to_owned(),
             )
             .with_event_id(Some(event_id))],
-            String::new(),
         );
     }
 
