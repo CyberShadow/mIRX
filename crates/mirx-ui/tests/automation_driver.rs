@@ -6125,10 +6125,9 @@ fn window_menu_logging_toggles_the_log_and_its_check() -> Result<(), Box<dyn std
     app.select_view(beta.clone())?;
     let child = view_child_hwnd(&app, &beta)?;
     let toggle = || -> Result<(), Box<dyn std::error::Error>> {
-        assert_ne!(
-            unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_LOGGING, 0) },
-            0
-        );
+        // Sent, not posted: a posted command can come after the dump,
+        // which the UI thread takes first as a sent message.
+        unsafe { SendMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_LOGGING, 0) };
         app.wait_idle(Duration::from_secs(5))?;
         Ok(())
     };
@@ -6161,10 +6160,8 @@ fn a_thread_windows_logging_is_its_rooms() -> Result<(), Box<dyn std::error::Err
     let thread = thread_identity("!ops:example", "$thread-root");
     app.select_view(thread.clone())?;
     let child = view_child_hwnd(&app, &thread)?;
-    assert_ne!(
-        unsafe { PostMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_LOGGING, 0) },
-        0
-    );
+    // Sent, not posted: a posted command can come after the dump.
+    unsafe { SendMessageW(child, WM_SYSCOMMAND, SYSMENU_ID_LOGGING, 0) };
     app.wait_idle(Duration::from_secs(5))?;
     let ui_state = app.dump_ui_state()?;
     let path = find_view(&ui_state, &ops)
