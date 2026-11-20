@@ -46,8 +46,9 @@ pub(super) enum ConnectAction {
     StartSync,
 }
 
-/// `server` is `/server`'s argument. Matrix needs a password, so a named
-/// server always goes through the dialog rather than the command line.
+/// `server` is `/server`'s argument. Signing in takes a password or the
+/// browser, so a named server always goes through the dialog rather than
+/// the command line.
 pub(super) fn connect_action(
     connection: ConnectionState,
     server: Option<&str>,
@@ -72,14 +73,25 @@ pub(super) fn connect_action(
     }
 }
 
-/// File > Disconnect and `/quit` stop sync and keep the session.
-pub(super) fn check_disconnect(connection: ConnectionState) -> Result<(), &'static str> {
+/// What File > Disconnect or `/quit` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DisconnectAction {
+    /// Stop syncing and keep the session.
+    StopSync,
+    /// Stop waiting for the browser, as mIRC's Disconnect cancels a
+    /// connect in progress.
+    CancelSignIn,
+}
+
+pub(super) fn disconnect_action(
+    connection: ConnectionState,
+) -> Result<DisconnectAction, &'static str> {
     match connection {
-        ConnectionState::Syncing => Ok(()),
-        ConnectionState::SignedOut
-        | ConnectionState::SigningIn
-        | ConnectionState::WaitingForBrowser
-        | ConnectionState::SignedIn => Err("not connected"),
+        ConnectionState::Syncing => Ok(DisconnectAction::StopSync),
+        ConnectionState::WaitingForBrowser => Ok(DisconnectAction::CancelSignIn),
+        ConnectionState::SignedOut | ConnectionState::SigningIn | ConnectionState::SignedIn => {
+            Err("not connected")
+        }
     }
 }
 
@@ -244,10 +256,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_syncing_account_disconnects_and_only_a_signed_out_one_signs_in() {
-        assert_eq!(check_disconnect(Syncing), Ok(()));
-        for connection in [SignedOut, SigningIn, WaitingForBrowser, SignedIn] {
-            assert_eq!(check_disconnect(connection), Err("not connected"));
+    fn disconnect_stops_sync_or_cancels_the_sign_in_and_only_a_signed_out_account_signs_in() {
+        assert_eq!(disconnect_action(Syncing), Ok(DisconnectAction::StopSync));
+        assert_eq!(
+            disconnect_action(WaitingForBrowser),
+            Ok(DisconnectAction::CancelSignIn)
+        );
+        for connection in [SignedOut, SigningIn, SignedIn] {
+            assert_eq!(disconnect_action(connection), Err("not connected"));
         }
         assert_eq!(check_sign_in(SignedOut), Ok(()));
         for connecting in [SigningIn, WaitingForBrowser] {

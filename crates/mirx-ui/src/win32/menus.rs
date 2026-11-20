@@ -487,7 +487,7 @@ pub(super) fn file_menu_state(connection: ConnectionState) -> FileMenuState {
     );
     FileMenuState {
         connect: signed_out || signed_in,
-        disconnect: syncing,
+        disconnect: super::connection::disconnect_action(connection).is_ok(),
         select_server: signed_out,
         log_out: signed_in || syncing,
     }
@@ -564,6 +564,15 @@ mod tests {
             FileMenuState {
                 connect: false,
                 disconnect: false,
+                select_server: false,
+                log_out: false,
+            }
+        );
+        assert_eq!(
+            file_menu_state(ConnectionState::WaitingForBrowser),
+            FileMenuState {
+                connect: false,
+                disconnect: true,
                 select_server: false,
                 log_out: false,
             }

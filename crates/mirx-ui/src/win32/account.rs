@@ -292,12 +292,7 @@ pub(super) fn submit_login(
 ) -> Result<(), String> {
     connection::check_sign_in(state.model.connection)?;
     let server = login_server(&server, &username)?;
-    if username.is_empty() {
-        return Err("username must not be empty".to_owned());
-    }
-    if password.is_empty() {
-        return Err("password must not be empty".to_owned());
-    }
+    let method = login_method(&username, &password)?;
 
     let device_display_name = if device_display_name.is_empty() {
         DEFAULT_DEVICE_DISPLAY_NAME.to_owned()
@@ -309,11 +304,14 @@ pub(super) fn submit_login(
         .command_sender
         .as_ref()
         .ok_or_else(|| "core command sender is not available".to_owned())?;
-    let connecting = status_log::connecting(&server, &username);
+    let connecting = match &method {
+        LoginMethod::Password { username, .. } => status_log::connecting(&server, username),
+        LoginMethod::Browser { .. } => status_log::connecting_with_browser(&server),
+    };
     sender
         .send(Command::Login(LoginRequest {
             server,
-            method: LoginMethod::Password { username, password },
+            method,
             device_display_name,
             start_sync,
         }))
@@ -830,6 +828,65 @@ mod tests {
             Err("homeserver URL must not be empty".to_owned())
         );
         assert!(commands.try_recv().is_err(), "refused submits send nothing");
+    }
+
+    #[test]
+    fn submit_login_without_a_password_signs_in_with_the_browser() {
+        let mut state = test_state();
+        let (sender, mut commands) = inert_command_sender();
+        state.command_sender = Some(sender);
+
+        for (username, password, error) in [
+            (
+                "alice",
+                "",
+                "to sign in with your browser, leave User empty or enter a full user ID like @alice:matrix.org",
+            ),
+            (
+                "",
+                "secret",
+                "enter a user name, or leave Password empty to sign in with your browser",
+            ),
+        ] {
+            assert_eq!(
+                submit_login(
+                    &mut state,
+                    "https://matrix.example".to_owned(),
+                    username.to_owned(),
+                    password.to_owned(),
+                    String::new(),
+                    true,
+                ),
+                Err(error.to_owned())
+            );
+        }
+        assert!(commands.try_recv().is_err(), "refused submits send nothing");
+
+        submit_login(
+            &mut state,
+            String::new(),
+            "@alice:example.org".to_owned(),
+            String::new(),
+            "desktop".to_owned(),
+            true,
+        )
+        .unwrap();
+        assert_eq!(state.model.connection, ConnectionState::SigningIn);
+        assert_eq!(
+            status_log_lines(&state).last().map(String::as_str),
+            Some("[22:12] * Connecting to example.org to sign in with your browser")
+        );
+        assert_eq!(
+            commands.try_recv(),
+            Ok(Command::Login(LoginRequest {
+                server: "example.org".to_owned(),
+                method: LoginMethod::Browser {
+                    user_id_hint: Some("@alice:example.org".to_owned()),
+                },
+                device_display_name: "desktop".to_owned(),
+                start_sync: true,
+            }))
+        );
     }
 
     #[test]

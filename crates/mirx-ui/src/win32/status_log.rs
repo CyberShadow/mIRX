@@ -61,6 +61,10 @@ pub(super) fn connecting(homeserver_url: &str, username: &str) -> String {
     format!("Connecting to {homeserver_url} as {username}")
 }
 
+pub(super) fn connecting_with_browser(homeserver_url: &str) -> String {
+    format!("Connecting to {homeserver_url} to sign in with your browser")
+}
+
 pub(super) fn restoring(homeserver_url: &str, user_id: &str) -> String {
     format!("Restoring session for {user_id} on {homeserver_url}")
 }

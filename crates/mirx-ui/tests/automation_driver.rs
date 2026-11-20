@@ -309,17 +309,25 @@ fn write_saved_session_payload(
     Ok(path)
 }
 
-/// The homeserver URL the app saved with its session.
-fn saved_session_homeserver_url(
+/// The session file the app saved, unprotected.
+fn read_saved_session(
     local_app_data: &Path,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let bytes = fs::read(session_file_path(local_app_data))?;
     let protected = bytes
         .strip_prefix(PROTECTED_SESSION_MAGIC)
         .ok_or("saved session is not protected")?;
-    let payload: serde_json::Value =
-        serde_json::from_slice(&dpapi::unprotect(protected, SESSION_DPAPI_ENTROPY)?)?;
-    Ok(payload["homeserver_url"]
+    Ok(serde_json::from_slice(&dpapi::unprotect(
+        protected,
+        SESSION_DPAPI_ENTROPY,
+    )?)?)
+}
+
+/// The homeserver URL the app saved with its session.
+fn saved_session_homeserver_url(
+    local_app_data: &Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(read_saved_session(local_app_data)?["homeserver_url"]
         .as_str()
         .ok_or("saved session has no homeserver_url")?
         .to_owned())
@@ -387,6 +395,17 @@ fn spawn_mock_backfill_homeserver() -> Result<MockBackfillHomeserver, Box<dyn st
     spawn_mock_homeserver(MockMessages::Hang, vec![])
 }
 
+/// How the mock homeserver signs users in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MockAuth {
+    /// `/login` answers every request with Alice's session.
+    Password,
+    /// An OAuth 2.0 authorization server on the same port, as MAS behind a
+    /// homeserver: it registers `mirx-client` and grants `oauth-token`.
+    /// The test plays the browser, so `/oauth2/authorize` is not served.
+    OAuth,
+}
+
 /// Serves `!beta:example` with Alice and Bob in the sync `state` section and
 /// `timeline_events` as its sync timeline. Every `/sync` gets the same body.
 /// The `/members` list also has the members that join in the timeline.
@@ -394,8 +413,17 @@ fn spawn_mock_homeserver(
     messages: MockMessages,
     timeline_events: Vec<serde_json::Value>,
 ) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
+    spawn_mock_homeserver_with_auth(MockAuth::Password, messages, timeline_events)
+}
+
+fn spawn_mock_homeserver_with_auth(
+    auth: MockAuth,
+    messages: MockMessages,
+    timeline_events: Vec<serde_json::Value>,
+) -> Result<MockBackfillHomeserver, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
+    let issuer = format!("http://{address}/");
     std::thread::spawn(move || {
         let alice_member = serde_json::json!({
             "content": {
@@ -466,6 +494,43 @@ fn spawn_mock_homeserver(
             let request = String::from_utf8_lossy(&request);
             let request_line = request.lines().next().unwrap_or_default();
             let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+            if auth == MockAuth::OAuth {
+                let body = match path {
+                    // The versions below 1.15 pick the unstable path.
+                    "/_matrix/client/unstable/org.matrix.msc2965/auth_metadata" => {
+                        Some(serde_json::json!({
+                            "issuer": issuer,
+                            "authorization_endpoint": format!("{issuer}oauth2/authorize"),
+                            "token_endpoint": format!("{issuer}oauth2/token"),
+                            "registration_endpoint": format!("{issuer}oauth2/registration"),
+                            "revocation_endpoint": format!("{issuer}oauth2/revoke"),
+                            "response_types_supported": ["code"],
+                            "response_modes_supported": ["query", "fragment"],
+                            "grant_types_supported": ["authorization_code", "refresh_token"],
+                            "code_challenge_methods_supported": ["S256"],
+                            "prompt_values_supported": ["create"],
+                        }))
+                    }
+                    "/oauth2/registration" => Some(serde_json::json!({
+                        "client_id": "mirx-client",
+                    })),
+                    "/oauth2/token" => Some(serde_json::json!({
+                        "access_token": "oauth-token",
+                        "token_type": "Bearer",
+                        "expires_in": 3600,
+                        "refresh_token": "oauth-refresh",
+                    })),
+                    "/_matrix/client/v3/account/whoami" => Some(serde_json::json!({
+                        "user_id": "@alice:example",
+                    })),
+                    _ => None,
+                };
+                if let Some(body) = body {
+                    respond_json(&mut stream, 200, &body);
+                    continue;
+                }
+            }
 
             if path == "/_matrix/client/v3/login" {
                 respond_json(
@@ -3309,15 +3374,13 @@ fn file_disconnect_and_connect_toggle_sync() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-#[test]
-fn select_server_dialog_logs_in_and_syncs() -> Result<(), Box<dyn std::error::Error>> {
-    let local_app_data = unique_local_app_data_path();
-    let server = spawn_mock_backfill_homeserver()?;
-    let app = launch_automation_app(&local_app_data)?;
-    assert_eq!(app.dump_model()?.connection, "signed_out");
-
-    let frame = app.automation_frame_hwnd() as HWND;
-    let frame_value = frame as isize;
+/// Opens File > Select Server..., which runs modally on the thread this
+/// returns, and fills in its fields; the dialog is returned open.
+fn open_select_server(
+    app: &MirxApp,
+    fields: [&str; 3],
+) -> Result<(HWND, std::thread::JoinHandle<()>), Box<dyn std::error::Error>> {
+    let frame_value = app.automation_frame_hwnd();
     let menu_thread = std::thread::spawn(move || unsafe {
         SendMessageW(
             frame_value as HWND,
@@ -3329,18 +3392,27 @@ fn select_server_dialog_logs_in_and_syncs() -> Result<(), Box<dyn std::error::Er
     let class_name = wide_null("mirxWin32LoginDialog");
     let dialog = wait_for_window(&class_name, "Select Server dialog")?;
     assert_eq!(unsafe { read_window_text(dialog) }, "Select Server");
-    // A user ID's server part cannot name the http://127.0.0.1 mock, so the
-    // server is typed; the empty-server path is a login_server unit test.
     for (control_id, text) in [
-        (LOGIN_DIALOG_SERVER_ID, server.base_url.as_str()),
-        (LOGIN_DIALOG_USER_ID, "alice"),
-        (LOGIN_DIALOG_PASSWORD_ID, "secret"),
-    ] {
+        LOGIN_DIALOG_SERVER_ID,
+        LOGIN_DIALOG_USER_ID,
+        LOGIN_DIALOG_PASSWORD_ID,
+    ]
+    .into_iter()
+    .zip(fields)
+    {
         let edit = unsafe { GetDlgItem(dialog, control_id) };
         assert!(!edit.is_null(), "login dialog control {control_id}");
         let text = wide_null(text);
         assert_ne!(unsafe { SetWindowTextW(edit, text.as_ptr()) }, 0);
     }
+    Ok((dialog, menu_thread))
+}
+
+/// Presses OK on a valid Select Server form, which signs in.
+fn submit_select_server(
+    dialog: HWND,
+    menu_thread: std::thread::JoinHandle<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_ne!(
         unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_OK_ID as WPARAM, 0) },
         0
@@ -3349,12 +3421,224 @@ fn select_server_dialog_logs_in_and_syncs() -> Result<(), Box<dyn std::error::Er
     menu_thread
         .join()
         .expect("Select Server menu command thread must not panic");
+    Ok(())
+}
+
+#[test]
+fn select_server_dialog_logs_in_and_syncs() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_backfill_homeserver()?;
+    let app = launch_automation_app(&local_app_data)?;
+    assert_eq!(app.dump_model()?.connection, "signed_out");
+
+    // A user ID's server part cannot name the http://127.0.0.1 mock, so the
+    // server is typed; the empty-server path is a login_server unit test.
+    let (dialog, menu_thread) = open_select_server(&app, [&server.base_url, "alice", "secret"])?;
+    submit_select_server(dialog, menu_thread)?;
 
     app.wait_for_connection("syncing", Duration::from_secs(30))?;
     assert_eq!(
         saved_session_homeserver_url(&local_app_data)?,
         format!("{}/", server.base_url)
     );
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+/// Opens Select Server with User and Password empty, presses OK and
+/// waits for the browser sign-in; returns the page the app handed to the
+/// shell.
+fn start_browser_sign_in(
+    app: &MirxApp,
+    server: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let (dialog, menu_thread) = open_select_server(app, [server, "", ""])?;
+    submit_select_server(dialog, menu_thread)?;
+    app.wait_for_connection("waiting_for_browser", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    let opened_links = app.dump_model()?.opened_links;
+    let [sign_in] = &opened_links[..] else {
+        return Err(format!("expected the sign-in page alone in {opened_links:?}").into());
+    };
+    Ok(sign_in.clone())
+}
+
+/// The value of `name` in the query of `url`, decoded.
+fn query_param(url: &str, name: &str) -> Option<String> {
+    let (_, query) = url.split_once('?')?;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then(|| percent_decode(value))
+    })
+}
+
+fn percent_decode(text: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut rest = text.as_bytes();
+    while let [first, tail @ ..] = rest {
+        match (first, tail) {
+            (b'%', [high, low, tail @ ..]) => {
+                let hex = std::str::from_utf8(&[*high, *low])
+                    .expect("percent escapes are ASCII")
+                    .to_owned();
+                bytes.push(u8::from_str_radix(&hex, 16).expect("a percent escape is hex"));
+                rest = tail;
+            }
+            (b'+', _) => {
+                bytes.push(b' ');
+                rest = tail;
+            }
+            (byte, _) => {
+                bytes.push(*byte);
+                rest = tail;
+            }
+        }
+    }
+    String::from_utf8(bytes).expect("a decoded query value is UTF-8")
+}
+
+/// `http://127.0.0.1:<port>/<path>` as (port, path).
+fn loopback_redirect(redirect_uri: &str) -> (u16, String) {
+    let rest = redirect_uri
+        .strip_prefix("http://127.0.0.1:")
+        .unwrap_or_else(|| panic!("{redirect_uri} is not a loopback address"));
+    let (port, path) = rest.split_once('/').expect("the redirect has a path");
+    (
+        port.parse().expect("the redirect names its port"),
+        format!("/{path}"),
+    )
+}
+
+/// Plays the browser coming back from the sign-in page with `query`, and
+/// returns the page mirx answered.
+fn browse_to_redirect(sign_in: &str, query: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let redirect_uri = query_param(sign_in, "redirect_uri").ok_or("no redirect_uri")?;
+    let (port, path) = loopback_redirect(&redirect_uri);
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port))?;
+    write!(
+        stream,
+        "GET {path}?{query} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}
+
+#[test]
+fn select_server_browser_sign_in_with_oauth_restores_after_restart()
+-> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+
+    let sign_in = start_browser_sign_in(&app, &server.base_url)?;
+    let authorize = format!("{}/oauth2/authorize?", server.base_url);
+    assert!(sign_in.starts_with(&authorize), "{sign_in}");
+    assert!(status_view_contains(
+        &app,
+        &format!(
+            "* Connecting to {} to sign in with your browser",
+            server.base_url
+        )
+    )?);
+    assert!(status_view_contains(
+        &app,
+        "* Sign in on the page your browser opened; File > Disconnect cancels"
+    )?);
+    assert!(status_view_contains(
+        &app,
+        &format!("* If no browser opened, go to {sign_in}")
+    )?);
+    // The devshell's Wine has no browser to start; the printed address
+    // still works.
+    assert!(status_view_contains(
+        &app,
+        &format!("* Unable to open {sign_in}: ShellExecuteExW failed")
+    )?);
+
+    let state = query_param(&sign_in, "state").ok_or("no state")?;
+    let page = browse_to_redirect(&sign_in, &format!("code=c&state={state}"))?;
+    assert!(page.starts_with("HTTP/1.1 200 OK\r\n"), "{page}");
+    assert!(
+        page.contains("Signed in to mirx as @alice:example. You can close this page."),
+        "{page}"
+    );
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    let saved = read_saved_session(&local_app_data)?;
+    assert_eq!(saved["version"], 2);
+    assert_eq!(
+        saved["session"]["auth"],
+        serde_json::json!({ "OAuth": { "client_id": "mirx-client" } })
+    );
+    assert_eq!(saved["session"]["access_token"], "oauth-token");
+    drop(app);
+
+    // The next start restores the OAuth session.
+    let exe_path =
+        mirx_ui_exe_path().map_err(|error| format!("failed to locate mirx-ui.exe: {error}"))?;
+    let app = launch_app_with_options(
+        &exe_path,
+        &[OsString::from("--automation")],
+        launch_options(Some(local_app_data.clone())),
+    )?;
+    app.wait_for_connection("syncing", Duration::from_secs(30))?;
+    assert!(status_view_contains(&app, "* Session restored")?);
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn file_disconnect_cancels_a_browser_sign_in() -> Result<(), Box<dyn std::error::Error>> {
+    let local_app_data = unique_local_app_data_path();
+    let server = spawn_mock_homeserver_with_auth(MockAuth::OAuth, MockMessages::Hang, vec![])?;
+    let app = launch_automation_app(&local_app_data)?;
+
+    let sign_in = start_browser_sign_in(&app, &server.base_url)?;
+    let (port, _) = loopback_redirect(&query_param(&sign_in, "redirect_uri").ok_or("no redirect")?);
+    invoke_account_menu_command(&app, MENU_ID_FILE_DISCONNECT)?;
+    app.wait_for_connection("signed_out", Duration::from_secs(30))?;
+    app.wait_idle(Duration::from_secs(5))?;
+    assert!(status_view_contains(&app, "* Sign-in cancelled")?);
+    assert_eq!(app.dump_model()?.status, "sign-in cancelled");
+    assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err());
+
+    drop(app);
+    let _ = fs::remove_dir_all(&local_app_data);
+    Ok(())
+}
+
+#[test]
+fn select_server_refuses_a_bare_user_without_a_password() -> Result<(), Box<dyn std::error::Error>>
+{
+    let local_app_data = unique_local_app_data_path();
+    let app = launch_automation_app(&local_app_data)?;
+
+    let (dialog, menu_thread) = open_select_server(&app, ["matrix.example", "alice", ""])?;
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_OK_ID as WPARAM, 0) },
+        0
+    );
+    let (error_box, text) = wait_for_owned_message_box(dialog);
+    assert_eq!(
+        text,
+        "to sign in with your browser, leave User empty or enter a full user ID like @alice:matrix.org"
+    );
+    answer_message_box(&app, error_box, IDOK)?;
+    // The form stays open to be corrected.
+    assert_ne!(unsafe { IsWindow(dialog) }, 0);
+    assert_ne!(
+        unsafe { PostMessageW(dialog, WM_COMMAND, LOGIN_DIALOG_CANCEL_ID as WPARAM, 0) },
+        0
+    );
+    wait_for_window_gone(dialog, "Select Server dialog")?;
+    menu_thread
+        .join()
+        .expect("Select Server menu command thread must not panic");
+    assert_eq!(app.dump_model()?.connection, "signed_out");
 
     drop(app);
     let _ = fs::remove_dir_all(&local_app_data);

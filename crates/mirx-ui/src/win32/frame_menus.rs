@@ -1108,10 +1108,14 @@ pub(super) unsafe fn connect(hwnd: HWND, server: Option<&str>) -> Result<bool, S
     Ok(true)
 }
 
-/// File > Disconnect and `/quit`: stop syncing, keep the session.
+/// File > Disconnect and `/quit`: stop syncing and keep the session, or
+/// stop waiting for a browser sign-in.
 pub(super) unsafe fn disconnect(hwnd: HWND) -> Result<(), String> {
-    connection::check_disconnect(state_ref(hwnd).model.connection)?;
-    enqueue_command(state_mut(hwnd), Command::StopSync)
+    let command = match connection::disconnect_action(state_ref(hwnd).model.connection)? {
+        DisconnectAction::StopSync => Command::StopSync,
+        DisconnectAction::CancelSignIn => Command::CancelLogin,
+    };
+    enqueue_command(state_mut(hwnd), command)
 }
 
 /// A Commands item runs the slash command it stands for, prompting first

@@ -462,7 +462,9 @@ unsafe extern "system" fn login_dialog_window_proc(
                     };
                     // Like mIRC's dialogs, a form that cannot work stays
                     // open with the reason.
-                    if let Err(message) = login_server(&form.server, &form.username) {
+                    if let Err(message) = login_server(&form.server, &form.username)
+                        .and_then(|_| login_method(&form.username, &form.password))
+                    {
                         show_error_message(hwnd, "Select Server", &message);
                         return 0;
                     }
@@ -773,7 +775,7 @@ unsafe fn create_login_dialog(
             column.edit(LOGIN_DIALOG_HOME_SERVER_ID, server, 0)?;
             column.label("User (alice or @alice:matrix.org)", 0, 0)?;
             column.edit(LOGIN_DIALOG_USERNAME_ID, "", 0)?;
-            column.label("Password", 0, 0)?;
+            column.label("Password (leave empty to sign in with your browser)", 0, 0)?;
             column.edit(LOGIN_DIALOG_PASSWORD_ID, "", ES_PASSWORD as u32)?;
             column.label("Device name", 0, 0)?;
             column.edit(LOGIN_DIALOG_DEVICE_ID, DEFAULT_DEVICE_DISPLAY_NAME, 0)?;

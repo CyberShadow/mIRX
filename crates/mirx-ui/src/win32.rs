@@ -35,7 +35,7 @@ use mirx_core::{
     SetRoomMemberPowerLevelRequest, SetRoomNotificationModeRequest, SetRoomTopicRequest,
     SetupE2eeRecoveryRequest, StoredSession, TextStyleSpan, UnbanRoomMemberRequest, UserProfile,
     VerificationEmoji, VerificationFlowId, VerificationRequest, VerificationState,
-    VerificationStateEvent, login_server, start,
+    VerificationStateEvent, login_method, login_server, start,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -278,7 +278,7 @@ use compose::{
     send_room_message, set_compose_text, subclass_compose_edit, submit_compose_from_control,
     submit_redact_selected_message, submit_send_file,
 };
-use connection::ConnectAction;
+use connection::{ConnectAction, DisconnectAction};
 #[cfg(test)]
 use core_events::apply_core_event;
 use core_events::{
